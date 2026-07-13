@@ -72,5 +72,14 @@ Self-hosted Daemon  ────────────────────
 
 ## Status
 
-Early architecture / specification. Nothing built yet. See
-[`docs/architecture.md`](docs/architecture.md#v1-build-slice) for the proposed v1 build slice.
+Specs + validated spine. What exists:
+
+- **`docs/`** — the architecture and locked decisions (below).
+- **`design/`** — an interactive wireframe of the docked-rails UI.
+- **`daemon/`** — a runnable PoC that **de-risks the durability + ACP spine**: the daemon
+  owns the agent process, a client socket can die (simulated dropped SSH pipe) and
+  reconnect with gapless seq-replay, and the ACP `request_permission` loop round-trips
+  end-to-end. `cd daemon && npm install && npm run derisk` — all checks pass. See
+  [`daemon/README.md`](daemon/README.md).
+
+See [`docs/architecture.md`](docs/architecture.md#v1-build-slice) for the full v1 build slice.

@@ -53,8 +53,8 @@ function handle(msg) {
     note({
       sessionUpdate: 'plan',
       entries: [
-        { content: 'Reinstall dependencies', status: 'in_progress' },
-        { content: 'Run tests', status: 'pending' },
+        { content: 'Reinstall dependencies', priority: 'high', status: 'in_progress' },
+        { content: 'Run tests', priority: 'medium', status: 'pending' },
       ],
     });
     note({ sessionUpdate: 'tool_call', toolCallId: 'tc1', title: 'terminal: rm -rf node_modules && npm ci', status: 'pending' });
@@ -78,10 +78,10 @@ function handle(msg) {
   if (msg.id === PERM_REQ_ID && msg.result) {
     const opt = msg.result?.outcome?.optionId;
     if (opt === 'allow') {
-      note({ sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'done' });
+      note({ sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'completed' });
       note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done — deps reinstalled.' } });
     } else {
-      note({ sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'error' });
+      note({ sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'failed' });
       note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Skipped install.' } });
     }
     if (pendingPromptId != null) {

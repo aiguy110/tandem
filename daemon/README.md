@@ -19,6 +19,7 @@ Nothing here needs Claude Code installed — the mock agent stands in for any AC
 cd daemon
 npm install
 npm run derisk        # the automated proof (exits non-zero on any failure)
+npm run acp:live      # drive the REAL @agentclientprotocol/claude-agent-acp (needs authed `claude`)
 npm run pty-smoke     # optional: proves the pty adapter (needs node-pty)
 npm run daemon        # standalone daemon on ws://localhost:7717 for manual poking
 ```
@@ -47,9 +48,10 @@ npm run daemon        # standalone daemon on ws://localhost:7717 for manual poki
 ## What this deliberately does NOT do yet
 
 - No auth on the WS, no TLS — bind to localhost only (see the security note in the specs).
-- ACP framing here is newline-delimited JSON; **the exact framing and the
-  `session/update` content-block shapes must be confirmed against the ACP spec** before
-  wiring `claude-code-acp`. (This is the "pin the ACP version" next step.)
+- ACP framing and shapes are now **pinned** against `@agentclientprotocol/sdk` 1.2.1 and
+  verified against the real `@agentclientprotocol/claude-agent-acp` (see
+  [`../docs/acp-notes.md`](../docs/acp-notes.md)). Still deferred: advertising + servicing
+  `fs/*` and `terminal/*` (we advertise them off for now, so the agent does its own I/O).
 - `fs/*` and `terminal/*` requests are acknowledged minimally, not serviced by a real
   workspace manager / `TerminalHost`.
 - Single agent; no git-worktree workspace isolation; no shared browser.

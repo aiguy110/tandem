@@ -25,6 +25,23 @@ Tandem's answer is to **become the thing that owns the pty**:
 > survive a daemon *crash* too. Deferred — first make the daemon robust with a
 > scrollback/replay buffer.
 
+### Validated (PoC)
+
+This model is proven in [`daemon/`](../daemon/README.md), not just asserted. The
+`npm run derisk` harness hard-kills a client socket mid-stream (no close handshake —
+a real dropped pipe), waits with no client attached, then reconnects from the client's
+last `seq`. It asserts, and passes, that:
+
+- the agent subprocess PID is unchanged across the disconnect (it never saw SIGHUP);
+- not a single heartbeat event was lost during the gap;
+- replay resumes from exactly `lastSeq + 1` with a gapless merged stream;
+- the ACP `session/request_permission` loop is delivered *after* reconnect and answered
+  over the new socket.
+
+The pty path is likewise proven (`npm run pty-smoke`): the daemon owns the pty master fd
+and captures the child's scrollback. So both adapter paths sit on the correct side of the
+durability boundary.
+
 ## Subsystems
 
 Five separable pieces; keeping them decoupled is most of the battle.
@@ -117,13 +134,14 @@ Core primitives:
 
 Thinnest end-to-end spine; each step is independently demoable, riskiest theses first.
 
-1. **Daemon + one agent.** Spawn one Claude Code agent (via `AcpAdapter`, or `PtyAdapter`
-   to start), expose its normalized event stream + scrollback over the WS with
-   reconnect/replay. *Proves the survive-the-dropped-pipe thesis.*
+1. **Daemon + one agent.** ✓ **Validated in `daemon/`.** Spawn one Claude Code agent (via
+   `AcpAdapter`, or `PtyAdapter` to start), expose its normalized event stream + scrollback
+   over the WS with reconnect/replay. *Proves the survive-the-dropped-pipe thesis.*
 2. **UI spine.** Left rail (single agent) + focus with Transcript + Terminal panes. No
    browser, no approvals yet.
-3. **Approvals.** Wire `session/request_permission` → `permission_request` events → the
-   right-rail queue → response back over the WS. *Proves human-as-conductor.*
+3. **Approvals.** ✓ **Loop validated in `daemon/`** (against a mock ACP agent; real-agent
+   wiring in progress). Wire `session/request_permission` → `permission_request` events →
+   the right-rail queue → response back over the WS. *Proves human-as-conductor.*
 4. **Second agent + workspace isolation.** Git worktree per agent; two agents run without
    clobbering; rails show both statuses.
 5. **Shared browser.** Attach a Steel session, render the screencast in the Browser pane,

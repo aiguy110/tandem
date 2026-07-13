@@ -68,6 +68,13 @@ interface ClientServices {
 Speaks Agent Client Protocol (JSON-RPC 2.0) over the agent subprocess's stdio. The daemon
 is the ACP client.
 
+> **Pinned** against `@agentclientprotocol/sdk` 1.2.1 (protocol v1) and verified against the
+> real `@agentclientprotocol/claude-agent-acp` — full details in [`acp-notes.md`](acp-notes.md).
+> Framing is **newline-delimited JSON**; `session/update` variants **flatten** their payload
+> onto the update object beside the `sessionUpdate` discriminator (`tool_call` carries
+> `toolCallId`/`title`/`status` directly, not nested). ACP status enums are mapped to Tandem's
+> normalized vocabulary in the adapter.
+
 - **Handshake:** fork the agent (`claude-code-acp`, `gemini`, …), run `initialize`, then
   `session/new` (or `session/load` when resuming).
 - **`session/update`** → map 1:1 to `AgentEvent` (`message_chunk`, `thought_chunk`,

@@ -6,6 +6,7 @@
   "description": "Tandem daemon spine PoC — daemon-owns-state durability + ACP adapter",
   "scripts": {
     "derisk": "tsx src/derisk.ts",
+    "acp:live": "tsx src/acpLive.ts",
     "daemon": "tsx src/index.ts",
     "pty-smoke": "tsx src/ptySmoke.ts"
   },
@@ -16,6 +17,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.59.0",
     "@types/node": "^22.7.0",
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.2",
