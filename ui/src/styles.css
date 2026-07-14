@@ -194,6 +194,22 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .prompt-bar textarea:focus { outline: none; border-color: var(--agent); }
 
+/* ---- session config bar (model / permission-mode pickers) ---- */
+.session-config-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px;
+  padding: 5px 14px; border-top: 1px solid var(--border); background: var(--surface);
+}
+.session-config-bar label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: var(--fs-xs); letter-spacing: .3px; color: var(--text-faint); white-space: nowrap;
+}
+.session-config-bar select {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text-dim); padding: 3px 6px; font-family: var(--font-mono); font-size: var(--fs-xs);
+}
+.session-config-bar select:hover { border-color: var(--border-strong); color: var(--text); }
+.session-config-bar select:focus { outline: none; border-color: var(--agent); color: var(--text); }
+
 /* ---- approvals rail ---- */
 .appr {
   margin: 8px 10px; padding: 10px 12px;

@@ -115,8 +115,8 @@ export function TranscriptPane() {
           <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
         ))}
       </div>
-      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
+      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
     </div>
   );
 }
@@ -205,9 +205,9 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
   if (!hasModes && !modelOpt) return null;
 
   return (
-    <div className="session-config-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', padding: '4px 12px', alignItems: 'center' }}>
+    <div className="session-config-bar">
       {modelOpt && (
-        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, whiteSpace: 'nowrap' }}>
+        <label>
           Model
           <select value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
             {(modelOpt.options ?? []).map((o) => (
@@ -219,7 +219,7 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
         </label>
       )}
       {hasModes && modes && (
-        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, whiteSpace: 'nowrap' }}>
+        <label>
           Permission Mode
           <select value={modes.currentModeId} onChange={(e) => setMode(agentId, e.target.value)}>
             {modes.availableModes.map((m) => (
