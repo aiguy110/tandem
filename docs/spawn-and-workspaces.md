@@ -27,10 +27,11 @@ Two keyboard surfaces, one for speed and one for discoverability:
 
 1. **Quick-spawn palette** — a dedicated hotkey opens a modal focused on a fuzzy
    **directory** input. Sources, ranked: focused agent's repo → recent dirs → git repos
-   under configured project roots → pinned bookmarks. Each row shows branch, clean/dirty,
-   and whether an agent already occupies that dir.
-   - `Enter` on a dir → spawn with defaults, focus the new agent.
-   - `⇥` then type a task → spawn **and dispatch** in one shot.
+   under your project roots (`TANDEM_PROJECT_ROOTS`, default `~/Projects`) → pinned
+   bookmarks. Each row shows branch, clean/dirty, and whether an agent already occupies
+   that dir.
+   - `Enter` on a dir → spawn with defaults; **focus jumps to the new agent**.
+   - `⇥` then type a task → spawn **and dispatch** in one shot (focus jumps to it too).
    - `⌘Enter` → reveal advanced fields (adapter, model, branch, base ref, name).
 2. **Command palette** (`⌘K`) — everything: all commands, jump-to-agent-by-name, spawn,
    assign, approve, kill, merge-back. Every row shows its current keybinding inline, so the
@@ -76,7 +77,8 @@ Illustrative default map (all rebindable):
 
 ## Workspaces (host dirs, no sandbox)
 
-Config: **project roots** (scanned for repos), **recents**, **bookmarks**.
+Config: **project roots** — `TANDEM_PROJECT_ROOTS` (default `~/Projects`), scanned for
+repos — plus **recents** and **bookmarks**.
 
 ### Git repo → one worktree per agent
 
@@ -110,6 +112,17 @@ offer "open a worktree instead" or "attach to the existing agent."
   diff and either merges its branch into the base or opens a PR. The human conductor
   decides — nothing merges on its own.
 - **Respawn:** a closed agent's branch can be re-checked-out into a fresh worktree.
+
+## Persistence & restore
+
+Agents are **durable declarations**, not ephemeral processes. The daemon persists each live
+agent's `SpawnSpec` + ACP `sessionId` (and its worktree/branch). On daemon restart it
+**restores** every agent:
+
+- re-attach the worktree and re-spawn the adapter subprocess;
+- **resume the ACP session via `session/load`** where the agent advertises the
+  `loadSession` capability;
+- otherwise start a fresh session and re-render history from the persisted event log.
 
 ## Deferred
 

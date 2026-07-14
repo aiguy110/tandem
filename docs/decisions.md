@@ -123,3 +123,14 @@ customizable via a `keybindings.json`.
 **Why:** Fewest keystrokes for a keyboard-heavy conductor workflow; mirrors the
 `keybindings.json` model the user already uses in Claude Code. Scope-awareness avoids
 bare-key collisions with text input.
+
+## D11 — Agents are persistent; sessions restored on restart
+
+**Choice:** Agents are durable. The daemon persists each agent's `SpawnSpec` + ACP
+`sessionId` + worktree/branch, and on restart restores them — resuming via `session/load`
+where the agent supports `loadSession`, else a fresh session with history re-rendered from
+the event log. Project roots are configurable via `TANDEM_PROJECT_ROOTS` (default
+`~/Projects`); after a spawn, focus jumps to the newly launched agent.
+
+**Why:** An agent is a long-lived unit of work with a workspace and history; a daemon
+restart (crash, upgrade) shouldn't lose it.
