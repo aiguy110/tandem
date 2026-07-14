@@ -96,13 +96,20 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .count.hot { background: var(--warn-soft); color: var(--warn); }
 
 .agent-row {
-  display: grid; grid-template-columns: 14px 1fr; gap: 8px;
+  display: grid; grid-template-columns: 14px 1fr auto; gap: 8px;
   padding: 9px 12px; border-bottom: 1px solid var(--border);
   cursor: pointer; align-items: start;
 }
 .agent-row:hover { background: var(--surface-2); }
 .agent-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
 .agent-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+.agent-row .delete-btn {
+  background: transparent; border: none; padding: 2px 4px; margin-top: 1px;
+  font-size: var(--fs-sm); line-height: 1; color: var(--text-faint);
+  opacity: 0; border-radius: var(--r-sm);
+}
+.agent-row:hover .delete-btn { opacity: 1; }
+.agent-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
 .dot.idle { background: var(--ok); }
 .dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 1.4s infinite; }
 .dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
@@ -241,6 +248,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .adv { padding: 10px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .modal .adv label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); }
 .modal .adv input, .modal .adv select { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
+.confirm-modal { width: min(420px, 92vw); }
+.confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
+.confirm-modal .foot { justify-content: flex-end; }
+.btn.danger { background: var(--err-soft); border-color: var(--err); color: var(--err); }
+.btn.danger:hover { background: var(--err); color: var(--surface); }
 .modal-err { padding: 8px 16px; color: var(--err); background: var(--err-soft); font-size: var(--fs-sm); border-top: 1px solid var(--err); }
 
 /* ---- token screen ---- */

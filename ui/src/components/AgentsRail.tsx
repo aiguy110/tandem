@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useStore, rankedOrder } from '../store';
 import type { AgentView } from '../store';
 
@@ -8,6 +9,18 @@ export function AgentsRail() {
   const agents = useStore((s) => s.agents);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const closeAgent = useStore((s) => s.closeAgent);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  const doDelete = (id: string, force?: boolean) => {
+    void closeAgent(id, force).then((r) => {
+      if (r.error?.startsWith('dirty_worktree')) {
+        if (confirm(`${id} has uncommitted changes. Force close and drop the checkout? (branch is kept)`)) {
+          doDelete(id, true);
+        }
+      }
+    });
+  };
 
   return (
     <div className="rail agents">
@@ -21,13 +34,54 @@ export function AgentsRail() {
           Press <span className="kbd">C</span> or <b>+ Agent</b> to spawn one.
         </div>
       ) : (
-        order.map((id) => <Row key={id} agent={agents[id]} active={id === focusedId} onClick={() => focus(id)} />)
+        order.map((id) => (
+          <Row
+            key={id}
+            agent={agents[id]}
+            active={id === focusedId}
+            onClick={() => focus(id)}
+            onDelete={() => setConfirmId(id)}
+          />
+        ))
+      )}
+      {confirmId && agents[confirmId] && (
+        <div className="modal-scrim" onClick={() => setConfirmId(null)}>
+          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-body">
+              Delete agent <b>{agents[confirmId].name}</b>? This tears down its session (the branch is kept).
+            </div>
+            <div className="foot">
+              <button className="btn" onClick={() => setConfirmId(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  doDelete(confirmId);
+                  setConfirmId(null);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-function Row({ agent, active, onClick }: { agent: AgentView; active: boolean; onClick: () => void }) {
+function Row({
+  agent,
+  active,
+  onClick,
+  onDelete,
+}: {
+  agent: AgentView;
+  active: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+}) {
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
   return (
@@ -45,6 +99,16 @@ function Row({ agent, active, onClick }: { agent: AgentView; active: boolean; on
           {branch && ` · ${branch}`}
         </div>
       </div>
+      <button
+        className="delete-btn"
+        title="Delete agent"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        🗑
+      </button>
     </div>
   );
 }
