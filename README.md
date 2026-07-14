@@ -25,6 +25,13 @@ Prerequisites: **Node 22+**, a C toolchain (for `better-sqlite3`'s native build)
 authenticated `claude` CLI if you want to drive the real agent. `git` on `PATH`.
 
 ```bash
+./start-dev-server.sh
+```
+
+This builds the UI, installs daemon deps (compiling `better-sqlite3`), and starts the
+daemon pointing at the built UI (`127.0.0.1:7717`). Equivalent manual steps:
+
+```bash
 # 1. Build the UI (the daemon serves the compiled dist)
 cd ui && npm install && npm run build && cd ..
 
