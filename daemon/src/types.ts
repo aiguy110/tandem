@@ -10,6 +10,39 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
 
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 
+// ---- Session modes + config options (ACP session-modes / session-config-options) --
+// Permission-mode style modes (session/set_mode) and a generic config-option list
+// (session/set_config_option) — the latter is how ACP surfaces a model selector
+// (SessionConfigOption.category === 'model'), among other selectors. Normalized
+// here so the WS layer never leaks the ACP option/group shapes.
+export interface SessionMode {
+  id: string;
+  name: string;
+  description?: string;
+}
+export interface SessionModeState {
+  currentModeId: string;
+  availableModes: SessionMode[];
+}
+export interface SessionConfigSelectOption {
+  value: string;
+  name: string;
+  description?: string;
+}
+export interface SessionConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  // Semantic hint for UX placement (SessionConfigOptionCategory) — 'model' is the
+  // one Tandem cares about today; others pass through untouched.
+  category?: string;
+  type: 'select' | 'boolean';
+  currentValue: string | boolean;
+  // Present for type:'select' — flattened (groups collapsed) since Tandem's UI is
+  // a plain dropdown, not a grouped menu.
+  options?: SessionConfigSelectOption[];
+}
+
 export type AgentEvent =
   // The human's prompt, echoed into the log so it renders in the transcript and
   // replays for every client (incl. after a daemon restart) — the daemon owns it,
@@ -24,6 +57,10 @@ export type AgentEvent =
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'status'; status: AgentStatus }
   | { kind: 'error'; message: string }
+  // Current permission-mode + config-option (incl. model selector) state, pushed
+  // once modes/configOptions are known and again on every current_mode_update /
+  // config_option_update. The UI folds these to "latest wins" like `status`.
+  | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
   // Agent-initiated browser handoff (docs/browser.md Attention): the agent called
   // the Tandem-control MCP's browser.request_takeover. A normalized event so it
   // logs, replays, and folds into the attention rail. `reason` is human-facing.
@@ -121,6 +158,10 @@ export interface AgentAdapter {
   respondPermission(reqId: string, optionId: string): void;
   interrupt(): void;
   loadSession?(sessionId: string): Promise<void>; // only if capabilities.loadSession
+  // Session modes / config options (ACP-only; pty has neither). Adapters that
+  // don't support these simply omit them — session.ts rejects with a clear error.
+  setMode?(modeId: string): Promise<void>;
+  setConfigOption?(configId: string, value: string | boolean): Promise<void>;
   dispose(): Promise<void>;
 
   readonly events: AsyncIterable<AgentEvent>;
@@ -204,6 +245,8 @@ export type ClientMsg =
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }
   | { t: 'interrupt'; agentId: string; corrId?: string }
+  | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
+  | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }

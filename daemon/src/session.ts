@@ -103,6 +103,14 @@ export class AgentSession {
     this.approvals.clear();
     this.adapter.interrupt();
   }
+  setMode(modeId: string): Promise<void> {
+    if (!this.adapter.setMode) return Promise.reject(new Error('this agent does not support session modes'));
+    return this.adapter.setMode(modeId);
+  }
+  setConfigOption(configId: string, value: string | boolean): Promise<void> {
+    if (!this.adapter.setConfigOption) return Promise.reject(new Error('this agent does not support session config options'));
+    return this.adapter.setConfigOption(configId, value);
+  }
   async dispose(): Promise<void> {
     this.terminals?.disposeAll();
     await this.adapter.dispose();

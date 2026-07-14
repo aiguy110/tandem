@@ -206,6 +206,14 @@ export function startServer(
         requireSession(m.agentId).interrupt();
         conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
         break;
+      case 'set_mode':
+        await requireSession(m.agentId).setMode(m.modeId);
+        conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
+        break;
+      case 'set_config_option':
+        await requireSession(m.agentId).setConfigOption(m.configId, m.value);
+        conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
+        break;
       case 'spawn_agent': {
         const session = await registry.spawn(m.spec);
         conn.send({ t: 'ack', corrId: m.corrId, agentId: session.id });

@@ -115,6 +115,7 @@ export function TranscriptPane() {
           <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
         ))}
       </div>
+      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
     </div>
   );
@@ -182,6 +183,53 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
         <span className={`chip ${item.status}`}>{item.status}</span>
       </div>
       {open && hasBody && <div className="card-body">{typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)}</div>}
+    </div>
+  );
+}
+
+// Model + Permission Mode pickers (ACP session-modes / session-config-options,
+// docs/acp-notes.md). `sessionConfig` is null until the agent reports it (or
+// always, for pty agents) — the bar renders nothing in that case rather than an
+// empty shell.
+function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; sessionConfig: AgentView['sessionConfig'] }) {
+  const setMode = useStore((s) => s.setMode);
+  const setConfigOption = useStore((s) => s.setConfigOption);
+  if (!sessionConfig) return null;
+
+  const { modes, configOptions } = sessionConfig;
+  // The model selector is a config option with category 'model' (pinned id
+  // "model" on the real agent, but category is the spec-sanctioned way to find
+  // it). Everything else with category 'mode' is redundant with `modes` below.
+  const modelOpt = configOptions.find((o) => o.category === 'model' && o.type === 'select');
+  const hasModes = !!modes && modes.availableModes.length > 0;
+  if (!hasModes && !modelOpt) return null;
+
+  return (
+    <div className="session-config-bar" style={{ display: 'flex', gap: 8, padding: '4px 12px', alignItems: 'center' }}>
+      {modelOpt && (
+        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+          Model
+          <select value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
+            {(modelOpt.options ?? []).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {hasModes && modes && (
+        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+          Permission Mode
+          <select value={modes.currentModeId} onChange={(e) => setMode(agentId, e.target.value)}>
+            {modes.availableModes.map((m) => (
+              <option key={m.id} value={m.id} title={m.description}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
     </div>
   );
 }

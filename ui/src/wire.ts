@@ -7,6 +7,30 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 export type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 
+export interface SessionMode {
+  id: string;
+  name: string;
+  description?: string;
+}
+export interface SessionModeState {
+  currentModeId: string;
+  availableModes: SessionMode[];
+}
+export interface SessionConfigSelectOption {
+  value: string;
+  name: string;
+  description?: string;
+}
+export interface SessionConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: 'select' | 'boolean';
+  currentValue: string | boolean;
+  options?: SessionConfigSelectOption[];
+}
+
 export type AgentEvent =
   | { kind: 'user_message'; text: string }
   | { kind: 'message_chunk'; text: string }
@@ -18,7 +42,8 @@ export type AgentEvent =
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'status'; status: AgentStatus }
   | { kind: 'error'; message: string }
-  | { kind: 'takeover_request'; reqId: string; reason: string };
+  | { kind: 'takeover_request'; reqId: string; reason: string }
+  | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] };
 
 // On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.
 export type WireEvent = AgentEvent | { kind: 'raw_pty'; dataB64: string };
@@ -66,6 +91,8 @@ export type ClientMsg =
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }
   | { t: 'interrupt'; agentId: string; corrId?: string }
+  | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
+  | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }

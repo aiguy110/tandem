@@ -15,9 +15,36 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { AsyncQueue } from './asyncQueue.ts';
 import { PathEscapeError } from './workspaceFs.ts';
-import type { AgentAdapter, AgentEvent, ClientServices, SpawnOpts } from './types.ts';
+import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SpawnOpts } from './types.ts';
 
 let permCounter = 0;
+
+// Normalizes the ACP wire shape (SessionConfigOption, whose `options` may be a
+// flat list OR grouped under headers — SessionConfigSelectOptions) into our flat
+// SessionConfigOption. Groups are collapsed since Tandem's UI is a plain dropdown.
+function normalizeConfigOption(o: any): SessionConfigOption {
+  const type: 'select' | 'boolean' = o?.type === 'boolean' ? 'boolean' : 'select';
+  if (type === 'boolean') {
+    return { id: o.id, name: o.name, description: o.description ?? undefined, category: o.category ?? undefined, type, currentValue: !!o.currentValue };
+  }
+  const options: { value: string; name: string; description?: string }[] = [];
+  for (const item of o?.options ?? []) {
+    if (item && Array.isArray(item.options)) {
+      for (const opt of item.options) options.push({ value: opt.value, name: opt.name, description: opt.description ?? undefined });
+    } else if (item) {
+      options.push({ value: item.value, name: item.name, description: item.description ?? undefined });
+    }
+  }
+  return { id: o.id, name: o.name, description: o.description ?? undefined, category: o.category ?? undefined, type, currentValue: o.currentValue, options };
+}
+
+function normalizeModes(m: any): SessionModeState | null {
+  if (!m) return null;
+  return {
+    currentModeId: m.currentModeId,
+    availableModes: (m.availableModes ?? []).map((mo: any) => ({ id: mo.id, name: mo.name, description: mo.description ?? undefined })),
+  };
+}
 
 export class AcpAdapter implements AgentAdapter {
   // What this adapter *services*. Phase 3: fs + terminals are now backed by the
@@ -37,6 +64,11 @@ export class AcpAdapter implements AgentAdapter {
   // Unfinished tool calls, tracked so session/cancel can mark them cancelled in
   // the transcript (acp-notes.md cancellation contract).
   private liveToolCalls = new Set<string>();
+  // Current modes/configOptions (permission-mode + model selectors) — set from
+  // session/new|load's response, refreshed by current_mode_update /
+  // config_option_update notifications. Null modes = agent doesn't support them.
+  private modes: SessionModeState | null = null;
+  private configOptions: SessionConfigOption[] = [];
 
   constructor(readonly id: string, private launch: { cmd: string; args: string[] }) {}
 
@@ -73,16 +105,28 @@ export class AcpAdapter implements AgentAdapter {
 
     if (opts.resumeSessionId && this.agentLoadSession) {
       // Restore path (D11): resume the persisted ACP session instead of a new one.
-      await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] });
+      const res = (await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] })) as {
+        modes?: unknown;
+        configOptions?: unknown[];
+      };
       this.sessionId = opts.resumeSessionId;
+      this.modes = normalizeModes(res.modes);
+      this.configOptions = (res.configOptions ?? []).map(normalizeConfigOption);
     } else {
       // Phase 5: register any MCP servers (Playwright MCP + Tandem-control MCP)
       // the daemon wants this agent to have. McpServerStdio shape: {name, command,
       // args, env}. The AGENT spawns them; we only declare them here.
       const mcpServers = (opts.mcpServers ?? []).map((s) => ({ name: s.name, command: s.command, args: s.args, env: s.env }));
-      const res = (await this.rpc('session/new', { cwd: opts.cwd ?? process.cwd(), mcpServers })) as { sessionId: string };
+      const res = (await this.rpc('session/new', { cwd: opts.cwd ?? process.cwd(), mcpServers })) as {
+        sessionId: string;
+        modes?: unknown;
+        configOptions?: unknown[];
+      };
       this.sessionId = res.sessionId;
+      this.modes = normalizeModes(res.modes);
+      this.configOptions = (res.configOptions ?? []).map(normalizeConfigOption);
     }
+    if (this.modes || this.configOptions.length) this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
     this.q.push({ kind: 'status', status: 'idle' });
   }
 
@@ -270,8 +314,16 @@ export class AcpAdapter implements AgentAdapter {
           entries: (u.entries ?? []).map((e: any) => ({ label: e.content ?? '', status: AcpAdapter.planStatus(e.status) })),
         });
         break;
-      // user_message_chunk / usage_update / current_mode_update / available_commands_update
-      // / plan_removed / config_option_update / session_info_update are ignored for now.
+      case 'current_mode_update':
+        this.modes = this.modes ? { ...this.modes, currentModeId: u.currentModeId } : { currentModeId: u.currentModeId, availableModes: [] };
+        this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
+        break;
+      case 'config_option_update':
+        this.configOptions = (u.configOptions ?? []).map(normalizeConfigOption);
+        this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
+        break;
+      // user_message_chunk / usage_update / available_commands_update / plan_removed
+      // / session_info_update are ignored for now.
     }
   }
 
@@ -292,6 +344,26 @@ export class AcpAdapter implements AgentAdapter {
     this.permIds.delete(reqId);
     this.send({ jsonrpc: '2.0', id, result: { outcome: { outcome: 'selected', optionId } } });
     this.q.push({ kind: 'status', status: 'working' });
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    await this.rpc('session/set_mode', { sessionId: this.sessionId, modeId });
+    // The real agent confirms via a current_mode_update notification, but that
+    // races the RPC response on the wire — apply optimistically too so a client
+    // that only awaits the ack sees the change immediately.
+    this.modes = this.modes ? { ...this.modes, currentModeId: modeId } : { currentModeId: modeId, availableModes: [] };
+    this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
+  }
+
+  async setConfigOption(configId: string, value: string | boolean): Promise<void> {
+    const params: Record<string, unknown> =
+      typeof value === 'boolean' ? { sessionId: this.sessionId, configId, type: 'boolean', value } : { sessionId: this.sessionId, configId, value };
+    const res = (await this.rpc('session/set_config_option', params)) as { configOptions?: unknown[] };
+    // Pinned fact (acp-notes.md candidate): the real agent's response already
+    // carries the full updated configOptions list, so apply it directly rather
+    // than waiting on a config_option_update notification that may not follow.
+    if (res.configOptions) this.configOptions = res.configOptions.map(normalizeConfigOption);
+    this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
   }
 
   interrupt(): void {

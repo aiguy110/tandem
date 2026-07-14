@@ -7,7 +7,20 @@ import { create } from 'zustand';
 import { WsClient, resolveToken, type ConnState } from './ws/client';
 import { ptyHub } from './terminal/ptyHub';
 import { browserHub } from './terminal/browserHub';
-import type { AgentStatus, AgentSummary, Approval, BrowserInputWire, Channel, ClientMsg, RepoInfo, ServerMsg, SpawnSpec, WireEvent } from './wire';
+import type {
+  AgentStatus,
+  AgentSummary,
+  Approval,
+  BrowserInputWire,
+  Channel,
+  ClientMsg,
+  RepoInfo,
+  ServerMsg,
+  SessionConfigOption,
+  SessionModeState,
+  SpawnSpec,
+  WireEvent,
+} from './wire';
 
 // The focus/bandwidth rule (docs/browser.md): only the focused, browser-viewing
 // client streams the screencast. Base subscription omits 'browser'; the mounted
@@ -37,6 +50,10 @@ export interface AgentView {
   browserActive: boolean;
   browserOwner: 'agent' | 'user';
   takeovers: Takeover[];
+  // Permission-mode + config-option (incl. model selector) state, from the last
+  // session_config event. Null until the ACP agent reports it (or for pty agents,
+  // which never do) — the picker bar hides itself in that case.
+  sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command';
@@ -79,6 +96,8 @@ interface StoreState {
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
   respond: (agentId: string, reqId: string, optionId: string) => void;
+  setMode: (agentId: string, modeId: string) => void;
+  setConfigOption: (agentId: string, configId: string, value: string | boolean) => void;
   closeAgent: (agentId: string, force?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
   nav: (dir: 1 | -1) => void;
@@ -319,6 +338,8 @@ export const useStore = create<StoreState>((set, get) => {
       });
       client.send({ t: 'permission_response', agentId, reqId, optionId });
     },
+    setMode: (agentId, modeId) => client.send({ t: 'set_mode', agentId, modeId }),
+    setConfigOption: (agentId, configId, value) => client.send({ t: 'set_config_option', agentId, configId, value }),
     closeAgent: (agentId, force) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
@@ -381,6 +402,7 @@ function shell(id: string): AgentView {
     browserActive: false,
     browserOwner: 'agent',
     takeovers: [],
+    sessionConfig: null,
   };
 }
 
@@ -404,6 +426,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
     v.status = 'blocked';
     if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason }];
   }
+  if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
 }
 
 // All pending browser takeovers across agents, for the attention rail.
