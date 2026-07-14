@@ -19,6 +19,41 @@ experience.
 - **Survives disconnects by design**: a long-lived daemon owns all state; the browser is a
   pure view that can drop and reconnect without disturbing the agents.
 
+## Quick start
+
+Prerequisites: **Node 22+**, a C toolchain (for `better-sqlite3`'s native build), and an
+authenticated `claude` CLI if you want to drive the real agent. `git` on `PATH`.
+
+```bash
+# 1. Build the UI (the daemon serves the compiled dist)
+cd ui && npm install && npm run build && cd ..
+
+# 2. Install + start the daemon, pointing it at the built UI
+cd daemon && npm install                     # compiles better-sqlite3
+TANDEM_UI_DIR=../ui/dist npm run daemon       # → 127.0.0.1:7717
+```
+
+The daemon prints a **bootstrap URL** with an embedded token on first run, e.g.
+`http://127.0.0.1:7717/#t=<token>` — open it. The browser reads the token from the URL
+fragment once and stores it; later visits to `http://127.0.0.1:7717/` just work. Press `c`
+to quick-spawn an agent into a repo under your project roots.
+
+Common configuration (full table in [`daemon/README.md`](daemon/README.md#configuration)):
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `TANDEM_UI_DIR` | — | Path to the built UI (`ui/dist`); omit to serve a placeholder |
+| `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
+| `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
+| `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
+| `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
+
+**Remote access:** the daemon binds localhost by default; front it with `tailscale serve`
+(TLS + network identity) rather than exposing the port. The bearer token is a second layer.
+
+**Validate the build:** `cd daemon && npm test` runs eight de-risk suites end-to-end
+(each on a throwaway `TANDEM_HOME`, so your real `~/.tandem` is untouched).
+
 ## Architecture at a glance
 
 ```
