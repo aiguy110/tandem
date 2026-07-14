@@ -87,3 +87,39 @@ Diff.
 
 **Why:** Keeps everything about an agent in one place and keeps v1 tight. Detachable /
 first-class browser surfaces can come later.
+
+## D8 — Workspaces: one git worktree + branch per agent (host dirs, no sandbox)
+
+**Choice:** Agents run in host working directories. Spawning into a git repo creates an
+isolated `git worktree` + branch (`tandem/<agent>`, based on current HEAD, checked out under
+`~/.tandem/worktrees/<repo>/<agent>/`); non-git dirs are used as-is. No sandboxing yet.
+
+**Why:** Worktrees give clobber-free parallel agents on one repo for almost free — they're
+just different host directories, no container machinery. Central placement keeps the real
+repo clean and makes worktrees easy to enumerate/GC.
+
+**Teardown:** closing an agent removes the worktree checkout but **keeps the branch**
+(work never lost); uncommitted changes block the close with a warning. **Merge-back is an
+explicit human action** (`agent.mergeBack` → review diff → merge or PR), never automatic.
+
+**Deferred:** real sandboxing (containers/per-agent isolation) is future work.
+
+## D9 — Spawn UX: dir-first quick-spawn + command palette
+
+**Choice:** A dedicated quick-spawn hotkey opens a fuzzy **directory-first** palette
+(`Enter` = spawn idle, `⇥ task` = spawn + dispatch, `⌘Enter` = advanced). A separate command
+palette (`⌘K`) covers all commands + jump-to-agent and shows every keybinding inline.
+
+**Why:** Spawn is the most-repeated action; dir-first with defaults makes the common case a
+few keystrokes, while progressive disclosure keeps full control reachable. The palette is
+the discoverability layer that also teaches the hotkeys.
+
+## D10 — Hotkeys: single-key + chords, rebindable
+
+**Choice:** Single-key and chord bindings (`c`, `g a`), active when not typing in a field,
+resolved by scope (`global` / `agent-focused` / `modal-open` / `text-input`), fully
+customizable via a `keybindings.json`.
+
+**Why:** Fewest keystrokes for a keyboard-heavy conductor workflow; mirrors the
+`keybindings.json` model the user already uses in Claude Code. Scope-awareness avoids
+bare-key collisions with text input.

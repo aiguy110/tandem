@@ -16,7 +16,9 @@ type ClientMsg =
   | { t: 'input';       agentId: string; bytesB64: string }            // → adapter.sendInput
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string }
   | { t: 'interrupt';   agentId: string }
-  | { t: 'spawn_agent'; adapter: 'acp'|'pty'; config: SpawnOpts }
+  | { t: 'spawn_agent'; spec: SpawnSpec }                               // see spawn-and-workspaces.md
+  | { t: 'close_agent'; agentId: string; force?: boolean }             // teardown: keep branch, drop checkout
+  | { t: 'merge_back';  agentId: string; mode: 'merge'|'pr' }          // explicit, human-initiated
   | { t: 'browser_control'; agentId: string; action: 'grab'|'release' }; // control-owner token
 
 type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
