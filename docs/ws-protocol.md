@@ -68,4 +68,6 @@ concrete payoff of the "daemon owns all state" invariant.
   queue stay live.
 - **`pty`** — binary `raw_pty` frames for xterm.js (TUI-only agents, user shell).
 - **`terminals`** — client-owned terminal output for structured agents.
-- **`browser`** — CDP screencast frames + control-owner state.
+- **`browser`** — CDP screencast frames + control-owner state, plus `takeover_request`
+  attention items (agent called `browser.request_takeover`); `browser_control` grab/release
+  accepts the wheel / hands back. See [`browser.md`](browser.md).

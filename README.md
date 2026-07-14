@@ -58,6 +58,7 @@ Self-hosted Daemon  ────────────────────
 | Deployment topology | Self-hosted daemon (v1) |
 | Agent integration | Hybrid, structured-first (ACP primary, pty fallback) |
 | Shared browser stack | CDP screencast, Steel-based |
+| Browser control | Per-agent Steel; agent via Playwright MCP (lazy); hard-pause token; MCP takeover |
 | Orchestration model | Human-as-conductor |
 | Home-view layout | Docked rails + focus |
 | Shared browser in UI | Pane inside focus mode |
@@ -75,6 +76,7 @@ Self-hosted Daemon  ────────────────────
 - [`docs/ui.md`](docs/ui.md) — UI structure and state model
 - [`docs/spawn-and-workspaces.md`](docs/spawn-and-workspaces.md) — spawn mechanics, keymap, worktrees
 - [`docs/terminal.md`](docs/terminal.md) — terminal pane (ghostty-web) + spike findings
+- [`docs/browser.md`](docs/browser.md) — shared browser (Playwright MCP + Steel, control token)
 - [`docs/acp-notes.md`](docs/acp-notes.md) — pinned ACP protocol facts
 
 ## Status

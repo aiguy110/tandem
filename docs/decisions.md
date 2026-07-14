@@ -148,3 +148,24 @@ interface keeps the emulator out of the rest of the UI.
 **Constraints:** only the focused terminal renders live (WebGL context limits); reconnect
 replays buffered `raw_pty` bytes; resize propagates via a `resize` WS message. See
 [`terminal.md`](terminal.md).
+
+## D13 — Shared browser: per-agent Steel, Playwright MCP, Tandem-mediated token
+
+**Choice:** Each agent gets its own Steel (self-hosted) browser session. The agent drives it
+via a **Playwright MCP** server (snapshot mode) registered in ACP `mcpServers`, pointed at a
+**Tandem browser-broker** URL that provisions the Steel session **lazily on first use** — so
+every agent has browser tools but no browser spins up until needed. The user views/controls
+the same browser via Steel's CDP screencast in the Browser pane.
+
+**Control:** a per-browser control-owner token (`agent` / `user`). Since the Playwright MCP
+is Tandem-mediated, grabbing the wheel **hard-pauses** the agent's browser tool calls (async
+hold, no errors) until release. Agent-initiated handoff uses a dedicated **Tandem-control MCP**
+tool `browser.request_takeover(reason)`, which surfaces in the attention rail as
+`blocked · needs you` and resolves when the human hands back.
+
+**Why:** Per-agent isolation matches the worktree model; Playwright MCP over CDP is the
+supported way to attach an agent to an existing shared browser; mediating the MCP lets Tandem
+enforce the token without trusting the agent; a dedicated takeover tool is a cleaner fit than
+overloading ACP permissions. See [`browser.md`](browser.md).
+
+**Deferred:** VNC/desktop fallback, shared cross-agent profiles, persisted browser state.
