@@ -56,6 +56,10 @@ interface StoreState {
   modal: ModalKind;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
+  // Unsent prompt drafts, keyed by agentId. Lives here (not in the pane's local
+  // state) so a draft survives tab switches and agent switches, which remount the
+  // TranscriptPane.
+  drafts: Record<string, string>;
   // Which agent (if any) currently has its browser channel subscribed (i.e. the
   // focused agent with the Browser pane open) — drives the screencast focus rule.
   browserSubAgent: string | null;
@@ -72,6 +76,7 @@ interface StoreState {
   refreshAgents: () => void;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   prompt: (agentId: string, text: string) => void;
+  setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
   respond: (agentId: string, reqId: string, optionId: string) => void;
   closeAgent: (agentId: string, force?: boolean) => Promise<AckResult>;
@@ -90,6 +95,9 @@ const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 
 let client: WsClient;
+// Guards the one-time window 'hashchange' listener boot() installs (boot may run
+// twice under React StrictMode in dev).
+let hashListenerAttached = false;
 
 function rankAgents(agents: Record<string, AgentView>, order: string[]): string[] {
   // Blocked / error float to the top (docs/ui.md), otherwise insertion order.
@@ -248,11 +256,24 @@ export const useStore = create<StoreState>((set, get) => {
     modal: 'none',
     inspectorOpen: false,
     dirs: [],
+    drafts: {},
     browserSubAgent: null,
 
     boot: () => {
       const tok = resolveToken();
       client.start(tok);
+      // Adopt a token pasted into the URL fragment AFTER boot — e.g. opening a
+      // fresh bootstrap URL (#t=…) in the already-open tab after the daemon
+      // restarted with a new token. That's a same-document hash change, so the
+      // SPA never re-runs boot(); without this the tab stays stuck on the old
+      // (now-rejected) token until a manual reload.
+      if (!hashListenerAttached) {
+        hashListenerAttached = true;
+        window.addEventListener('hashchange', () => {
+          const next = resolveToken();
+          if (next) client.setToken(next);
+        });
+      }
     },
     submitToken: (t) => client.setToken(t.trim()),
     focus: (id) => set({ focusedId: id }),
@@ -282,7 +303,11 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
-    prompt: (agentId, text) => client.send({ t: 'prompt', agentId, text }),
+    prompt: (agentId, text) => {
+      client.send({ t: 'prompt', agentId, text });
+      set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+    },
+    setDraft: (agentId, text) => set((st) => ({ drafts: { ...st.drafts, [agentId]: text } })),
     interrupt: (agentId) => client.send({ t: 'interrupt', agentId }),
     respond: (agentId, reqId, optionId) => {
       // Optimistically drop the approval so the rail feels instant; the daemon

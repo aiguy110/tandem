@@ -8,6 +8,7 @@ export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 export type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 
 export type AgentEvent =
+  | { kind: 'user_message'; text: string }
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown }

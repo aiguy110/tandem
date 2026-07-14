@@ -139,6 +139,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* ---- transcript ---- */
 .transcript { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .ev { max-width: 860px; }
+/* The human's turn — a distinct bubble aligned to the right so the eye can tell
+   who said what at a glance. */
+.ev.user {
+  align-self: flex-end; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--human-soft); border: 1px solid var(--human); color: var(--text);
+  border-radius: var(--r-md); padding: 8px 12px; line-height: 1.5;
+}
 .ev.msg { line-height: 1.62; }
 .ev.msg p { margin: 0 0 8px; }
 .ev.msg pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
@@ -190,9 +197,17 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
 .appr .acts { display: flex; gap: 6px; }
-.btn-approve, .btn-deny { flex: 1; height: 28px; border-radius: var(--r-sm); font-size: var(--fs-sm); border: 1px solid transparent; }
+/* Option names can be long (e.g. a bundled "Always Allow Bash(…), Bash(…)"), so
+   let buttons grow to fit and wrap instead of clipping at a fixed height (which
+   made wrapped text spill over the border and read as a strike-through). */
+.appr .acts { flex-wrap: wrap; }
+.btn-approve, .btn-deny {
+  flex: 1 1 auto; min-width: 0; min-height: 28px; padding: 5px 9px;
+  border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.3;
+  border: 1px solid transparent; text-align: center; overflow-wrap: anywhere;
+}
 .btn-approve { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
-.btn-deny { background: var(--err-soft); color: var(--err); border-color: var(--err); }
+.btn-deny { flex-grow: 0; background: var(--err-soft); color: var(--err); border-color: var(--err); }
 
 /* ---- inspector ---- */
 .inspector { grid-area: inspector; border-top: 1px solid var(--border); background: var(--surface); }

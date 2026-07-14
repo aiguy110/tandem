@@ -82,6 +82,9 @@ export class AgentSession {
   }
 
   prompt(text: string): Promise<string> {
+    // Log the human turn first so it lands in the transcript ahead of the agent's
+    // response (and replays for late/reconnecting clients).
+    this.emit({ kind: 'user_message', text });
     return this.adapter.prompt(text);
   }
   respondPermission(reqId: string, optionId: string): void {

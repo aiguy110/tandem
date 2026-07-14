@@ -10,6 +10,7 @@ import { renderMarkdown } from '../../markdown';
 // prompt input sends {t:'prompt'}; Esc/Interrupt sends {t:'interrupt'}.
 
 type Item =
+  | { kind: 'user'; key: string; text: string }
   | { kind: 'message'; key: string; text: string }
   | { kind: 'thought'; key: string; text: string }
   | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown }
@@ -26,6 +27,9 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
+      case 'user_message':
+        items.push({ kind: 'user', key: `u${seq}`, text: ev.text });
+        break;
       case 'message_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'message') last.text += ev.text;
@@ -39,9 +43,20 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         break;
       }
       case 'tool_call': {
-        const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content };
-        tools.set(ev.id, item);
-        items.push(item);
+        // Real agents re-send tool_call for the SAME toolCallId as it progresses
+        // (pending → running → done). Keep ONE card per id, updated in place —
+        // pushing a fresh item each time gives every card the key `tc${id}`, and
+        // duplicate React keys make the cards render as empty slivers on remount.
+        const existing = tools.get(ev.id);
+        if (existing) {
+          existing.title = ev.title || existing.title;
+          existing.status = ev.status;
+          if (ev.content != null) existing.content = ev.content;
+        } else {
+          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content };
+          tools.set(ev.id, item);
+          items.push(item);
+        }
         break;
       }
       case 'tool_call_update': {
@@ -107,6 +122,8 @@ export function TranscriptPane() {
 
 function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) => void }) {
   switch (item.kind) {
+    case 'user':
+      return <div className="ev user">{item.text}</div>;
     case 'message':
       return <div className="ev msg" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />;
     case 'thought':
@@ -140,7 +157,7 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
       return (
         <div className="inline-approval">
           <div className="t">⚠ Permission required: {item.title}</div>
-          <div className="acts" style={{ display: 'flex', gap: 6 }}>
+          <div className="acts" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {item.options.map((o) => (
               <button key={o.optionId} className={/reject|deny|no/i.test(o.name) ? 'btn-deny' : 'btn-approve'} onClick={() => onRespond(o.optionId)}>
                 {o.name}
@@ -172,13 +189,15 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
   const interrupt = useStore((s) => s.interrupt);
-  const [text, setText] = useState('');
+  // Draft lives in the store (keyed by agent) so it survives the remounts that a
+  // tab switch or agent switch cause.
+  const text = useStore((s) => s.drafts[agentId] ?? '');
+  const setDraft = useStore((s) => s.setDraft);
 
   const send = () => {
     const t = text.trim();
     if (!t) return;
     prompt(agentId, t);
-    setText('');
   };
 
   return (
@@ -186,7 +205,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       <textarea
         placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => setDraft(agentId, e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();

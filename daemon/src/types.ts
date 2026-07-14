@@ -11,6 +11,10 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 
 export type AgentEvent =
+  // The human's prompt, echoed into the log so it renders in the transcript and
+  // replays for every client (incl. after a daemon restart) — the daemon owns it,
+  // the browser never fabricates it.
+  | { kind: 'user_message'; text: string }
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown }
