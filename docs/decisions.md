@@ -169,3 +169,32 @@ enforce the token without trusting the agent; a dedicated takeover tool is a cle
 overloading ACP permissions. See [`browser.md`](browser.md).
 
 **Deferred:** VNC/desktop fallback, shared cross-agent profiles, persisted browser state.
+
+**Amendment (v1 build):** the browser broker exposes one `BrowserDriver` interface with two
+implementations — `SteelDriver` (Steel's sessions API at `STEEL_BASE_URL`, the specced
+production path) and `LocalChromiumDriver` (Playwright-launched headless Chromium, used
+where no Steel/Docker is available and by the automated tests; same CDP surface).
+
+## D14 — Persistence: SQLite under `~/.tandem`
+
+**Choice:** `better-sqlite3` database at `~/.tandem/tandem.db` holding the agent registry
+(`SpawnSpec` + ACP `sessionId` + worktree/branch) and per-agent event logs (seq-keyed).
+
+**Why:** D11 (durable agents) needs a store that survives restarts, appends fast, and can
+serve `sinceSeq` range queries for replay. SQLite is atomic, queryable, single-file, and
+handles growing logs; WAL mode keeps appends cheap.
+
+**Alternatives:** JSONL + registry.json (zero native deps, human-readable, but manual
+compaction and racy multi-file updates).
+
+## D15 — WS auth: localhost bind + bearer token, URL-fragment bootstrap
+
+**Choice:** The daemon binds `127.0.0.1` by default and serves the UI over the same HTTP
+port as the WS. On first run it generates a token into `~/.tandem/token` and prints a
+bootstrap URL (`http://host/#t=<token>`). The UI reads the fragment once, stores the token
+in `localStorage`, and presents it on every WS connect; the daemon rejects unauthenticated
+sockets.
+
+**Why:** Remote access is fronted by `tailscale serve` (TLS + network identity); the token
+is defense-in-depth. URL fragments are never sent in HTTP requests, so the token stays out
+of proxy/serve logs.

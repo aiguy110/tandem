@@ -66,6 +66,8 @@ Self-hosted Daemon  ────────────────────
 | Workspaces | Git worktree + branch per agent (host dirs, no sandbox yet) |
 | Spawn UX | Dir-first quick-spawn + command palette |
 | Hotkeys | Single-key + chords, rebindable |
+| Persistence | SQLite (`~/.tandem/tandem.db`) — registry + event logs |
+| WS auth | Localhost bind + bearer token, URL-fragment bootstrap (Tailscale for remote) |
 
 ## Docs
 
@@ -81,14 +83,45 @@ Self-hosted Daemon  ────────────────────
 
 ## Status
 
-Specs + validated spine. What exists:
+**The full v1 build slice is implemented and validated.** All five build-slice steps are
+built end-to-end, each proven by an automated de-risk suite. What exists:
 
 - **`docs/`** — the architecture and locked decisions (below).
 - **`design/`** — an interactive wireframe of the docked-rails UI.
-- **`daemon/`** — a runnable PoC that **de-risks the durability + ACP spine**: the daemon
-  owns the agent process, a client socket can die (simulated dropped SSH pipe) and
-  reconnect with gapless seq-replay, and the ACP `request_permission` loop round-trips
-  end-to-end. `cd daemon && npm install && npm run derisk` — all checks pass. See
+- **`daemon/`** — the real multi-agent daemon: multi-agent registry, **SQLite persistence**
+  (`~/.tandem/tandem.db`) with restore-on-restart, the full browser↔daemon **WS protocol**
+  with **bearer-token auth**, **git-worktree workspaces**, ACP **fs/terminal servicing**
+  (daemon is the ACP client), and the **shared-browser broker** (control token + hard-pause).
+  `cd daemon && npm install && npm test` runs eight de-risk suites — all pass. See
+  [`daemon/README.md`](daemon/README.md).
+- **`ui/`** — the React "mission control" front-end: durable WS client (reconnect + replay),
+  docked rails + focus, streaming transcript, always-on approvals rail, quick-spawn +
+  command palettes with a rebindable keymap, ghostty-web terminal, and the shared-browser
+  pane (screencast + grab/release wheel). `cd ui && npm install && npm run build`; the
+  daemon serves the built `dist` (`TANDEM_UI_DIR`).
+- **`spike/`** — the original de-risk spikes (terminal + shared browser) the production code
+  was ported from.
+
+**Validation.** `daemon/`'s `npm test` runs eight suites: durability/ACP spine, multi-agent,
+restart-restore, auth, git worktrees, ACP fs+terminal+cancel, shared browser (10-check CDP
+harness), and a **full-slice integration smoke** (discover → spawn worktree agent → prompt →
+approval → second isolated agent → hard-drop reconnect replay → dirty-close teardown). The UI
+was driven end-to-end against a live daemon + mock ACP agent via Playwright.
+
+### Deviations from the specs (recorded during the build)
+
+- **Persistence + auth** were unspecified and are now decided: SQLite (D14) and a
+  localhost-bind + bearer-token with URL-fragment bootstrap (D15), fronted by `tailscale
+  serve` for remote. See [`docs/decisions.md`](docs/decisions.md).
+- **`BrowserDriver` interface** with `SteelDriver` (specced, **untested** — no Docker on the
+  build host) and `LocalChromiumDriver` (Playwright-launched, the tested path). Steel remains
+  the intended production driver per D4/D13; the local driver is a drop-in behind one
+  interface. See D13's amendment.
+- **`takeover_request`** rides the always-on `transcript` channel, not the `browser` channel,
+  so the attention rail surfaces it even when the Browser pane is closed.
+- The **real `claude-agent-acp`** accepts our advertised `fs`/`terminal` capabilities and MCP
+  registrations, but does its own file/command I/O and did not delegate to the client during
+  spot checks — so the fs/terminal *servicing* path is exercised by the mock agent. See
   [`daemon/README.md`](daemon/README.md).
 
-See [`docs/architecture.md`](docs/architecture.md#v1-build-slice) for the full v1 build slice.
+See [`docs/architecture.md`](docs/architecture.md#v1-build-slice) for the build slice.

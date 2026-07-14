@@ -41,8 +41,8 @@ export class PtyAdapter implements AgentAdapter {
     });
   }
 
-  prompt(): Promise<void> {
-    return Promise.resolve();
+  prompt(): Promise<string> {
+    return Promise.resolve('end_turn');
   }
   sendInput(bytes: Uint8Array): void {
     this.proc?.write(Buffer.from(bytes).toString('utf8'));

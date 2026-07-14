@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Target — shared browser</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0e2233; color: #e6eef5; }
+    header { padding: 26px 34px; background: linear-gradient(90deg, #0b8a80, #1487b0); }
+    #title { margin: 0; font-size: 30px; }
+    #counter { margin-top: 6px; font-size: 14px; color: #d7ecff; }
+    main { padding: 26px 34px; display: flex; flex-direction: column; gap: 16px; max-width: 560px; }
+    input { font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #2a4a63; background: #0a1a28; color: #e6eef5; }
+    #btn { font-size: 16px; padding: 12px 18px; border-radius: 8px; border: 0; background: #db4a2e; color: #fff; cursor: pointer; width: 260px; }
+    #status { font-size: 18px; color: #f2b441; min-height: 22px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Tandem shared browser</h1>
+    <div id="counter">live counter: 0</div>
+  </header>
+  <main>
+    <label>Type here:<input id="input" placeholder="…" /></label>
+    <button id="btn" onclick="document.getElementById('status').textContent = 'CLICKED BY USER'">Do the human-only step</button>
+    <div id="status">waiting…</div>
+  </main>
+  <script>
+    let n = 0;
+    setInterval(() => { document.getElementById('counter').textContent = 'live counter: ' + ++n; }, 300);
+  </script>
+</body>
+</html>

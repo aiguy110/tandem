@@ -4,10 +4,13 @@
 
 import { PtyAdapter } from './ptyAdapter.ts';
 import { AgentSession } from './session.ts';
+import { MemoryStore } from './eventLog.ts';
+import type { SpawnSpec } from './types.ts';
 
 async function main() {
   const adapter = new PtyAdapter('shell-1');
-  const session = new AgentSession('shell-1', adapter);
+  const spec: SpawnSpec = { adapter: 'pty', workspace: { kind: 'existing', cwd: process.cwd() }, name: 'shell-1' };
+  const session = new AgentSession('shell-1', 'shell-1', spec, adapter, new MemoryStore());
   try {
     await session.start({
       cwd: process.cwd(),

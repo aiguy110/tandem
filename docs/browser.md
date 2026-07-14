@@ -1,8 +1,14 @@
 # Shared browser
 
 Joint agent + human control of one browser **per agent**. The agent drives via Playwright
-MCP over CDP; the user views and controls the same browser via Steel's screencast, arbitrated
+MCP over CDP; the user views and controls the same browser via a CDP screencast, arbitrated
 by a **control-owner token**. Builds on D4 (CDP-screencast, Steel-based) and D13.
+
+> **Status: BUILT (Phase 5).** The broker, both drivers, the CDP-proxy hard-pause gate,
+> MCP wiring, screencast/input over the daemon WS, and the UI Browser pane are implemented
+> in `daemon/src/browser/` + `ui/src/components/panes/BrowserPane.tsx` and validated by
+> `npm run derisk:browser` (checks a–h). See "What's real (Phase 5)" below for the concrete
+> shapes and the one pragmatic deviation from the sketch above (drivers, not Steel-only).
 
 ## Topology
 
@@ -91,6 +97,61 @@ into the page — the human watches the agent drive in real time and can grab th
 **Transfer to production:** swap the raw Chrome + `connectOverCDP` URL for a **Steel
 session's CDP endpoint**; the Playwright-MCP layer is a thin wrapper over the same
 `connectOverCDP` proven here (wiring `--cdp-endpoint` + the lazy broker is a build-phase step).
+
+## What's real (Phase 5)
+
+Implemented in `daemon/src/browser/` (`driver.ts`, `broker.ts`, `sharedBrowser.ts`,
+`controlMcp.mjs`, `mcpWiring.ts`) and wired through `registry.ts` / `server.ts` /
+`index.ts`; UI in `BrowserPane.tsx` + `browserHub.ts`.
+
+### Driver selection (D13 amendment)
+
+One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(agentId)`:
+
+- **`LocalChromiumDriver`** (default): launches Playwright's bundled headless Chromium per
+  agent with a per-agent user-data dir under `$TANDEM_HOME/browser-profiles/<agent>`.
+  Used by all automated tests and wherever no Steel/Docker exists.
+- **`SteelDriver`**: `POST {STEEL_BASE_URL}/v1/sessions` → session's CDP/websocket URL;
+  release on teardown. **Specced but untested** on this machine (no Docker) — kept thin;
+  field names are isolated in one class if a Steel build differs.
+
+Config: `TANDEM_BROWSER_DRIVER=local|steel` (default `local`; `steel` requires
+`STEEL_BASE_URL`, optional `STEEL_API_KEY`). `TANDEM_BROWSER_MCP=off` disables the MCP
+registration at `session/new` (mock-agent derisk suites run with it off; default on).
+
+### The broker: a gated CDP proxy (the design choice)
+
+The broker runs its own localhost HTTP/WS server and serves a **stable per-agent CDP URL**
+(`http://127.0.0.1:<broker>/cdp/<agentId>`) that Playwright MCP gets via `--cdp-endpoint`.
+Nothing is provisioned until the **first CDP request** hits that URL (HTTP `/json/version`
+or the WS upgrade); the broker then provisions via the driver, rewrites the advertised
+`webSocketDebuggerUrl` to point back through itself, and **proxies CDP frames**.
+
+The hard-pause gate lives **in this proxy**, not in front of the MCP process: while
+`controlOwner = user`, CDP frames from the agent's connection are **queued** (not forwarded,
+not errored) and flushed in order on release. This was chosen over fronting the MCP process
+because Playwright MCP speaks CDP directly to the endpoint we hand it — the proxy is the one
+layer that (a) preserves the laziness invariant (provision on first connect) and (b) can hold
+the agent's actions with zero agent/MCP cooperation. The daemon's own screencast + `Input.*`
+run on a **separate, ungated** CDP connection, so the human's view and input keep working
+while the agent is held. (One CDP subtlety: frames must be relayed as **text**, not binary —
+Chrome closes the socket otherwise.)
+
+### Wire protocol (see ws-protocol.md)
+
+- `browser_frame` / `browser_state` (daemon → UI), `browser_input` / `browser_control`
+  (UI → daemon); `takeover_request` is a normalized `AgentEvent` on the transcript channel.
+- Screencast follows the **focus rule**: only a client subscribed to the agent's `browser`
+  channel streams; the UI subscribes it only while the Browser pane is open for the focused
+  agent, and the daemon stops the cast when the last subscriber leaves.
+
+### Attention (implemented)
+
+The Tandem-control MCP (stdio, spawned by the agent) exposes `browser_request_takeover(reason)`.
+It POSTs to the daemon's internal HTTP surface (bearer-token authed); the daemon emits
+`{kind:'takeover_request', reqId, reason}` + `status: blocked`, and the tool call blocks until
+the human **releases** the wheel, then returns and the agent resumes (`working`). The UI shows
+the Browser-pane banner and an attention card in the approvals rail.
 
 ## Deferred
 

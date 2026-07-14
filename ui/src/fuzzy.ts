@@ -1,0 +1,36 @@
+// A tiny fuzzy subsequence matcher — enough for the dir-first spawn palette and
+// the command palette (no dependency needed). Returns a score (higher = better)
+// or -Infinity when the query isn't a subsequence of the target.
+export function fuzzyScore(query: string, target: string): number {
+  if (!query) return 0;
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  let qi = 0;
+  let score = 0;
+  let streak = 0;
+  let prevIdx = -1;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      streak++;
+      score += 1 + streak; // reward consecutive matches
+      if (ti === 0 || /[\s/_\-.]/.test(t[ti - 1])) score += 3; // word-boundary bonus
+      if (prevIdx >= 0 && ti === prevIdx + 1) score += 1;
+      prevIdx = ti;
+      qi++;
+    } else {
+      streak = 0;
+    }
+  }
+  if (qi < q.length) return -Infinity;
+  score -= t.length * 0.01; // gentle preference for shorter targets
+  return score;
+}
+
+export function fuzzyFilter<T>(query: string, items: T[], key: (t: T) => string): T[] {
+  if (!query) return items;
+  return items
+    .map((it) => ({ it, s: fuzzyScore(query, key(it)) }))
+    .filter((x) => x.s > -Infinity)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.it);
+}

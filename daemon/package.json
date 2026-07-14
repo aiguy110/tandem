@@ -6,11 +6,23 @@
   "description": "Tandem daemon spine PoC — daemon-owns-state durability + ACP adapter",
   "scripts": {
     "derisk": "tsx src/derisk.ts",
+    "derisk:multi": "tsx src/deriskMulti.ts",
+    "derisk:restart": "tsx src/deriskRestart.ts",
+    "derisk:auth": "tsx src/deriskAuth.ts",
+    "derisk:workspace": "tsx src/deriskWorkspace.ts",
+    "derisk:services": "tsx src/deriskServices.ts",
+    "derisk:browser": "tsx src/deriskBrowser.ts",
+    "derisk:integration": "tsx src/deriskIntegration.ts",
+    "derisk:all": "npm run derisk && npm run derisk:multi && npm run derisk:restart && npm run derisk:auth && npm run derisk:workspace && npm run derisk:services && npm run derisk:browser && npm run derisk:integration",
+    "test": "npm run derisk:all",
     "acp:live": "tsx src/acpLive.ts",
     "daemon": "tsx src/index.ts",
     "pty-smoke": "tsx src/ptySmoke.ts"
   },
   "dependencies": {
+    "@playwright/mcp": "^0.0.78",
+    "better-sqlite3": "^12.11.1",
+    "playwright-core": "^1.61.1",
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
@@ -18,6 +30,7 @@
   },
   "devDependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.59.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.7.0",
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.2",

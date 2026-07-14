@@ -14,14 +14,16 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { AsyncQueue } from './asyncQueue.ts';
-import type { AgentAdapter, AgentEvent, SpawnOpts } from './types.ts';
+import { PathEscapeError } from './workspaceFs.ts';
+import type { AgentAdapter, AgentEvent, ClientServices, SpawnOpts } from './types.ts';
 
 let permCounter = 0;
 
 export class AcpAdapter implements AgentAdapter {
-  // What this adapter currently *services*. fs/terminal are advertised as false
-  // to the agent until the daemon has a real workspace fs + TerminalHost (TODO).
-  readonly capabilities = { structured: true, terminals: false, loadSession: true, fs: false };
+  // What this adapter *services*. Phase 3: fs + terminals are now backed by the
+  // daemon-owned WorkspaceFs + TerminalHost passed in via ClientServices, so we
+  // advertise them to the agent and handle its fs/* and terminal/* requests.
+  readonly capabilities = { structured: true, terminals: true, loadSession: true, fs: true };
 
   private q = new AsyncQueue<AgentEvent>();
   private proc?: ChildProcess;
@@ -29,7 +31,12 @@ export class AcpAdapter implements AgentAdapter {
   private nextId = 1;
   private pending = new Map<number, { resolve: (r: unknown) => void; reject: (e: unknown) => void }>();
   private sessionId = '';
+  private agentLoadSession = false; // from the agent's initialize response
   private permIds = new Map<string, number>(); // our reqId -> agent's JSON-RPC request id
+  private services?: ClientServices; // daemon-owned fs + terminals
+  // Unfinished tool calls, tracked so session/cancel can mark them cancelled in
+  // the transcript (acp-notes.md cancellation contract).
+  private liveToolCalls = new Set<string>();
 
   constructor(readonly id: string, private launch: { cmd: string; args: string[] }) {}
 
@@ -39,9 +46,14 @@ export class AcpAdapter implements AgentAdapter {
   get pid() {
     return this.proc?.pid;
   }
+  // Persisted for restore (D11). Empty until session/new or session/load resolves.
+  get acpSessionId() {
+    return this.sessionId || undefined;
+  }
 
-  async spawn(opts: SpawnOpts): Promise<void> {
-    this.proc = spawn(this.launch.cmd, this.launch.args, { stdio: ['pipe', 'pipe', 'inherit'] });
+  async spawn(opts: SpawnOpts, services?: ClientServices): Promise<void> {
+    this.services = services;
+    this.proc = spawn(this.launch.cmd, this.launch.args, { stdio: ['pipe', 'pipe', 'inherit'], cwd: opts.cwd });
     this.proc.stdout!.on('data', (d: Buffer) => this.onData(d));
     this.proc.on('exit', (code) => {
       for (const [, p] of this.pending) p.reject(new Error(`agent exited (code ${code}) before responding`));
@@ -50,16 +62,36 @@ export class AcpAdapter implements AgentAdapter {
       this.q.close();
     });
 
-    // TODO: once the daemon owns a workspace fs + TerminalHost, advertise these
-    // and service fs/* and terminal/* requests. For now advertise none so the
-    // agent does its own I/O and we just consume the update stream.
-    await this.rpc('initialize', {
+    // Phase 3: the daemon owns a WorkspaceFs + TerminalHost (via ClientServices),
+    // so advertise fs + terminal and service the agent's fs/* and terminal/*
+    // requests. `terminal` is a plain boolean per the schema (ClientCapabilities).
+    const init = (await this.rpc('initialize', {
       protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-    });
-    const res = (await this.rpc('session/new', { cwd: opts.cwd ?? process.cwd(), mcpServers: [] })) as { sessionId: string };
-    this.sessionId = res.sessionId;
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    })) as { agentCapabilities?: { loadSession?: boolean } };
+    this.agentLoadSession = !!init.agentCapabilities?.loadSession;
+
+    if (opts.resumeSessionId && this.agentLoadSession) {
+      // Restore path (D11): resume the persisted ACP session instead of a new one.
+      await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] });
+      this.sessionId = opts.resumeSessionId;
+    } else {
+      // Phase 5: register any MCP servers (Playwright MCP + Tandem-control MCP)
+      // the daemon wants this agent to have. McpServerStdio shape: {name, command,
+      // args, env}. The AGENT spawns them; we only declare them here.
+      const mcpServers = (opts.mcpServers ?? []).map((s) => ({ name: s.name, command: s.command, args: s.args, env: s.env }));
+      const res = (await this.rpc('session/new', { cwd: opts.cwd ?? process.cwd(), mcpServers })) as { sessionId: string };
+      this.sessionId = res.sessionId;
+    }
     this.q.push({ kind: 'status', status: 'idle' });
+  }
+
+  // Explicit resume entry-point (docs/agent-adapter.md), for callers that spawn
+  // then load. spawn(opts.resumeSessionId) is the primary path used by restore.
+  async loadSession(sessionId: string): Promise<void> {
+    if (!this.agentLoadSession) throw new Error('agent does not advertise loadSession');
+    await this.rpc('session/load', { sessionId, cwd: process.cwd(), mcpServers: [] });
+    this.sessionId = sessionId;
   }
 
   private send(obj: unknown): void {
@@ -123,9 +155,67 @@ export class AcpAdapter implements AgentAdapter {
       });
       return;
     }
-    // We advertised no fs/terminal capabilities, so we shouldn't receive those.
-    // Be honest rather than acking with a bogus empty success.
-    this.send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `client does not support method: ${msg.method}` } });
+    // fs/* and terminal/* are serviced by the daemon-owned ClientServices. These
+    // are async; we respond when they settle (JSON-RPC allows out-of-order ids),
+    // so e.g. terminal/wait_for_exit never blocks the read loop.
+    void this.serviceRequest(msg);
+  }
+
+  private ok(id: number, result: unknown): void {
+    this.send({ jsonrpc: '2.0', id, result });
+  }
+  private err(id: number, code: number, message: string): void {
+    this.send({ jsonrpc: '2.0', id, error: { code, message } });
+  }
+
+  private async serviceRequest(msg: any): Promise<void> {
+    const svc = this.services;
+    const p = msg.params ?? {};
+    try {
+      if (!svc) throw Object.assign(new Error('client services unavailable'), { code: -32603 });
+      switch (msg.method) {
+        case 'fs/read_text_file': {
+          const content = await svc.fs.readTextFile(p.path, { line: p.line ?? undefined, limit: p.limit ?? undefined });
+          return this.ok(msg.id, { content });
+        }
+        case 'fs/write_text_file': {
+          await svc.fs.writeTextFile(p.path, p.content ?? '');
+          return this.ok(msg.id, {});
+        }
+        case 'terminal/create': {
+          const terminalId = await svc.terminals.create({
+            command: p.command,
+            args: p.args ?? [],
+            cwd: p.cwd ?? undefined,
+            env: p.env ?? [],
+            outputByteLimit: p.outputByteLimit ?? undefined,
+          });
+          return this.ok(msg.id, { terminalId });
+        }
+        case 'terminal/output': {
+          const { output, truncated, exitStatus } = svc.terminals.output(p.terminalId);
+          return this.ok(msg.id, { output, truncated, exitStatus });
+        }
+        case 'terminal/wait_for_exit': {
+          const e = await svc.terminals.waitForExit(p.terminalId);
+          return this.ok(msg.id, { exitCode: e.exitCode, signal: e.signal });
+        }
+        case 'terminal/kill': {
+          svc.terminals.kill(p.terminalId);
+          return this.ok(msg.id, {});
+        }
+        case 'terminal/release': {
+          svc.terminals.release(p.terminalId);
+          return this.ok(msg.id, {});
+        }
+        default:
+          return this.err(msg.id, -32601, `client does not support method: ${msg.method}`);
+      }
+    } catch (e: any) {
+      // Path escapes are the sandbox choke point → a proper invalid-params error.
+      const code = e instanceof PathEscapeError ? -32602 : e?.code ?? -32603;
+      this.err(msg.id, code, e?.message ?? 'client method failed');
+    }
   }
 
   // ---- ACP -> normalized status mapping ----
@@ -160,12 +250,19 @@ export class AcpAdapter implements AgentAdapter {
       case 'agent_thought_chunk':
         this.q.push({ kind: 'thought_chunk', text: AcpAdapter.text(u.content) });
         break;
-      case 'tool_call':
-        this.q.push({ kind: 'tool_call', id: u.toolCallId, title: u.title ?? '', status: AcpAdapter.toolStatus(u.status), content: u.content });
+      case 'tool_call': {
+        const status = AcpAdapter.toolStatus(u.status);
+        if (status === 'pending' || status === 'running') this.liveToolCalls.add(u.toolCallId);
+        else this.liveToolCalls.delete(u.toolCallId);
+        this.q.push({ kind: 'tool_call', id: u.toolCallId, title: u.title ?? '', status, content: u.content });
         break;
-      case 'tool_call_update':
-        this.q.push({ kind: 'tool_call_update', id: u.toolCallId, status: u.status ? AcpAdapter.toolStatus(u.status) : undefined });
+      }
+      case 'tool_call_update': {
+        const status = u.status ? AcpAdapter.toolStatus(u.status) : undefined;
+        if (status && status !== 'pending' && status !== 'running') this.liveToolCalls.delete(u.toolCallId);
+        this.q.push({ kind: 'tool_call_update', id: u.toolCallId, status });
         break;
+      }
       case 'plan':
       case 'plan_update': // 1.2.x incremental plan; both carry `entries`
         this.q.push({
@@ -178,10 +275,11 @@ export class AcpAdapter implements AgentAdapter {
     }
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string): Promise<string> {
     this.q.push({ kind: 'status', status: 'working' });
-    await this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] });
+    const res = (await this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] })) as { stopReason?: string };
     this.q.push({ kind: 'status', status: 'idle' });
+    return res?.stopReason ?? 'end_turn';
   }
 
   sendInput(): void {
@@ -197,7 +295,19 @@ export class AcpAdapter implements AgentAdapter {
   }
 
   interrupt(): void {
-    // session/cancel is a notification (no id) in ACP.
+    // acp-notes.md cancellation contract:
+    //  1. resolve any pending permission requests as `cancelled`,
+    //  2. mark unfinished tool calls cancelled in the transcript,
+    //  3. send the session/cancel notification (no id).
+    // The in-flight session/prompt resolves when the agent answers it with
+    // stopReason 'cancelled' — the pending map clears normally, so the adapter
+    // is never wedged and subsequent prompts work.
+    for (const [reqId, id] of this.permIds) {
+      this.send({ jsonrpc: '2.0', id, result: { outcome: { outcome: 'cancelled' } } });
+      this.permIds.delete(reqId);
+    }
+    for (const id of this.liveToolCalls) this.q.push({ kind: 'tool_call_update', id, status: 'cancelled' });
+    this.liveToolCalls.clear();
     if (this.proc && this.sessionId) this.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.sessionId } });
   }
 

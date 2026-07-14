@@ -133,16 +133,22 @@ Core primitives:
 ## v1 build slice
 
 Thinnest end-to-end spine; each step is independently demoable, riskiest theses first.
+**All five steps are now built and validated** — see [`../README.md`](../README.md#status)
+for the suite-by-suite breakdown and recorded deviations.
 
-1. **Daemon + one agent.** ✓ **Validated in `daemon/`.** Spawn one Claude Code agent (via
-   `AcpAdapter`, or `PtyAdapter` to start), expose its normalized event stream + scrollback
-   over the WS with reconnect/replay. *Proves the survive-the-dropped-pipe thesis.*
-2. **UI spine.** Left rail (single agent) + focus with Transcript + Terminal panes. No
-   browser, no approvals yet.
-3. **Approvals.** ✓ **Loop validated in `daemon/`** (against a mock ACP agent; real-agent
-   wiring in progress). Wire `session/request_permission` → `permission_request` events →
-   the right-rail queue → response back over the WS. *Proves human-as-conductor.*
-4. **Second agent + workspace isolation.** Git worktree per agent; two agents run without
-   clobbering; rails show both statuses.
-5. **Shared browser.** Attach a Steel session, render the screencast in the Browser pane,
-   add the control-owner token. *Proves joint control.*
+1. **Daemon + one agent.** ✓ **Built + validated.** Spawn a Claude Code agent (via
+   `AcpAdapter`, `PtyAdapter` fallback), expose its normalized event stream + scrollback over
+   the WS with reconnect/replay, persisted to SQLite and restored on restart.
+   *Survive-the-dropped-pipe thesis proven (`derisk`, `derisk:restart`).*
+2. **UI spine.** ✓ **Built.** `ui/` — left rail + focus with Transcript + Terminal panes,
+   durable WS client, quick-spawn + command palettes, rebindable keymap.
+3. **Approvals.** ✓ **Built + validated.** `session/request_permission` →
+   `permission_request` events → the always-on right-rail queue → response over the WS.
+   *Human-as-conductor proven (`derisk`, `derisk:services` cancellation).*
+4. **Second agent + workspace isolation.** ✓ **Built + validated.** Git worktree + branch
+   per agent; two agents run without clobbering; rails show both statuses; teardown keeps the
+   branch. (`derisk:multi`, `derisk:workspace`, `derisk:integration`.)
+5. **Shared browser.** ✓ **Built + validated.** Per-agent browser via a Tandem broker
+   (`BrowserDriver`: Steel — specced — or local Chromium — tested), Playwright MCP + a
+   Tandem-control MCP, CDP screencast in the Browser pane, control-owner token with
+   hard-pause. *Joint control proven (`derisk:browser`, 10 checks).*

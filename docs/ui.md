@@ -73,6 +73,28 @@ interface AgentView {
 - **Optimistic control token.** On "grab wheel," immediately reflect `controlOwner: 'user'`
   and disable agent input; confirm/rollback on daemon ack.
 
+## Implementation status (Phase 4)
+
+The React UI in [`ui/`](../ui/) (Vite + TypeScript strict) implements this doc for real: the
+docked-rails layout (D6), a zustand store that is a pure projection of daemon messages, the
+durable token-auth WS client with backoff reconnect + `sinceSeq` replay (D15), the transcript
+renderer (merged prose/markdown, dimmed thoughts, collapsed tool cards with status chips,
+plans, per-terminal mini-terminals, inline permission cards, error banners), the always-on
+global approvals rail, the Terminal pane (`ghostty-web` default via WASM, `@xterm/xterm`
+fallback — D12), the dir-first quick-spawn palette (D9), and the scope-aware rebindable
+command palette + keymap (D10). See [`ui/README.md`](../ui/README.md).
+
+Small deviations from the sketch above, all driven by what the wire actually carries:
+
+- **`AgentView.transcript`** is stored as the raw seq-tagged `WireEvent[]`; the rendered
+  message/tool/plan/terminal items are derived per render (the store stays a thin projection).
+- **`terminalBuffer`** lives outside the reactive store (a non-reactive `ptyHub` fan-out) so a
+  stream of pty bytes never re-renders React; the Terminal pane rehydrates from it on focus.
+- The rail needs each agent's **name + workspace**, which no `snapshot` carries, so the client
+  discovers agents via a new **`list_agents`** message (see `ws-protocol.md`) on every
+  (re)connect — this is what makes the rail correct after a daemon restart.
+- **Diff** and **Browser** panes are placeholders (their daemon verbs still return error acks).
+
 ## Later (deferred)
 
 - A **canvas/grid overview** mode as a second lens over the docked rails.

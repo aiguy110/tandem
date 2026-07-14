@@ -132,3 +132,23 @@ agent's `SpawnSpec` + ACP `sessionId` (and its worktree/branch). On daemon resta
   SpawnSpec reserves `preset`; a single default agent ships first.
 
 See [`decisions.md`](decisions.md) D8–D10 for the rationale.
+
+## Implementation status (Phase 2)
+
+The daemon's `WorkspaceManager` (`daemon/src/workspace.ts`) implements this doc's git-worktree
+mechanics for real, wired through `AgentRegistry.spawn`/`close`/`restoreOne` — see
+[`ws-protocol.md`](ws-protocol.md) for the wire-level `spawn_agent`/`close_agent`/`list_dirs`
+details. Two small deviations from the illustrative `SpawnSpec` above:
+
+- `workspace.branch` and `workspace.baseRef` are **optional** on the wire (not plain
+  `string`s) — the manager fills the documented defaults (`tandem/<agent-name>`, current
+  HEAD) and persists the *resolved* values back into the stored spec, so restore and a later
+  respawn are unambiguous.
+- If an auto-derived branch name collides with an unrelated existing branch, the manager
+  suffixes it (`tandem/web-1-2`) rather than erroring; an **explicit** `branch` that already
+  exists is treated as the respawn path (re-checkout, not create) — the cheap version of
+  "Respawn" above: point `spec.workspace.branch` at a still-live `tandem/<name>` branch and
+  spawn normally.
+
+Everything else — quick-spawn palette UX, keymap, command palette, merge-back — is still
+Phase 3+ UI work; the daemon side (`merge_back`) still returns an error `ack`.
