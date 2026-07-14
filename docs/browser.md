@@ -72,6 +72,26 @@ Folds into the same attention/approvals rail as permissions. Two directions:
 - Browser auth/state is per-agent and **ephemeral in v1** — not restored across daemon
   restart (the agent re-navigates). Persisting browser cookies/state is deferred.
 
+## Spike (verified)
+
+[`spike/browser/`](../spike/browser/) proves the mechanics against a real headless Chrome —
+the same CDP surface Steel wraps. `npm run derisk` passes all five checks:
+
+- the agent drives the page via **Playwright over CDP** (`connectOverCDP` — exactly what
+  Playwright MCP uses under the hood);
+- a CDP **`Page.startScreencast`** streams the same page **concurrently** (12 frames) while
+  the agent acts;
+- **grabbing the wheel hard-pauses** the agent's actions (held until release);
+- **releasing resumes** the paused action;
+- the human's input reaches the page via CDP **`Input.*`** (a click flipped page state).
+
+`npm run broker` runs it live: a viewer renders the screencast while a demo agent loop types
+into the page — the human watches the agent drive in real time and can grab the wheel.
+
+**Transfer to production:** swap the raw Chrome + `connectOverCDP` URL for a **Steel
+session's CDP endpoint**; the Playwright-MCP layer is a thin wrapper over the same
+`connectOverCDP` proven here (wiring `--cdp-endpoint` + the lazy broker is a build-phase step).
+
 ## Deferred
 
 - **VNC/desktop fallback** for OS-level needs (native file pickers, dialogs, extensions,
