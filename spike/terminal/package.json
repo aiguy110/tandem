@@ -1,0 +1,18 @@
+{
+  "name": "tandem-terminal-spike",
+  "private": true,
+  "type": "module",
+  "description": "Validate ghostty-web (xterm.js fallback) against the daemon's real pty channel",
+  "scripts": {
+    "predev": "cp node_modules/ghostty-web/ghostty-vt.wasm public/",
+    "dev": "vite --port 5177 --strictPort"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "ghostty-web": "latest"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

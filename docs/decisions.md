@@ -134,3 +134,17 @@ the event log. Project roots are configurable via `TANDEM_PROJECT_ROOTS` (defaul
 
 **Why:** An agent is a long-lived unit of work with a workspace and history; a daemon
 restart (crash, upgrade) shouldn't lose it.
+
+## D12 — Terminal renderer: ghostty-web default, xterm.js fallback
+
+**Choice:** Render terminals against the xterm.js API behind a `TerminalRenderer` interface.
+Default engine is `ghostty-web` (Ghostty's `libghostty-vt` in WASM, xterm-API-compatible,
+purpose-built for parallel agentic dev); `@xterm/xterm` is a drop-in fallback via config.
+
+**Why:** Ghostty's VT engine is best-in-class and fits our category, while xterm-API
+compatibility makes the choice reversible (≈one-line swap) and keeps a proven fallback. The
+interface keeps the emulator out of the rest of the UI.
+
+**Constraints:** only the focused terminal renders live (WebGL context limits); reconnect
+replays buffered `raw_pty` bytes; resize propagates via a `resize` WS message. See
+[`terminal.md`](terminal.md).

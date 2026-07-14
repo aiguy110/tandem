@@ -29,6 +29,7 @@ export interface AgentAdapter {
   spawn(opts: SpawnOpts): Promise<void>;
   prompt(text: string): Promise<void>;
   sendInput(bytes: Uint8Array): void;
+  resize?(cols: number, rows: number): void;
   respondPermission(reqId: string, optionId: string): void;
   interrupt(): void;
   dispose(): Promise<void>;

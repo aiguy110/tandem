@@ -14,6 +14,7 @@ type ClientMsg =
   | { t: 'unsubscribe'; agentId: string; channels: Channel[] }
   | { t: 'prompt';      agentId: string; text: string }
   | { t: 'input';       agentId: string; bytesB64: string }            // → adapter.sendInput
+  | { t: 'resize';      agentId: string; cols: number; rows: number }  // → adapter.resize (pty)
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string }
   | { t: 'interrupt';   agentId: string }
   | { t: 'spawn_agent'; spec: SpawnSpec }                               // see spawn-and-workspaces.md

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tandem terminal spike — ghostty-web</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0c1216; color: #e4eaee;
+      font-family: ui-monospace, "IBM Plex Mono", monospace; }
+    #bar { height: 36px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+      border-bottom: 1px solid #26313a; font-size: 12px; }
+    #bar b { color: #3fd0c4; }
+    #bar .k { color: #63707b; }
+    #status { margin-left: auto; color: #4cc6e8; }
+    #term { position: absolute; top: 36px; left: 0; right: 0; bottom: 0; padding: 6px 8px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <b>Tandem · terminal spike</b>
+    <span class="k">engine:</span><span id="engine">ghostty-web</span>
+    <span class="k">agent:</span><span>web-1 (pty)</span>
+    <span id="status">connecting…</span>
+  </div>
+  <div id="term"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

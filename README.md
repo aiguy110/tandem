@@ -61,6 +61,7 @@ Self-hosted Daemon  ────────────────────
 | Orchestration model | Human-as-conductor |
 | Home-view layout | Docked rails + focus |
 | Shared browser in UI | Pane inside focus mode |
+| Terminal engine | ghostty-web (xterm.js fallback) |
 | Workspaces | Git worktree + branch per agent (host dirs, no sandbox yet) |
 | Spawn UX | Dir-first quick-spawn + command palette |
 | Hotkeys | Single-key + chords, rebindable |
@@ -73,6 +74,7 @@ Self-hosted Daemon  ────────────────────
 - [`docs/ws-protocol.md`](docs/ws-protocol.md) — browser ↔ daemon WebSocket protocol
 - [`docs/ui.md`](docs/ui.md) — UI structure and state model
 - [`docs/spawn-and-workspaces.md`](docs/spawn-and-workspaces.md) — spawn mechanics, keymap, worktrees
+- [`docs/terminal.md`](docs/terminal.md) — terminal pane (ghostty-web) + spike findings
 - [`docs/acp-notes.md`](docs/acp-notes.md) — pinned ACP protocol facts
 
 ## Status

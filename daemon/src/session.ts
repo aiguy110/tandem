@@ -40,6 +40,9 @@ export class AgentSession {
   sendInput(bytes: Uint8Array): void {
     this.adapter.sendInput(bytes);
   }
+  resize(cols: number, rows: number): void {
+    this.adapter.resize?.(cols, rows);
+  }
   dispose(): Promise<void> {
     return this.adapter.dispose();
   }

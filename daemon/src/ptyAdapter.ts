@@ -47,6 +47,13 @@ export class PtyAdapter implements AgentAdapter {
   sendInput(bytes: Uint8Array): void {
     this.proc?.write(Buffer.from(bytes).toString('utf8'));
   }
+  resize(cols: number, rows: number): void {
+    try {
+      this.proc?.resize(cols, rows);
+    } catch {
+      /* proc may have exited */
+    }
+  }
   respondPermission(): void {}
   interrupt(): void {
     this.proc?.write('\x03');

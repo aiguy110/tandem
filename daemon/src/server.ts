@@ -57,6 +57,9 @@ export function startServer(session: AgentSession, port: number): WebSocketServe
         case 'input':
           session.sendInput(Buffer.from(m.bytesB64 ?? '', 'base64'));
           break;
+        case 'resize':
+          session.resize(m.cols, m.rows);
+          break;
       }
     });
 
