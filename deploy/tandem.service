@@ -1,0 +1,14 @@
+[Unit]
+Description=Tandem daemon (multi-agent orchestration)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/tandem
+Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/bin:/bin
+ExecStart=%h/Projects/tandem/start-dev-server.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

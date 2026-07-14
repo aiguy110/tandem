@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Workflow
 
-- After implementing a feature or bug fix, verify it works (run tests, typecheck, or exercise the change), then commit the changes with git.
+- After implementing a feature or bug fix, verify it works (run tests, typecheck, or exercise the change). Once verified, commit the changes with git automatically — do not wait for the user to ask separately. Only skip the auto-commit if the user has said otherwise for that specific change.
 
 ## Commands
 
 ```bash
 ./start-dev-server.sh          # builds the UI, installs daemon deps, starts the daemon at 127.0.0.1:7717
+./redeploy.sh                  # rebuild + restart the running app (calls: systemctl --user restart tandem.service)
 ```
+
+The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh` itself — so a restart always rebuilds first. `redeploy.sh` is meant to be run from inside the app (e.g. its own terminal pane) after the app has edited its own code, so it can redeploy itself. Logs: `journalctl --user -u tandem -f`.
 
 Manual equivalent:
 
