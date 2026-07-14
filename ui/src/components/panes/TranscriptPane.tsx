@@ -205,9 +205,9 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
   if (!hasModes && !modelOpt) return null;
 
   return (
-    <div className="session-config-bar" style={{ display: 'flex', gap: 8, padding: '4px 12px', alignItems: 'center' }}>
+    <div className="session-config-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', padding: '4px 12px', alignItems: 'center' }}>
       {modelOpt && (
-        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, whiteSpace: 'nowrap' }}>
           Model
           <select value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
             {(modelOpt.options ?? []).map((o) => (
@@ -219,7 +219,7 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
         </label>
       )}
       {hasModes && modes && (
-        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+        <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, whiteSpace: 'nowrap' }}>
           Permission Mode
           <select value={modes.currentModeId} onChange={(e) => setMode(agentId, e.target.value)}>
             {modes.availableModes.map((m) => (

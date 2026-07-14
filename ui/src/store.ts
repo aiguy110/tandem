@@ -216,12 +216,20 @@ export const useStore = create<StoreState>((set, get) => {
           const transcript = msg.transcript.filter((e) => e.event.kind !== 'raw_pty');
           // Feed any pty frames in the snapshot into the terminal hub (rehydrate).
           for (const e of msg.transcript) if (e.event.kind === 'raw_pty') ptyHub.push(msg.agentId, e.event.dataB64);
+          // session_config isn't a top-level snapshot field (unlike status/
+          // pendingApprovals) — fold the latest one out of the replayed
+          // transcript, mirroring the live 'event' path's applyEventToView.
+          const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
           agents[msg.agentId] = {
             ...prev,
             status: msg.status,
             pendingApprovals: msg.pendingApprovals,
             events: transcript,
             lastSeq: msg.seq,
+            sessionConfig:
+              lastConfig && lastConfig.event.kind === 'session_config'
+                ? { modes: lastConfig.event.modes, configOptions: lastConfig.event.configOptions }
+                : prev.sessionConfig,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
