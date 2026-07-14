@@ -355,9 +355,10 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, opts: 
   const reqPath = new URL(req.url ?? '/', 'http://localhost').pathname;
   if (opts.uiDir) {
     const rel = reqPath === '/' ? 'index.html' : reqPath.replace(/^\/+/, '');
-    const file = path.join(opts.uiDir, rel);
+    const root = path.resolve(opts.uiDir);
+    const file = path.resolve(root, rel);
     // Contain within uiDir (no path traversal).
-    if (file.startsWith(path.resolve(opts.uiDir)) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+    if ((file === root || file.startsWith(root + path.sep)) && fs.existsSync(file) && fs.statSync(file).isFile()) {
       res.writeHead(200, { 'content-type': contentType(file) });
       fs.createReadStream(file).pipe(res);
       return;
