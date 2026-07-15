@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { AsyncQueue } from './asyncQueue.ts';
 import { PathEscapeError } from './workspaceFs.ts';
-import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SlashCommand, SpawnOptions, SpawnOpts } from './types.ts';
+import type { AdapterPromptBlock, AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SlashCommand, SpawnOptions, SpawnOpts } from './types.ts';
 
 let permCounter = 0;
 
@@ -56,7 +56,7 @@ export class AcpAdapter implements AgentAdapter {
   // What this adapter *services*. Phase 3: fs + terminals are now backed by the
   // daemon-owned WorkspaceFs + TerminalHost passed in via ClientServices, so we
   // advertise them to the agent and handle its fs/* and terminal/* requests.
-  readonly capabilities = { structured: true, terminals: true, loadSession: true, fs: true };
+  readonly capabilities = { structured: true, terminals: true, loadSession: true, fs: true, image: false };
 
   private q = new AsyncQueue<AgentEvent>();
   private proc?: ChildProcess;
@@ -119,8 +119,10 @@ export class AcpAdapter implements AgentAdapter {
     const init = (await this.rpc('initialize', {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
-    })) as { agentCapabilities?: { loadSession?: boolean } };
+    })) as { agentCapabilities?: { loadSession?: boolean; promptCapabilities?: { image?: boolean } } };
     this.agentLoadSession = !!init.agentCapabilities?.loadSession;
+    this.capabilities.image = !!init.agentCapabilities?.promptCapabilities?.image;
+    this.q.push({ kind: 'prompt_capabilities', image: this.capabilities.image });
 
     if (opts.resumeSessionId && this.agentLoadSession) {
       // Restore path (D11): resume the persisted ACP session instead of a new one.
@@ -368,9 +370,10 @@ export class AcpAdapter implements AgentAdapter {
     }
   }
 
-  async prompt(text: string): Promise<string> {
+  async prompt(input: string | AdapterPromptBlock[]): Promise<string> {
     this.q.push({ kind: 'status', status: 'working' });
-    const res = (await this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] })) as { stopReason?: string };
+    const prompt = typeof input === 'string' ? [{ type: 'text', text: input }] : input;
+    const res = (await this.rpc('session/prompt', { sessionId: this.sessionId, prompt })) as { stopReason?: string };
     this.q.push({ kind: 'status', status: 'idle' });
     return res?.stopReason ?? 'end_turn';
   }

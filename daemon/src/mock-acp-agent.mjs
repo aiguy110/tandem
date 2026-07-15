@@ -22,6 +22,7 @@
 
 import process from 'node:process';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 process.stdin.on('end', () => process.exit(0));
 process.stdout.on('error', (e) => {
@@ -90,7 +91,14 @@ function handle(msg) {
     send({
       jsonrpc: '2.0',
       id: msg.id,
-      result: { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { list: true } } },
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+          sessionCapabilities: { list: true },
+          promptCapabilities: { image: process.env.TANDEM_MOCK_IMAGE_CAPABILITY !== 'false' },
+        },
+      },
     });
     return;
   }
@@ -133,7 +141,9 @@ function handle(msg) {
   }
   if (msg.method === 'session/prompt') {
     pendingPromptId = msg.id;
-    const text = (msg.params?.prompt ?? []).map((b) => b?.text ?? '').join(' ');
+    const blocks = msg.params?.prompt ?? [];
+    const text = blocks.map((b) => b?.text ?? '').join(' ');
+    if (text.includes('DERISK_IMAGE')) return void runImagePrompt(blocks);
     if (text.includes('DERISK_SERVICES')) return void runServices();
     if (text.includes('DERISK_ESCAPE')) return void runEscape();
     if (text.includes('DERISK_SLOWTERM')) return void runSlowTerm();
@@ -155,6 +165,23 @@ function handle(msg) {
     }
     finish('end_turn');
   }
+}
+
+// Echo a compact, deterministic description of the exact ACP content blocks.
+// The image-upload derisk suite uses this to prove that Tandem preserved mixed
+// text/image ordering and delivered the original bytes at the ACP boundary.
+function runImagePrompt(blocks) {
+  const description = blocks.map((block) => {
+    if (block?.type === 'text') return `text:${block.text}`;
+    if (block?.type === 'image') {
+      const bytes = Buffer.from(block.data ?? '', 'base64');
+      const digest = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+      return `image:${block.mimeType}:${bytes.length}:${digest}`;
+    }
+    return `unknown:${block?.type ?? 'missing'}`;
+  }).join('|');
+  note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `ACP_PROMPT_BLOCKS ${description}` } });
+  finish('end_turn');
 }
 
 // ---- default turn (Phase 1/2 approval flow, unchanged) ----

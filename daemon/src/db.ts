@@ -61,6 +61,19 @@ export class Db {
         ts      INTEGER NOT NULL,
         PRIMARY KEY (agentId, seq)
       );
+      CREATE TABLE IF NOT EXISTS assets (
+        id        TEXT PRIMARY KEY,
+        mimeType  TEXT NOT NULL,
+        size      INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agent_assets (
+        agentId   TEXT NOT NULL,
+        assetId   TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        PRIMARY KEY (agentId, assetId),
+        FOREIGN KEY (assetId) REFERENCES assets(id)
+      );
     `);
     // Phase 2 migration: DBs created before `cwd` existed. No-op on fresh DBs
     // (the CREATE TABLE above already has the column).
@@ -166,6 +179,22 @@ export class Db {
   getAgent(id: string): AgentRecord | undefined {
     const r = this.sGetAgent.get(id) as any;
     return r ? rowToRecord(r) : undefined;
+  }
+
+  // Content bytes are stored on disk; SQLite owns metadata and the access-control
+  // association. An identical upload may be shared physically while remaining
+  // readable only by agents explicitly associated with it.
+  putAsset(agentId: string, asset: { id: string; mimeType: string; size: number }): void {
+    const now = Date.now();
+    this.db.transaction(() => {
+      this.db.prepare('INSERT OR IGNORE INTO assets (id, mimeType, size, createdAt) VALUES (?, ?, ?, ?)').run(asset.id, asset.mimeType, asset.size, now);
+      this.db.prepare('INSERT OR IGNORE INTO agent_assets (agentId, assetId, createdAt) VALUES (?, ?, ?)').run(agentId, asset.id, now);
+    })();
+  }
+  getAgentAsset(agentId: string, assetId: string): { id: string; mimeType: string; size: number } | undefined {
+    return this.db.prepare(
+      'SELECT a.id, a.mimeType, a.size FROM assets a JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?',
+    ).get(agentId, assetId) as { id: string; mimeType: string; size: number } | undefined;
   }
 
   close(): void {

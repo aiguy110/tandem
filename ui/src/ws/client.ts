@@ -34,6 +34,9 @@ export function storeToken(tok: string): void {
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
+export function storedToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
 
 // The WS origin: a runtime override (window.__TANDEM_WS__ or VITE_TANDEM_WS at
 // build time) else same-origin (the daemon serves UI + WS on one port, D15).

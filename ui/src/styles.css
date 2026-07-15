@@ -225,6 +225,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: var(--human-soft); border: 1px solid var(--human); color: var(--text);
   border-radius: var(--r-md); padding: 8px 12px; line-height: 1.5;
 }
+.transcript-image { display: block; max-width: min(520px, 100%); max-height: 440px; margin-top: 7px; border-radius: var(--r-sm); object-fit: contain; }
+.transcript-image-loading, .transcript-image-failed { margin-top: 7px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); color: var(--text-faint); font-size: var(--fs-xs); }
+.transcript-image-failed { color: var(--err); }
 .ev.msg { line-height: 1.62; }
 .ev.msg p { margin: 0 0 8px; }
 .ev.msg pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
@@ -261,7 +264,24 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .err-banner { border: 1px solid var(--err); background: var(--err-soft); color: var(--err); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-sm); }
 
 /* ---- prompt bar ---- */
-.prompt-bar { position: relative; display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); align-items: flex-end; }
+.prompt-bar { position: relative; display: flex; flex-direction: column; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); }
+.prompt-bar.dragging { box-shadow: inset 0 0 0 2px var(--agent); }
+.prompt-main { display: flex; gap: 8px; align-items: flex-end; }
+.attach-btn { width: 38px; padding-left: 0; padding-right: 0; font-size: 19px; }
+.attach-btn:disabled { opacity: .45; cursor: not-allowed; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.prompt-attachments { display: flex; flex-wrap: wrap; gap: 7px; }
+.prompt-attachment { display: flex; align-items: center; gap: 7px; min-width: 180px; max-width: 300px; padding: 5px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.prompt-attachment.error { border-color: var(--err); }
+.prompt-attachment img { width: 42px; height: 42px; border-radius: 4px; object-fit: cover; }
+.attachment-meta { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
+.attachment-meta small { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-attachment.error .attachment-meta small, .prompt-attachment-error { color: var(--err); }
+.prompt-attachment button { appearance: none; border: 0; background: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; font-size: 16px; }
+.prompt-attachment button:hover { color: var(--text); }
+.prompt-attachment-error { font-size: var(--fs-xs); }
+.prompt-drop-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 30; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--agent); font-weight: 600; }
 .slash-popup {
   position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);

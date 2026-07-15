@@ -22,6 +22,7 @@ export interface Config {
   dbPath: string;
   tokenPath: string;
   worktreesDir: string;
+  assetsDir: string;
   host: string;
   port: number;
   uiDir?: string;
@@ -154,6 +155,7 @@ export function loadConfig(): Config {
     dbPath: path.join(home, 'tandem.db'),
     tokenPath: path.join(home, 'token'),
     worktreesDir,
+    assetsDir: path.join(home, 'assets'),
     host: process.env.TANDEM_BIND || '127.0.0.1',
     port: Number(process.env.TANDEM_PORT || 7717),
     uiDir: process.env.TANDEM_UI_DIR || undefined,

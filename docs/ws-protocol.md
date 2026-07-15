@@ -17,6 +17,28 @@ transport error). The token is generated on first run into `$TANDEM_HOME/token` 
 the UI reads once and stores. Static UI assets are served from `TANDEM_UI_DIR` if set, else a
 placeholder page.
 
+### Transcript image assets
+
+Image bytes are uploaded before prompting. Both routes require
+`Authorization: Bearer <token>`:
+
+```text
+POST /api/agents/:agentId/assets
+Content-Type: image/png | image/jpeg | image/gif | image/webp
+X-File-Name: <percent-encoded original name>
+
+201 { "asset": { "assetId": "<sha256>", "mimeType": "image/png", "name": "shot.png", "size": 1234 } }
+
+GET /api/agents/:agentId/assets/:assetId
+```
+
+Assets are content-addressed under `$TANDEM_HOME/assets`; SQLite records their
+per-agent ownership. Physical deduplication never grants cross-agent access.
+Bytes are signature-sniffed, declared MIME must agree, malformed or excessive
+decoded dimensions are rejected, and SVG is not accepted. Limits are 10 MiB per
+image, four images and 20 MiB total image data per prompt. Assets are retained
+with durable transcript/session history; there is currently no eager GC.
+
 ### Implementation status (Phase 2)
 
 Implemented and de-risked: `subscribe`/`unsubscribe` (per-agent `channels` + `sinceSeq`),
@@ -108,7 +130,7 @@ All client messages accept an optional `corrId` echoed back on the matching `ack
 type ClientMsg =
   | { t: 'subscribe';   agentId: string; channels?: Channel[]; sinceSeq?: number } // channels omitted = all
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[] }
-  | { t: 'prompt';      agentId: string; text: string }
+  | { t: 'prompt';      agentId: string; text?: string; blocks?: PromptBlock[] }
   | { t: 'input';       agentId: string; bytesB64: string }            // → adapter.sendInput
   | { t: 'resize';      agentId: string; cols: number; rows: number }  // → adapter.resize (pty)
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string }
@@ -124,6 +146,10 @@ type ClientMsg =
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean }
   | { t: 'leave_terminal'; agentId: string };
+
+type PromptBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; assetId: string; mimeType: string; name?: string };
 
 // Phase 5: the normalized user-input event carried by browser_input — mapped to CDP
 // Input.dispatchMouseEvent / dispatchKeyEvent / insertText daemon-side. x/y are in the
@@ -163,6 +189,13 @@ type ServerMsg =
 
 // WireEvent = AgentEvent, except raw_pty's bytes become { kind:'raw_pty', dataB64: string }.
 ```
+
+Legacy `text` prompts normalize to one text block. Block order is preserved into
+ACP `session/prompt`; only at that boundary does the daemon resolve an owned asset
+to ACP's inline `{type:'image', mimeType, data:<base64>}` block. The ACP
+`promptCapabilities.image` value is persisted as a
+`{kind:'prompt_capabilities', image:boolean}` event. An image prompt is rejected
+before logging a user message or starting a turn when that capability is false.
 
 ## End-to-end mapping of ACP
 
