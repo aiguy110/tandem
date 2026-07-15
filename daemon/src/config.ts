@@ -12,6 +12,11 @@ export interface AcpLaunch {
   args: string[];
 }
 
+export interface ResumeCliLaunch {
+  cmd: string;
+  args: string[]; // `{sessionId}` tokens are replaced at handoff time
+}
+
 export interface Config {
   home: string;
   dbPath: string;
@@ -34,6 +39,7 @@ export interface Config {
     agents: Record<string, AcpLaunch>;
     override?: AcpLaunch;
   };
+  resumeCli: Record<string, ResumeCliLaunch>;
   // Shared-browser subsystem (Phase 5, D13).
   browser: {
     driver: 'local' | 'steel'; // TANDEM_BROWSER_DRIVER (default local)
@@ -85,6 +91,19 @@ function acpAgentsFromEnv(): Record<string, AcpLaunch> {
   return agents;
 }
 
+function resumeClisFromEnv(): Record<string, ResumeCliLaunch> {
+  const defaults: Record<string, ResumeCliLaunch> = {
+    claude: { cmd: 'claude', args: ['--resume', '{sessionId}'] },
+    codex: { cmd: 'codex', args: ['resume', '{sessionId}'] },
+    pi: { cmd: 'pi', args: ['--session', '{sessionId}'] },
+  };
+  for (const name of Object.keys(defaults)) {
+    const raw = process.env[`TANDEM_RESUME_CMD_${name.toUpperCase()}`];
+    if (raw) defaults[name] = parseLaunchEnv(raw);
+  }
+  return defaults;
+}
+
 export function loadConfig(): Config {
   const home = process.env.TANDEM_HOME || path.join(os.homedir(), '.tandem');
   fs.mkdirSync(home, { recursive: true });
@@ -109,6 +128,7 @@ export function loadConfig(): Config {
       // every derisk suite (and testHarness.ts) points at a fake ACP server.
       override: process.env.TANDEM_ACP_CMD ? parseLaunchEnv(process.env.TANDEM_ACP_CMD) : undefined,
     },
+    resumeCli: resumeClisFromEnv(),
     browser: {
       driver: process.env.TANDEM_BROWSER_DRIVER === 'steel' ? 'steel' : 'local',
       userDataRoot: path.join(home, 'browser-profiles'),

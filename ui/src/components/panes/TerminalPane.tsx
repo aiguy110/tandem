@@ -10,9 +10,14 @@ import { createRenderer, selectedEngine, type EngineName, type TerminalRenderer 
 export function TerminalPane() {
   const agentId = useStore((s) => s.focusedId)!;
   const send = useStore((s) => s.send);
+  const agent = useStore((s) => s.agents[agentId]);
+  const enterTerminal = useStore((s) => s.enterTerminal);
+  const leaveTerminal = useStore((s) => s.leaveTerminal);
+  const setPane = useStore((s) => s.setPane);
   const mountRef = useRef<HTMLDivElement>(null);
   const [engine, setEngine] = useState<EngineName | null>(null);
   const [hasPty, setHasPty] = useState(() => ptyHub.hasData(agentId));
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   useEffect(() => {
     let renderer: TerminalRenderer | null = null;
@@ -76,6 +81,42 @@ export function TerminalPane() {
         </div>
       )}
       {engine && <div className="term-note">engine: {engine}{engine === 'xterm' ? ' (ghostty-web fallback)' : ''}</div>}
+      {agent?.controlMode === 'terminal' && (
+        <div className="term-note">
+          CLI control is active. Exit the CLI normally to return automatically, or{' '}
+          <button
+            className="link-btn"
+            onClick={() => void leaveTerminal(agentId).then((r) => {
+              if (r.error) setHandoffError(r.error);
+              else setPane('transcript');
+            })}
+          >return to Transcript now</button>.
+        </div>
+      )}
+      {agent && agent.controlMode !== 'terminal' && (
+        <div className="handoff-shroud">
+          <div className="handoff-card">
+            <div className="handoff-title">{agent.controlMode === 'switching' ? 'Switching agent interface…' : agent.status === 'working' || agent.status === 'blocked' ? 'Agent is mid-turn in Transcript' : 'Terminal control is not active'}</div>
+            <div className="handoff-copy">
+              {agent.status === 'working' || agent.status === 'blocked'
+                ? 'Taking control sends ACP session/cancel and waits briefly for the turn to flush before resuming the CLI. Unsaved in-flight steps may be lost.'
+                : 'Start the agent’s resumable CLI in this workspace.'}
+            </div>
+            {handoffError && <div className="modal-err">{handoffError}</div>}
+            {agent.controlMode === 'transcript' && (
+              <div className="handoff-actions">
+                <button
+                  className="btn"
+                  onClick={() => void enterTerminal(agentId, agent.status === 'working' || agent.status === 'blocked').then((r) => r.error && setHandoffError(r.error))}
+                >
+                  {agent.status === 'working' || agent.status === 'blocked' ? 'Interrupt & take over' : 'Take control'}
+                </button>
+                <button className="btn" onClick={() => setPane('transcript')}>Back to Transcript</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

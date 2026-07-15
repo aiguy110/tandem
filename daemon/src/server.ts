@@ -265,6 +265,20 @@ export function startServer(
         conn.send({ t: 'ack', corrId: m.corrId, agentId: session.id });
         break;
       }
+      case 'enter_terminal': {
+        await registry.enterTerminal(m.agentId, !!m.interrupt);
+        const agents = await registry.summaries();
+        for (const c of connections) c.send({ t: 'agents', agents });
+        conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
+        break;
+      }
+      case 'leave_terminal': {
+        await registry.leaveTerminal(m.agentId);
+        const agents = await registry.summaries();
+        for (const c of connections) c.send({ t: 'agents', agents });
+        conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
+        break;
+      }
       case 'browser_control': {
         if (!broker) return conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId, error: 'browser subsystem disabled' });
         if (!registry.get(m.agentId)) return conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId, error: `no such agent: ${m.agentId}` });
@@ -310,7 +324,7 @@ export function startServer(
         .fullHistory()
         .filter((le) => wants(le.event))
         .map((le) => ({ seq: le.seq, event: serialize(le.event) }));
-      conn.send({ t: 'snapshot', agentId: session.id, seq: log.head, transcript, status: session.status, pendingApprovals: session.pendingApprovals() });
+      conn.send({ t: 'snapshot', agentId: session.id, seq: log.head, transcript, status: session.status, controlMode: session.controlMode, pendingApprovals: session.pendingApprovals() });
     }
 
     const eventUnsub = session.onEvent((le) => {

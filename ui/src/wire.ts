@@ -4,6 +4,7 @@
 // dependency on the daemon package.
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
+export type ControlMode = 'transcript' | 'switching' | 'terminal';
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 export type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 
@@ -50,7 +51,8 @@ export type AgentEvent =
   | { kind: 'error'; message: string }
   | { kind: 'takeover_request'; reqId: string; reason: string }
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
-  | { kind: 'available_commands'; commands: SlashCommand[] };
+  | { kind: 'available_commands'; commands: SlashCommand[] }
+  | { kind: 'control_state'; mode: ControlMode };
 
 // On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.
 export type WireEvent = AgentEvent | { kind: 'raw_pty'; dataB64: string };
@@ -83,6 +85,7 @@ export interface AgentSummary {
   };
   status: AgentStatus;
   pendingApprovals: number;
+  controlMode: ControlMode;
 }
 
 // A resumable coding-agent session for the Resume picker — either a session
@@ -143,7 +146,9 @@ export type ClientMsg =
   | { t: 'list_dirs'; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
-  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string };
+  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
+  | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
+  | { t: 'leave_terminal'; agentId: string; corrId?: string };
 
 export interface BrowserInputWire {
   kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';
@@ -161,7 +166,7 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; pendingApprovals: Approval[] }
+  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }

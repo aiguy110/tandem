@@ -29,6 +29,7 @@ export class AgentRegistry {
   // probe result is memoized so rapid re-opens of the picker don't re-spawn agents.
   private externalCache?: { at: number; external: ResumableSession[]; adapters: ResumeAdapterInfo[] };
   private static EXTERNAL_TTL_MS = 15_000;
+  private handoffs = new Map<string, Promise<void>>();
 
   constructor(private db: Db, private config: Config, private browser?: BrowserWiring) {
     // Continue the name counter past whatever the DB already contains so restored
@@ -69,7 +70,7 @@ export class AgentRegistry {
           ws.kind === 'worktree'
             ? { kind: 'worktree' as const, repo: path.basename(ws.repo), repoPath: ws.repo, branch: ws.branch ?? `tandem/${s.name}`, cwd, gitState }
             : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd, gitState };
-        return { id: s.id, name: s.name, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length };
+        return { id: s.id, name: s.name, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length, controlMode: s.controlMode };
       }),
     );
   }
@@ -122,6 +123,64 @@ export class AgentRegistry {
     const launch = this.config.acp.override ?? this.config.acp.agents[agentName];
     if (!launch) throw new Error(`unknown agent: ${agentName}`);
     return new AcpAdapter(id, launch);
+  }
+
+  private serializeHandoff(agentId: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.handoffs.get(agentId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(work);
+    this.handoffs.set(agentId, next);
+    void next.finally(() => this.handoffs.get(agentId) === next && this.handoffs.delete(agentId)).catch(() => {});
+    return next;
+  }
+
+  async enterTerminal(agentId: string, interrupt = false): Promise<void> {
+    return this.serializeHandoff(agentId, async () => {
+      const session = this.sessions.get(agentId);
+      if (!session) throw new Error(`no such agent: ${agentId}`);
+      if (session.spec.adapter !== 'acp') throw new Error('terminal handoff is only available for ACP agents');
+      if (session.controlMode === 'terminal') return;
+      if ((session.status === 'working' || session.status === 'blocked') && !interrupt) {
+        throw new Error('agent_busy: switching to Terminal will interrupt the active Transcript turn');
+      }
+      const sessionId = session.acpSessionId;
+      if (!sessionId) throw new Error('agent session has no resumable ACP session id');
+      const agentName = session.spec.agent ?? this.config.acp.default;
+      const cli = this.config.resumeCli[agentName];
+      if (!cli) throw new Error(`no resume CLI configured for agent: ${agentName}`);
+      if (interrupt) await session.interruptAndWait();
+      session.setControlMode('switching');
+      const cwd = this.cwdByAgent.get(agentId) ?? this.defaultCwd(session.spec);
+      const pty = new PtyAdapter(agentId);
+      try {
+        await session.swapAdapter(
+          pty,
+          { cwd, cmd: cli.cmd, args: cli.args.map((arg) => arg.replaceAll('{sessionId}', sessionId)) },
+          'terminal',
+          () => void this.leaveTerminal(agentId).catch((error) => session.pushEvent({ kind: 'error', message: `failed to return to Transcript: ${error.message}` })),
+        );
+      } catch (error) {
+        // The ACP process was already disposed. Recover it immediately so a
+        // missing/broken CLI never strands the durable session in switching.
+        const acp = this.makeAdapter(agentId, session.spec);
+        await session.swapAdapter(acp, { cwd, resumeSessionId: sessionId, mcpServers: this.mcpServersFor(agentId) }, 'transcript');
+        throw error;
+      }
+    });
+  }
+
+  async leaveTerminal(agentId: string): Promise<void> {
+    return this.serializeHandoff(agentId, async () => {
+      const session = this.sessions.get(agentId);
+      if (!session) throw new Error(`no such agent: ${agentId}`);
+      if (session.controlMode === 'transcript') return;
+      const rec = this.db.getAgent(agentId);
+      const sessionId = rec?.acpSessionId;
+      if (!sessionId) throw new Error('agent session has no resumable ACP session id');
+      session.setControlMode('switching');
+      const cwd = this.cwdByAgent.get(agentId) ?? this.defaultCwd(session.spec);
+      const acp = this.makeAdapter(agentId, session.spec);
+      await session.swapAdapter(acp, { cwd, resumeSessionId: sessionId, mcpServers: this.mcpServersFor(agentId) }, 'transcript');
+    });
   }
 
   // Spawn a brand-new agent. Persists the row, dispatches an optional first
@@ -269,6 +328,11 @@ export class AgentRegistry {
 
     const rec = this.db.getAgentByAcpSessionId(sessionId);
     if (rec) {
+      // During Terminal control the live adapter intentionally has no
+      // `acpSessionId`; the durable DB row is the linkage. Do not mistake that
+      // for a closed agent and create a second AgentSession over the live PTY.
+      const live = this.sessions.get(rec.id);
+      if (live) return live;
       this.db.reopenAgent(rec.id);
       await this.restoreOne({ ...rec, closedAt: null, status: 'idle' });
       const s = this.sessions.get(rec.id);

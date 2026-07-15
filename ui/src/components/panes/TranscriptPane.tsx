@@ -98,6 +98,9 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined)) as AgentView | undefined;
   const respond = useStore((s) => s.respond);
+  const setPane = useStore((s) => s.setPane);
+  const leaveTerminal = useStore((s) => s.leaveTerminal);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // `stick` follows the tail as new items arrive; it flips off the moment the
   // user scrolls up and back on when they return (or hit the button). Kept in a
@@ -156,6 +159,26 @@ export function TranscriptPane() {
       </div>
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
+      {agent.controlMode !== 'transcript' && (
+        <div className="handoff-shroud">
+          <div className="handoff-card">
+            <div className="handoff-title">{agent.controlMode === 'switching' ? 'Switching agent interface…' : 'This session is active in Terminal'}</div>
+            <div className="handoff-copy">Transcript history remains available, but prompts are paused while the resumable CLI owns the session.</div>
+            {handoffError && <div className="modal-err">{handoffError}</div>}
+            <div className="handoff-actions">
+              <button className="btn" onClick={() => setPane('terminal')}>View Terminal</button>
+              {agent.controlMode === 'terminal' && (
+                <button
+                  className="btn"
+                  onClick={() => void leaveTerminal(agent.id).then((r) => r.error && setHandoffError(r.error))}
+                >
+                  End terminal control
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

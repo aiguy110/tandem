@@ -38,6 +38,21 @@ interface TerminalRenderer {
 - **Reconnect:** replay the daemon's buffered `raw_pty` bytes into `write()` — no serialize
   addon needed; reuses the durability spine.
 
+## ACP ↔ CLI handoff
+
+Opening Terminal for an idle ACP agent swaps its adapter to the agent's resumable CLI while
+preserving the Tandem agent id, workspace, ACP session id, and monotonic event log. For a
+mid-turn agent the Terminal pane is shrouded until the user chooses **Interrupt & take over**:
+the daemon sends `session/cancel`, waits up to four seconds for the prompt to settle, disposes
+ACP, and launches the CLI with its session id. Transcript is shrouded while the CLI owns the
+session. Normal CLI exit—or **return to Transcript now**—disposes the PTY and reloads the same
+session through ACP automatically.
+
+Default CLI templates are `claude --resume {sessionId}`, `codex resume {sessionId}`, and
+`pi --session {sessionId}`. They can be overridden with `TANDEM_RESUME_CMD_<AGENT>`. Tandem
+prefers `node-pty`; when its native module is unavailable, util-linux `script` supplies the
+required pseudoterminal.
+
 ## Multi-agent rendering constraint
 
 Browsers cap WebGL contexts (~16 per page). Only the **focused** terminal renders live;

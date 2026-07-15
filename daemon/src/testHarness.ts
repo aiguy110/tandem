@@ -14,6 +14,7 @@ import { makeDriver } from './browser/driver.ts';
 import { BrowserBroker } from './browser/broker.ts';
 
 export const mockPath = new URL('./mock-acp-agent.mjs', import.meta.url).pathname;
+export const mockResumeCliPath = new URL('./mock-resume-cli.mjs', import.meta.url).pathname;
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const rule = '─'.repeat(64);
 
@@ -37,6 +38,7 @@ export async function makeHarness(port: number, opts: { browserMcp?: boolean } =
   process.env.TANDEM_HOME = home;
   process.env.TANDEM_PORT = String(port);
   process.env.TANDEM_ACP_CMD = JSON.stringify([process.execPath, mockPath]);
+  process.env.TANDEM_RESUME_CMD_CLAUDE = JSON.stringify([process.execPath, mockResumeCliPath, '{sessionId}']);
   process.env.TANDEM_BROWSER_MCP = opts.browserMcp ? 'on' : 'off';
   process.env.TANDEM_BROWSER_DRIVER = 'local';
   const config = loadConfig();

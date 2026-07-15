@@ -67,6 +67,7 @@ export interface AgentView {
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
   commands: SlashCommand[];
+  controlMode: 'transcript' | 'switching' | 'terminal';
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume';
@@ -116,6 +117,8 @@ interface StoreState {
   refreshAgents: () => void;
   refreshSessions: () => void;
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
+  enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
+  leaveTerminal: (agentId: string) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   prompt: (agentId: string, text: string) => void;
   setDraft: (agentId: string, text: string) => void;
@@ -258,6 +261,7 @@ export const useStore = create<StoreState>((set, get) => {
           agents[msg.agentId] = {
             ...prev,
             status: msg.status,
+            controlMode: msg.controlMode,
             pendingApprovals: msg.pendingApprovals,
             events: transcript,
             lastSeq: msg.seq,
@@ -344,7 +348,13 @@ export const useStore = create<StoreState>((set, get) => {
     },
     submitToken: (t) => client.setToken(t.trim()),
     focus: (id) => set({ focusedId: id }),
-    setPane: (p) => set({ pane: p }),
+    setPane: (p) => {
+      set({ pane: p });
+      if (p !== 'terminal') return;
+      const st = get();
+      const agent = st.focusedId ? st.agents[st.focusedId] : undefined;
+      if (agent?.controlMode === 'transcript' && agent.status === 'idle') void st.enterTerminal(agent.id);
+    },
     toggleTheme: () =>
       set((st) => {
         const theme = st.theme === 'dark' ? 'light' : 'dark';
@@ -382,6 +392,18 @@ export const useStore = create<StoreState>((set, get) => {
           cwd: session.source === 'external' ? session.cwd : undefined,
           corrId,
         });
+      }),
+    enterTerminal: (agentId, interrupt = false) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'enter_terminal', agentId, interrupt, corrId });
+      }),
+    leaveTerminal: (agentId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'leave_terminal', agentId, corrId });
       }),
     spawn: (spec) =>
       new Promise<AckResult>((resolve) => {
@@ -477,12 +499,13 @@ function shell(id: string): AgentView {
     takeovers: [],
     sessionConfig: null,
     commands: [],
+    controlMode: 'transcript',
   };
 }
 
 function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, workspace: s.workspace, status: s.status };
+  return { ...base, name: s.name, workspace: s.workspace, status: s.status, controlMode: s.controlMode };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the
@@ -502,6 +525,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   }
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
+  if (event.kind === 'control_state') v.controlMode = event.mode;
 }
 
 // All pending browser takeovers across agents, for the attention rail.

@@ -196,7 +196,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tab:hover { color: var(--text); background: var(--surface-2); }
 .tab.active { color: var(--agent); background: var(--agent-soft); border-color: var(--agent); }
 .tab .n { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; margin-left: 5px; }
-.pane { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.pane { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
 .pane-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-faint); text-align: center; padding: 30px; }
 .pane-placeholder .big { font-size: 34px; opacity: .5; }
 
@@ -368,6 +368,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .term-host { flex: 1; min-height: 0; position: relative; background: #0c1216; }
 .term-mount { position: absolute; inset: 0; padding: 6px 8px; }
 .term-note { padding: 3px 10px; font-size: var(--fs-xs); color: var(--text-faint); border-top: 1px solid var(--border); font-family: var(--font-mono); background: var(--surface); }
+.link-btn { border: 0; padding: 0; color: var(--accent); background: transparent; font: inherit; cursor: pointer; text-decoration: underline; }
+.handoff-shroud { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(3px); }
+.handoff-card { width: min(500px, 100%); padding: 22px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 18px 50px rgba(0,0,0,.3); }
+.handoff-title { font-size: var(--fs-lg); font-weight: 650; color: var(--text); }
+.handoff-copy { margin-top: 8px; color: var(--text-muted); line-height: 1.5; }
+.handoff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 
 /* ---- browser pane (Phase 5) ---- */
 .browser-pane { background: #0b0f14; }

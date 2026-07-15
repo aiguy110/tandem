@@ -7,6 +7,7 @@
 // ever ships these shapes — it must never leak ACP JSON-RPC.
 
 export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
+export type ControlMode = 'transcript' | 'switching' | 'terminal';
 
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 
@@ -77,6 +78,10 @@ export type AgentEvent =
   // the Tandem-control MCP's browser.request_takeover. A normalized event so it
   // logs, replays, and folds into the attention rail. `reason` is human-facing.
   | { kind: 'takeover_request'; reqId: string; reason: string }
+  // Which interface currently owns this coding-agent session. Emitted by the
+  // daemon during ACP ↔ resumable CLI handoffs so every client shrouds the
+  // inactive surface consistently.
+  | { kind: 'control_state'; mode: ControlMode }
   | { kind: 'raw_pty'; data: Uint8Array };
 
 // An ACP MCP server registration (McpServerStdio in the SDK schema): the AGENT
@@ -166,6 +171,9 @@ export interface AgentAdapter {
   // The ACP sessionId once established — persisted for restore (D11). Undefined
   // for adapters without a session concept (pty).
   readonly acpSessionId?: string;
+  // Resolves when an interactive adapter exits. ACP adapters omit it; handoff
+  // PTYs use it to automatically return control to the transcript surface.
+  readonly exited?: Promise<number>;
 
   spawn(opts: SpawnOpts, services?: ClientServices): Promise<void>;
   // Resolves with the ACP stopReason for the turn (end_turn | max_tokens |
@@ -304,6 +312,7 @@ export interface AgentSummary {
   };
   status: AgentStatus;
   pendingApprovals: number;
+  controlMode: ControlMode;
 }
 
 // corrId is an optional client-supplied correlation token echoed back on `ack`.
@@ -315,6 +324,8 @@ export type ClientMsg =
   // is needed; for an external one, `agent`+`cwd` (from the catalog) say how/where
   // to relaunch it.
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
+  | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
+  | { t: 'leave_terminal'; agentId: string; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; agentId: string; text: string; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
@@ -353,7 +364,7 @@ export interface BrowserInputWire {
 export type WireEvent = Exclude<AgentEvent, { kind: 'raw_pty' }> | { kind: 'raw_pty'; dataB64: string };
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; pendingApprovals: Approval[] }
+  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }

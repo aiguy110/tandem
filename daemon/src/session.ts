@@ -11,11 +11,12 @@
 import { EventLog, type EventStore, type LoggedEvent } from './eventLog.ts';
 import { TerminalHost } from './terminalHost.ts';
 import { WorkspaceFs } from './workspaceFs.ts';
-import type { AgentAdapter, AgentEvent, AgentStatus, Approval, ClientServices, SpawnOpts, SpawnSpec } from './types.ts';
+import type { AgentAdapter, AgentEvent, AgentStatus, Approval, ClientServices, ControlMode, SpawnOpts, SpawnSpec } from './types.ts';
 
 export class AgentSession {
   readonly log: EventLog;
   status: AgentStatus = 'idle';
+  controlMode: ControlMode = 'transcript';
   // Live permission requests, so a reconnecting/late client sees them in the
   // snapshot's pendingApprovals (the always-on approvals rail).
   private approvals = new Map<string, Approval>();
@@ -24,6 +25,8 @@ export class AgentSession {
   // registry can tear processes down and tests can inspect the ACP-view vs.
   // scrollback split directly.
   terminals?: TerminalHost;
+  private adapterEpoch = 0;
+  private activePrompt?: Promise<string>;
 
   constructor(
     readonly id: string,
@@ -36,6 +39,10 @@ export class AgentSession {
   }
 
   async start(opts: SpawnOpts): Promise<void> {
+    await this.attachAdapter(this.adapter, opts);
+  }
+
+  private async attachAdapter(adapter: AgentAdapter, opts: SpawnOpts, onExit?: () => void): Promise<void> {
     const cwd = opts.cwd ?? process.cwd();
     const terminals = new TerminalHost({ defaultCwd: cwd, emit: (ev) => this.emit(ev) });
     this.terminals = terminals;
@@ -44,8 +51,10 @@ export class AgentSession {
       terminals,
       permissions: { request: () => {} }, // perms already flow via the adapter's event queue
     };
-    await this.adapter.spawn(opts, services);
-    void this.pump();
+    await adapter.spawn(opts, services);
+    const epoch = ++this.adapterEpoch;
+    void this.pump(adapter, epoch);
+    if (adapter.exited && onExit) void adapter.exited.then(() => epoch === this.adapterEpoch && onExit());
   }
 
   // The single sink for everything that enters this agent's log: adapter events
@@ -61,8 +70,22 @@ export class AgentSession {
     for (const l of this.listeners) l(le);
   }
 
-  private async pump(): Promise<void> {
-    for await (const ev of this.adapter.events) this.emit(ev);
+  private async pump(adapter: AgentAdapter, epoch: number): Promise<void> {
+    for await (const ev of adapter.events) if (epoch === this.adapterEpoch) this.emit(ev);
+  }
+
+  async swapAdapter(adapter: AgentAdapter, opts: SpawnOpts, mode: ControlMode, onExit?: () => void): Promise<void> {
+    ++this.adapterEpoch; // silence the old pump before disposal emits its tail
+    this.terminals?.disposeAll();
+    await this.adapter.dispose();
+    this.adapter = adapter;
+    await this.attachAdapter(adapter, opts, onExit);
+    this.setControlMode(mode);
+  }
+
+  setControlMode(mode: ControlMode): void {
+    this.controlMode = mode;
+    this.emit({ kind: 'control_state', mode });
   }
 
   // Push a daemon-originated normalized event into this agent's log + fan-out
@@ -82,10 +105,16 @@ export class AgentSession {
   }
 
   prompt(text: string): Promise<string> {
+    if (this.controlMode !== 'transcript') return Promise.reject(new Error('agent session is controlled by the terminal'));
     // Log the human turn first so it lands in the transcript ahead of the agent's
     // response (and replays for late/reconnecting clients).
     this.emit({ kind: 'user_message', text });
-    return this.adapter.prompt(text);
+    const turn = this.adapter.prompt(text);
+    this.activePrompt = turn;
+    void turn.finally(() => {
+      if (this.activePrompt === turn) this.activePrompt = undefined;
+    }).catch(() => {});
+    return turn;
   }
   respondPermission(reqId: string, optionId: string): void {
     this.approvals.delete(reqId);
@@ -103,6 +132,12 @@ export class AgentSession {
     this.approvals.clear();
     this.adapter.interrupt();
   }
+  async interruptAndWait(timeoutMs = 4000): Promise<void> {
+    this.interrupt();
+    const turn = this.activePrompt;
+    if (!turn) return;
+    await Promise.race([turn.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))]);
+  }
   setMode(modeId: string): Promise<void> {
     if (!this.adapter.setMode) return Promise.reject(new Error('this agent does not support session modes'));
     return this.adapter.setMode(modeId);
@@ -112,6 +147,7 @@ export class AgentSession {
     return this.adapter.setConfigOption(configId, value);
   }
   async dispose(): Promise<void> {
+    ++this.adapterEpoch; // suppress exit callbacks/events from intentional teardown
     this.terminals?.disposeAll();
     await this.adapter.dispose();
   }

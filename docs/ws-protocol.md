@@ -40,6 +40,12 @@ also reports each adapter's enumeration support so the UI can identify a partial
 `cwd` are required only for an external session. Raw PTY agents have no resumable-session
 concept and external enumeration remains optional in ACP.
 
+`enter_terminal {agentId, interrupt?}` and `leave_terminal {agentId}` drive the ACP/CLI
+handoff. An active ACP turn rejects an implicit handoff with `agent_busy`; `interrupt:true`
+performs graceful cancellation first. `control_state` events and the authoritative
+`AgentSummary.controlMode` / `snapshot.controlMode` expose `transcript | switching | terminal`
+to every client. CLI exit automatically performs `leave_terminal` daemon-side.
+
 ### `spawn_agent` / `close_agent` (Phase 2: real workspaces)
 
 `spawn_agent`'s `workspace.kind:'worktree'` now provisions a real `git worktree` (branch
@@ -115,7 +121,9 @@ type ClientMsg =
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
   | { t: 'list_sessions' }                                              // resumable-session catalog
-  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string };
+  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string }
+  | { t: 'enter_terminal'; agentId: string; interrupt?: boolean }
+  | { t: 'leave_terminal'; agentId: string };
 
 // Phase 5: the normalized user-input event carried by browser_input — mapped to CDP
 // Input.dispatchMouseEvent / dispatchKeyEvent / insertText daemon-side. x/y are in the
