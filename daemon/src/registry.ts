@@ -26,8 +26,10 @@ export class AgentRegistry {
 
   constructor(private db: Db, private config: Config, private browser?: BrowserWiring) {
     // Continue the name counter past whatever the DB already contains so restored
-    // + fresh agents never collide.
-    this.counter = db.liveAgents().length;
+    // + fresh agents never collide. Must include closed agents too: their ids
+    // are still valid primary keys in `agents`/`events`, and reissuing one to a
+    // new agent would splice the old agent's persisted history onto it.
+    this.counter = db.maxAgentSuffix();
     this.workspace = new WorkspaceManager(config);
   }
 

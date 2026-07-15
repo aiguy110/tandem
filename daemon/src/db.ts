@@ -126,6 +126,21 @@ export class Db {
   liveAgents(): AgentRecord[] {
     return (this.sLiveAgents.all() as any[]).map(rowToRecord);
   }
+  // Highest `-N` suffix among ALL agent ids ever created (including closed
+  // ones still in the DB). Names/ids double as the stable key, so the
+  // auto-name counter must never regenerate one already used — seeding it
+  // from live-agent count alone let closed agents' ids get reissued to a
+  // fresh agent, silently splicing the old agent's persisted event-log
+  // history onto the new one.
+  maxAgentSuffix(): number {
+    const rows = this.db.prepare('SELECT id FROM agents').all() as { id: string }[];
+    let max = 0;
+    for (const { id } of rows) {
+      const m = /-(\d+)$/.exec(id);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    return max;
+  }
   getAgent(id: string): AgentRecord | undefined {
     const r = this.sGetAgent.get(id) as any;
     return r ? rowToRecord(r) : undefined;
