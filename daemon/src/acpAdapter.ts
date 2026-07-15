@@ -76,6 +76,14 @@ export class AcpAdapter implements AgentAdapter {
   private modes: SessionModeState | null = null;
   private configOptions: SessionConfigOption[] = [];
   private commands: SlashCommand[] = [];
+  // True while a session/load RPC is in flight. Per the ACP resume contract the
+  // agent re-streams its ENTIRE prior history as session/update notifications
+  // before responding to session/load, so the client can rebuild UI state. That
+  // history is already durable in our own event log from before the restart —
+  // logging it again would duplicate every message/tool-call on every restart.
+  // State (modes/liveToolCalls/etc.) is still tracked from these notifications;
+  // only the re-emission into the log (this.q) is suppressed.
+  private replaying = false;
 
   constructor(readonly id: string, private launch: { cmd: string; args: string[] }) {}
 
@@ -112,10 +120,16 @@ export class AcpAdapter implements AgentAdapter {
 
     if (opts.resumeSessionId && this.agentLoadSession) {
       // Restore path (D11): resume the persisted ACP session instead of a new one.
-      const res = (await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] })) as {
-        modes?: unknown;
-        configOptions?: unknown[];
-      };
+      this.replaying = true;
+      let res: { modes?: unknown; configOptions?: unknown[] };
+      try {
+        res = (await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] })) as {
+          modes?: unknown;
+          configOptions?: unknown[];
+        };
+      } finally {
+        this.replaying = false;
+      }
       this.sessionId = opts.resumeSessionId;
       this.modes = normalizeModes(res.modes);
       this.configOptions = (res.configOptions ?? []).map(normalizeConfigOption);
@@ -141,7 +155,12 @@ export class AcpAdapter implements AgentAdapter {
   // then load. spawn(opts.resumeSessionId) is the primary path used by restore.
   async loadSession(sessionId: string): Promise<void> {
     if (!this.agentLoadSession) throw new Error('agent does not advertise loadSession');
-    await this.rpc('session/load', { sessionId, cwd: process.cwd(), mcpServers: [] });
+    this.replaying = true;
+    try {
+      await this.rpc('session/load', { sessionId, cwd: process.cwd(), mcpServers: [] });
+    } finally {
+      this.replaying = false;
+    }
     this.sessionId = sessionId;
   }
 
@@ -292,46 +311,51 @@ export class AcpAdapter implements AgentAdapter {
     return content?.text ?? '';
   }
 
+  // Gated push: suppressed while session/load is replaying already-logged history.
+  private push(ev: AgentEvent): void {
+    if (!this.replaying) this.q.push(ev);
+  }
+
   private onUpdate(u: any): void {
     if (!u) return;
     switch (u.sessionUpdate) {
       case 'agent_message_chunk':
-        this.q.push({ kind: 'message_chunk', text: AcpAdapter.text(u.content) });
+        this.push({ kind: 'message_chunk', text: AcpAdapter.text(u.content) });
         break;
       case 'agent_thought_chunk':
-        this.q.push({ kind: 'thought_chunk', text: AcpAdapter.text(u.content) });
+        this.push({ kind: 'thought_chunk', text: AcpAdapter.text(u.content) });
         break;
       case 'tool_call': {
         const status = AcpAdapter.toolStatus(u.status);
         if (status === 'pending' || status === 'running') this.liveToolCalls.add(u.toolCallId);
         else this.liveToolCalls.delete(u.toolCallId);
-        this.q.push({ kind: 'tool_call', id: u.toolCallId, title: u.title ?? '', status, content: u.content });
+        this.push({ kind: 'tool_call', id: u.toolCallId, title: u.title ?? '', status, content: u.content });
         break;
       }
       case 'tool_call_update': {
         const status = u.status ? AcpAdapter.toolStatus(u.status) : undefined;
         if (status && status !== 'pending' && status !== 'running') this.liveToolCalls.delete(u.toolCallId);
-        this.q.push({ kind: 'tool_call_update', id: u.toolCallId, status, content: u.content });
+        this.push({ kind: 'tool_call_update', id: u.toolCallId, status, content: u.content });
         break;
       }
       case 'plan':
       case 'plan_update': // 1.2.x incremental plan; both carry `entries`
-        this.q.push({
+        this.push({
           kind: 'plan',
           entries: (u.entries ?? []).map((e: any) => ({ label: e.content ?? '', status: AcpAdapter.planStatus(e.status) })),
         });
         break;
       case 'current_mode_update':
         this.modes = this.modes ? { ...this.modes, currentModeId: u.currentModeId } : { currentModeId: u.currentModeId, availableModes: [] };
-        this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
+        this.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
         break;
       case 'config_option_update':
         this.configOptions = (u.configOptions ?? []).map(normalizeConfigOption);
-        this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
+        this.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
         break;
       case 'available_commands_update':
         this.commands = (u.availableCommands ?? []).map(normalizeCommand);
-        this.q.push({ kind: 'available_commands', commands: this.commands });
+        this.push({ kind: 'available_commands', commands: this.commands });
         break;
       // user_message_chunk / usage_update / plan_removed / session_info_update
       // are ignored for now.
