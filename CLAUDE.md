@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Workflow
 
 - After implementing a feature or bug fix, verify it works (run tests, typecheck, or exercise the change). Once verified, commit the changes with git automatically — do not wait for the user to ask separately. Only skip the auto-commit if the user has said otherwise for that specific change.
+- After the final commit for a task (i.e. the work is done, not a mid-task checkpoint), merge the agent's worktree branch back into `master` in the main checkout (`/home/josiah/Projects/tandem`) and restart the service (`systemctl --user restart tandem.service`, or run `redeploy.sh`) so the change goes live. Skip this merge-and-restart step only if the user says otherwise for that task.
 
 ## Commands
 
