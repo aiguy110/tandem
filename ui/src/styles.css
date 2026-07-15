@@ -273,9 +273,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .slash-row .hint { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
 .slash-row .desc { color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .prompt-bar textarea {
-  flex: 1; resize: none; min-height: 38px; max-height: 160px;
+  flex: 1; resize: none; min-height: calc(1.4em + 20px); max-height: calc(5.6em + 20px);
   background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
-  border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--font-ui); font-size: var(--fs-base);
+  border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.4;
 }
 .prompt-bar textarea:focus { outline: none; border-color: var(--agent); }
 
