@@ -3,6 +3,28 @@ import { useStore } from '../store';
 import { fuzzyFilter } from '../fuzzy';
 import type { RepoInfo, SpawnSpec } from '../wire';
 
+const RECENT_DIRS_KEY = 'tandem.recentDirs';
+const RECENT_DIRS_MAX = 3;
+
+function loadRecentDirs(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_DIRS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordRecentDir(path: string) {
+  try {
+    const existing = loadRecentDirs().filter((p) => p !== path);
+    existing.unshift(path);
+    localStorage.setItem(RECENT_DIRS_KEY, JSON.stringify(existing.slice(0, 20)));
+  } catch {
+    // localStorage unavailable — recency just won't persist
+  }
+}
+
 // Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs.
 //   Enter               → spawn worktree defaults + focus jumps
 //   Tab → type task → Enter → spawn AND dispatch
@@ -30,7 +52,14 @@ export function SpawnPalette() {
 
   const taskRef = useRef<HTMLInputElement>(null);
 
-  const filtered = useMemo(() => fuzzyFilter(query, dirs, (d) => d.name + ' ' + d.path), [query, dirs]);
+  const filtered = useMemo(() => {
+    const matched = fuzzyFilter(query, dirs, (d) => d.name + ' ' + d.path);
+    if (query) return matched;
+    const recentPaths = loadRecentDirs();
+    const byPath = new Map(dirs.map((d) => [d.path, d]));
+    const recent = recentPaths.map((p) => byPath.get(p)).filter((d): d is RepoInfo => !!d);
+    return recent.length > 0 ? recent.slice(0, RECENT_DIRS_MAX) : matched.slice(0, RECENT_DIRS_MAX);
+  }, [query, dirs]);
   useEffect(() => setSel(0), [query]);
   useEffect(() => {
     if (taskMode) taskRef.current?.focus();
@@ -54,6 +83,7 @@ export function SpawnPalette() {
       const code = r.error.split(':')[0];
       setError({ code, msg: r.error, dir });
     } else if (r.agentId) {
+      recordRecentDir(dir.path);
       focus(r.agentId);
       // store.spawn already closes the modal on success
     }
