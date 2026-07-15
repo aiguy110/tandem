@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { fuzzyFilter } from '../fuzzy';
-import type { RepoInfo, SpawnSpec } from '../wire';
+import type { RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
@@ -55,6 +55,7 @@ function recordRecentDir(path: string) {
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
   const spawn = useStore((s) => s.spawn);
+  const getSpawnOptions = useStore((s) => s.getSpawnOptions);
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
@@ -73,6 +74,9 @@ export function SpawnPalette() {
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [permission, setPermission] = useState('');
+  const [spawnOptions, setSpawnOptions] = useState<SpawnOptions | null>(null);
+  const [optionsBusy, setOptionsBusy] = useState(false);
+  const [optionsError, setOptionsError] = useState('');
   const [error, setError] = useState<{ code: string; msg: string; dir: RepoInfo } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -96,6 +100,33 @@ export function SpawnPalette() {
     setPermission(saved.permission ?? '');
   }, [agent, adapter, selectedDir?.path]);
   useEffect(() => {
+    if (!advanced || adapter !== 'acp' || !selectedDir) {
+      setSpawnOptions(null);
+      setOptionsError('');
+      return;
+    }
+    let cancelled = false;
+    setOptionsBusy(true);
+    setOptionsError('');
+    void getSpawnOptions(agent, selectedDir.path).then((options) => {
+      if (cancelled) return;
+      setSpawnOptions(options);
+      const saved = loadSpawnSettings(agent, selectedDir.path);
+      const modelOption = options.configOptions.find((o) => o.category === 'model' && o.type === 'select');
+      const effortOption = options.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
+      const valid = (value: string | undefined, values: { value: string }[]) => value && values.some((o) => o.value === value) ? value : '';
+      setModel(valid(saved.model, modelOption?.options ?? []));
+      setEffort(valid(saved.effort, effortOption?.options ?? []));
+      setPermission(saved.permission && options.modes?.availableModes.some((m) => m.id === saved.permission) ? saved.permission : '');
+    }).catch((error: Error) => {
+      if (!cancelled) {
+        setSpawnOptions(null);
+        setOptionsError(error.message);
+      }
+    }).finally(() => { if (!cancelled) setOptionsBusy(false); });
+    return () => { cancelled = true; };
+  }, [advanced, agent, adapter, selectedDir?.path, getSpawnOptions]);
+  useEffect(() => {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
 
@@ -103,6 +134,8 @@ export function SpawnPalette() {
     setBusy(true);
     setError(null);
     const existing = useExisting && !forceWorktree;
+    const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
+    const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
     const spec: SpawnSpec = {
       adapter: advanced ? adapter : 'acp',
       agent: advanced && adapter === 'acp' ? agent : undefined,
@@ -114,8 +147,8 @@ export function SpawnPalette() {
       sessionConfig: adapter === 'acp' ? {
         modeId: permission || undefined,
         configOptions: {
-          ...(model ? { model } : {}),
-          ...(effort ? { thought_level: effort } : {}),
+          ...(model && modelOption ? { [modelOption.id]: model } : {}),
+          ...(effort && effortOption ? { [effortOption.id]: effort } : {}),
         },
       } : undefined,
     };
@@ -218,12 +251,10 @@ export function SpawnPalette() {
                     <option value="pi">pi</option>
                   </select>
                 </label>
-                <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="agent default" list="spawn-models" /></label>
-                <label>Effort<input value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="agent default" list="spawn-efforts" /></label>
-                <label>Permissions<input value={permission} onChange={(e) => setPermission(e.target.value)} placeholder="agent default" list="spawn-permissions" /></label>
-                <datalist id="spawn-models">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.configOptions.find((o) => o.category === 'model')?.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</datalist>
-                <datalist id="spawn-efforts">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.configOptions.find((o) => o.category === 'thought_level')?.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</datalist>
-                <datalist id="spawn-permissions">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.modes?.availableModes ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</datalist>
+                <label>Model<select value={model} onChange={(e) => setModel(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.configOptions.find((o) => o.category === 'model')?.options?.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</select></label>
+                <label>Effort<select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.configOptions.find((o) => o.category === 'thought_level')?.options?.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</select></label>
+                <label>Permissions<select value={permission} onChange={(e) => setPermission(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.modes?.availableModes.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+                {(optionsBusy || optionsError) && <div style={{ gridColumn: '1 / -1' }} className={optionsError ? 'modal-err' : 'sub'}>{optionsError || `Querying ${agent} ACP options…`}</div>}
               </>
             )}
             <label>

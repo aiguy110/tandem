@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { AsyncQueue } from './asyncQueue.ts';
 import { PathEscapeError } from './workspaceFs.ts';
-import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SlashCommand, SpawnOpts } from './types.ts';
+import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SlashCommand, SpawnOptions, SpawnOpts } from './types.ts';
 
 let permCounter = 0;
 
@@ -96,6 +96,10 @@ export class AcpAdapter implements AgentAdapter {
   // Persisted for restore (D11). Empty until session/new or session/load resolves.
   get acpSessionId() {
     return this.sessionId || undefined;
+  }
+
+  get sessionConfig(): SpawnOptions {
+    return { modes: this.modes, configOptions: this.configOptions };
   }
 
   async spawn(opts: SpawnOpts, services?: ClientServices): Promise<void> {

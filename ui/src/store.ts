@@ -22,6 +22,7 @@ import type {
   SessionModeState,
   SlashCommand,
   SpawnSpec,
+  SpawnOptions,
   WireEvent,
 } from './wire';
 
@@ -121,6 +122,7 @@ interface StoreState {
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
   leaveTerminal: (agentId: string) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
+  getSpawnOptions: (agent: string, cwd: string) => Promise<SpawnOptions>;
   prompt: (agentId: string, text: string) => void;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
@@ -141,6 +143,7 @@ interface StoreState {
 let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
+const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -210,6 +213,15 @@ export const useStore = create<StoreState>((set, get) => {
       case 'dirs':
         set({ dirs: msg.dirs });
         return;
+      case 'spawn_options': {
+        const pending = msg.corrId ? pendingSpawnOptions.get(msg.corrId) : undefined;
+        if (pending) {
+          pendingSpawnOptions.delete(msg.corrId!);
+          if (msg.error || !msg.options) pending.reject(new Error(msg.error ?? 'ACP server returned no spawn options'));
+          else pending.resolve(msg.options);
+        }
+        return;
+      }
       case 'sessions':
         set({ resumeCatalog: msg.catalog, resumeLoading: false });
         return;
@@ -414,6 +426,12 @@ export const useStore = create<StoreState>((set, get) => {
           resolve(r);
         });
         client.send({ t: 'spawn_agent', spec, corrId });
+      }),
+    getSpawnOptions: (agent, cwd) =>
+      new Promise<SpawnOptions>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingSpawnOptions.set(corrId, { resolve, reject });
+        client.send({ t: 'get_spawn_options', agent, cwd, corrId });
       }),
     prompt: (agentId, text) => {
       client.send({ t: 'prompt', agentId, text });
