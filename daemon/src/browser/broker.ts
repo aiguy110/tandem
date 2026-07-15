@@ -250,6 +250,20 @@ export class BrowserBroker extends EventEmitter {
       // First CDP hit provisions the browser (laziness invariant).
       await this.ensureProvisioned(agentId);
       const a = this.agents.get(agentId)!;
+      // A driver may hand us a ws:// CDP endpoint (e.g. Steel's session
+      // websocketUrl) with no HTTP /json/version to proxy. Playwright's
+      // connectOverCDP only needs a webSocketDebuggerUrl to dial — synthesize the
+      // version doc pointing back at this proxy (where the gate lives).
+      if (a.realCdpHttp && /^wss?:\/\//.test(a.realCdpHttp)) {
+        const bare = rest.replace(/\/+$/, '') || '/';
+        if (bare === '/' || bare.endsWith('/json/version')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${this.port}/cdp/${encodeURIComponent(agentId)}/devtools/browser` }));
+        } else {
+          res.writeHead(404).end();
+        }
+        return;
+      }
       const upstream = await fetch(`${a.realCdpHttp}${rest === '/' ? '/json/version' : rest}`);
       const text = await upstream.text();
       // Rewrite any browser-level ws debugger URL to point back at THIS proxy, so

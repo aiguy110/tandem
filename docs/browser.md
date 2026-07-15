@@ -111,13 +111,55 @@ One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(age
 - **`LocalChromiumDriver`** (default): launches Playwright's bundled headless Chromium per
   agent with a per-agent user-data dir under `$TANDEM_HOME/browser-profiles/<agent>`.
   Used by all automated tests and wherever no Steel/Docker exists.
-- **`SteelDriver`**: `POST {STEEL_BASE_URL}/v1/sessions` → session's CDP/websocket URL;
-  release on teardown. **Specced but untested** on this machine (no Docker) — kept thin;
-  field names are isolated in one class if a Steel build differs.
+- **`SteelDriver`**: `POST {STEEL_BASE_URL}/v1/sessions` → the session's CDP websocket
+  URL (host-normalized, see below); `POST .../{id}/release` on teardown. **Verified
+  end-to-end** against a self-hosted Steel by `npm run derisk:steel`; field names are
+  isolated in one class if a Steel build differs.
 
 Config: `TANDEM_BROWSER_DRIVER=local|steel` (default `local`; `steel` requires
 `STEEL_BASE_URL`, optional `STEEL_API_KEY`). `TANDEM_BROWSER_MCP=off` disables the MCP
 registration at `session/new` (mock-agent derisk suites run with it off; default on).
+
+### Self-hosting Steel
+
+Steel is the open-source headless-browser API (`ghcr.io/steel-dev/steel-browser`) that
+provisions/releases per-agent Chrome sessions over a CDP endpoint. Run one with Docker:
+
+```bash
+docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
+  ghcr.io/steel-dev/steel-browser:latest
+```
+
+- **Ports:** `3000` = REST API **and** the browser-level CDP websocket (`ws://host:3000/`);
+  `9223` = Steel's CDP/debugger HTTP; UI at `http://localhost:3000/ui`.
+- **`--shm-size=2g`** — Chrome exhausts the default 64 MB `/dev/shm` and dies with SIGTRAP.
+- Point Tandem at it:
+  ```bash
+  TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
+  ```
+  (For Steel Cloud / an authed deployment, also set `STEEL_API_KEY`.)
+- Verify: `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
+
+**How the CDP URL is derived (why `SteelDriver` doesn't just use `/json/version`):** Steel's
+`/json/version` (port 9223) advertises a *port-less* `ws://localhost/devtools/...` that
+Playwright dials as `:80` and fails. So the driver uses the create response's
+`websocketUrl` (`ws://0.0.0.0:3000/`) and rewrites the bind-address host to `STEEL_BASE_URL`'s
+host — a dialable `ws://host:3000/`. The broker accepts that ws:// upstream directly
+(`resolveBrowserWs` + the `onHttp` ws-branch synthesize the `/json/version` Playwright needs).
+
+**Bundled-Chromium launch failures.** Steel ships its own Chromium; on some hosts (e.g.
+Ubuntu 24.04) it crashes on launch (`Failed to launch the browser process` / SIGTRAP) for
+reasons unrelated to Tandem. Point Steel at a known-good Chromium instead — mount one in and
+set `CHROME_EXECUTABLE_PATH` (Playwright's bundled Chromium works well):
+
+```bash
+PW=$(node -e "console.log(require('playwright-core').chromium.executablePath())")
+docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
+  -v "$(dirname "$PW")":/opt/chromium:ro -e CHROME_EXECUTABLE_PATH=/opt/chromium/chrome \
+  ghcr.io/steel-dev/steel-browser:latest
+```
+
+If Chrome still won't start, add `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`.
 
 ### The broker: a gated CDP proxy (the design choice)
 

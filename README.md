@@ -53,7 +53,21 @@ Common configuration (full table in [`daemon/README.md`](daemon/README.md#config
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
-| `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
+| `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
+
+**Self-hosting Steel (optional):** for the shared browser you can back agents with
+[Steel](https://github.com/steel-dev/steel-browser) instead of local Chromium. Run it with
+Docker and point Tandem at it:
+
+```bash
+docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
+  ghcr.io/steel-dev/steel-browser:latest
+TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
+```
+
+Verify with `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
+Setup notes and troubleshooting (bundled-Chromium launch crashes, `CHROME_EXECUTABLE_PATH`)
+are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 
 **Remote access:** the daemon binds localhost by default; front it with `tailscale serve`
 (TLS + network identity) rather than exposing the port. The bearer token is a second layer.
@@ -155,10 +169,10 @@ was driven end-to-end against a live daemon + mock ACP agent via Playwright.
 - **Persistence + auth** were unspecified and are now decided: SQLite (D14) and a
   localhost-bind + bearer-token with URL-fragment bootstrap (D15), fronted by `tailscale
   serve` for remote. See [`docs/decisions.md`](docs/decisions.md).
-- **`BrowserDriver` interface** with `SteelDriver` (specced, **untested** — no Docker on the
-  build host) and `LocalChromiumDriver` (Playwright-launched, the tested path). Steel remains
-  the intended production driver per D4/D13; the local driver is a drop-in behind one
-  interface. See D13's amendment.
+- **`BrowserDriver` interface** with `SteelDriver` (self-hosted Steel over its REST + CDP API,
+  verified by `npm run derisk:steel`) and `LocalChromiumDriver` (Playwright-launched, the
+  default). Steel is the intended production driver per D4/D13; the local driver is a drop-in
+  behind one interface. See D13's amendment.
 - **`takeover_request`** rides the always-on `transcript` channel, not the `browser` channel,
   so the attention rail surfaces it even when the Browser pane is closed.
 - The **real `claude-agent-acp`** accepts our advertised `fs`/`terminal` capabilities and MCP
