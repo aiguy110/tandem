@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
-import type { Approval, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import type { Approval, PromptBlock, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 
@@ -11,7 +12,7 @@ import { fuzzyFilter } from '../../fuzzy';
 // prompt input sends {t:'prompt'}; Esc/Interrupt sends {t:'interrupt'}.
 
 type Item =
-  | { kind: 'user'; key: string; text: string }
+  | { kind: 'user'; key: string; blocks: PromptBlock[] }
   | { kind: 'message'; key: string; text: string }
   | { kind: 'thought'; key: string; text: string }
   | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown }
@@ -29,7 +30,11 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
       case 'user_message':
-        items.push({ kind: 'user', key: `u${seq}`, text: ev.text });
+        items.push({
+          kind: 'user',
+          key: `u${seq}`,
+          blocks: ev.blocks ?? (ev.text != null ? [{ type: 'text', text: ev.text }] : []),
+        });
         break;
       case 'message_chunk': {
         const last = items[items.length - 1];
@@ -186,7 +191,13 @@ export function TranscriptPane() {
 function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) => void }) {
   switch (item.kind) {
     case 'user':
-      return <div className="ev user">{item.text}</div>;
+      return (
+        <div className="ev user">
+          {item.blocks.map((block, i) =>
+            block.type === 'text' ? <div key={i}>{block.text}</div> : <TranscriptImage key={`${block.assetId}-${i}`} block={block} />,
+          )}
+        </div>
+      );
     case 'message':
       return <div className="ev msg" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />;
     case 'thought':
@@ -232,6 +243,45 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
   }
+}
+
+function assetUrl(agentId: string, assetId: string): string {
+  return `/api/agents/${encodeURIComponent(agentId)}/assets/${encodeURIComponent(assetId)}`;
+}
+
+function TranscriptImage({ block }: { block: Extract<PromptBlock, { type: 'image' }> }) {
+  const agentId = useStore((s) => s.focusedId);
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!agentId) return;
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    void fetch(assetUrl(agentId, block.assetId), {
+      headers: storedToken() ? { Authorization: `Bearer ${storedToken()}` } : {},
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`asset fetch failed (${response.status})`);
+        return response.blob();
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [agentId, block.assetId]);
+
+  if (failed) return <div className="transcript-image-failed">Image unavailable: {block.name ?? 'attachment'}</div>;
+  if (!src) return <div className="transcript-image-loading">Loading {block.name ?? 'image'}…</div>;
+  return <img className="transcript-image" src={src} alt={block.name ?? 'Uploaded image'} />;
 }
 
 // ACP tool_call content is an array of ToolCallContent blocks — most are
@@ -373,6 +423,20 @@ function findSlashToken(text: string, caret: number): { start: number; end: numb
   return { start: i - 1, end: caret, query };
 }
 
+const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_TURN_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGES = 4;
+
+type DraftAttachment = {
+  localId: string;
+  file: File;
+  previewUrl: string;
+  status: 'uploading' | 'ready' | 'error';
+  asset?: Extract<PromptBlock, { type: 'image' }>;
+  error?: string;
+};
+
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
   const interrupt = useStore((s) => s.interrupt);
@@ -381,10 +445,27 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const text = useStore((s) => s.drafts[agentId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
+  const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const aborts = useRef(new Map<string, AbortController>());
+  const attachmentRef = useRef<DraftAttachment[]>([]);
   const [caret, setCaret] = useState(0);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    attachmentRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => () => {
+    for (const controller of aborts.current.values()) controller.abort();
+    for (const attachment of attachmentRef.current) URL.revokeObjectURL(attachment.previewUrl);
+  }, []);
 
   const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
   const matches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
@@ -428,14 +509,138 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     });
   };
 
-  const send = () => {
+  const upload = async (attachment: DraftAttachment) => {
+    const controller = new AbortController();
+    aborts.current.set(attachment.localId, controller);
+    try {
+      const token = storedToken();
+      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/assets`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': attachment.file.type,
+          'X-File-Name': encodeURIComponent(attachment.file.name),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: attachment.file,
+        signal: controller.signal,
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { asset?: { assetId: string; mimeType: string; name?: string }; error?: string }
+        | null;
+      if (!response.ok || !body?.asset) throw new Error(body?.error ?? `Upload failed (${response.status})`);
+      const asset: Extract<PromptBlock, { type: 'image' }> = { type: 'image', ...body.asset };
+      setAttachments((current) => current.map((item) => item.localId === attachment.localId
+        ? { ...item, status: 'ready', asset, error: undefined }
+        : item));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      setAttachments((current) => current.map((item) => item.localId === attachment.localId
+        ? { ...item, status: 'error', error: message }
+        : item));
+    } finally {
+      aborts.current.delete(attachment.localId);
+    }
+  };
+
+  const addFiles = (files: File[]) => {
+    setAttachmentError(null);
+    if (imageSupport !== true) {
+      setAttachmentError(imageSupport === false ? 'This agent does not accept image prompts.' : 'Image support is not available yet.');
+      return;
+    }
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    if (!images.length) return;
+    const invalid = images.find((file) => !ACCEPTED_IMAGE_TYPES.has(file.type));
+    if (invalid) {
+      setAttachmentError(`${invalid.name}: use PNG, JPEG, GIF, or WebP.`);
+      return;
+    }
+    const oversized = images.find((file) => file.size > MAX_IMAGE_BYTES);
+    if (oversized) {
+      setAttachmentError(`${oversized.name} exceeds the 10 MiB per-image limit.`);
+      return;
+    }
+    if (attachments.length + images.length > MAX_IMAGES) {
+      setAttachmentError(`A prompt can contain at most ${MAX_IMAGES} images.`);
+      return;
+    }
+    const total = attachments.reduce((sum, item) => sum + item.file.size, 0) + images.reduce((sum, file) => sum + file.size, 0);
+    if (total > MAX_TURN_IMAGE_BYTES) {
+      setAttachmentError('Images exceed the 20 MiB per-prompt limit.');
+      return;
+    }
+    const added: DraftAttachment[] = images.map((file) => ({
+      localId: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: 'uploading',
+    }));
+    setAttachments((current) => [...current, ...added]);
+    for (const attachment of added) void upload(attachment);
+  };
+
+  const removeAttachment = (localId: string) => {
+    const attachment = attachments.find((item) => item.localId === localId);
+    aborts.current.get(localId)?.abort();
+    if (attachment) URL.revokeObjectURL(attachment.previewUrl);
+    setAttachments((current) => current.filter((item) => item.localId !== localId));
+    setAttachmentError(null);
+  };
+
+  const retryAttachment = (attachment: DraftAttachment) => {
+    setAttachments((current) => current.map((item) => item.localId === attachment.localId
+      ? { ...item, status: 'uploading', error: undefined }
+      : item));
+    void upload(attachment);
+  };
+
+  const send = async () => {
+    if (sending) return;
     const t = text.trim();
-    if (!t) return;
-    prompt(agentId, t);
+    if (!t && attachments.length === 0) return;
+    if (attachments.some((attachment) => attachment.status === 'uploading')) {
+      setAttachmentError('Wait for image uploads to finish.');
+      return;
+    }
+    if (attachments.some((attachment) => attachment.status === 'error' || !attachment.asset)) {
+      setAttachmentError('Remove or retry failed images before sending.');
+      return;
+    }
+    if (attachments.length === 0) {
+      setSending(true);
+      const result = await prompt(agentId, t);
+      setSending(false);
+      if (result.error) setAttachmentError(result.error);
+      return;
+    }
+    const blocks: PromptBlock[] = [];
+    if (t) blocks.push({ type: 'text', text: t });
+    blocks.push(...attachments.map((attachment) => attachment.asset!));
+    setSending(true);
+    const result = await prompt(agentId, blocks);
+    setSending(false);
+    if (result.error) {
+      setAttachmentError(result.error);
+      return;
+    }
+    for (const attachment of attachments) URL.revokeObjectURL(attachment.previewUrl);
+    setAttachments([]);
+    setAttachmentError(null);
   };
 
   return (
-    <div className="prompt-bar">
+    <div
+      className={`prompt-bar${dragging ? ' dragging' : ''}`}
+      onDragEnter={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        addFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
       {showPopup && (
         <div className="slash-popup">
           {matches.map((c, i) => (
@@ -455,18 +660,64 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           ))}
         </div>
       )}
-      <textarea
-        ref={textRef}
-        data-prompt-agent={agentId}
-        placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
-        value={text}
-        onChange={(e) => {
-          setDraft(agentId, e.target.value);
-          updateCaret(e.target);
-        }}
-        onClick={(e) => updateCaret(e.currentTarget)}
-        onKeyUp={(e) => updateCaret(e.currentTarget)}
-        onKeyDown={(e) => {
+      {attachments.length > 0 && (
+        <div className="prompt-attachments">
+          {attachments.map((attachment) => (
+            <div className={`prompt-attachment ${attachment.status}`} key={attachment.localId}>
+              <img src={attachment.previewUrl} alt="" />
+              <div className="attachment-meta">
+                <span title={attachment.file.name}>{attachment.file.name}</span>
+                <small>{attachment.status === 'uploading' ? 'Uploading…' : attachment.status === 'error' ? attachment.error : 'Ready'}</small>
+              </div>
+              {attachment.status === 'error' && <button type="button" onClick={() => retryAttachment(attachment)} title="Retry upload">↻</button>}
+              <button type="button" onClick={() => removeAttachment(attachment.localId)} title={`Remove ${attachment.file.name}`}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {attachmentError && <div className="prompt-attachment-error">{attachmentError}</div>}
+      <div className="prompt-main">
+        <input
+          ref={fileRef}
+          className="visually-hidden"
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          disabled={imageSupport !== true}
+          onChange={(e) => {
+            addFiles(Array.from(e.target.files ?? []));
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          className="btn attach-btn"
+          disabled={imageSupport !== true}
+          onClick={() => fileRef.current?.click()}
+          title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
+          aria-label="Attach images"
+        >
+          ＋
+        </button>
+        <textarea
+          ref={textRef}
+          data-prompt-agent={agentId}
+          placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
+          value={text}
+          onPaste={(e) => {
+            const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+            if (images.length) {
+              e.preventDefault();
+              addFiles(images);
+            }
+          }}
+          onChange={(e) => {
+            setDraft(agentId, e.target.value);
+            updateCaret(e.target);
+          }}
+          onClick={(e) => updateCaret(e.currentTarget)}
+          onKeyUp={(e) => updateCaret(e.currentTarget)}
+          onKeyDown={(e) => {
           if (showPopup) {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
@@ -491,24 +742,26 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           }
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            send();
+            void send();
           }
           if (e.key === 'Escape' && working) {
             e.preventDefault();
             interrupt(agentId);
           }
-        }}
-        rows={1}
-      />
-      {working ? (
-        <button className="btn" onClick={() => interrupt(agentId)} title="Interrupt (Esc)">
-          ◼ Esc
-        </button>
-      ) : (
-        <button className="btn primary" onClick={send}>
-          Send
-        </button>
-      )}
+          }}
+          rows={1}
+        />
+        {working ? (
+          <button className="btn" onClick={() => interrupt(agentId)} title="Interrupt (Esc)">
+            ◼ Esc
+          </button>
+        ) : (
+          <button className="btn primary" onClick={() => void send()} disabled={sending || attachments.some((item) => item.status === 'uploading')}>
+            {sending ? 'Sending…' : 'Send'}
+          </button>
+        )}
+      </div>
+      {dragging && <div className="prompt-drop-hint">Drop images to attach</div>}
     </div>
   );
 }

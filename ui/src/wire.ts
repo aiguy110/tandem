@@ -38,8 +38,18 @@ export interface SlashCommand {
   input?: string;
 }
 
+export interface ImageAssetRef {
+  assetId: string;
+  mimeType: string;
+  name?: string;
+}
+
+export type PromptBlock =
+  | { type: 'text'; text: string }
+  | ({ type: 'image' } & ImageAssetRef);
+
 export type AgentEvent =
-  | { kind: 'user_message'; text: string }
+  | { kind: 'user_message'; text?: string; blocks?: PromptBlock[] }
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown }
@@ -52,6 +62,7 @@ export type AgentEvent =
   | { kind: 'takeover_request'; reqId: string; reason: string }
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
   | { kind: 'available_commands'; commands: SlashCommand[] }
+  | { kind: 'prompt_capabilities'; image: boolean }
   | { kind: 'control_state'; mode: ControlMode };
 
 // On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.
@@ -144,7 +155,7 @@ export interface ClosePreview {
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
-  | { t: 'prompt'; agentId: string; text: string; corrId?: string }
+  | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }

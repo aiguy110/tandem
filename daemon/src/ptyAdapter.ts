@@ -9,7 +9,7 @@ import { spawn as spawnChild, type ChildProcessWithoutNullStreams } from 'node:c
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 export class PtyAdapter implements AgentAdapter {
-  readonly capabilities = { structured: false, terminals: false, loadSession: false, fs: false };
+  readonly capabilities = { structured: false, terminals: false, loadSession: false, fs: false, image: false };
   private q = new AsyncQueue<AgentEvent>();
   private proc: any;
   private child?: ChildProcessWithoutNullStreams;

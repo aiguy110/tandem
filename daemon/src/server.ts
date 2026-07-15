@@ -16,6 +16,7 @@ import type { AgentRegistry } from './registry.ts';
 import type { AgentSession } from './session.ts';
 import type { BrowserBroker } from './browser/broker.ts';
 import type { AgentEvent, Channel, ClientMsg, ServerMsg, WireEvent } from './types.ts';
+import { AssetTooLargeError, MAX_ASSET_BYTES, UnsupportedAssetError } from './assetStore.ts';
 
 const ALL_CHANNELS: Channel[] = ['transcript', 'pty', 'terminals', 'browser', 'status'];
 
@@ -96,6 +97,12 @@ export function startServer(
 
   const httpServer = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.pathname.startsWith('/api/agents/')) {
+      handleAsset(req, res, url).catch((e) => {
+        if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: (e as Error).message }));
+      });
+      return;
+    }
     if (url.pathname.startsWith('/internal/')) {
       handleInternal(req, res, url).catch((e) => {
         res.writeHead(500, { 'content-type': 'text/plain' }).end((e as Error).message);
@@ -104,6 +111,61 @@ export function startServer(
     }
     serveStatic(req, res, opts);
   });
+
+  async function handleAsset(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+    const auth = req.headers.authorization;
+    if (auth !== `Bearer ${opts.token}`) {
+      res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    const match = /^\/api\/agents\/([^/]+)\/assets(?:\/([a-f0-9]{64}))?$/.exec(url.pathname);
+    if (!match) return void res.writeHead(404).end('not found');
+    const agentId = decodeURIComponent(match[1]);
+    const assetId = match[2];
+    if (!registry.get(agentId)) return void res.writeHead(404).end('not found');
+
+    if (req.method === 'POST' && !assetId) {
+      let body: Buffer;
+      try {
+        body = await readBuffer(req, MAX_ASSET_BYTES);
+      } catch (error) {
+        const status = error instanceof AssetTooLargeError ? 413 : 400;
+        res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error: (error as Error).message }));
+        return;
+      }
+      let rawName = Array.isArray(req.headers['x-file-name']) ? req.headers['x-file-name'][0] : req.headers['x-file-name'];
+      try {
+        if (rawName) rawName = decodeURIComponent(rawName);
+      } catch {
+        // Keep the literal header when it is not valid percent encoding.
+      }
+      const name = (rawName || 'image').replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 255);
+      try {
+        const stored = registry.assets.put(agentId, body, req.headers['content-type']);
+        res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ asset: { ...stored, name } }));
+      } catch (error) {
+        const status = error instanceof AssetTooLargeError ? 413 : error instanceof UnsupportedAssetError ? 415 : 500;
+        res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error: (error as Error).message }));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && assetId) {
+      try {
+        const asset = registry.assets.get(agentId, assetId);
+        res.writeHead(200, {
+          'content-type': asset.mimeType,
+          'content-length': asset.size,
+          'cache-control': 'private, max-age=31536000, immutable',
+          'x-content-type-options': 'nosniff',
+        }).end(asset.data);
+      } catch {
+        res.writeHead(404).end('not found');
+      }
+      return;
+    }
+    res.writeHead(404).end('not found');
+  }
 
   // Internal HTTP surface for daemon-spawned helper processes (the Tandem-control
   // MCP). Authed with the same bearer token; localhost-only via the daemon bind.
@@ -210,7 +272,7 @@ export function startServer(
         break;
       }
       case 'prompt':
-        requireSession(m.agentId).prompt(m.text).catch(() => {});
+        requireSession(m.agentId).prompt(m.blocks ?? m.text ?? '').catch(() => {});
         conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId });
         break;
       case 'input':
@@ -433,6 +495,35 @@ function readBody(req: http.IncomingMessage): Promise<string> {
     req.on('data', (c) => (buf += c));
     req.on('end', () => resolve(buf));
     req.on('error', () => resolve(buf));
+  });
+}
+function readBuffer(req: http.IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length'] ?? 0);
+    if (declared > limit) {
+      req.resume();
+      reject(new AssetTooLargeError(`image exceeds ${limit} byte limit`));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    req.on('data', (chunk: Buffer) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > limit) {
+        done = true;
+        reject(new AssetTooLargeError(`image exceeds ${limit} byte limit`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (!done) resolve(Buffer.concat(chunks, size));
+    });
+    req.on('error', (error) => {
+      if (!done) reject(error);
+    });
   });
 }
 function safeJson(s: string): Record<string, unknown> | undefined {

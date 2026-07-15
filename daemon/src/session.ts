@@ -12,6 +12,8 @@ import { EventLog, type EventStore, type LoggedEvent } from './eventLog.ts';
 import { TerminalHost } from './terminalHost.ts';
 import { WorkspaceFs } from './workspaceFs.ts';
 import type { AgentAdapter, AgentEvent, AgentStatus, Approval, ClientServices, ControlMode, SpawnOpts, SpawnSpec } from './types.ts';
+import type { PromptBlock } from './types.ts';
+import { AssetStore, MAX_PROMPT_IMAGES, MAX_PROMPT_IMAGE_BYTES } from './assetStore.ts';
 
 export class AgentSession {
   readonly log: EventLog;
@@ -34,6 +36,7 @@ export class AgentSession {
     readonly spec: SpawnSpec,
     private adapter: AgentAdapter,
     store: EventStore,
+    private assets?: AssetStore,
   ) {
     this.log = new EventLog(id, store);
   }
@@ -108,12 +111,31 @@ export class AgentSession {
     return this.activePrompt !== undefined;
   }
 
-  prompt(text: string): Promise<string> {
+  prompt(input: string | PromptBlock[]): Promise<string> {
     if (this.controlMode !== 'transcript') return Promise.reject(new Error('agent session is controlled by the terminal'));
+    const blocks: PromptBlock[] = typeof input === 'string' ? [{ type: 'text', text: input }] : input;
+    if (!Array.isArray(blocks) || blocks.length === 0) throw new Error('prompt must contain at least one block');
+    const images = blocks.filter((block): block is Extract<PromptBlock, { type: 'image' }> => block.type === 'image');
+    if (images.length > 0 && !this.adapter.capabilities.image) throw new Error('this agent does not support image prompts');
+    if (images.length > MAX_PROMPT_IMAGES) throw new Error(`prompt may contain at most ${MAX_PROMPT_IMAGES} images`);
+    let imageBytes = 0;
+    const resolved = blocks.map((block) => {
+      if (block.type === 'text') {
+        if (typeof block.text !== 'string') throw new Error('invalid text prompt block');
+        return block;
+      }
+      if (!this.assets) throw new Error('image asset storage is unavailable');
+      const asset = this.assets.get(this.id, block.assetId);
+      if (block.mimeType !== asset.mimeType) throw new Error(`image MIME type does not match uploaded asset: ${block.assetId}`);
+      imageBytes += asset.size;
+      return { type: 'image' as const, mimeType: asset.mimeType, data: asset.data.toString('base64') };
+    });
+    if (imageBytes > MAX_PROMPT_IMAGE_BYTES) throw new Error(`prompt images exceed ${MAX_PROMPT_IMAGE_BYTES} byte limit`);
+    const text = blocks.filter((block): block is Extract<PromptBlock, { type: 'text' }> => block.type === 'text').map((block) => block.text).join('');
     // Log the human turn first so it lands in the transcript ahead of the agent's
     // response (and replays for late/reconnecting clients).
-    this.emit({ kind: 'user_message', text });
-    const turn = this.adapter.prompt(text);
+    this.emit({ kind: 'user_message', text, blocks });
+    const turn = this.adapter.prompt(resolved);
     this.activePrompt = turn;
     void turn.finally(() => {
       if (this.activePrompt === turn) this.activePrompt = undefined;

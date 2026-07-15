@@ -24,6 +24,7 @@ import type {
   SlashCommand,
   SpawnSpec,
   SpawnOptions,
+  PromptBlock,
   WireEvent,
 } from './wire';
 
@@ -70,6 +71,8 @@ export interface AgentView {
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
   commands: SlashCommand[];
+  // null until the adapter reports ACP prompt capabilities.
+  imagePromptSupport: boolean | null;
   controlMode: 'transcript' | 'switching' | 'terminal';
 }
 
@@ -124,7 +127,7 @@ interface StoreState {
   leaveTerminal: (agentId: string) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string) => Promise<SpawnOptions>;
-  prompt: (agentId: string, text: string) => void;
+  prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
   respond: (agentId: string, reqId: string, optionId: string) => void;
@@ -283,6 +286,7 @@ export const useStore = create<StoreState>((set, get) => {
           // replayed transcript, mirroring the live 'event' path's applyEventToView.
           const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
+          const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
           agents[msg.agentId] = {
             ...prev,
             status: msg.status,
@@ -295,6 +299,10 @@ export const useStore = create<StoreState>((set, get) => {
                 ? { modes: lastConfig.event.modes, configOptions: lastConfig.event.configOptions }
                 : prev.sessionConfig,
             commands: lastCommands && lastCommands.event.kind === 'available_commands' ? lastCommands.event.commands : prev.commands,
+            imagePromptSupport:
+              lastPromptCapabilities && lastPromptCapabilities.event.kind === 'prompt_capabilities'
+                ? lastPromptCapabilities.event.image
+                : prev.imagePromptSupport,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
@@ -445,10 +453,17 @@ export const useStore = create<StoreState>((set, get) => {
         pendingSpawnOptions.set(corrId, { resolve, reject });
         client.send({ t: 'get_spawn_options', agent, cwd, corrId });
       }),
-    prompt: (agentId, text) => {
-      client.send({ t: 'prompt', agentId, text });
-      set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
-    },
+    prompt: (agentId, input) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          resolve(result);
+        });
+        client.send(typeof input === 'string'
+          ? { t: 'prompt', agentId, text: input, corrId }
+          : { t: 'prompt', agentId, blocks: input, corrId });
+      }),
     setDraft: (agentId, text) => set((st) => ({ drafts: { ...st.drafts, [agentId]: text } })),
     interrupt: (agentId) => client.send({ t: 'interrupt', agentId }),
     respond: (agentId, reqId, optionId) => {
@@ -533,6 +548,7 @@ function shell(id: string): AgentView {
     takeovers: [],
     sessionConfig: null,
     commands: [],
+    imagePromptSupport: null,
     controlMode: 'transcript',
   };
 }
@@ -559,6 +575,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   }
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
+  if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
   if (event.kind === 'control_state') v.controlMode = event.mode;
 }
 

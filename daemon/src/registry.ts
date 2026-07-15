@@ -10,12 +10,14 @@ import { WorkspaceManager, listRepos } from './workspace.ts';
 import { buildBrowserMcpServers, type BrowserWiring } from './browser/mcpWiring.ts';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
+import { AssetStore } from './assetStore.ts';
 import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
 
 // A short rotating word pool for auto-names: web-1, api-2, db-3, … (docs D9).
 const NAME_WORDS = ['web', 'api', 'db', 'cli', 'ui', 'svc', 'job', 'net'];
 
 export class AgentRegistry {
+  readonly assets: AssetStore;
   private sessions = new Map<string, AgentSession>();
   // agentId -> resolved cwd (worktree checkout path, or the raw dir for
   // kind:'existing'). Kept alongside `sessions` for fast collision checks and
@@ -38,6 +40,7 @@ export class AgentRegistry {
     // new agent would splice the old agent's persisted history onto it.
     this.counter = db.maxAgentSuffix();
     this.workspace = new WorkspaceManager(config);
+    this.assets = new AssetStore(config.assetsDir, db);
   }
 
   // Per-agent MCP server registrations (Phase 5): Playwright MCP pointed at the
@@ -215,7 +218,7 @@ export class AgentRegistry {
     const { cwd, workspace } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
     const resolvedSpec: SpawnSpec = { ...spec, name, workspace };
     const adapter = this.makeAdapter(id, resolvedSpec);
-    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db);
+    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db, this.assets);
 
     const rec: AgentRecord = { id, name, spec: resolvedSpec, cwd, acpSessionId: null, status: 'idle', createdAt: Date.now(), closedAt: null };
     this.db.upsertAgent(rec);
@@ -258,7 +261,7 @@ export class AgentRegistry {
     // existing-dir workspace, the dir must still be there.
     const cwd = await this.workspace.reattach(rec.spec.workspace, rec.cwd || this.defaultCwd(rec.spec));
     const adapter = this.makeAdapter(rec.id, rec.spec);
-    const session = new AgentSession(rec.id, rec.name, rec.spec, adapter, this.db);
+    const session = new AgentSession(rec.id, rec.name, rec.spec, adapter, this.db, this.assets);
     this.wireStatus(session);
     this.sessions.set(rec.id, session);
     this.cwdByAgent.set(rec.id, cwd);
@@ -379,7 +382,7 @@ export class AgentRegistry {
     const { cwd: resolvedCwd, workspace } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
     const resolvedSpec: SpawnSpec = { ...spec, name, workspace };
     const adapter = this.makeAdapter(id, resolvedSpec);
-    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db);
+    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db, this.assets);
     const rec: AgentRecord = { id, name, spec: resolvedSpec, cwd: resolvedCwd, acpSessionId: sessionId, status: 'idle', createdAt: Date.now(), closedAt: null };
     this.db.upsertAgent(rec);
     this.wireStatus(session);

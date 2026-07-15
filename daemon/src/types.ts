@@ -53,11 +53,21 @@ export interface SlashCommand {
   input?: string;
 }
 
+// Durable/wire prompt content. Image bytes live in the daemon asset store; ACP's
+// inline base64 representation is assembled only at the adapter boundary.
+export type PromptBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; assetId: string; mimeType: string; name?: string };
+
+export type AdapterPromptBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mimeType: string; data: string };
+
 export type AgentEvent =
   // The human's prompt, echoed into the log so it renders in the transcript and
   // replays for every client (incl. after a daemon restart) — the daemon owns it,
   // the browser never fabricates it.
-  | { kind: 'user_message'; text: string }
+  | { kind: 'user_message'; text: string; blocks?: PromptBlock[] }
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown }
@@ -74,6 +84,7 @@ export type AgentEvent =
   // The agent's slash-command menu, pushed once known and again on every
   // available_commands_update. The UI folds this to "latest wins" like `status`.
   | { kind: 'available_commands'; commands: SlashCommand[] }
+  | { kind: 'prompt_capabilities'; image: boolean }
   // Agent-initiated browser handoff (docs/browser.md Attention): the agent called
   // the Tandem-control MCP's browser.request_takeover. A normalized event so it
   // logs, replays, and folds into the attention rail. `reason` is human-facing.
@@ -166,7 +177,7 @@ export interface ClientServices {
 
 export interface AgentAdapter {
   readonly id: string;
-  readonly capabilities: { structured: boolean; terminals: boolean; loadSession: boolean; fs: boolean };
+  readonly capabilities: { structured: boolean; terminals: boolean; loadSession: boolean; fs: boolean; image: boolean };
   readonly pid?: number;
   // The ACP sessionId once established — persisted for restore (D11). Undefined
   // for adapters without a session concept (pty).
@@ -178,7 +189,7 @@ export interface AgentAdapter {
   spawn(opts: SpawnOpts, services?: ClientServices): Promise<void>;
   // Resolves with the ACP stopReason for the turn (end_turn | max_tokens |
   // max_turn_requests | refusal | cancelled). Non-ACP adapters return 'end_turn'.
-  prompt(text: string): Promise<string>;
+  prompt(input: string | AdapterPromptBlock[]): Promise<string>;
   sendInput(bytes: Uint8Array): void;
   resize?(cols: number, rows: number): void;
   respondPermission(reqId: string, optionId: string): void;
@@ -342,7 +353,7 @@ export type ClientMsg =
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
   | { t: 'leave_terminal'; agentId: string; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
-  | { t: 'prompt'; agentId: string; text: string; corrId?: string }
+  | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }
