@@ -10,6 +10,8 @@ export function AgentsRail() {
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
   const closeAgent = useStore((s) => s.closeAgent);
+  const collapsed = useStore((s) => s.agentsRailCollapsed);
+  const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const doDelete = (id: string, force?: boolean) => {
@@ -22,9 +24,24 @@ export function AgentsRail() {
     });
   };
 
+  if (collapsed) {
+    return (
+      <div className="rail agents collapsed">
+        <button className="rail-toggle" title="Show agents" onClick={toggleCollapsed}>
+          <span className="chevron">›</span>
+          <span className="label">Agents</span>
+          {order.length > 0 && <span className="count">{order.length}</span>}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="rail agents">
       <div className="rail-head">
+        <button className="rail-toggle-btn" title="Collapse agents" onClick={toggleCollapsed}>
+          ‹
+        </button>
         Agents <span className="count">{order.length}</span>
       </div>
       {order.length === 0 ? (

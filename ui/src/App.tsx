@@ -16,6 +16,8 @@ export function App() {
   const conn = useStore((s) => s.conn);
   const modal = useStore((s) => s.modal);
   const boot = useStore((s) => s.boot);
+  const agentsRailCollapsed = useStore((s) => s.agentsRailCollapsed);
+  const approvalsRailCollapsed = useStore((s) => s.approvalsRailCollapsed);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -33,7 +35,10 @@ export function App() {
 
   return (
     <>
-      <div className="app">
+      <div
+        className={`app${agentsRailCollapsed ? ' agents-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
+      >
+
         <ConductorBar />
         <AgentsRail />
         <FocusArea />
