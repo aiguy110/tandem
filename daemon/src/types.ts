@@ -191,6 +191,10 @@ export type Workspace =
 
 export interface SpawnSpec {
   adapter: 'acp' | 'pty'; // default: acp
+  // Which ACP-speaking coding agent to launch (Config.acp.agents key, e.g.
+  // 'claude' | 'codex' | 'pi'). Ignored when adapter is 'pty'. Defaults to
+  // Config.acp.default.
+  agent?: string;
   workspace: Workspace;
   name?: string; // auto: web-1, api-2…
   task?: string; // optional initial prompt, dispatched on spawn

@@ -123,7 +123,8 @@ npm run pty-smoke         # optional: proves the pty adapter (needs node-pty)
 | `TANDEM_UI_DIR` | — | Static UI dist to serve (else a placeholder page) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Scanned for repos (spawn palette `list_dirs`) |
 | `TANDEM_DIR_SCAN_DEPTH` | `1` | Directories to descend under each project root when scanning for repos |
-| `TANDEM_ACP_CMD` | real claude-agent-acp | JSON array overriding how ACP agents launch (tests point it at the mock) |
+| `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches, regardless of `SpawnSpec.agent` (tests point it at the mock) |
+| `TANDEM_ACP_CMD_CLAUDE` / `_CODEX` / `_PI` | bundled `claude-agent-acp` / `codex-acp` / `pi-acp` | Per-agent launch override (JSON array or `"cmd arg arg"`), selected by `SpawnSpec.agent` |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (Playwright's bundled Chromium) or `steel` (requires `STEEL_BASE_URL`) |
 | `STEEL_BASE_URL` / `STEEL_API_KEY` | — | Steel REST API for `driver=steel` (SteelDriver is specced, untested here) |
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |

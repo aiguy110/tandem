@@ -11,7 +11,8 @@ An agent is defined by a small spec; almost everything is defaulted or inferred:
 
 ```ts
 interface SpawnSpec {
-  adapter: 'acp' | 'pty';                 // default: acp (claude-agent-acp)
+  adapter: 'acp' | 'pty';                 // default: acp
+  agent?: string;                         // acp only: 'claude' | 'codex' | 'pi' (Config.acp.agents key); default: Config.acp.default ('claude')
   workspace:                              // where it works
     | { kind: 'worktree'; repo: string; branch: string; baseRef: string }
     | { kind: 'existing'; cwd: string };  // reuse a dir as-is (non-git, or opt-in)

@@ -43,6 +43,7 @@ export function SpawnPalette() {
   const [task, setTask] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [adapter, setAdapter] = useState<'acp' | 'pty'>('acp');
+  const [agent, setAgent] = useState<string>('claude');
   const [branch, setBranch] = useState('');
   const [baseRef, setBaseRef] = useState('');
   const [name, setName] = useState('');
@@ -71,6 +72,7 @@ export function SpawnPalette() {
     const existing = useExisting && !forceWorktree;
     const spec: SpawnSpec = {
       adapter: advanced ? adapter : 'acp',
+      agent: advanced && adapter === 'acp' ? agent : undefined,
       workspace: existing
         ? { kind: 'existing', cwd: dir.path }
         : { kind: 'worktree', repo: dir.path, branch: branch || undefined, baseRef: baseRef || undefined },
@@ -165,6 +167,16 @@ export function SpawnPalette() {
                 <option value="pty">pty</option>
               </select>
             </label>
+            {adapter === 'acp' && (
+              <label>
+                Agent
+                <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+                  <option value="claude">claude</option>
+                  <option value="codex">codex</option>
+                  <option value="pi">pi</option>
+                </select>
+              </label>
+            )}
             <label>
               Name
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="auto: web-1…" />

@@ -107,7 +107,10 @@ export class AgentRegistry {
 
   private makeAdapter(id: string, spec: SpawnSpec): AgentAdapter {
     if (spec.adapter === 'pty') return new PtyAdapter(id);
-    return new AcpAdapter(id, this.config.acpLaunch);
+    const agentName = spec.agent || this.config.acp.default;
+    const launch = this.config.acp.override ?? this.config.acp.agents[agentName];
+    if (!launch) throw new Error(`unknown agent: ${agentName}`);
+    return new AcpAdapter(id, launch);
   }
 
   // Spawn a brand-new agent. Persists the row, dispatches an optional first

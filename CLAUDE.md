@@ -56,7 +56,8 @@ There is no single-test runner — each `derisk:*` script is a standalone, self-
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_UI_DIR` | — | Static UI dist to serve (else a placeholder page) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
-| `TANDEM_ACP_CMD` | real claude-agent-acp | JSON array overriding how ACP agents launch (tests point it at the mock) |
+| `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches, regardless of `SpawnSpec.agent` (tests point it at the mock) |
+| `TANDEM_ACP_CMD_CLAUDE` / `_CODEX` / `_PI` | bundled `claude-agent-acp` / `codex-acp` / `pi-acp` | Per-agent launch override, selected by `SpawnSpec.agent` |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |
 
