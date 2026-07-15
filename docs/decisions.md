@@ -201,9 +201,10 @@ of proxy/serve logs.
 
 ## D16 — Configurable agent catalog with launch profiles
 
-**Choice:** Agent implementations are data, not adapter subclasses. Tandem merges its
-built-in Claude, Codex, and Pi definitions with `agents` and `profiles` from
-`$TANDEM_HOME/config.yml`. Each agent may declare an ACP command and/or a direct-terminal
+**Choice:** Agent implementations are data, not adapter subclasses. Tandem loads the
+checked-in `config.yml.example` catalog and overlays `agents` and `profiles` from
+`$TANDEM_HOME/config.yml`. Even the shipped Claude, Codex, and Pi definitions live in YAML.
+Each agent may declare an ACP command and/or a direct-terminal
 command, including argument arrays and scoped environment variables. Profiles reference an
 agent and append reusable ACP or terminal arguments.
 
@@ -211,8 +212,8 @@ agent and append reusable ACP or terminal arguments.
 in a catalog makes locally installed and custom agents available without daemon code
 changes, while profiles support several model or behavior configurations of one tool.
 
-**Compatibility and safety:** The built-ins preserve existing ids and environment-variable
-overrides. Launch commands use argv arrays, not shell strings. Direct-terminal start and
+**Compatibility and safety:** The shipped catalog preserves existing ids and
+environment-variable overrides. Launch commands use argv arrays, not shell strings. Direct-terminal start and
 ACP-session resume are separate templates because some agents cannot resume an ACP session
 in their native CLI.
 

@@ -66,9 +66,9 @@ There is no single-test runner — each `derisk:*` script is a standalone, self-
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |
 
-Agent launches can also be declared in `$TANDEM_HOME/config.yml`. The daemon merges the
-built-in `claude`, `codex`, and `pi` catalog with user-defined `agents` (ACP and direct
-terminal commands) and reusable `profiles`; see `docs/spawn-and-workspaces.md`.
+Agent launches are declared by the shipped `config.yml.example`, overlaid by optional
+`$TANDEM_HOME/config.yml` definitions and reusable profiles. Claude, Codex, and Pi are
+ordinary YAML entries rather than daemon-code special cases; see `docs/spawn-and-workspaces.md`.
 
 ## Architecture
 

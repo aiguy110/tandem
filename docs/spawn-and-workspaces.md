@@ -39,11 +39,13 @@ interface SpawnSpec {
 
 ## Agent catalog and profiles
 
-Tandem loads an optional catalog from `$TANDEM_HOME/config.yml` (normally
-`~/.tandem/config.yml`). The built-in `claude`, `codex`, and `pi` definitions are always
-available; user definitions with the same id override their fields, so existing installs
-continue to work without a config file. Environment-variable launch overrides remain
-supported for backwards compatibility.
+Tandem loads its shipped catalog from the repository's `config.yml.example`, then overlays
+an optional `$TANDEM_HOME/config.yml` (normally `~/.tandem/config.yml`). The shipped file
+declares Claude, Codex, and Pi using the same schema available to users; there are no
+agent-specific definitions in daemon code. User definitions with the same id override their
+fields, and environment-variable launch overrides remain supported for backwards
+compatibility. Copy `config.yml.example` to `~/.tandem/config.yml` to start from a fully
+editable catalog, or keep the home file small and override only selected fields.
 
 An **agent definition** describes how to start the same tool through ACP and directly in a
 terminal. A **profile** gives that definition a reusable set of extra arguments:
@@ -75,8 +77,10 @@ Commands and arguments are arrays rather than shell command strings, avoiding sh
 quoting and injection surprises. Profile arguments are appended to the selected launch
 mode's configured arguments. Direct Terminal launches use `terminal.startArgs`; ACP-to-CLI
 handoff uses `terminal.resumeArgs` and is offered only when that template is present.
-`{sessionId}`, `{cwd}`, `{agentId}`, and `{agentName}` are substituted in terminal argument
-templates. Environment entries are passed only to the configured child process.
+`{node}`, `{daemonRoot}`, `{tandemRoot}`, and `{home}` are expanded while loading either
+catalog layer. Runtime terminal argument templates additionally substitute `{sessionId}`,
+`{cwd}`, `{agentId}`, and `{agentName}`. Environment entries are passed only to the
+configured child process.
 
 The spawn palette lists definitions and profiles from the normalized catalog. Selecting a
 profile retains its own display name while resolving its referenced agent's ACP or terminal

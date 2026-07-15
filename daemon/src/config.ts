@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
 export interface AcpLaunch {
@@ -48,7 +49,7 @@ export interface Config {
   // children are checked (the common ~/Projects/<repo> layout).
   dirScanDepth: number;
   // How to launch each supported ACP agent subprocess, keyed by agent name
-  // (the SpawnSpec.agent selector — claude | codex | pi | …). `default` is used
+  // (the SpawnSpec.agent selector). `default` is used
   // when a spec omits `agent`. `override`, when set (TANDEM_ACP_CMD), forces
   // EVERY agent to that one launch — the mock hook every derisk suite relies on.
   acp: {
@@ -111,54 +112,18 @@ function resolveUserExecutable(cmd: string): string {
   return cmd;
 }
 
-// Bundled ACP entry for each supported agent, run via `node <dist/index.js>`.
-// Each ships as a devDependency so a fresh install always has a working
-// default; a per-agent env var (TANDEM_ACP_CMD_<NAME>) can point at a
-// different install (e.g. a system-wide binary) instead.
-const BUNDLED_ENTRIES: Record<string, string> = {
-  claude: '../node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js',
-  codex: '../node_modules/@agentclientprotocol/codex-acp/dist/index.js',
-  pi: '../node_modules/pi-acp/dist/index.js',
-};
-
-function acpAgentsFromEnv(): Record<string, AcpLaunch> {
-  const agents: Record<string, AcpLaunch> = {};
-  for (const [name, relEntry] of Object.entries(BUNDLED_ENTRIES)) {
-    const envVar = `TANDEM_ACP_CMD_${name.toUpperCase()}`;
-    const raw = process.env[envVar];
-    if (raw) {
-      agents[name] = parseLaunchEnv(raw);
-      continue;
-    }
-    const entry = new URL(relEntry, import.meta.url).pathname;
-    agents[name] = { cmd: process.execPath, args: [entry] };
-  }
-  return agents;
-}
-
-function resumeClisFromEnv(): Record<string, ResumeCliLaunch> {
-  const defaults: Record<string, ResumeCliLaunch> = {
-    claude: { cmd: 'claude', args: ['--resume', '{sessionId}'] },
-    codex: { cmd: 'codex', args: ['resume', '{sessionId}'] },
-    pi: { cmd: 'pi', args: ['--session', '{sessionId}'] },
-  };
-  for (const name of Object.keys(defaults)) {
-    const raw = process.env[`TANDEM_RESUME_CMD_${name.toUpperCase()}`];
-    if (raw) defaults[name] = parseLaunchEnv(raw);
-    defaults[name] = { ...defaults[name], cmd: resolveUserExecutable(defaults[name].cmd) };
-  }
-  return defaults;
-}
-
 type FileConfig = {
+  version?: number;
   defaults?: { agent?: string; profile?: string };
   agents?: Record<string, { name?: string; acp?: { command: string; args?: string[]; env?: Record<string, string> }; terminal?: { command: string; startArgs?: string[]; resumeArgs?: string[]; env?: Record<string, string> } }>;
   profiles?: Record<string, { agent: string; name?: string; acpArgs?: string[]; terminalArgs?: string[] }>;
 };
 
-function readFileConfig(home: string): FileConfig {
-  const file = path.join(home, 'config.yml');
-  if (!fs.existsSync(file)) return {};
+function readFileConfig(file: string, required = false): FileConfig {
+  if (!fs.existsSync(file)) {
+    if (required) throw new Error(`missing shipped agent catalog: ${file}`);
+    return {};
+  }
   try {
     const parsed = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('root must be a mapping');
@@ -166,6 +131,10 @@ function readFileConfig(home: string): FileConfig {
   } catch (error) {
     throw new Error(`invalid ${file}: ${(error as Error).message}`);
   }
+}
+
+function expand(value: string, substitutions: Record<string, string>): string {
+  return Object.entries(substitutions).reduce((result, [key, replacement]) => result.replaceAll(`{${key}}`, replacement), value);
 }
 
 function stringArray(value: unknown, key: string): string[] {
@@ -188,31 +157,53 @@ function command(value: unknown, key: string): string {
 }
 
 function catalogFromFile(home: string): { agents: Record<string, AgentDefinition>; profiles: Record<string, AgentProfile>; defaultAgent: string; defaultProfile?: string } {
-  const bundled = acpAgentsFromEnv();
-  const resume = resumeClisFromEnv();
-  const agents: Record<string, AgentDefinition> = Object.fromEntries(Object.keys(bundled).map((id) => [id, { name: id[0].toUpperCase() + id.slice(1), acp: bundled[id], terminal: { ...resume[id], startArgs: [] } }]));
-  const file = readFileConfig(home);
-  for (const [id, value] of Object.entries(file.agents ?? {})) {
-    if (!value || typeof value !== 'object') throw new Error(`agents.${id} must be a mapping`);
-    const previous = agents[id];
-    const acp = value.acp ? {
-      cmd: resolveUserExecutable(command(value.acp.command, `agents.${id}.acp.command`)),
-      args: stringArray(value.acp.args, `agents.${id}.acp.args`),
-      env: stringMap(value.acp.env, `agents.${id}.acp.env`),
-    } : previous?.acp;
-    const terminal = value.terminal
-      ? {
-        cmd: resolveUserExecutable(command(value.terminal.command, `agents.${id}.terminal.command`)),
-        args: stringArray(value.terminal.resumeArgs, `agents.${id}.terminal.resumeArgs`),
-        startArgs: stringArray(value.terminal.startArgs, `agents.${id}.terminal.startArgs`),
-        env: stringMap(value.terminal.env, `agents.${id}.terminal.env`),
-      }
-      : previous?.terminal;
-    if (!acp && !terminal) throw new Error(`agents.${id} must configure acp or terminal`);
-    agents[id] = { name: value.name ?? previous?.name ?? id, acp, terminal };
+  const daemonRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
+  const tandemRoot = path.dirname(daemonRoot);
+  const substitutions = { node: process.execPath, daemonRoot, tandemRoot, home };
+  // This checked-in example is also the runtime default, keeping documentation
+  // and shipped behavior in one declarative source of truth.
+  const shipped = readFileConfig(path.join(tandemRoot, 'config.yml.example'), true);
+  const user = readFileConfig(path.join(home, 'config.yml'));
+  const agents: Record<string, AgentDefinition> = {};
+
+  const mergeAgents = (file: FileConfig) => {
+    for (const [id, value] of Object.entries(file.agents ?? {})) {
+      if (!value || typeof value !== 'object') throw new Error(`agents.${id} must be a mapping`);
+      const previous = agents[id];
+      const acp = value.acp ? {
+        cmd: resolveUserExecutable(expand(command(value.acp.command, `agents.${id}.acp.command`), substitutions)),
+        args: stringArray(value.acp.args, `agents.${id}.acp.args`).map((arg) => expand(arg, substitutions)),
+        env: Object.fromEntries(Object.entries(stringMap(value.acp.env, `agents.${id}.acp.env`) ?? {}).map(([key, item]) => [key, expand(item, substitutions)])),
+      } : previous?.acp;
+      const terminal = value.terminal
+        ? {
+          cmd: resolveUserExecutable(expand(command(value.terminal.command, `agents.${id}.terminal.command`), substitutions)),
+          args: stringArray(value.terminal.resumeArgs, `agents.${id}.terminal.resumeArgs`).map((arg) => expand(arg, substitutions)),
+          startArgs: stringArray(value.terminal.startArgs, `agents.${id}.terminal.startArgs`).map((arg) => expand(arg, substitutions)),
+          env: Object.fromEntries(Object.entries(stringMap(value.terminal.env, `agents.${id}.terminal.env`) ?? {}).map(([key, item]) => [key, expand(item, substitutions)])),
+        }
+        : previous?.terminal;
+      if (!acp && !terminal) throw new Error(`agents.${id} must configure acp or terminal`);
+      agents[id] = { name: value.name ?? previous?.name ?? id, acp, terminal };
+    }
+  };
+  mergeAgents(shipped);
+  mergeAgents(user);
+
+  // Legacy environment overrides remain as a generic compatibility overlay.
+  for (const [id, definition] of Object.entries(agents)) {
+    const envId = id.toUpperCase().replaceAll(/[^A-Z0-9]/g, '_');
+    const acpOverride = process.env[`TANDEM_ACP_CMD_${envId}`];
+    if (acpOverride) definition.acp = parseLaunchEnv(acpOverride);
+    const terminalOverride = process.env[`TANDEM_RESUME_CMD_${envId}`];
+    if (terminalOverride) {
+      const parsed = parseLaunchEnv(terminalOverride);
+      definition.terminal = { ...definition.terminal, cmd: resolveUserExecutable(parsed.cmd), args: parsed.args };
+    }
   }
+
   const profiles: Record<string, AgentProfile> = {};
-  for (const [id, value] of Object.entries(file.profiles ?? {})) {
+  for (const [id, value] of Object.entries({ ...(shipped.profiles ?? {}), ...(user.profiles ?? {}) })) {
     if (!value || typeof value !== 'object') throw new Error(`profiles.${id} must be a mapping`);
     if (typeof value.agent !== 'string' || !value.agent) throw new Error(`profiles.${id}.agent must be a non-empty string`);
     if (!agents[value.agent]) throw new Error(`profiles.${id} references unknown agent: ${value.agent}`);
@@ -223,10 +214,12 @@ function catalogFromFile(home: string): { agents: Record<string, AgentDefinition
       terminalArgs: stringArray(value.terminalArgs, `profiles.${id}.terminalArgs`),
     };
   }
-  const defaultAgent = file.defaults?.agent ?? 'claude';
+  const defaultAgent = user.defaults?.agent ?? shipped.defaults?.agent;
+  if (!defaultAgent) throw new Error('shipped agent catalog must configure defaults.agent');
   if (!agents[defaultAgent]) throw new Error(`defaults.agent references unknown agent: ${defaultAgent}`);
-  if (file.defaults?.profile && !profiles[file.defaults.profile]) throw new Error(`defaults.profile references unknown profile: ${file.defaults.profile}`);
-  return { agents, profiles, defaultAgent, defaultProfile: file.defaults?.profile };
+  const defaultProfile = user.defaults?.profile ?? shipped.defaults?.profile;
+  if (defaultProfile && !profiles[defaultProfile]) throw new Error(`defaults.profile references unknown profile: ${defaultProfile}`);
+  return { agents, profiles, defaultAgent, defaultProfile };
 }
 
 function parseSteelSessionOptions(raw?: string): Record<string, unknown> {

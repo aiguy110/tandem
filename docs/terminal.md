@@ -49,10 +49,10 @@ ACP, and launches the CLI with its session id. Transcript is shrouded while the 
 session. Normal CLI exit—or **return to Transcript now**—disposes the PTY and reloads the same
 session through ACP automatically.
 
-Default CLI templates are `claude --resume {sessionId}`, `codex resume {sessionId}`, and
-`pi --session {sessionId}`. They can be overridden with `TANDEM_RESUME_CMD_<AGENT>`. Tandem
-prefers `node-pty`; when its native module is unavailable, util-linux `script` supplies the
-required pseudoterminal.
+CLI templates come from each agent's `terminal.resumeArgs` entry in `config.yml.example`
+or the `$TANDEM_HOME/config.yml` overlay. They can also be overridden with the legacy
+`TANDEM_RESUME_CMD_<AGENT>` environment variable. Tandem prefers `node-pty`; when its native
+module is unavailable, util-linux `script` supplies the required pseudoterminal.
 
 ## Multi-agent rendering constraint
 
