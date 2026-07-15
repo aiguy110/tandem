@@ -13,6 +13,7 @@
     "derisk:services": "tsx src/deriskServices.ts",
     "derisk:browser": "tsx src/deriskBrowser.ts",
     "derisk:integration": "tsx src/deriskIntegration.ts",
+    "derisk:steel": "tsx src/deriskSteel.ts",
     "derisk:all": "npm run derisk && npm run derisk:multi && npm run derisk:restart && npm run derisk:auth && npm run derisk:workspace && npm run derisk:services && npm run derisk:browser && npm run derisk:integration",
     "test": "npm run derisk:all",
     "acp:live": "tsx src/acpLive.ts",

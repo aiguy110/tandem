@@ -39,6 +39,9 @@ npm run derisk:services    # ACP client services: fs round-trip, path-escape rej
 npm run derisk:browser     # shared browser: laziness, broker CDP proxy, screencast, grab/hold/release, takeover MCP
 npm run derisk:integration # full-slice smoke: discover → spawn → prompt → approval → 2nd agent → reconnect replay → dirty-close teardown
 
+# Opt-in (NOT part of `npm test`): needs a self-hosted Steel (Docker). Skips+passes if unreachable.
+STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel # SteelDriver + broker against a live Steel (see docs/browser.md › Self-hosting Steel)
+
 npm run acp:live           # drive the real @agentclientprotocol/claude-agent-acp (needs an authenticated `claude` CLI)
 npm run pty-smoke          # exercise the pty adapter (needs node-pty)
 ```
@@ -98,7 +101,7 @@ Self-hosted Daemon
 - `terminalHost.ts` — daemon-owned terminal execution for `terminal/create·output·wait_for_exit·kill·release`; prefers `node-pty`, degrades to `child_process` pipes. Dual buffer: the ACP-visible view honors `outputByteLimit` (truncate-from-start), while the daemon keeps a larger independent scrollback that persists past `terminal/release` and replays as `terminal_output` events.
 - `ptyAdapter.ts` — raw pty adapter (daemon owns the pty master directly, no ACP).
 - `browser/` — the shared-browser subsystem: `driver.ts` (`BrowserDriver` seam: `LocalChromiumDriver` real/tested, `SteelDriver` specced/untested), `broker.ts` (lazy per-agent CDP provisioning, gated CDP proxy enforcing the control-owner token), `sharedBrowser.ts` (daemon's own screencast/input CDP connection), `controlMcp.mjs` (Tandem-control MCP exposing `browser_request_takeover`), `mcpWiring.ts` (registers Playwright MCP + Tandem-control MCP at `session/new`).
-- `deriskAuth.ts` / `deriskWorkspace.ts` / `deriskServices.ts` / `deriskBrowser.ts` / `deriskMulti.ts` / `deriskRestart.ts` / `deriskIntegration.ts` / `derisk.ts` — the eight standalone de-risk suites (see Commands above); each is the primary regression test for its named subsystem, run against a throwaway `TANDEM_HOME`.
+- `deriskAuth.ts` / `deriskWorkspace.ts` / `deriskServices.ts` / `deriskBrowser.ts` / `deriskMulti.ts` / `deriskRestart.ts` / `deriskIntegration.ts` / `derisk.ts` — the eight standalone de-risk suites (see Commands above); each is the primary regression test for its named subsystem, run against a throwaway `TANDEM_HOME`. `deriskSteel.ts` is a ninth, opt-in suite (needs a self-hosted Steel; not in `npm test`).
 
 ### UI (`ui/src/`)
 
@@ -128,4 +131,4 @@ The daemon serves the built UI (`ui/dist`) via `TANDEM_UI_DIR`; there is no sepa
 
 - `merge_back` — accepted over WS but returns an error `ack`; no diff review / merge-or-PR UI yet.
 - `raw_pty` / `browser_frame` payloads are base64-in-JSON, not binary framing.
-- `SteelDriver` is specced but untested (no Docker on the build host); `LocalChromiumDriver` is the tested browser driver path.
+- `SteelDriver` is verified against a self-hosted Steel via `npm run derisk:steel` (opt-in, needs Docker); `LocalChromiumDriver` remains the default, no-Docker path.

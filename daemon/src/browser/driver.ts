@@ -7,9 +7,9 @@
 //     endpoint (--remote-debugging-port) — the SAME surface Steel wraps.
 //
 //   * SteelDriver — provisions a session via Steel's REST API (POST /v1/sessions
-//     → cdp ws url; DELETE to release). The specced production path. NOT
-//     integration-tested here (no Docker on this box) — kept thin + clearly
-//     marked untested-but-specced.
+//     → CDP ws url; POST .../release to release). The production path, verified
+//     end-to-end against a self-hosted Steel by `npm run derisk:steel` (see
+//     docs/browser.md › "Self-hosting Steel").
 //
 // Selection is by config (TANDEM_BROWSER_DRIVER=local|steel).
 
@@ -143,17 +143,25 @@ function killAndWait(proc: ChildProcess): Promise<void> {
 
 // =============================== SteelDriver ================================
 //
-// UNTESTED-BUT-SPECCED (no Docker on this machine). Kept thin: it maps our two
-// lifecycle calls onto Steel's documented REST API. Steel self-hosted exposes:
+// Maps our two lifecycle calls onto Steel's REST API. Verified against the
+// self-hosted OSS `ghcr.io/steel-dev/steel-browser` image (see docs/browser.md
+// › "Self-hosting Steel"):
 //
-//   POST   {STEEL_BASE_URL}/v1/sessions   -> { id, websocketUrl, ... }
-//   DELETE {STEEL_BASE_URL}/v1/sessions/{id}/release   (or DELETE .../{id})
+//   POST {STEEL_BASE_URL}/v1/sessions              -> { id, websocketUrl, ... }
+//   POST {STEEL_BASE_URL}/v1/sessions/{id}/release -> releases the session
 //
-// The session's `websocketUrl` is a CDP browser endpoint. Playwright's
-// connectOverCDP also accepts a ws:// CDP URL directly, and the broker's proxy
-// handles either an http:// (json/version) or ws:// upstream (see broker.ts).
+// The create response's `websocketUrl` is the browser-level CDP endpoint, but
+// self-hosted Steel advertises it with a bind-address host (`ws://0.0.0.0:3000/`)
+// that isn't dialable as-is — so we normalize the host to STEEL_BASE_URL's host
+// (this also makes a remote Steel reachable). The result is a ws:// CDP URL;
+// Playwright's connectOverCDP and the broker's proxy both accept ws:// upstreams
+// directly (resolveBrowserWs + the onHttp ws branch in broker.ts).
 //
-// If your Steel build differs, this is the ONE place to adjust the field names.
+// NB Steel's `/json/version` (on its separate CDP/debugger port) advertises a
+// PORT-LESS `ws://localhost/devtools/...`, which Playwright dials as :80 and
+// fails — so we deliberately go through `websocketUrl`, not that endpoint.
+//
+// If your Steel build differs, this class is the ONE place to adjust field names.
 
 export class SteelDriver implements BrowserDriver {
   readonly kind = 'steel';
@@ -168,6 +176,10 @@ export class SteelDriver implements BrowserDriver {
     return undefined; // remote session — no local pid
   }
 
+  private get base(): string {
+    return this.opts.baseUrl.replace(/\/$/, '');
+  }
+
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'content-type': 'application/json' };
     if (this.opts.apiKey) h['steel-api-key'] = this.opts.apiKey;
@@ -178,7 +190,7 @@ export class SteelDriver implements BrowserDriver {
     const existing = this.sessions.get(agentId);
     if (existing) return { cdpUrl: this.cdpUrlFor(existing) };
 
-    const res = await fetch(`${this.opts.baseUrl.replace(/\/$/, '')}/v1/sessions`, {
+    const res = await fetch(`${this.base}/v1/sessions`, {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ dimensions: { width: 1280, height: 800 } }),
@@ -186,21 +198,36 @@ export class SteelDriver implements BrowserDriver {
     if (!res.ok) throw new Error(`steel: create session failed (${res.status} ${res.statusText})`);
     const body = (await res.json()) as { id: string; websocketUrl?: string; cdpUrl?: string };
     this.sessions.set(agentId, body.id);
-    // Prefer an explicit CDP/websocket URL from Steel; else derive from base.
-    const cdpUrl = body.cdpUrl ?? body.websocketUrl ?? this.cdpUrlFor(body.id);
+    const cdpUrl = this.normalizeWs(body.cdpUrl ?? body.websocketUrl) ?? this.cdpUrlFor(body.id);
     return { cdpUrl };
   }
 
+  // Rewrite a Steel-advertised CDP ws URL so its host is reachable: self-hosted
+  // Steel returns `ws://0.0.0.0:3000/` (the container bind address). We swap that
+  // host for STEEL_BASE_URL's host, keeping the port + path Steel chose. A URL
+  // that already names a routable host is left as-is.
+  private normalizeWs(raw?: string): string | undefined {
+    if (!raw) return undefined;
+    try {
+      const u = new URL(raw);
+      const bindHosts = new Set(['0.0.0.0', '::', '127.0.0.1', 'localhost']);
+      if (bindHosts.has(u.hostname)) u.hostname = new URL(this.base).hostname;
+      return u.toString();
+    } catch {
+      return raw;
+    }
+  }
+
   private cdpUrlFor(sessionId: string): string {
-    // Fallback shape when Steel doesn't echo an explicit URL.
-    return `${this.opts.baseUrl.replace(/\/$/, '')}/v1/sessions/${sessionId}`;
+    // Fallback shape when Steel doesn't echo a usable websocketUrl.
+    return `${this.base}/v1/sessions/${sessionId}`;
   }
 
   async teardown(agentId: string): Promise<void> {
     const id = this.sessions.get(agentId);
     if (!id) return;
     this.sessions.delete(agentId);
-    await fetch(`${this.opts.baseUrl.replace(/\/$/, '')}/v1/sessions/${id}/release`, {
+    await fetch(`${this.base}/v1/sessions/${id}/release`, {
       method: 'POST',
       headers: this.headers(),
     }).catch(() => {});
