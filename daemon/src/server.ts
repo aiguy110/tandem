@@ -367,12 +367,15 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, opts: 
     const file = path.resolve(root, rel);
     // Contain within uiDir (no path traversal).
     if ((file === root || file.startsWith(root + path.sep)) && fs.existsSync(file) && fs.statSync(file).isFile()) {
-      res.writeHead(200, { 'content-type': contentType(file) });
+      // There is no production build mode yet (D15 always serves a freshly
+      // built dist via start-dev-server.sh/redeploy.sh) — always no-cache so a
+      // redeploy is reflected on next load instead of a stale cached bundle.
+      res.writeHead(200, { 'content-type': contentType(file), 'cache-control': 'no-cache, no-store, must-revalidate' });
       fs.createReadStream(file).pipe(res);
       return;
     }
   }
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' });
   res.end(placeholderPage(opts.bootstrapUrl, !!opts.uiDir));
 }
 
