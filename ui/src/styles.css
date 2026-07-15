@@ -29,12 +29,35 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+html {
+  /* Lock the whole document to the visual viewport so nothing rubber-bands
+     the app away from the screen edges (iOS/Android overscroll), and stop
+     browser gesture zoom so pinch/double-tap don't peel the layout. */
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
+  /* dvh tracks the mobile URL bar as it shows/hides, so the app keeps
+     filling the real viewport instead of the static layout height. */
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
   font-family: var(--font-ui);
   font-size: var(--fs-base);
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+}
+#root {
+  height: 100dvh;
+  /* viewport-fit=cover lets the bg reach the true edges; the insets keep the
+     actual chrome (bar, rails, inspector) clear of the notch/home indicator. */
+  padding:
+    env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 button { font-family: inherit; color: inherit; cursor: pointer; }
 ::selection { background: var(--agent-soft); }
