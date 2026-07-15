@@ -100,7 +100,7 @@ export function TerminalPane() {
             <div className="handoff-copy">
               {agent.status === 'working' || agent.status === 'blocked'
                 ? 'Taking control sends ACP session/cancel and waits briefly for the turn to flush before resuming the CLI. Unsaved in-flight steps may be lost.'
-                : 'Start the agent’s resumable CLI in this workspace.'}
+                : 'This will pause Transcript control and start the agent’s resumable CLI in this workspace.'}
             </div>
             {handoffError && <div className="modal-err">{handoffError}</div>}
             {agent.controlMode === 'transcript' && (

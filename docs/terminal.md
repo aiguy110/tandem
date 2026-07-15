@@ -40,9 +40,10 @@ interface TerminalRenderer {
 
 ## ACP ↔ CLI handoff
 
-Opening Terminal for an idle ACP agent swaps its adapter to the agent's resumable CLI while
-preserving the Tandem agent id, workspace, ACP session id, and monotonic event log. For a
-mid-turn agent the Terminal pane is shrouded until the user chooses **Interrupt & take over**:
+Opening Terminal is initially view-only: a shroud requires the user to confirm **Take
+control** before an idle ACP agent swaps to its resumable CLI. The handoff preserves the
+Tandem agent id, workspace, ACP session id, and monotonic event log. For a mid-turn agent
+the Terminal pane instead requires the stronger **Interrupt & take over** confirmation:
 the daemon sends `session/cancel`, waits up to four seconds for the prompt to settle, disposes
 ACP, and launches the CLI with its session id. Transcript is shrouded while the CLI owns the
 session. Normal CLI exit—or **return to Transcript now**—disposes the PTY and reloads the same

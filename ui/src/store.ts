@@ -348,13 +348,10 @@ export const useStore = create<StoreState>((set, get) => {
     },
     submitToken: (t) => client.setToken(t.trim()),
     focus: (id) => set({ focusedId: id }),
-    setPane: (p) => {
-      set({ pane: p });
-      if (p !== 'terminal') return;
-      const st = get();
-      const agent = st.focusedId ? st.agents[st.focusedId] : undefined;
-      if (agent?.controlMode === 'transcript' && agent.status === 'idle') void st.enterTerminal(agent.id);
-    },
+    // Selecting Terminal is view-only until its shroud's explicit Take control
+    // action calls enterTerminal. Even an idle ACP session must never be swapped
+    // merely because the user inspected the tab.
+    setPane: (p) => set({ pane: p }),
     toggleTheme: () =>
       set((st) => {
         const theme = st.theme === 'dark' ? 'light' : 'dark';
