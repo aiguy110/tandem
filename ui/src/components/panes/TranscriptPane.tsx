@@ -390,6 +390,17 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const matches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
   const showPopup = !!slash && matches.length > 0 && !dismissed;
 
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+
+    el.style.height = 'auto';
+    const maxHeight = Number.parseFloat(getComputedStyle(el).maxHeight);
+    const height = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${height}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, [text]);
+
   // Re-arm the popup (and reset the highlighted row) whenever the token itself
   // changes — a fresh "/" or continued typing should reopen it even if the
   // previous token was dismissed with Escape.
