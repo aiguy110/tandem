@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
 import type { Approval, ToolStatus, WireEvent } from '../../wire';
@@ -94,26 +94,60 @@ export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined)) as AgentView | undefined;
   const respond = useStore((s) => s.respond);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // `stick` follows the tail as new items arrive; it flips off the moment the
+  // user scrolls up and back on when they return (or hit the button). Kept in a
+  // ref so the scroll handler and the items effect share it without re-rendering.
+  const stick = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
 
-  // Autoscroll to the tail unless the user scrolled up.
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stick.current = true;
+    setAtBottom(true);
+  };
+
+  // On mount and whenever the focused agent changes, open to the latest message.
+  const agentId = agent?.id;
+  useLayoutEffect(() => {
+    stick.current = true;
+    scrollToBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  // As new items stream in, keep the tail pinned only while sticking.
   useEffect(() => {
+    if (stick.current) scrollToBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [items]);
+    stick.current = nearBottom;
+    setAtBottom(nearBottom);
+  };
 
   if (!agent) return null;
 
   return (
     <div className="pane">
-      <div className="transcript" ref={scrollRef}>
-        {items.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
-        {items.map((it) => (
-          <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
-        ))}
+      <div className="transcript-wrap">
+        <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+          {items.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
+          {items.map((it) => (
+            <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
+          ))}
+        </div>
+        {!atBottom && (
+          <button className="scroll-latest" onClick={scrollToBottom} title="Scroll to latest">
+            ↓ Latest
+          </button>
+        )}
       </div>
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
