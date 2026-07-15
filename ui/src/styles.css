@@ -267,7 +267,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-bar { position: relative; display: flex; flex-direction: column; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); }
 .prompt-bar.dragging { box-shadow: inset 0 0 0 2px var(--agent); }
 .prompt-main { display: flex; gap: 8px; align-items: flex-end; }
-.attach-btn { width: 38px; padding-left: 0; padding-right: 0; font-size: 19px; }
+.attach-btn { width: 38px; padding-left: 0; padding-right: 0; display: inline-flex; align-items: center; justify-content: center; }
+.attach-btn svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .attach-btn:disabled { opacity: .45; cursor: not-allowed; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .prompt-attachments { display: flex; flex-wrap: wrap; gap: 7px; }

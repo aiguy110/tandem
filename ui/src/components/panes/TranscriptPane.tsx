@@ -689,16 +689,6 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             e.target.value = '';
           }}
         />
-        <button
-          type="button"
-          className="btn attach-btn"
-          disabled={imageSupport !== true}
-          onClick={() => fileRef.current?.click()}
-          title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
-          aria-label="Attach images"
-        >
-          ＋
-        </button>
         <textarea
           ref={textRef}
           data-prompt-agent={agentId}
@@ -751,6 +741,18 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           }}
           rows={1}
         />
+        <button
+          type="button"
+          className="btn attach-btn"
+          disabled={imageSupport !== true}
+          onClick={() => fileRef.current?.click()}
+          title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
+          aria-label="Attach images"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+        </button>
         {working ? (
           <button className="btn" onClick={() => interrupt(agentId)} title="Interrupt (Esc)">
             ◼ Esc
