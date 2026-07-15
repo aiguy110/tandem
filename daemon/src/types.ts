@@ -43,6 +43,15 @@ export interface SessionConfigOption {
   options?: SessionConfigSelectOption[];
 }
 
+// ACP AvailableCommand (session/available_commands_update) — the agent's
+// slash-command menu (e.g. "/compact", "/review"). `input` is a free-form
+// hint string for the argument the command expects, if any.
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  input?: string;
+}
+
 export type AgentEvent =
   // The human's prompt, echoed into the log so it renders in the transcript and
   // replays for every client (incl. after a daemon restart) — the daemon owns it,
@@ -51,7 +60,7 @@ export type AgentEvent =
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown }
-  | { kind: 'tool_call_update'; id: string; status?: ToolStatus }
+  | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown }
   | { kind: 'plan'; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal_output'; termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }
@@ -61,6 +70,9 @@ export type AgentEvent =
   // once modes/configOptions are known and again on every current_mode_update /
   // config_option_update. The UI folds these to "latest wins" like `status`.
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
+  // The agent's slash-command menu, pushed once known and again on every
+  // available_commands_update. The UI folds this to "latest wins" like `status`.
+  | { kind: 'available_commands'; commands: SlashCommand[] }
   // Agent-initiated browser handoff (docs/browser.md Attention): the agent called
   // the Tandem-control MCP's browser.request_takeover. A normalized event so it
   // logs, replays, and folds into the attention rail. `reason` is human-facing.

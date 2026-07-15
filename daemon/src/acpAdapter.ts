@@ -304,7 +304,7 @@ export class AcpAdapter implements AgentAdapter {
       case 'tool_call_update': {
         const status = u.status ? AcpAdapter.toolStatus(u.status) : undefined;
         if (status && status !== 'pending' && status !== 'running') this.liveToolCalls.delete(u.toolCallId);
-        this.q.push({ kind: 'tool_call_update', id: u.toolCallId, status });
+        this.q.push({ kind: 'tool_call_update', id: u.toolCallId, status, content: u.content });
         break;
       }
       case 'plan':
