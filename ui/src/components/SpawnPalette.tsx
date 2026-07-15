@@ -8,7 +8,11 @@ const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
 const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
-const AGENT_TYPES = ['claude', 'codex', 'pi'] as const;
+const FALLBACK_PROFILES = [
+  { id: 'agent:claude', name: 'Claude', agent: 'claude', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:codex', name: 'Codex', agent: 'codex', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:pi', name: 'Pi', agent: 'pi', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+];
 
 type SavedSettings = { model?: string; effort?: string; permission?: string };
 
@@ -31,11 +35,11 @@ function saveSpawnSettings(agent: string, project: string, value: SavedSettings)
   } catch { /* localStorage unavailable */ }
 }
 
-function loadProjectAgent(project: string): string {
+function loadProjectAgent(project: string): string | undefined {
   try {
     const all = JSON.parse(localStorage.getItem(SPAWN_AGENT_KEY) || '{}') as Record<string, string>;
-    return AGENT_TYPES.includes(all[project] as (typeof AGENT_TYPES)[number]) ? all[project] : 'claude';
-  } catch { return 'claude'; }
+    return all[project] || undefined;
+  } catch { return undefined; }
 }
 
 function saveProjectAgent(project: string, agent: string) {
@@ -77,6 +81,25 @@ export function SpawnPalette() {
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
+  const agentCatalog = useStore((s) => s.agentCatalog);
+  const profiles = useMemo(() => {
+    if (!agentCatalog) return FALLBACK_PROFILES;
+    const agentsById = new Map(agentCatalog.agents.map((entry) => [entry.id, entry]));
+    const configured = agentCatalog.profiles.map((profile) => {
+      const definition = agentsById.get(profile.agent);
+      return {
+        id: `profile:${profile.id}`,
+        profile: profile.id,
+        name: profile.name,
+        agent: profile.agent,
+        hasAcp: definition?.hasAcp ?? false,
+        hasTerminal: definition?.hasTerminal ?? false,
+      };
+    });
+    const implicit = agentCatalog.agents
+      .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, profile: undefined as string | undefined }));
+    return [...configured, ...implicit];
+  }, [agentCatalog]);
 
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);
@@ -84,7 +107,8 @@ export function SpawnPalette() {
   const [task, setTask] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [adapter, setAdapter] = useState<'acp' | 'pty'>('acp');
-  const [agent, setAgent] = useState<string>('claude');
+  const [agent, setAgent] = useState<string>('agent:claude');
+  const [terminalArgsText, setTerminalArgsText] = useState('');
   const [branch, setBranch] = useState('');
   const [baseRef, setBaseRef] = useState('');
   const [name, setName] = useState('');
@@ -110,9 +134,25 @@ export function SpawnPalette() {
   }, [query, dirs]);
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
+  const selectedProfile = profiles.find((profile) => profile.id === agent) ?? profiles[0];
+  const agentSlug = selectedProfile?.agent ?? agent.replace(/^agent:/, '');
   useEffect(() => {
-    if (selectedDir) setAgent(loadProjectAgent(selectedDir.path));
-  }, [selectedDir?.path]);
+    if (!selectedDir) return;
+    const saved = loadProjectAgent(selectedDir.path);
+    const catalogDefault = agentCatalog?.defaultProfile
+      ? `profile:${agentCatalog.defaultProfile}`
+      : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
+    const matched = saved
+      ? profiles.find((profile) => profile.id === saved)
+        ?? profiles.find((profile) => !profile.profile && profile.agent === saved)
+        ?? profiles.find((profile) => profile.profile === saved)
+      : undefined;
+    setAgent(matched?.id ?? profiles.find((profile) => profile.id === catalogDefault)?.id ?? profiles[0]?.id ?? 'agent:claude');
+  }, [selectedDir?.path, profiles, agentCatalog]);
+  useEffect(() => {
+    if (adapter === 'acp' && selectedProfile && !selectedProfile.hasAcp && selectedProfile.hasTerminal) setAdapter('pty');
+    if (adapter === 'pty' && selectedProfile && !selectedProfile.hasTerminal && selectedProfile.hasAcp) setAdapter('acp');
+  }, [agent, adapter, selectedProfile]);
   useEffect(() => {
     if (!selectedDir || adapter !== 'acp') return;
     const saved = loadSpawnSettings(agent, selectedDir.path);
@@ -129,7 +169,7 @@ export function SpawnPalette() {
     let cancelled = false;
     setOptionsBusy(true);
     setOptionsError('');
-    void getSpawnOptions(agent, selectedDir.path).then((options) => {
+    void getSpawnOptions(agentSlug, selectedDir.path, selectedProfile?.profile).then((options) => {
       if (cancelled) return;
       setSpawnOptions(options);
       const saved = loadSpawnSettings(agent, selectedDir.path);
@@ -146,7 +186,7 @@ export function SpawnPalette() {
       }
     }).finally(() => { if (!cancelled) setOptionsBusy(false); });
     return () => { cancelled = true; };
-  }, [advanced, agent, adapter, selectedDir?.path, getSpawnOptions]);
+  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedProfile?.profile, getSpawnOptions]);
   useEffect(() => {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
@@ -154,13 +194,17 @@ export function SpawnPalette() {
   const doSpawn = async (dir: RepoInfo, forceWorktree = false) => {
     setBusy(true);
     setError(null);
-    const spawnAdapter = advanced ? adapter : 'acp';
+    const spawnAdapter = advanced ? adapter : (selectedProfile?.hasAcp ? 'acp' : 'pty');
     const existing = useExisting && !forceWorktree;
     const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
     const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
     const spec: SpawnSpec = {
       adapter: spawnAdapter,
-      agent: spawnAdapter === 'acp' ? agent : undefined,
+      agent: agentSlug,
+      profile: selectedProfile?.profile,
+      terminalArgs: spawnAdapter === 'pty'
+        ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
+        : undefined,
       workspace: existing
         ? { kind: 'existing', cwd: dir.path }
         : { kind: 'worktree', repo: dir.path, branch: branch || undefined, baseRef: baseRef || undefined },
@@ -174,8 +218,8 @@ export function SpawnPalette() {
         },
       } : undefined,
     };
+    saveProjectAgent(dir.path, agent);
     if (spawnAdapter === 'acp') {
-      saveProjectAgent(dir.path, agent);
       saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
     }
     const r = await spawn(spec);
@@ -260,31 +304,41 @@ export function SpawnPalette() {
         {advanced && (
           <div className="adv">
             <label>
-              Adapter
+              Connection
               <select value={adapter} onChange={(e) => setAdapter(e.target.value as 'acp' | 'pty')}>
-                <option value="acp">acp</option>
-                <option value="pty">pty</option>
+                <option value="acp" disabled={!selectedProfile?.hasAcp}>Transcript (ACP)</option>
+                <option value="pty" disabled={!selectedProfile?.hasTerminal}>Direct Terminal</option>
+              </select>
+            </label>
+            <label>
+              Profile
+              <select value={selectedProfile?.id ?? ''} onChange={(e) => {
+                const next = e.target.value;
+                setAgent(next);
+                if (selectedDir) saveProjectAgent(selectedDir.path, next);
+              }}>
+                {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
             </label>
             {adapter === 'acp' && (
               <>
-                <label>
-                  Agent
-                  <select value={agent} onChange={(e) => {
-                    const next = e.target.value;
-                    setAgent(next);
-                    if (selectedDir) saveProjectAgent(selectedDir.path, next);
-                  }}>
-                    <option value="claude">claude</option>
-                    <option value="codex">codex</option>
-                    <option value="pi">pi</option>
-                  </select>
-                </label>
                 <label>Model<select value={model} onChange={(e) => setModel(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">{truncateLabel('Agent default')}</option>{spawnOptions?.configOptions.find((o) => o.category === 'model')?.options?.map((o) => <option key={o.value} value={o.value} title={o.name}>{truncateLabel(o.name)}</option>)}</select></label>
                 <label>Effort<select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.configOptions.find((o) => o.category === 'thought_level')?.options?.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</select></label>
                 <label>Permissions<select value={permission} onChange={(e) => setPermission(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.modes?.availableModes.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
                 {(optionsBusy || optionsError) && <div style={{ gridColumn: '1 / -1' }} className={optionsError ? 'modal-err' : 'sub'}>{optionsError || `Querying ${agent} ACP options…`}</div>}
               </>
+            )}
+            {adapter === 'pty' && (
+              <label style={{ gridColumn: '1 / -1' }}>
+                Additional terminal arguments (one argument per line)
+                <textarea
+                  value={terminalArgsText}
+                  onChange={(e) => setTerminalArgsText(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  placeholder={'--model\nopenai/gpt-5'}
+                  spellCheck={false}
+                />
+              </label>
             )}
             <label>
               Name

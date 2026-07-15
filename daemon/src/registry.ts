@@ -11,7 +11,7 @@ import { buildBrowserMcpServers, type BrowserWiring } from './browser/mcpWiring.
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
 import { AssetStore } from './assetStore.ts';
-import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
+import type { AgentAdapter, AgentCatalog, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
 
 // A short rotating word pool for auto-names: web-1, api-2, db-3, … (docs D9).
 const NAME_WORDS = ['web', 'api', 'db', 'cli', 'ui', 'svc', 'job', 'net'];
@@ -64,8 +64,16 @@ export class AgentRegistry {
   resumeCliCommand(agentId: string): string {
     const session = this.sessions.get(agentId);
     if (!session) throw new Error(`no such agent: ${agentId}`);
-    const agentName = session.spec.agent ?? this.config.acp.default;
-    return this.config.resumeCli[agentName]?.cmd ?? '';
+    return session.spec.resolvedLaunch?.terminal?.cmd ?? this.config.resumeCli[session.spec.agent ?? this.config.acp.default]?.cmd ?? '';
+  }
+
+  agentCatalog(): AgentCatalog {
+    return {
+      defaultAgent: this.config.acp.default,
+      defaultProfile: this.config.defaultProfile,
+      agents: Object.entries(this.config.agents).map(([id, a]) => ({ id, name: a.name, hasAcp: !!a.acp, hasTerminal: !!a.terminal, canResume: !!a.terminal?.args.length })),
+      profiles: Object.entries(this.config.profiles).map(([id, p]) => ({ id, agent: p.agent, name: p.name, acpArgs: p.acpArgs, terminalArgs: p.terminalArgs })),
+    };
   }
 
   // Compact rail metadata for every live agent (docs/ws-protocol.md list_agents).
@@ -119,8 +127,12 @@ export class AgentRegistry {
   listDirs(): Promise<RepoInfo[]> {
     return listRepos(this.config.projectRoots, this.config.dirScanDepth, (repo) => this.hasLiveAgentForRepo(repo));
   }
-  async spawnOptions(agent: string, cwd: string): Promise<SpawnOptions> {
-    const launch = this.config.acp.override ?? this.config.acp.agents[agent];
+  async spawnOptions(agent: string, cwd: string, profileId?: string, acpArgs: string[] = []): Promise<SpawnOptions> {
+    const profile = profileId ? this.config.profiles[profileId] : undefined;
+    if (profileId && !profile) throw new Error(`unknown profile: ${profileId}`);
+    if (profile && profile.agent !== agent) throw new Error(`profile ${profileId} belongs to agent ${profile.agent}`);
+    const configured = this.config.acp.override ?? this.config.acp.agents[agent];
+    const launch = configured ? { ...configured, args: [...configured.args, ...(profile?.acpArgs ?? []), ...acpArgs] } : undefined;
     if (!launch) throw new Error(`unknown agent: ${agent}`);
     const probe = new AcpAdapter(`spawn-options-${agent}`, launch);
     try {
@@ -143,10 +155,42 @@ export class AgentRegistry {
 
   private makeAdapter(id: string, spec: SpawnSpec): AgentAdapter {
     if (spec.adapter === 'pty') return new PtyAdapter(id);
-    const agentName = spec.agent || this.config.acp.default;
-    const launch = this.config.acp.override ?? this.config.acp.agents[agentName];
+    const agentName = spec.resolvedLaunch?.agent ?? spec.agent ?? this.config.acp.default;
+    const launch = spec.resolvedLaunch?.acp ?? this.config.acp.override ?? this.config.acp.agents[agentName];
     if (!launch) throw new Error(`unknown agent: ${agentName}`);
     return new AcpAdapter(id, launch);
+  }
+
+  private expandTerminalArgs(args: string[], context: { sessionId?: string; cwd: string; agentId: string; agentName: string }): string[] {
+    return args.map((arg) => arg
+      .replaceAll('{sessionId}', context.sessionId ?? '')
+      .replaceAll('{cwd}', context.cwd)
+      .replaceAll('{agentId}', context.agentId)
+      .replaceAll('{agentName}', context.agentName));
+  }
+
+  private resolveSpec(spec: SpawnSpec): SpawnSpec {
+    if (spec.resolvedLaunch) return spec;
+    const profileId = spec.profile ?? (spec.agent ? undefined : this.config.defaultProfile);
+    const profile = profileId ? this.config.profiles[profileId] : undefined;
+    if (profileId && !profile) throw new Error(`unknown profile: ${profileId}`);
+    if (profile && spec.agent && profile.agent !== spec.agent) throw new Error(`profile ${profileId} belongs to agent ${profile.agent}`);
+    const agent = spec.agent ?? profile?.agent ?? this.config.acp.default;
+    const definition = this.config.agents[agent];
+    if (!definition) throw new Error(`unknown agent: ${agent}`);
+    const configuredAcp = this.config.acp.override ?? definition.acp;
+    const acp = configuredAcp ? { ...configuredAcp, args: [...configuredAcp.args, ...(profile?.acpArgs ?? []), ...(spec.acpArgs ?? [])] } : undefined;
+    const configuredTerminal = definition.terminal;
+    const extraTerminal = [...(profile?.terminalArgs ?? []), ...(spec.terminalArgs ?? [])];
+    const terminal = configuredTerminal ? {
+      cmd: configuredTerminal.cmd,
+      startArgs: [...(configuredTerminal.startArgs ?? []), ...extraTerminal],
+      resumeArgs: configuredTerminal.args.length ? [...configuredTerminal.args, ...extraTerminal] : undefined,
+      env: configuredTerminal.env,
+    } : undefined;
+    if (spec.adapter === 'acp' && !acp) throw new Error(`agent ${agent} has no ACP launch configured`);
+    if (spec.adapter === 'pty' && !terminal) throw new Error(`agent ${agent} has no terminal launch configured`);
+    return { ...spec, agent, profile: profileId, resolvedLaunch: { agent, acp, terminal } };
   }
 
   private serializeHandoff(agentId: string, work: () => Promise<void>): Promise<void> {
@@ -168,17 +212,20 @@ export class AgentRegistry {
       }
       const sessionId = session.acpSessionId;
       if (!sessionId) throw new Error('agent session has no resumable ACP session id');
-      const agentName = session.spec.agent ?? this.config.acp.default;
-      const cli = this.config.resumeCli[agentName];
+      const agentName = session.spec.resolvedLaunch?.agent ?? session.spec.agent ?? this.config.acp.default;
+      const configured = session.spec.resolvedLaunch?.terminal;
+      const cli = configured ? { cmd: configured.cmd, args: configured.resumeArgs ?? [], env: configured.env } : this.config.resumeCli[agentName];
       if (!cli) throw new Error(`no resume CLI configured for agent: ${agentName}`);
+      if (!cli.args.length) throw new Error(`agent has no resumable terminal command configured: ${agentName}`);
       if (interrupt) await session.interruptAndWait();
       session.setControlMode('switching');
       const cwd = this.cwdByAgent.get(agentId) ?? this.defaultCwd(session.spec);
+      const args = this.expandTerminalArgs(cli.args, { sessionId, cwd, agentId, agentName: session.name });
       const pty = new PtyAdapter(agentId);
       try {
         await session.swapAdapter(
           pty,
-          { cwd, cmd: cli.cmd, args: cli.args.map((arg) => arg.replaceAll('{sessionId}', sessionId)) },
+          { cwd, cmd: cli.cmd, args, env: cli.env },
           'terminal',
           () => void this.leaveTerminal(agentId).catch((error) => session.pushEvent({ kind: 'error', message: `failed to return to Transcript: ${error.message}` })),
         );
@@ -210,6 +257,7 @@ export class AgentRegistry {
   // Spawn a brand-new agent. Persists the row, dispatches an optional first
   // prompt, and returns the live session.
   async spawn(spec: SpawnSpec): Promise<AgentSession> {
+    spec = this.resolveSpec(spec);
     const name = this.uniqueName(spec.name || this.autoName());
     const id = name; // names are unique, so they double as the stable key
     // Provision the workspace BEFORE creating the session/adapter: a failed
@@ -226,7 +274,10 @@ export class AgentRegistry {
     this.sessions.set(id, session);
     this.cwdByAgent.set(id, cwd);
 
-    await session.start({ cwd, mcpServers: this.mcpServersFor(id) });
+    const launch = resolvedSpec.resolvedLaunch;
+    await session.start(resolvedSpec.adapter === 'pty'
+      ? { cwd, cmd: launch?.terminal?.cmd, args: this.expandTerminalArgs(launch?.terminal?.startArgs ?? [], { cwd, agentId: id, agentName: name }), env: launch?.terminal?.env }
+      : { cwd, mcpServers: this.mcpServersFor(id) });
     // The ACP sessionId is known once session/new resolves — persist it for restore.
     if (session.acpSessionId) this.db.setSessionId(id, session.acpSessionId);
 
@@ -268,7 +319,10 @@ export class AgentRegistry {
     // Re-spawn the subprocess; resume via session/load when we have a persisted
     // sessionId and the agent supports it, else a fresh session (history stays
     // available to clients from the persisted event log).
-    await session.start({ cwd, resumeSessionId: rec.acpSessionId ?? undefined, mcpServers: this.mcpServersFor(rec.id) });
+    const launch = rec.spec.resolvedLaunch;
+    await session.start(rec.spec.adapter === 'pty'
+      ? { cwd, cmd: launch?.terminal?.cmd, args: this.expandTerminalArgs(launch?.terminal?.startArgs ?? [], { cwd, agentId: rec.id, agentName: rec.name }), env: launch?.terminal?.env }
+      : { cwd, resumeSessionId: rec.acpSessionId ?? undefined, mcpServers: this.mcpServersFor(rec.id) });
     if (session.acpSessionId && session.acpSessionId !== rec.acpSessionId) this.db.setSessionId(rec.id, session.acpSessionId);
   }
 
@@ -378,7 +432,7 @@ export class AgentRegistry {
   private async spawnResumed(agent: string, cwd: string, sessionId: string): Promise<AgentSession> {
     const name = this.uniqueName(this.autoName());
     const id = name;
-    const spec: SpawnSpec = { adapter: 'acp', agent, workspace: { kind: 'existing', cwd } };
+    const spec = this.resolveSpec({ adapter: 'acp', agent, workspace: { kind: 'existing', cwd } });
     const { cwd: resolvedCwd, workspace } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
     const resolvedSpec: SpawnSpec = { ...spec, name, workspace };
     const adapter = this.makeAdapter(id, resolvedSpec);

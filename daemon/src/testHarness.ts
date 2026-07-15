@@ -93,6 +93,7 @@ export interface Frame {
   controlOwner?: 'agent' | 'user';
   agents?: any[];
   catalog?: any;
+  preview?: any;
 }
 
 /** Print a check table and return whether all passed (shared by all derisk scripts). */

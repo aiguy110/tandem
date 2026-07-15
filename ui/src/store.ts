@@ -10,6 +10,7 @@ import { browserHub } from './terminal/browserHub';
 import type {
   AgentStatus,
   AgentSummary,
+  AgentCatalog,
   Approval,
   BrowserInputWire,
   Channel,
@@ -94,6 +95,7 @@ interface StoreState {
   modal: ModalKind;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
+  agentCatalog: AgentCatalog | null;
   // Resume picker: the resumable-session catalog (null until first fetched) and a
   // loading flag while the daemon probes agents for external sessions.
   resumeCatalog: ResumeCatalog | null;
@@ -127,7 +129,7 @@ interface StoreState {
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
   leaveTerminal: (agentId: string) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
-  getSpawnOptions: (agent: string, cwd: string) => Promise<SpawnOptions>;
+  getSpawnOptions: (agent: string, cwd: string, profile?: string) => Promise<SpawnOptions>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
@@ -219,6 +221,9 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'dirs':
         set({ dirs: msg.dirs });
+        return;
+      case 'agent_catalog':
+        set({ agentCatalog: msg.catalog });
         return;
       case 'spawn_options': {
         const pending = msg.corrId ? pendingSpawnOptions.get(msg.corrId) : undefined;
@@ -342,6 +347,7 @@ export const useStore = create<StoreState>((set, get) => {
     onOpen: () => {
       // Rediscover agents (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
+      client.send({ t: 'list_agent_catalog' });
       // Also re-subscribe to anything we already track, immediately (idempotent).
       for (const id of get().order) subscribeAgent(id);
     },
@@ -357,6 +363,7 @@ export const useStore = create<StoreState>((set, get) => {
     modal: 'none',
     inspectorOpen: false,
     dirs: [],
+    agentCatalog: null,
     resumeCatalog: null,
     resumeLoading: false,
     drafts: {},
@@ -395,7 +402,10 @@ export const useStore = create<StoreState>((set, get) => {
     toggleAgentsRail: () => set((st) => ({ agentsRailCollapsed: !st.agentsRailCollapsed })),
     toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {
-      if (m === 'spawn') get().refreshDirs();
+      if (m === 'spawn') {
+        get().refreshDirs();
+        client.send({ t: 'list_agent_catalog' });
+      }
       if (m === 'resume') get().refreshSessions();
       set({ modal: m });
     },
@@ -448,11 +458,11 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
-    getSpawnOptions: (agent, cwd) =>
+    getSpawnOptions: (agent, cwd, profile) =>
       new Promise<SpawnOptions>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSpawnOptions.set(corrId, { resolve, reject });
-        client.send({ t: 'get_spawn_options', agent, cwd, corrId });
+        client.send({ t: 'get_spawn_options', agent, profile, cwd, corrId });
       }),
     prompt: (agentId, input) =>
       new Promise<AckResult>((resolve) => {

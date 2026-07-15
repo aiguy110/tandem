@@ -112,6 +112,7 @@ export interface SpawnOpts {
   cwd?: string;
   cmd?: string;
   args?: string[];
+  env?: Record<string, string>;
   // Restore path: when set and the agent advertises the loadSession capability,
   // the adapter resumes this ACP session (session/load) instead of session/new.
   resumeSessionId?: string;
@@ -223,6 +224,10 @@ export interface SpawnSpec {
   // 'claude' | 'codex' | 'pi'). Ignored when adapter is 'pty'. Defaults to
   // Config.acp.default.
   agent?: string;
+  profile?: string;
+  // Additional arguments appended after the configured profile arguments.
+  acpArgs?: string[];
+  terminalArgs?: string[];
   workspace: Workspace;
   name?: string; // auto: web-1, api-2…
   task?: string; // optional initial prompt, dispatched on spawn
@@ -230,7 +235,24 @@ export interface SpawnSpec {
   // controls and before an optional first task is dispatched.
   sessionConfig?: { modeId?: string; configOptions?: Record<string, string | boolean> };
   preset?: string; // reserved; single default agent for now
+  // Durable, fully resolved launch data. Filled by the daemon at first spawn so
+  // config edits do not silently change restore or handoff behavior.
+  resolvedLaunch?: {
+    agent: string;
+    acp?: { cmd: string; args: string[]; env?: Record<string, string> };
+    terminal?: { cmd: string; startArgs: string[]; resumeArgs?: string[]; env?: Record<string, string> };
+  };
 }
+
+export interface AgentCatalogEntry {
+  id: string;
+  name: string;
+  hasAcp: boolean;
+  hasTerminal: boolean;
+  canResume: boolean;
+}
+export interface AgentProfileEntry { id: string; agent: string; name: string; acpArgs: string[]; terminalArgs: string[] }
+export interface AgentCatalog { defaultAgent: string; defaultProfile?: string; agents: AgentCatalogEntry[]; profiles: AgentProfileEntry[] }
 
 export interface SpawnOptions {
   modes: SessionModeState | null;
@@ -348,6 +370,7 @@ export interface ClosePreview {
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'list_agents'; corrId?: string } // rail discovery: which agents exist + their metadata
+  | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string } // Resume picker: the resumable-session catalog
   // Resume a session (Resume picker). For a Tandem-owned session only sessionId
   // is needed; for an external one, `agent`+`cwd` (from the catalog) say how/where
@@ -364,7 +387,7 @@ export type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
-  | { t: 'get_spawn_options'; agent: string; cwd: string; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
@@ -400,6 +423,7 @@ export type ServerMsg =
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] } // reply to list_agents
+  | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] } // reply to list_dirs
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }

@@ -85,7 +85,7 @@ export class AcpAdapter implements AgentAdapter {
   // only the re-emission into the log (this.q) is suppressed.
   private replaying = false;
 
-  constructor(readonly id: string, private launch: { cmd: string; args: string[] }) {}
+  constructor(readonly id: string, private launch: { cmd: string; args: string[]; env?: Record<string, string> }) {}
 
   get events() {
     return this.q;
@@ -104,7 +104,7 @@ export class AcpAdapter implements AgentAdapter {
 
   async spawn(opts: SpawnOpts, services?: ClientServices): Promise<void> {
     this.services = services;
-    this.proc = spawn(this.launch.cmd, this.launch.args, { stdio: ['pipe', 'pipe', 'inherit'], cwd: opts.cwd });
+    this.proc = spawn(this.launch.cmd, this.launch.args, { stdio: ['pipe', 'pipe', 'inherit'], cwd: opts.cwd, env: { ...process.env, ...this.launch.env, ...opts.env } });
     this.proc.stdout!.on('data', (d: Buffer) => this.onData(d));
     this.proc.on('exit', (code) => {
       for (const [, p] of this.pending) p.reject(new Error(`agent exited (code ${code}) before responding`));
@@ -462,14 +462,14 @@ export interface ProbedSession {
 // binary, unauthenticated agent, or a timeout — degrades to `{ supportsList:false,
 // sessions:[] }` rather than throwing, so one bad adapter can't break the picker.
 export function probeAcpSessions(
-  launch: { cmd: string; args: string[] },
+  launch: { cmd: string; args: string[]; env?: Record<string, string> },
   opts: { timeoutMs?: number; cwd?: string } = {},
 ): Promise<{ supportsList: boolean; sessions: ProbedSession[] }> {
   const timeoutMs = opts.timeoutMs ?? 6000;
   return new Promise((resolve) => {
     let proc: ChildProcess;
     try {
-      proc = spawn(launch.cmd, launch.args, { stdio: ['pipe', 'pipe', 'ignore'] });
+      proc = spawn(launch.cmd, launch.args, { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...launch.env } });
     } catch {
       resolve({ supportsList: false, sessions: [] });
       return;

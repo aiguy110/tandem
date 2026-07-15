@@ -306,7 +306,7 @@ export function startServer(
       }
       case 'get_spawn_options': {
         try {
-          const options = await registry.spawnOptions(m.agent, m.cwd);
+          const options = await registry.spawnOptions(m.agent, m.cwd, m.profile, m.acpArgs);
           conn.send({ t: 'spawn_options', corrId: m.corrId, options });
         } catch (error) {
           conn.send({ t: 'spawn_options', corrId: m.corrId, error: (error as Error).message });
@@ -353,6 +353,10 @@ export function startServer(
       }
       case 'list_agents': {
         conn.send({ t: 'agents', corrId: m.corrId, agents: await registry.summaries() });
+        break;
+      }
+      case 'list_agent_catalog': {
+        conn.send({ t: 'agent_catalog', corrId: m.corrId, catalog: registry.agentCatalog() });
         break;
       }
       case 'list_sessions': {

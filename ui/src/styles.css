@@ -382,7 +382,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .foot .kbd { margin-right: 4px; }
 .modal .adv { padding: 10px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .modal .adv label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); }
-.modal .adv input, .modal .adv select { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
+.modal .adv input, .modal .adv select, .modal .adv textarea { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
+.modal .adv textarea { min-height: 72px; resize: vertical; }
 .confirm-modal { width: min(560px, 92vw); }
 .confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
 .confirm-modal section { margin-top: 14px; }

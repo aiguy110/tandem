@@ -24,15 +24,64 @@ An agent is defined by a small spec; almost everything is defaulted or inferred:
 ```ts
 interface SpawnSpec {
   adapter: 'acp' | 'pty';                 // default: acp
-  agent?: string;                         // acp only: 'claude' | 'codex' | 'pi' (Config.acp.agents key); default: Config.acp.default ('claude')
+  agent?: string;                         // agent definition id; default: defaults.agent or claude
+  profile?: string;                       // optional profile id referencing that agent
+  acpArgs?: string[];                     // one-off ACP arguments, after profile arguments
+  terminalArgs?: string[];                // one-off direct-terminal arguments
   workspace:                              // where it works
     | { kind: 'worktree'; repo: string; branch: string; baseRef: string }
     | { kind: 'existing'; cwd: string };  // reuse a dir as-is (non-git, or opt-in)
   name?: string;                          // auto: web-1, api-2… (renamable)
   task?: string;                          // optional initial prompt, dispatched on spawn
-  preset?: string;                        // reserved; single default agent for now
+  preset?: string;                        // reserved legacy field
 }
 ```
+
+## Agent catalog and profiles
+
+Tandem loads an optional catalog from `$TANDEM_HOME/config.yml` (normally
+`~/.tandem/config.yml`). The built-in `claude`, `codex`, and `pi` definitions are always
+available; user definitions with the same id override their fields, so existing installs
+continue to work without a config file. Environment-variable launch overrides remain
+supported for backwards compatibility.
+
+An **agent definition** describes how to start the same tool through ACP and directly in a
+terminal. A **profile** gives that definition a reusable set of extra arguments:
+
+```yaml
+agents:
+  pi:
+    name: Pi
+    acp:
+      command: pi-acp
+      args: []
+      env:
+        PI_ACP_ENABLE_EMBEDDED_CONTEXT: "true"
+    terminal:
+      command: pi
+      startArgs: [--model, openai-codex/gpt-5.4]
+      resumeArgs: [--session, "{sessionId}"]
+      env: {}
+
+profiles:
+  pi-fast:
+    agent: pi
+    name: Pi Fast
+    acpArgs: []
+    terminalArgs: [--model, openai-codex/gpt-5.4-mini]
+```
+
+Commands and arguments are arrays rather than shell command strings, avoiding shell
+quoting and injection surprises. Profile arguments are appended to the selected launch
+mode's configured arguments. Direct Terminal launches use `terminal.startArgs`; ACP-to-CLI
+handoff uses `terminal.resumeArgs` and is offered only when that template is present.
+`{sessionId}`, `{cwd}`, `{agentId}`, and `{agentName}` are substituted in terminal argument
+templates. Environment entries are passed only to the configured child process.
+
+The spawn palette lists definitions and profiles from the normalized catalog. Selecting a
+profile retains its own display name while resolving its referenced agent's ACP or terminal
+command. Persisted specs naming `claude`, `codex`, or `pi` resolve through the built-ins
+exactly as before.
 
 ## Surfaces
 
@@ -141,8 +190,9 @@ agent's `SpawnSpec` + ACP `sessionId` (and its worktree/branch). On daemon resta
 
 - **Sandboxing** (containers / per-agent isolation beyond the filesystem) — future; for now
   agents share the host with host-level permissions.
-- **Presets** (named agent+model+role+cwd bundles, individually hotkey-bound) — the
-  SpawnSpec reserves `preset`; a single default agent ships first.
+- **Managed agent distribution** — ACP Registry discovery, versioned installs and rollback,
+  and custom pinned Git manifests are separate lifecycle work; the current catalog launches
+  commands already installed on the host.
 
 See [`decisions.md`](decisions.md) D8–D10 for the rationale.
 
@@ -163,5 +213,5 @@ details. Two small deviations from the illustrative `SpawnSpec` above:
   "Respawn" above: point `spec.workspace.branch` at a still-live `tandem/<name>` branch and
   spawn normally.
 
-Everything else — quick-spawn palette UX, keymap, command palette, merge-back — is still
-Phase 3+ UI work; the daemon side (`merge_back`) still returns an error `ack`.
+Merge-back remains future UI/daemon work; the daemon side (`merge_back`) still returns an
+error `ack`.

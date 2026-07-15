@@ -134,12 +134,35 @@ export type Workspace =
 
 export interface SpawnSpec {
   adapter: 'acp' | 'pty';
-  agent?: string; // which ACP-speaking agent to launch (e.g. 'claude' | 'codex' | 'pi'); ignored for pty
+  agent?: string; // configured agent definition; applies to both ACP and direct Terminal launches
+  profile?: string; // configured profile id; agent remains populated for older daemons
+  terminalArgs?: string[]; // argv entries appended to a configured direct-terminal launch
   workspace: Workspace;
   name?: string;
   task?: string;
   sessionConfig?: { modeId?: string; configOptions?: Record<string, string | boolean> };
   preset?: string;
+}
+
+export interface AgentCatalogEntry {
+  id: string;
+  name: string;
+  hasAcp: boolean;
+  hasTerminal: boolean;
+  canResume: boolean;
+}
+export interface AgentProfileEntry {
+  id: string;
+  agent: string;
+  name: string;
+  acpArgs: string[];
+  terminalArgs: string[];
+}
+export interface AgentCatalog {
+  defaultAgent: string;
+  defaultProfile?: string;
+  agents: AgentCatalogEntry[];
+  profiles: AgentProfileEntry[];
 }
 
 export interface SpawnOptions {
@@ -164,7 +187,7 @@ export type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
-  | { t: 'get_spawn_options'; agent: string; cwd: string; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
@@ -172,6 +195,7 @@ export type ClientMsg =
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
+  | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
@@ -198,6 +222,7 @@ export type ServerMsg =
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
+  | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }

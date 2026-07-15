@@ -198,3 +198,24 @@ sockets.
 **Why:** Remote access is fronted by `tailscale serve` (TLS + network identity); the token
 is defense-in-depth. URL fragments are never sent in HTTP requests, so the token stays out
 of proxy/serve logs.
+
+## D16 — Configurable agent catalog with launch profiles
+
+**Choice:** Agent implementations are data, not adapter subclasses. Tandem merges its
+built-in Claude, Codex, and Pi definitions with `agents` and `profiles` from
+`$TANDEM_HOME/config.yml`. Each agent may declare an ACP command and/or a direct-terminal
+command, including argument arrays and scoped environment variables. Profiles reference an
+agent and append reusable ACP or terminal arguments.
+
+**Why:** `AcpAdapter` and `PtyAdapter` are already protocol-generic. Keeping launch details
+in a catalog makes locally installed and custom agents available without daemon code
+changes, while profiles support several model or behavior configurations of one tool.
+
+**Compatibility and safety:** The built-ins preserve existing ids and environment-variable
+overrides. Launch commands use argv arrays, not shell strings. Direct-terminal start and
+ACP-session resume are separate templates because some agents cannot resume an ACP session
+in their native CLI.
+
+**Deferred:** Registry discovery, installation/update management, and custom Git sources.
+Those features must preserve resolved versions for durable-session restoration rather than
+silently changing the executable beneath an existing session.

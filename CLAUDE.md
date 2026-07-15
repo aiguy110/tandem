@@ -28,7 +28,7 @@ cd ui && npm run dev                    # vite dev server
 cd daemon && npm install
 TANDEM_UI_DIR=../ui/dist npm run daemon # start the daemon
 
-# Daemon tests — ten de-risk suites, each against a throwaway TANDEM_HOME
+# Daemon tests — de-risk suites, each against a throwaway TANDEM_HOME
 cd daemon && npm test                   # = derisk:all, runs all suites below in sequence
 npm run derisk             # durability + ACP approval loop (single agent)
 npm run derisk:multi       # two agents: independent seq streams, queues, isolated teardown
@@ -41,6 +41,7 @@ npm run derisk:browser     # shared browser: laziness, broker CDP proxy, screenc
 npm run derisk:integration # full-slice smoke: discover → spawn → prompt → approval → 2nd agent → reconnect replay → dirty-close teardown
 npm run derisk:resume      # resumable-session catalog + live/closed/external resume paths
 npm run derisk:handoff     # ACP cancel → resumable CLI terminal → automatic ACP reload
+npm run derisk:config      # config.yml agents/profiles + direct Terminal argv/env + durable launch resolution
 
 # Opt-in (NOT part of `npm test`): needs a self-hosted Steel (Docker). Skips+passes if unreachable.
 STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel # SteelDriver + broker against a live Steel (see docs/browser.md › Self-hosting Steel)
@@ -64,6 +65,10 @@ There is no single-test runner — each `derisk:*` script is a standalone, self-
 | `TANDEM_RESUME_CMD_CLAUDE` / `_CODEX` / `_PI` | agent-specific CLI command | JSON array or command template for Terminal handoff; `{sessionId}` is substituted |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |
+
+Agent launches can also be declared in `$TANDEM_HOME/config.yml`. The daemon merges the
+built-in `claude`, `codex`, and `pi` catalog with user-defined `agents` (ACP and direct
+terminal commands) and reusable `profiles`; see `docs/spawn-and-workspaces.md`.
 
 ## Architecture
 
@@ -137,3 +142,15 @@ The daemon serves the built UI (`ui/dist`) via `TANDEM_UI_DIR`; there is no sepa
 - `merge_back` — accepted over WS but returns an error `ack`; no diff review / merge-or-PR UI yet.
 - `raw_pty` / `browser_frame` payloads are base64-in-JSON, not binary framing.
 - `SteelDriver` is verified against a self-hosted Steel via `npm run derisk:steel` (opt-in, needs Docker); `LocalChromiumDriver` remains the default, no-Docker path.
+
+## Agent catalog TODOs
+
+- **Stage 3 — ACP Registry discovery:** fetch/cache registry manifests, expose available
+  agents and versions in settings, and resolve supported distribution types without
+  installing during ordinary daemon startup.
+- **Stage 4 — managed installs:** install into versioned `$TANDEM_HOME/agents/` locations,
+  record exact resolutions in a lockfile and persisted sessions, detect updates explicitly,
+  retain versions needed by resumable sessions, and support rollback.
+- **Stage 5 — custom Git manifests:** accept pinned tags or commit SHAs only, require an
+  explicit registry-compatible build/launch manifest, and never guess or execute an
+  arbitrary repository's installation workflow.

@@ -121,6 +121,18 @@ learn which agents exist or how to label them. The UI calls `list_agents` on eve
 reconciles the rail, then `subscribe`s to each agent with its tracked `sinceSeq`. `repo` is a
 display basename; `repoPath` is the source-repo path used for "sibling" spawns.
 
+### `list_agent_catalog` (configurable agents and profiles)
+
+```ts
+{ t: 'list_agent_catalog'; corrId?: string }
+// →
+{ t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
+```
+
+The catalog is the daemon-normalized view of built-in plus `$TANDEM_HOME/config.yml`
+agent definitions and profiles. The spawn palette uses its ACP/Terminal capability flags
+instead of hard-coding agent names. Launch commands and environment values stay daemon-side.
+
 ## Messages
 
 All client messages accept an optional `corrId` echoed back on the matching `ack`.
@@ -136,12 +148,14 @@ type ClientMsg =
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string }
   | { t: 'interrupt';   agentId: string }                              // → session/cancel; pending perms → cancelled
   | { t: 'spawn_agent'; spec: SpawnSpec }                               // see spawn-and-workspaces.md
+  | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string }
   | { t: 'close_agent'; agentId: string; force?: boolean }             // teardown: keep branch, drop checkout
   | { t: 'merge_back';  agentId: string; mode: 'merge'|'pr' }          // error ack for now (no diff/merge UI yet)
   | { t: 'browser_control'; agentId: string; action: 'grab'|'release' } // Phase 5: flips the control-owner token
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire }   // Phase 5: user mouse/key/wheel (owner=user only)
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
+  | { t: 'list_agent_catalog' }                                         // configured definitions + profiles
   | { t: 'list_sessions' }                                              // resumable-session catalog
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean }
@@ -179,7 +193,9 @@ type ServerMsg =
   | { t: 'ack';      corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents';   agents: AgentSummary[] }                           // Phase 4: reply to list_agents
+  | { t: 'agent_catalog'; catalog: AgentCatalog }                       // reply to list_agent_catalog
   | { t: 'dirs';     dirs: RepoInfo[] }                                 // reply to list_dirs
+  | { t: 'spawn_options'; options?: SpawnOptions; error?: string }      // reply to get_spawn_options
   | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions
   // Phase 5 browser channel (only sent to subscribers of that agent's 'browser' channel):
   | { t: 'browser_frame'; agentId: string; dataB64: string;             // CDP screencast JPEG

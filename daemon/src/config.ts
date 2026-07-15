@@ -6,15 +6,31 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import YAML from 'yaml';
 
 export interface AcpLaunch {
   cmd: string;
   args: string[];
+  env?: Record<string, string>;
 }
 
 export interface ResumeCliLaunch {
   cmd: string;
   args: string[]; // `{sessionId}` tokens are replaced at handoff time
+  startArgs?: string[];
+  env?: Record<string, string>;
+}
+
+export interface AgentDefinition {
+  name: string;
+  acp?: AcpLaunch;
+  terminal?: ResumeCliLaunch;
+}
+export interface AgentProfile {
+  agent: string;
+  name: string;
+  acpArgs: string[];
+  terminalArgs: string[];
 }
 
 export interface Config {
@@ -41,6 +57,9 @@ export interface Config {
     override?: AcpLaunch;
   };
   resumeCli: Record<string, ResumeCliLaunch>;
+  agents: Record<string, AgentDefinition>;
+  profiles: Record<string, AgentProfile>;
+  defaultProfile?: string;
   // Shared-browser subsystem (Phase 5, D13).
   browser: {
     driver: 'local' | 'steel'; // TANDEM_BROWSER_DRIVER (default local)
@@ -131,6 +150,85 @@ function resumeClisFromEnv(): Record<string, ResumeCliLaunch> {
   return defaults;
 }
 
+type FileConfig = {
+  defaults?: { agent?: string; profile?: string };
+  agents?: Record<string, { name?: string; acp?: { command: string; args?: string[]; env?: Record<string, string> }; terminal?: { command: string; startArgs?: string[]; resumeArgs?: string[]; env?: Record<string, string> } }>;
+  profiles?: Record<string, { agent: string; name?: string; acpArgs?: string[]; terminalArgs?: string[] }>;
+};
+
+function readFileConfig(home: string): FileConfig {
+  const file = path.join(home, 'config.yml');
+  if (!fs.existsSync(file)) return {};
+  try {
+    const parsed = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('root must be a mapping');
+    return parsed as FileConfig;
+  } catch (error) {
+    throw new Error(`invalid ${file}: ${(error as Error).message}`);
+  }
+}
+
+function stringArray(value: unknown, key: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) throw new Error(`${key} must be an array of strings`);
+  return value;
+}
+
+function stringMap(value: unknown, key: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some((item) => typeof item !== 'string')) {
+    throw new Error(`${key} must be a mapping of string values`);
+  }
+  return value as Record<string, string>;
+}
+
+function command(value: unknown, key: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} must be a non-empty string`);
+  return value;
+}
+
+function catalogFromFile(home: string): { agents: Record<string, AgentDefinition>; profiles: Record<string, AgentProfile>; defaultAgent: string; defaultProfile?: string } {
+  const bundled = acpAgentsFromEnv();
+  const resume = resumeClisFromEnv();
+  const agents: Record<string, AgentDefinition> = Object.fromEntries(Object.keys(bundled).map((id) => [id, { name: id[0].toUpperCase() + id.slice(1), acp: bundled[id], terminal: { ...resume[id], startArgs: [] } }]));
+  const file = readFileConfig(home);
+  for (const [id, value] of Object.entries(file.agents ?? {})) {
+    if (!value || typeof value !== 'object') throw new Error(`agents.${id} must be a mapping`);
+    const previous = agents[id];
+    const acp = value.acp ? {
+      cmd: resolveUserExecutable(command(value.acp.command, `agents.${id}.acp.command`)),
+      args: stringArray(value.acp.args, `agents.${id}.acp.args`),
+      env: stringMap(value.acp.env, `agents.${id}.acp.env`),
+    } : previous?.acp;
+    const terminal = value.terminal
+      ? {
+        cmd: resolveUserExecutable(command(value.terminal.command, `agents.${id}.terminal.command`)),
+        args: stringArray(value.terminal.resumeArgs, `agents.${id}.terminal.resumeArgs`),
+        startArgs: stringArray(value.terminal.startArgs, `agents.${id}.terminal.startArgs`),
+        env: stringMap(value.terminal.env, `agents.${id}.terminal.env`),
+      }
+      : previous?.terminal;
+    if (!acp && !terminal) throw new Error(`agents.${id} must configure acp or terminal`);
+    agents[id] = { name: value.name ?? previous?.name ?? id, acp, terminal };
+  }
+  const profiles: Record<string, AgentProfile> = {};
+  for (const [id, value] of Object.entries(file.profiles ?? {})) {
+    if (!value || typeof value !== 'object') throw new Error(`profiles.${id} must be a mapping`);
+    if (typeof value.agent !== 'string' || !value.agent) throw new Error(`profiles.${id}.agent must be a non-empty string`);
+    if (!agents[value.agent]) throw new Error(`profiles.${id} references unknown agent: ${value.agent}`);
+    profiles[id] = {
+      agent: value.agent,
+      name: value.name ?? id,
+      acpArgs: stringArray(value.acpArgs, `profiles.${id}.acpArgs`),
+      terminalArgs: stringArray(value.terminalArgs, `profiles.${id}.terminalArgs`),
+    };
+  }
+  const defaultAgent = file.defaults?.agent ?? 'claude';
+  if (!agents[defaultAgent]) throw new Error(`defaults.agent references unknown agent: ${defaultAgent}`);
+  if (file.defaults?.profile && !profiles[file.defaults.profile]) throw new Error(`defaults.profile references unknown profile: ${file.defaults.profile}`);
+  return { agents, profiles, defaultAgent, defaultProfile: file.defaults?.profile };
+}
+
 function parseSteelSessionOptions(raw?: string): Record<string, unknown> {
   if (!raw) return {};
   let value: unknown;
@@ -150,6 +248,7 @@ export function loadConfig(): Config {
   const roots = (process.env.TANDEM_PROJECT_ROOTS || path.join(os.homedir(), 'Projects'))
     .split(path.delimiter)
     .filter(Boolean);
+  const catalog = catalogFromFile(home);
   return {
     home,
     dbPath: path.join(home, 'tandem.db'),
@@ -162,13 +261,16 @@ export function loadConfig(): Config {
     projectRoots: roots,
     dirScanDepth: Number(process.env.TANDEM_DIR_SCAN_DEPTH || 1),
     acp: {
-      default: 'claude',
-      agents: acpAgentsFromEnv(),
+      default: catalog.defaultAgent,
+      agents: Object.fromEntries(Object.entries(catalog.agents).filter(([, a]) => a.acp).map(([id, a]) => [id, a.acp!])),
       // TANDEM_ACP_CMD forces every agent to this one launch — the mock hook
       // every derisk suite (and testHarness.ts) points at a fake ACP server.
       override: process.env.TANDEM_ACP_CMD ? parseLaunchEnv(process.env.TANDEM_ACP_CMD) : undefined,
     },
-    resumeCli: resumeClisFromEnv(),
+    resumeCli: Object.fromEntries(Object.entries(catalog.agents).filter(([, a]) => a.terminal).map(([id, a]) => [id, a.terminal!])),
+    agents: catalog.agents,
+    profiles: catalog.profiles,
+    defaultProfile: catalog.defaultProfile,
     browser: {
       driver: process.env.TANDEM_BROWSER_DRIVER === 'steel' ? 'steel' : 'local',
       userDataRoot: path.join(home, 'browser-profiles'),

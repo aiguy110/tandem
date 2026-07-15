@@ -36,7 +36,7 @@ export class PtyAdapter implements AgentAdapter {
       const command = [opts.cmd ?? 'bash', ...(opts.args ?? [])].map(shellQuote).join(' ');
       this.child = spawnChild('script', ['-qefc', command, '/dev/null'], {
         cwd: opts.cwd,
-        env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
+        env: { ...process.env, ...opts.env, TERM: process.env.TERM ?? 'xterm-256color' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       this.q.push({ kind: 'status', status: 'working' });
@@ -57,7 +57,7 @@ export class PtyAdapter implements AgentAdapter {
       cols: 100,
       rows: 30,
       cwd: opts.cwd,
-      env: process.env,
+      env: { ...process.env, ...opts.env },
     });
     this.q.push({ kind: 'status', status: 'working' });
     this.proc.onData((s: string) => this.q.push({ kind: 'raw_pty', data: Buffer.from(s, 'utf8') }));
