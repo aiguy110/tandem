@@ -42,6 +42,7 @@ export const PANES: PaneId[] = ['transcript', 'terminal', 'diff', 'browser'];
 export interface AgentView {
   id: string;
   name: string;
+  agent?: string;
   workspace: {
     kind: 'worktree' | 'existing';
     repo: string;
@@ -502,7 +503,7 @@ function shell(id: string): AgentView {
 
 function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, workspace: s.workspace, status: s.status, controlMode: s.controlMode };
+  return { ...base, name: s.name, agent: s.agent, workspace: s.workspace, status: s.status, controlMode: s.controlMode };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the
