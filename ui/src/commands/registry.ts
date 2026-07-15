@@ -24,6 +24,7 @@ export function buildCommands(): Command[] {
   const s = () => useStore.getState();
   return [
     { id: 'agent.spawn', title: 'Spawn agent…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
+    { id: 'agent.resume', title: 'Resume session…', subtitle: 'Find a Tandem or external ACP session', run: () => s().setModal('resume') },
     {
       id: 'agent.spawn.sibling',
       title: 'Spawn sibling agent',

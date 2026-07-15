@@ -28,6 +28,18 @@ repo discovery for the quick-spawn palette), and — Phase 5 — the browser cha
 yet"`) pending the diff/merge UI. Multiple concurrent clients and multiplexed multi-agent
 subscriptions on one socket are supported.
 
+### `list_sessions` / `resume_session`
+
+`list_sessions` returns a catalog combining Tandem-owned ACP sessions with external
+sessions exposed by adapters that advertise ACP `sessionCapabilities.list`. Entries are
+deduplicated by session id, with the richer Tandem record taking precedence. The response
+also reports each adapter's enumeration support so the UI can identify a partial catalog.
+
+`resume_session` focuses an already-live session, restores a closed Tandem session
+(reattaching its worktree when necessary), or imports an external session. `agent` and
+`cwd` are required only for an external session. Raw PTY agents have no resumable-session
+concept and external enumeration remains optional in ACP.
+
 ### `spawn_agent` / `close_agent` (Phase 2: real workspaces)
 
 `spawn_agent`'s `workspace.kind:'worktree'` now provisions a real `git worktree` (branch
@@ -101,7 +113,9 @@ type ClientMsg =
   | { t: 'browser_control'; agentId: string; action: 'grab'|'release' } // Phase 5: flips the control-owner token
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire }   // Phase 5: user mouse/key/wheel (owner=user only)
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
-  | { t: 'list_agents' };                                               // Phase 4: rail discovery, see below
+  | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
+  | { t: 'list_sessions' }                                              // resumable-session catalog
+  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string };
 
 // Phase 5: the normalized user-input event carried by browser_input — mapped to CDP
 // Input.dispatchMouseEvent / dispatchKeyEvent / insertText daemon-side. x/y are in the
@@ -132,6 +146,7 @@ type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents';   agents: AgentSummary[] }                           // Phase 4: reply to list_agents
   | { t: 'dirs';     dirs: RepoInfo[] }                                 // reply to list_dirs
+  | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions
   // Phase 5 browser channel (only sent to subscribers of that agent's 'browser' channel):
   | { t: 'browser_frame'; agentId: string; dataB64: string;             // CDP screencast JPEG
       meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }

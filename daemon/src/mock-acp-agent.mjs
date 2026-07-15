@@ -87,7 +87,24 @@ function handle(msg) {
 
   if (msg.method === 'initialize') {
     // Advertised so the client knows what we might exercise (informational).
-    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+    send({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { list: true } } },
+    });
+    return;
+  }
+  if (msg.method === 'session/list') {
+    send({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        sessions: [
+          { sessionId: 'sess_mock', cwd: process.cwd(), title: 'Mock current session', updatedAt: '2026-07-15T12:00:00.000Z' },
+          { sessionId: 'sess_external', cwd: process.cwd(), title: 'External mock session', updatedAt: '2026-07-15T13:00:00.000Z' },
+        ],
+      },
+    });
     return;
   }
   if (msg.method === 'session/new') {

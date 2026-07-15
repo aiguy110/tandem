@@ -120,7 +120,9 @@ export class AcpAdapter implements AgentAdapter {
 
     if (opts.resumeSessionId && this.agentLoadSession) {
       // Restore path (D11): resume the persisted ACP session instead of a new one.
-      this.replaying = true;
+      // Suppress the re-streamed history UNLESS the caller wants it captured (a
+      // Resume of an external session, whose event log starts empty).
+      this.replaying = !opts.captureReplay;
       let res: { modes?: unknown; configOptions?: unknown[] };
       try {
         res = (await this.rpc('session/load', { sessionId: opts.resumeSessionId, cwd: opts.cwd ?? process.cwd(), mcpServers: [] })) as {
@@ -421,4 +423,107 @@ export class AcpAdapter implements AgentAdapter {
   async dispose(): Promise<void> {
     this.proc?.kill();
   }
+}
+
+// A session enumerated via ACP `session/list` (capability-gated). `sessionId` is
+// the agent's own resumable id (== its CLI's --resume id for claude-agent-acp).
+export interface ProbedSession {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+// Spawn an ACP agent JUST to read its resumable sessions, then kill it. This is
+// how the Resume picker learns about sessions Tandem never spawned: we can't read
+// the agent's private session store directly (that would break the "any ACP agent
+// drops in" seam), so we ask it over the protocol. `session/list` is agent-level
+// (no session/new needed) and capability-gated — an agent that doesn't advertise
+// `sessionCapabilities.list` returns `supportsList: false` and contributes nothing
+// but the flag (which the UI surfaces so the user knows the catalog is partial).
+//
+// Fully self-contained (its own tiny ndjson JSON-RPC loop) so it never has to
+// stand up a real AgentSession/ClientServices. Any failure — spawn error, missing
+// binary, unauthenticated agent, or a timeout — degrades to `{ supportsList:false,
+// sessions:[] }` rather than throwing, so one bad adapter can't break the picker.
+export function probeAcpSessions(
+  launch: { cmd: string; args: string[] },
+  opts: { timeoutMs?: number; cwd?: string } = {},
+): Promise<{ supportsList: boolean; sessions: ProbedSession[] }> {
+  const timeoutMs = opts.timeoutMs ?? 6000;
+  return new Promise((resolve) => {
+    let proc: ChildProcess;
+    try {
+      proc = spawn(launch.cmd, launch.args, { stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch {
+      resolve({ supportsList: false, sessions: [] });
+      return;
+    }
+    let done = false;
+    let buf = '';
+    let nextId = 1;
+    const pending = new Map<number, (r: any) => void>();
+    const finish = (r: { supportsList: boolean; sessions: ProbedSession[] }) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        proc.kill();
+      } catch {
+        /* already gone */
+      }
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish({ supportsList: false, sessions: [] }), timeoutMs);
+    const rpc = (method: string, params: unknown): Promise<any> =>
+      new Promise((res) => {
+        const id = nextId++;
+        pending.set(id, res);
+        proc.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      });
+    proc.on('error', () => finish({ supportsList: false, sessions: [] }));
+    proc.on('exit', () => finish({ supportsList: false, sessions: [] }));
+    proc.stdout!.on('data', (d: Buffer) => {
+      buf += d.toString('utf8');
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        let msg: any;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        // Only care about responses to our own requests; agent-initiated requests
+        // (fs/terminal) don't occur before a session exists, so we ignore them.
+        if (msg.id !== undefined && pending.has(msg.id)) {
+          const res = pending.get(msg.id)!;
+          pending.delete(msg.id);
+          res(msg.error !== undefined ? { __err: msg.error } : msg.result);
+        }
+      }
+    });
+    void (async () => {
+      const init = await rpc('initialize', {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+      });
+      if (done) return;
+      const supportsList = !!init?.agentCapabilities?.sessionCapabilities?.list;
+      if (!supportsList) {
+        finish({ supportsList: false, sessions: [] });
+        return;
+      }
+      // Omit cwd → global enumeration across every project (confirmed against the
+      // Claude Agent SDK: a falsy dir reads all of ~/.claude/projects, not cwd).
+      const res = await rpc('session/list', opts.cwd ? { cwd: opts.cwd } : {});
+      if (done) return;
+      const sessions: ProbedSession[] = ((res?.sessions as any[]) ?? [])
+        .filter((s) => s && s.sessionId && s.cwd)
+        .map((s) => ({ sessionId: s.sessionId, cwd: s.cwd, title: s.title ?? undefined, updatedAt: s.updatedAt ?? undefined }));
+      finish({ supportsList: true, sessions });
+    })().catch(() => finish({ supportsList: false, sessions: [] }));
+  });
 }

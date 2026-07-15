@@ -10,6 +10,7 @@ import { FocusArea } from './components/FocusArea';
 import { Inspector } from './components/Inspector';
 import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
+import { ResumePalette } from './components/ResumePalette';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -48,6 +49,7 @@ export function App() {
       <ConnectionBanner />
       {modal === 'spawn' && <SpawnPalette />}
       {modal === 'command' && <CommandPalette />}
+      {modal === 'resume' && <ResumePalette />}
     </>
   );
 }

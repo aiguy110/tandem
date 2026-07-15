@@ -28,7 +28,7 @@ cd ui && npm run dev                    # vite dev server
 cd daemon && npm install
 TANDEM_UI_DIR=../ui/dist npm run daemon # start the daemon
 
-# Daemon tests — eight de-risk suites, each against a throwaway TANDEM_HOME
+# Daemon tests — nine de-risk suites, each against a throwaway TANDEM_HOME
 cd daemon && npm test                   # = derisk:all, runs all suites below in sequence
 npm run derisk             # durability + ACP approval loop (single agent)
 npm run derisk:multi       # two agents: independent seq streams, queues, isolated teardown
@@ -38,6 +38,7 @@ npm run derisk:workspace   # git worktrees: provision, isolation, dirty-block, r
 npm run derisk:services    # ACP client services: fs round-trip, path-escape reject, terminal buffering, cancel
 npm run derisk:browser     # shared browser: laziness, broker CDP proxy, screencast, grab/hold/release, takeover MCP
 npm run derisk:integration # full-slice smoke: discover → spawn → prompt → approval → 2nd agent → reconnect replay → dirty-close teardown
+npm run derisk:resume      # resumable-session catalog + live/closed/external resume paths
 
 # Opt-in (NOT part of `npm test`): needs a self-hosted Steel (Docker). Skips+passes if unreachable.
 STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel # SteelDriver + broker against a live Steel (see docs/browser.md › Self-hosting Steel)
@@ -102,7 +103,7 @@ Self-hosted Daemon
 - `terminalHost.ts` — daemon-owned terminal execution for `terminal/create·output·wait_for_exit·kill·release`; prefers `node-pty`, degrades to `child_process` pipes. Dual buffer: the ACP-visible view honors `outputByteLimit` (truncate-from-start), while the daemon keeps a larger independent scrollback that persists past `terminal/release` and replays as `terminal_output` events.
 - `ptyAdapter.ts` — raw pty adapter (daemon owns the pty master directly, no ACP).
 - `browser/` — the shared-browser subsystem: `driver.ts` (`BrowserDriver` seam: `LocalChromiumDriver` real/tested, `SteelDriver` specced/untested), `broker.ts` (lazy per-agent CDP provisioning, gated CDP proxy enforcing the control-owner token), `sharedBrowser.ts` (daemon's own screencast/input CDP connection), `controlMcp.mjs` (Tandem-control MCP exposing `browser_request_takeover`), `mcpWiring.ts` (registers Playwright MCP + Tandem-control MCP at `session/new`).
-- `deriskAuth.ts` / `deriskWorkspace.ts` / `deriskServices.ts` / `deriskBrowser.ts` / `deriskMulti.ts` / `deriskRestart.ts` / `deriskIntegration.ts` / `derisk.ts` — the eight standalone de-risk suites (see Commands above); each is the primary regression test for its named subsystem, run against a throwaway `TANDEM_HOME`. `deriskSteel.ts` is a ninth, opt-in suite (needs a self-hosted Steel; not in `npm test`).
+- `deriskAuth.ts` / `deriskWorkspace.ts` / `deriskServices.ts` / `deriskBrowser.ts` / `deriskMulti.ts` / `deriskRestart.ts` / `deriskIntegration.ts` / `deriskResume.ts` / `derisk.ts` — the nine standalone de-risk suites (see Commands above); each is the primary regression test for its named subsystem, run against a throwaway `TANDEM_HOME`. `deriskSteel.ts` is a tenth, opt-in suite (needs a self-hosted Steel; not in `npm test`).
 
 ### UI (`ui/src/`)
 

@@ -3,14 +3,14 @@
 // start (D11). This is the daemon's source of truth for "which agents exist".
 
 import path from 'node:path';
-import { AcpAdapter } from './acpAdapter.ts';
+import { AcpAdapter, probeAcpSessions } from './acpAdapter.ts';
 import { PtyAdapter } from './ptyAdapter.ts';
 import { AgentSession } from './session.ts';
 import { WorkspaceManager, listRepos } from './workspace.ts';
 import { buildBrowserMcpServers, type BrowserWiring } from './browser/mcpWiring.ts';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
-import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, SpawnSpec } from './types.ts';
+import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnSpec } from './types.ts';
 
 // A short rotating word pool for auto-names: web-1, api-2, db-3, … (docs D9).
 const NAME_WORDS = ['web', 'api', 'db', 'cli', 'ui', 'svc', 'job', 'net'];
@@ -23,6 +23,12 @@ export class AgentRegistry {
   private cwdByAgent = new Map<string, string>();
   private workspace: WorkspaceManager;
   private counter: number;
+  // Short-TTL cache for the expensive half of the Resume catalog: enumerating
+  // *external* sessions means spawning each configured ACP agent to call
+  // session/list. The DB half is always rebuilt fresh (it's instant); only this
+  // probe result is memoized so rapid re-opens of the picker don't re-spawn agents.
+  private externalCache?: { at: number; external: ResumableSession[]; adapters: ResumeAdapterInfo[] };
+  private static EXTERNAL_TTL_MS = 15_000;
 
   constructor(private db: Db, private config: Config, private browser?: BrowserWiring) {
     // Continue the name counter past whatever the DB already contains so restored
@@ -175,6 +181,122 @@ export class AgentRegistry {
     // available to clients from the persisted event log).
     await session.start({ cwd, resumeSessionId: rec.acpSessionId ?? undefined, mcpServers: this.mcpServersFor(rec.id) });
     if (session.acpSessionId && session.acpSessionId !== rec.acpSessionId) this.db.setSessionId(rec.id, session.acpSessionId);
+  }
+
+  // ---- Resume Session (docs/spawn-and-workspaces.md Resume) ----------------
+  // The catalog behind the Resume picker: every session Tandem ever spawned
+  // (from the DB, live or closed) unioned with sessions discovered via each ACP
+  // agent's `session/list`, deduped by sessionId (the richer Tandem row wins).
+  // `adapters` reports which agent types could be enumerated so the UI can flag a
+  // partial catalog (e.g. pty and any agent without the list capability).
+  async resumeCatalog(): Promise<ResumeCatalog> {
+    // --- Tandem-owned half (instant, always fresh) ---
+    const seen = new Set<string>();
+    const tandem: ResumableSession[] = [];
+    for (const rec of this.db.allAgents()) {
+      if (rec.spec.adapter !== 'acp' || !rec.acpSessionId || seen.has(rec.acpSessionId)) continue;
+      seen.add(rec.acpSessionId);
+      const live = this.sessions.get(rec.id);
+      const ws = rec.spec.workspace;
+      tandem.push({
+        sessionId: rec.acpSessionId,
+        source: 'tandem',
+        agent: rec.spec.agent ?? this.config.acp.default,
+        adapter: 'acp',
+        cwd: rec.cwd,
+        title: rec.name,
+        updatedAt: new Date(rec.closedAt ?? rec.createdAt).toISOString(),
+        agentId: rec.id,
+        agentName: rec.name,
+        branch: ws.kind === 'worktree' ? ws.branch ?? `tandem/${rec.name}` : undefined,
+        live: !!live,
+        closed: rec.closedAt != null,
+        status: live?.status,
+      });
+    }
+
+    // --- External half (spawns agents to enumerate; cached briefly) ---
+    const { external, adapters } = await this.externalSessions(seen);
+
+    const sessions = [...tandem, ...external].sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+    return { sessions, adapters };
+  }
+
+  private async externalSessions(seen: Set<string>): Promise<{ external: ResumableSession[]; adapters: ResumeAdapterInfo[] }> {
+    const now = Date.now();
+    if (!this.externalCache || now - this.externalCache.at > AgentRegistry.EXTERNAL_TTL_MS) {
+      // Probe each distinct configured ACP agent (or the single override the derisk
+      // suites force). Runs in parallel; each probe self-limits with a timeout.
+      const entries: [string, { cmd: string; args: string[] }][] = this.config.acp.override
+        ? [[this.config.acp.default, this.config.acp.override]]
+        : Object.entries(this.config.acp.agents);
+      const external: ResumableSession[] = [];
+      const adapters: ResumeAdapterInfo[] = [];
+      await Promise.all(
+        entries.map(async ([agent, launch]) => {
+          const probe = await probeAcpSessions(launch).catch(() => ({ supportsList: false, sessions: [] as const }));
+          adapters.push({ agent, supportsList: probe.supportsList });
+          for (const s of probe.sessions) {
+            if (this.externalSeenGuard(external, s.sessionId)) continue;
+            external.push({ sessionId: s.sessionId, source: 'external', agent, adapter: 'acp', cwd: s.cwd, title: s.title ?? undefined, updatedAt: s.updatedAt ?? undefined });
+          }
+        }),
+      );
+      // The pty adapter has no session concept — surface it so the picker can
+      // explain that raw-terminal agents are never enumerable.
+      adapters.push({ agent: 'pty (raw terminal)', supportsList: false });
+      this.externalCache = { at: now, external, adapters };
+    }
+    // Drop any external entry that a Tandem row already covers (richer wins).
+    const external = this.externalCache.external.filter((s) => !seen.has(s.sessionId));
+    return { external, adapters: this.externalCache.adapters };
+  }
+  // Dedupe within a single external probe pass (two agent types can't really share
+  // a sessionId, but be defensive).
+  private externalSeenGuard(list: ResumableSession[], sessionId: string): boolean {
+    return list.some((s) => s.sessionId === sessionId);
+  }
+
+  // Resume a session by its ACP sessionId. Three cases:
+  //   1. already a live agent   → return it (client just focuses).
+  //   2. a Tandem-owned row     → reopen + restore (reattaches the worktree from
+  //                               its branch, resumes via session/load; the intact
+  //                               event log means replay stays suppressed).
+  //   3. external               → spawn a fresh agent bound to that session in the
+  //                               reported cwd, capturing the replayed history.
+  async resume(sessionId: string, hint?: { agent?: string; cwd?: string }): Promise<AgentSession> {
+    for (const s of this.sessions.values()) if (s.acpSessionId === sessionId) return s;
+
+    const rec = this.db.getAgentByAcpSessionId(sessionId);
+    if (rec) {
+      this.db.reopenAgent(rec.id);
+      await this.restoreOne({ ...rec, closedAt: null, status: 'idle' });
+      const s = this.sessions.get(rec.id);
+      if (!s) throw new Error(`resume: agent ${rec.id} failed to restore`);
+      return s;
+    }
+
+    if (!hint?.agent || !hint?.cwd) throw new Error('resume: unknown session — agent and cwd are required to resume an external session');
+    return this.spawnResumed(hint.agent, hint.cwd, sessionId);
+  }
+
+  // Spawn a brand-new Tandem agent bound to an existing (external) ACP session.
+  private async spawnResumed(agent: string, cwd: string, sessionId: string): Promise<AgentSession> {
+    const name = this.uniqueName(this.autoName());
+    const id = name;
+    const spec: SpawnSpec = { adapter: 'acp', agent, workspace: { kind: 'existing', cwd } };
+    const { cwd: resolvedCwd, workspace } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
+    const resolvedSpec: SpawnSpec = { ...spec, name, workspace };
+    const adapter = this.makeAdapter(id, resolvedSpec);
+    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db);
+    const rec: AgentRecord = { id, name, spec: resolvedSpec, cwd: resolvedCwd, acpSessionId: sessionId, status: 'idle', createdAt: Date.now(), closedAt: null };
+    this.db.upsertAgent(rec);
+    this.wireStatus(session);
+    this.sessions.set(id, session);
+    this.cwdByAgent.set(id, resolvedCwd);
+    await session.start({ cwd: resolvedCwd, resumeSessionId: sessionId, captureReplay: true, mcpServers: this.mcpServersFor(id) });
+    if (session.acpSessionId) this.db.setSessionId(id, session.acpSessionId);
+    return session;
   }
 
   // Persist status transitions so the registry row and the event log agree.
