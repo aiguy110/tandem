@@ -54,6 +54,9 @@ export class AgentRegistry {
   list(): AgentSession[] {
     return [...this.sessions.values()];
   }
+  activeTurnCount(): number {
+    return [...this.sessions.values()].filter((session) => session.isMidTurn()).length;
+  }
   // Exposed for diagnostics/de-risk: the exact executable a handoff will spawn.
   resumeCliCommand(agentId: string): string {
     const session = this.sessions.get(agentId);

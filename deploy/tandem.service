@@ -12,7 +12,8 @@ Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/bin:/bin
 Environment=TANDEM_BROWSER_DRIVER=steel
 Environment=STEEL_BASE_URL=http://localhost:3000
 ExecStart=%h/Projects/tandem/start-dev-server.sh
-Restart=on-failure
+# Deferred redeploys intentionally exit cleanly after all active turns finish.
+Restart=always
 RestartSec=5
 
 [Install]

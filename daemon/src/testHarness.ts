@@ -33,7 +33,7 @@ export interface Harness {
  *  shared-browser broker is always wired (LocalChromiumDriver), but browser MCP
  *  registration defaults OFF so the mock-agent suites stay clean; pass
  *  `{ browserMcp: true }` to exercise it. */
-export async function makeHarness(port: number, opts: { browserMcp?: boolean } = {}): Promise<Harness> {
+export async function makeHarness(port: number, opts: { browserMcp?: boolean; onShutdownRequested?: () => void } = {}): Promise<Harness> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-test-'));
   process.env.TANDEM_HOME = home;
   process.env.TANDEM_PORT = String(port);
@@ -49,7 +49,14 @@ export async function makeHarness(port: number, opts: { browserMcp?: boolean } =
   await broker.start();
   const registry = new AgentRegistry(db, config, { broker, controlUrl: `http://127.0.0.1:${port}`, token });
   await registry.restoreAll();
-  const server = await startServer(registry, { host: '127.0.0.1', port, token, bootstrapUrl: `http://127.0.0.1:${port}/#t=${token}`, broker });
+  const server = await startServer(registry, {
+    host: '127.0.0.1',
+    port,
+    token,
+    bootstrapUrl: `http://127.0.0.1:${port}/#t=${token}`,
+    broker,
+    onShutdownRequested: opts.onShutdownRequested,
+  });
   return {
     port,
     token,

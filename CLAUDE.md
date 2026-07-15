@@ -33,6 +33,7 @@ cd daemon && npm test                   # = derisk:all, runs all suites below in
 npm run derisk             # durability + ACP approval loop (single agent)
 npm run derisk:multi       # two agents: independent seq streams, queues, isolated teardown
 npm run derisk:restart     # persist → stop → restart → restore from SQLite + session/load
+npm run derisk:deferred-restart # wait for active turns, then cleanly stop for systemd restart
 npm run derisk:auth        # no/bad token → 4401; valid token → connects
 npm run derisk:workspace   # git worktrees: provision, isolation, dirty-block, restart-recreate, list_dirs, collisions
 npm run derisk:services    # ACP client services: fs round-trip, path-escape reject, terminal buffering, cancel

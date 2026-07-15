@@ -104,6 +104,10 @@ export class AgentSession {
     return [...this.approvals.values()];
   }
 
+  isMidTurn(): boolean {
+    return this.activePrompt !== undefined;
+  }
+
   prompt(text: string): Promise<string> {
     if (this.controlMode !== 'transcript') return Promise.reject(new Error('agent session is controlled by the terminal'));
     // Log the human turn first so it lands in the transcript ahead of the agent's

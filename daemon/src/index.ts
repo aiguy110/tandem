@@ -37,13 +37,27 @@ async function main() {
 
   const displayHost = config.host === '0.0.0.0' ? '127.0.0.1' : config.host;
   const bootstrapUrl = `http://${displayHost}:${config.port}/#t=${token}`;
-  const server: Server = await startServer(registry, {
+  let server: Server | undefined;
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    // Shutdown ≠ close: agents stay live in the DB so the next start restores them.
+    await server?.close();
+    await registry.disposeAll();
+    await broker.stop();
+    db.close();
+    process.exit(0);
+  };
+
+  server = await startServer(registry, {
     host: config.host,
     port: config.port,
     token,
     uiDir: config.uiDir,
     bootstrapUrl,
     broker,
+    onShutdownRequested: () => void shutdown(),
   });
 
   console.log(`tandem daemon · http+ws on ${config.host}:${config.port} · home ${config.home}`);
@@ -53,17 +67,6 @@ async function main() {
   // A machine-readable ready line for tooling/tests.
   console.log(`TANDEM_READY port=${config.port} token=${token}`);
 
-  let shuttingDown = false;
-  const shutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    // Shutdown ≠ close: agents stay live in the DB so the next start restores them.
-    await server.close();
-    await registry.disposeAll();
-    await broker.stop();
-    db.close();
-    process.exit(0);
-  };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }

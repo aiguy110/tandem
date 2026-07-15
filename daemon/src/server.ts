@@ -53,7 +53,7 @@ export interface Server {
 
 export function startServer(
   registry: AgentRegistry,
-  opts: { host: string; port: number; token: string; uiDir?: string; bootstrapUrl: string; broker?: BrowserBroker },
+  opts: { host: string; port: number; token: string; uiDir?: string; bootstrapUrl: string; broker?: BrowserBroker; onShutdownRequested?: () => void },
 ): Promise<Server> {
   const broker = opts.broker;
   // ---- one connection's per-agent subscriptions ----
@@ -64,6 +64,23 @@ export function startServer(
   // wheel (broker.release resolves broker.requestTakeover).
   const takeovers = new Map<string, { agentId: string; resolved: boolean }>();
   let takeoverSeq = 0;
+  let shutdownRequested = false;
+  let shutdownPoll: NodeJS.Timeout | undefined;
+
+  const requestShutdownWhenIdle = (): { activeTurns: number; alreadyRequested: boolean } => {
+    const alreadyRequested = shutdownRequested;
+    shutdownRequested = true;
+    const activeTurns = registry.activeTurnCount();
+    if (!shutdownPoll) {
+      shutdownPoll = setInterval(() => {
+        if (registry.activeTurnCount() !== 0) return;
+        clearInterval(shutdownPoll);
+        shutdownPoll = undefined;
+        opts.onShutdownRequested?.();
+      }, 250);
+    }
+    return { activeTurns, alreadyRequested };
+  };
 
   class Conn {
     subs = new Map<string, Sub>();
@@ -98,6 +115,12 @@ export function startServer(
     const json = (code: number, body: unknown): void => {
       res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(body));
     };
+
+    if (url.pathname === '/internal/shutdown-after-turns' && req.method === 'POST') {
+      const result = requestShutdownWhenIdle();
+      res.writeHead(200, { 'content-type': 'text/plain' }).end(`${result.activeTurns} ${result.alreadyRequested ? 1 : 0}\n`);
+      return;
+    }
 
     if (url.pathname === '/internal/browser/takeover' && req.method === 'POST') {
       const agentId = url.searchParams.get('agentId') ?? '';
@@ -377,6 +400,7 @@ export function startServer(
         close: () =>
           new Promise<void>((res) => {
             clearInterval(gitStatePoll);
+            if (shutdownPoll) clearInterval(shutdownPoll);
             for (const c of connections) c.ws.terminate();
             wss.close(() => httpServer.close(() => res()));
           }),
