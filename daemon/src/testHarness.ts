@@ -82,6 +82,8 @@ export interface Frame {
   meta?: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number };
   active?: boolean;
   controlOwner?: 'agent' | 'user';
+  agents?: any[];
+  catalog?: any;
 }
 
 /** Print a check table and return whether all passed (shared by all derisk scripts). */

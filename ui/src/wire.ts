@@ -85,6 +85,33 @@ export interface AgentSummary {
   pendingApprovals: number;
 }
 
+// A resumable coding-agent session for the Resume picker — either a session
+// Tandem spawned ('tandem', with full linkage) or one discovered via an ACP
+// agent's session/list ('external'). `sessionId` == the agent's CLI --resume id.
+export interface ResumableSession {
+  sessionId: string;
+  source: 'tandem' | 'external';
+  agent: string;
+  adapter: 'acp' | 'pty';
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+  agentId?: string;
+  agentName?: string;
+  branch?: string;
+  live?: boolean;
+  closed?: boolean;
+  status?: AgentStatus;
+}
+export interface ResumeAdapterInfo {
+  agent: string;
+  supportsList: boolean;
+}
+export interface ResumeCatalog {
+  sessions: ResumableSession[];
+  adapters: ResumeAdapterInfo[];
+}
+
 export type Workspace =
   | { kind: 'worktree'; repo: string; branch?: string; baseRef?: string }
   | { kind: 'existing'; cwd: string };
@@ -114,7 +141,9 @@ export type ClientMsg =
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; corrId?: string }
-  | { t: 'list_agents'; corrId?: string };
+  | { t: 'list_agents'; corrId?: string }
+  | { t: 'list_sessions'; corrId?: string }
+  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string };
 
 export interface BrowserInputWire {
   kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';
@@ -138,5 +167,6 @@ export type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
+  | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }
   | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; agentId: string; active: boolean; controlOwner: 'agent' | 'user' };

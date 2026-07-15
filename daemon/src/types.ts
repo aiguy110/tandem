@@ -96,6 +96,12 @@ export interface SpawnOpts {
   // Restore path: when set and the agent advertises the loadSession capability,
   // the adapter resumes this ACP session (session/load) instead of session/new.
   resumeSessionId?: string;
+  // When resuming: capture the agent's replayed history (session/load re-streams
+  // the whole prior conversation) into the event log instead of suppressing it.
+  // Restore leaves this false — the log already holds that history under the same
+  // agentId, so re-emitting would duplicate it. A Resume of an *external* session
+  // (no prior Tandem log) sets it true so the transcript is populated.
+  captureReplay?: boolean;
   // MCP servers to register at session/new (Phase 5: Playwright MCP + the
   // Tandem-control MCP). Empty/omitted = none.
   mcpServers?: McpServerSpec[];
@@ -216,6 +222,45 @@ export interface AgentRecord {
   closedAt: number | null;
 }
 
+// ---- Resume Session catalog (docs/spawn-and-workspaces.md Resume) --------
+// A resumable coding-agent session, from either of two sources:
+//   'tandem'   — an agent Tandem spawned (a row in `agents`, live or closed);
+//                carries the full Tandem linkage (agentId/name/branch/status).
+//   'external' — a session Tandem never spawned, discovered by asking an ACP
+//                agent that supports `session/list` (capability-gated). Only
+//                sessionId/cwd/title/updatedAt are known.
+// Every entry is resumable via the agent's `session/load` — `sessionId` is the
+// same id its CLI resumes (e.g. `claude --resume <sessionId>`).
+export interface ResumableSession {
+  sessionId: string;
+  source: 'tandem' | 'external';
+  agent: string; // ACP agent type (claude | codex | pi | …)
+  adapter: 'acp' | 'pty';
+  cwd: string;
+  title?: string;
+  updatedAt?: string; // ISO 8601, best-effort
+  // Tandem linkage — present only for source === 'tandem'.
+  agentId?: string;
+  agentName?: string;
+  branch?: string;
+  live?: boolean; // currently a running Tandem agent
+  closed?: boolean; // a closed Tandem agent (torn-down checkout, kept branch)
+  status?: AgentStatus;
+}
+
+// Per-adapter enumeration capability, so the Resume UI can flag that some
+// configured adapters can't be listed (their externally-run sessions won't
+// appear — only ones Tandem itself spawned).
+export interface ResumeAdapterInfo {
+  agent: string;
+  supportsList: boolean;
+}
+
+export interface ResumeCatalog {
+  sessions: ResumableSession[];
+  adapters: ResumeAdapterInfo[];
+}
+
 // ---- Repo discovery (Phase 2, docs/spawn-and-workspaces.md quick-spawn) --
 // Returned by `list_dirs` for the spawn palette's directory list.
 export interface RepoInfo {
@@ -265,6 +310,11 @@ export interface AgentSummary {
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'list_agents'; corrId?: string } // rail discovery: which agents exist + their metadata
+  | { t: 'list_sessions'; corrId?: string } // Resume picker: the resumable-session catalog
+  // Resume a session (Resume picker). For a Tandem-owned session only sessionId
+  // is needed; for an external one, `agent`+`cwd` (from the catalog) say how/where
+  // to relaunch it.
+  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; agentId: string; text: string; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
@@ -309,6 +359,7 @@ export type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] } // reply to list_agents
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] } // reply to list_dirs
+  | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog } // reply to list_sessions
   // Phase 5 browser channel. `browser_frame` is a CDP screencast frame (JSON +
   // base64; real binary framing is a future optimization). `browser_state`
   // announces lifecycle + control-owner so the UI knows when to show the pane.

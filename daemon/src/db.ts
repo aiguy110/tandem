@@ -33,7 +33,10 @@ export class Db {
   private sUpdateSession: Database.Statement;
   private sCloseAgent: Database.Statement;
   private sLiveAgents: Database.Statement;
+  private sAllAgents: Database.Statement;
   private sGetAgent: Database.Statement;
+  private sGetAgentBySession: Database.Statement;
+  private sReopenAgent: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -79,7 +82,10 @@ export class Db {
     this.sUpdateSession = this.db.prepare('UPDATE agents SET acpSessionId = ? WHERE id = ?');
     this.sCloseAgent = this.db.prepare("UPDATE agents SET status = 'idle', closedAt = ? WHERE id = ?");
     this.sLiveAgents = this.db.prepare('SELECT * FROM agents WHERE closedAt IS NULL ORDER BY createdAt');
+    this.sAllAgents = this.db.prepare('SELECT * FROM agents ORDER BY COALESCE(closedAt, createdAt) DESC');
     this.sGetAgent = this.db.prepare('SELECT * FROM agents WHERE id = ?');
+    this.sGetAgentBySession = this.db.prepare('SELECT * FROM agents WHERE acpSessionId = ? ORDER BY createdAt DESC LIMIT 1');
+    this.sReopenAgent = this.db.prepare("UPDATE agents SET closedAt = NULL, status = 'idle' WHERE id = ?");
   }
 
   // ---- events ----
@@ -125,6 +131,22 @@ export class Db {
   }
   liveAgents(): AgentRecord[] {
     return (this.sLiveAgents.all() as any[]).map(rowToRecord);
+  }
+  // Every agent ever created (live + closed), newest-activity first — the Resume
+  // picker's Tandem-owned catalog.
+  allAgents(): AgentRecord[] {
+    return (this.sAllAgents.all() as any[]).map(rowToRecord);
+  }
+  // Most-recent agent row bound to an ACP sessionId, if any (Resume: is this a
+  // session Tandem already knows about?).
+  getAgentByAcpSessionId(sessionId: string): AgentRecord | undefined {
+    const r = this.sGetAgentBySession.get(sessionId) as any;
+    return r ? rowToRecord(r) : undefined;
+  }
+  // Un-close a previously torn-down agent so restore can bring it back (Resume of
+  // a Tandem-owned session).
+  reopenAgent(id: string): void {
+    this.sReopenAgent.run(id);
   }
   // Highest `-N` suffix among ALL agent ids ever created (including closed
   // ones still in the DB). Names/ids double as the stable key, so the

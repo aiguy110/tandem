@@ -17,6 +17,7 @@ export interface KeymapDefault {
 export const DEFAULT_BINDINGS: Record<string, Binding> = {
   'agent.spawn': 'c',
   'agent.spawn.sibling': 'shift+c',
+  'agent.resume': 'shift+r',
   'palette.open': 'mod+k',
   'nav.goToAgent': 'g a',
   'nav.next': 'j',

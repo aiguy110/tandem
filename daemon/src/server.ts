@@ -252,6 +252,19 @@ export function startServer(
         conn.send({ t: 'agents', corrId: m.corrId, agents: await registry.summaries() });
         break;
       }
+      case 'list_sessions': {
+        conn.send({ t: 'sessions', corrId: m.corrId, catalog: await registry.resumeCatalog() });
+        break;
+      }
+      case 'resume_session': {
+        const session = await registry.resume(m.sessionId, { agent: m.agent, cwd: m.cwd });
+        // A resumed Tandem agent may be new to some clients — let every connection
+        // refresh its rail, then ack the initiator with the (possibly new) agentId.
+        const agents = await registry.summaries();
+        for (const c of connections) c.send({ t: 'agents', agents });
+        conn.send({ t: 'ack', corrId: m.corrId, agentId: session.id });
+        break;
+      }
       case 'browser_control': {
         if (!broker) return conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId, error: 'browser subsystem disabled' });
         if (!registry.get(m.agentId)) return conn.send({ t: 'ack', corrId: m.corrId, agentId: m.agentId, error: `no such agent: ${m.agentId}` });

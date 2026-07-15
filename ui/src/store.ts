@@ -15,6 +15,8 @@ import type {
   Channel,
   ClientMsg,
   RepoInfo,
+  ResumableSession,
+  ResumeCatalog,
   ServerMsg,
   SessionConfigOption,
   SessionModeState,
@@ -67,7 +69,7 @@ export interface AgentView {
   commands: SlashCommand[];
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume';
 
 export interface AckResult {
   agentId?: string;
@@ -84,6 +86,10 @@ interface StoreState {
   modal: ModalKind;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
+  // Resume picker: the resumable-session catalog (null until first fetched) and a
+  // loading flag while the daemon probes agents for external sessions.
+  resumeCatalog: ResumeCatalog | null;
+  resumeLoading: boolean;
   // Unsent prompt drafts, keyed by agentId. Lives here (not in the pane's local
   // state) so a draft survives tab switches and agent switches, which remount the
   // TranscriptPane.
@@ -108,6 +114,8 @@ interface StoreState {
   toggleInspector: () => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
+  refreshSessions: () => void;
+  resumeSession: (s: ResumableSession) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   prompt: (agentId: string, text: string) => void;
   setDraft: (agentId: string, text: string) => void;
@@ -197,6 +205,9 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'dirs':
         set({ dirs: msg.dirs });
+        return;
+      case 'sessions':
+        set({ resumeCatalog: msg.catalog, resumeLoading: false });
         return;
       case 'browser_frame':
         // Frames bypass the reactive store (browserHub) to avoid re-render storms.
@@ -308,6 +319,8 @@ export const useStore = create<StoreState>((set, get) => {
     modal: 'none',
     inspectorOpen: false,
     dirs: [],
+    resumeCatalog: null,
+    resumeLoading: false,
     drafts: {},
     browserSubAgent: null,
     agentsRailCollapsed: isNarrowViewport(),
@@ -342,11 +355,34 @@ export const useStore = create<StoreState>((set, get) => {
     toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {
       if (m === 'spawn') get().refreshDirs();
+      if (m === 'resume') get().refreshSessions();
       set({ modal: m });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
+    refreshSessions: () => {
+      set({ resumeLoading: true });
+      client.send({ t: 'list_sessions' });
+    },
+    resumeSession: (session) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (r) => {
+          if (r.agentId && !r.error) {
+            get().refreshAgents();
+            set({ focusedId: r.agentId, modal: 'none', pane: 'transcript' });
+          }
+          resolve(r);
+        });
+        client.send({
+          t: 'resume_session',
+          sessionId: session.sessionId,
+          agent: session.source === 'external' ? session.agent : undefined,
+          cwd: session.source === 'external' ? session.cwd : undefined,
+          corrId,
+        });
+      }),
     spawn: (spec) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();

@@ -5,6 +5,18 @@ keystrokes**: sensible defaults, progressive disclosure, and heavy keyboard cont
 No sandboxing yet — agents run in **working directories on the host** (git worktrees where
 possible).
 
+## Resume Session
+
+The **Resume session…** command (default binding `R`) opens a fuzzy picker over every live
+or closed ACP session persisted by Tandem plus external sessions returned by configured
+ACP adapters that advertise `sessionCapabilities.list`.
+
+Entries are deduplicated by ACP session id. Choosing a live entry focuses it; choosing a
+closed Tandem entry recreates its worktree when necessary and loads the stored session;
+choosing an external entry creates a Tandem agent in its reported working directory and
+captures the loaded transcript. External discovery is best-effort, and adapters without
+ACP session listing are identified in the picker.
+
 ## SpawnSpec
 
 An agent is defined by a small spec; almost everything is defaulted or inferred:
