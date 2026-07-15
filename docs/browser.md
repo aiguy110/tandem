@@ -127,18 +127,43 @@ provisions/releases per-agent Chrome sessions over a CDP endpoint. Run one with 
 
 ```bash
 docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
-  ghcr.io/steel-dev/steel-browser:latest
+  -e CHROME_HEADLESS=false -e DISPLAY=:10 \
+  --entrypoint /bin/sh ghcr.io/steel-dev/steel-browser:latest \
+  -c 'Xvfb :10 -screen 0 1920x1080x24 -nolisten tcp & exec /app/api/entrypoint.sh'
 ```
 
 - **Ports:** `3000` = REST API **and** the browser-level CDP websocket (`ws://host:3000/`);
   `9223` = Steel's CDP/debugger HTTP; UI at `http://localhost:3000/ui`.
 - **`--shm-size=2g`** — Chrome exhausts the default 64 MB `/dev/shm` and dies with SIGTRAP.
+- **Headful + Xvfb** — removes Chrome's explicit headless identity while retaining a virtual
+  display suitable for a server. Setting `CHROME_HEADLESS=false` alone is insufficient: the
+  current image contains Xvfb but does not start it, so Chrome otherwise fails with
+  `Missing X server or $DISPLAY`.
 - Point Tandem at it:
   ```bash
   TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
   ```
   (For Steel Cloud / an authed deployment, also set `STEEL_API_KEY`.)
 - Verify: `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
+
+Tandem passes optional Steel session settings from `STEEL_SESSION_OPTIONS`. For the bundled
+Chromium 149 image, a practical anti-detection baseline is:
+
+```bash
+export STEEL_SESSION_OPTIONS='{
+  "userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+  "dimensions":{"width":1365,"height":768},
+  "persistProfile":true
+}'
+```
+
+Keep the Chrome major version aligned with the image: a mismatched UA and client-hint
+fingerprint is more detectable than the default. Tandem remembers a returned `profileId`
+per agent and supplies it on that agent's next Steel session. Self-hosted Steel has no
+Profiles API and ignores `persistProfile`; its live session still retains cookies until the
+agent is closed. Steel Cloud can additionally accept `deviceConfig`, `stealthConfig`,
+`solveCaptcha`, and `useProxy` through the same JSON object. Interaction pacing is controlled
+by the agent/Playwright workflow, not by Steel's session API.
 
 **How the CDP URL is derived (why `SteelDriver` doesn't just use `/json/version`):** Steel's
 `/json/version` (port 9223) advertises a *port-less* `ws://localhost/devtools/...` that
