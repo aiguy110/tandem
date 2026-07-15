@@ -6,6 +6,8 @@ import type { RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
 const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
+const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
+const AGENT_TYPES = ['claude', 'codex', 'pi'] as const;
 
 type SavedSettings = { model?: string; effort?: string; permission?: string };
 
@@ -25,6 +27,21 @@ function saveSpawnSettings(agent: string, project: string, value: SavedSettings)
     const all = JSON.parse(localStorage.getItem(SPAWN_SETTINGS_KEY) || '{}') as Record<string, SavedSettings>;
     all[settingsKey(agent, project)] = value;
     localStorage.setItem(SPAWN_SETTINGS_KEY, JSON.stringify(all));
+  } catch { /* localStorage unavailable */ }
+}
+
+function loadProjectAgent(project: string): string {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPAWN_AGENT_KEY) || '{}') as Record<string, string>;
+    return AGENT_TYPES.includes(all[project] as (typeof AGENT_TYPES)[number]) ? all[project] : 'claude';
+  } catch { return 'claude'; }
+}
+
+function saveProjectAgent(project: string, agent: string) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPAWN_AGENT_KEY) || '{}') as Record<string, string>;
+    all[project] = agent;
+    localStorage.setItem(SPAWN_AGENT_KEY, JSON.stringify(all));
   } catch { /* localStorage unavailable */ }
 }
 
@@ -93,6 +110,9 @@ export function SpawnPalette() {
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
   useEffect(() => {
+    if (selectedDir) setAgent(loadProjectAgent(selectedDir.path));
+  }, [selectedDir?.path]);
+  useEffect(() => {
     if (!selectedDir || adapter !== 'acp') return;
     const saved = loadSpawnSettings(agent, selectedDir.path);
     setModel(saved.model ?? '');
@@ -152,7 +172,10 @@ export function SpawnPalette() {
         },
       } : undefined,
     };
-    if (adapter === 'acp') saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
+    if (adapter === 'acp') {
+      saveProjectAgent(dir.path, agent);
+      saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
+    }
     const r = await spawn(spec);
     setBusy(false);
     if (r.error) {
@@ -245,7 +268,11 @@ export function SpawnPalette() {
               <>
                 <label>
                   Agent
-                  <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+                  <select value={agent} onChange={(e) => {
+                    const next = e.target.value;
+                    setAgent(next);
+                    if (selectedDir) saveProjectAgent(selectedDir.path, next);
+                  }}>
                     <option value="claude">claude</option>
                     <option value="codex">codex</option>
                     <option value="pi">pi</option>
