@@ -349,11 +349,16 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .adv { padding: 10px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .modal .adv label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); }
 .modal .adv input, .modal .adv select { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
-.confirm-modal { width: min(420px, 92vw); }
+.confirm-modal { width: min(560px, 92vw); }
 .confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
+.confirm-modal section { margin-top: 14px; }
+.confirm-modal pre { max-height: 150px; overflow: auto; margin: 5px 0 0; padding: 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); white-space: pre-wrap; }
+.delete-worktree-option { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 .confirm-modal .foot { justify-content: flex-end; }
 .btn.danger { background: var(--err-soft); border-color: var(--err); color: var(--err); }
 .btn.danger:hover { background: var(--err); color: var(--surface); }
+.btn.success { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.rail-close-error { margin: 8px; padding: 7px; border: 1px solid var(--err); border-radius: var(--r-sm); color: var(--err); background: var(--err-soft); font-size: var(--fs-xs); }
 .modal-err { padding: 8px 16px; color: var(--err); background: var(--err-soft); font-size: var(--fs-sm); border-top: 1px solid var(--err); }
 
 /* ---- token screen ---- */

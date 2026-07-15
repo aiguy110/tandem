@@ -148,6 +148,17 @@ export class WorkspaceManager {
     }
   }
 
+  /** Exact details shown before closing an agent with work that may be lost. */
+  async closePreview(cwd: string, workspace: Workspace): Promise<{ kind: 'worktree' | 'existing'; uncommitted: string; unmerged: string }> {
+    const uncommitted = await runGit(cwd, ['status', '--short']);
+    let unmerged = '';
+    if (workspace.kind === 'worktree') {
+      const repoHead = await runGit(workspace.repo, ['rev-parse', 'HEAD']);
+      unmerged = await runGit(cwd, ['log', '--oneline', `${repoHead}..HEAD`]);
+    }
+    return { kind: workspace.kind, uncommitted, unmerged };
+  }
+
   /**
    * Teardown (docs D8): worktree case removes the checkout but keeps the
    * branch; blocks on uncommitted changes unless `force`. Existing-dir case

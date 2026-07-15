@@ -96,7 +96,7 @@ function rpc(ws: WebSocket, msg: any): Promise<Frame> {
     const corrId = msg.corrId ?? Math.random().toString(36).slice(2);
     const onMsg = (raw: any) => {
       const f = JSON.parse(raw.toString()) as Frame;
-      if (f.corrId === corrId && (f.t === 'ack' || f.t === 'dirs')) {
+      if (f.corrId === corrId && (f.t === 'ack' || f.t === 'dirs' || f.t === 'close_preview')) {
         ws.off('message', onMsg);
         resolve(f);
       }
@@ -153,6 +153,11 @@ async function main() {
   const independentPaths = !!idA && !!idB && idA !== idB && path.resolve(pathA) !== path.resolve(pathB);
   fs.writeFileSync(path.join(pathA, 'only-in-a.txt'), 'a\n');
   const isolated = fs.existsSync(path.join(pathA, 'only-in-a.txt')) && !fs.existsSync(path.join(pathB, 'only-in-a.txt'));
+  git(pathA, ['add', 'only-in-a.txt']);
+  git(pathA, ['commit', '-m', 'agent work']);
+  fs.appendFileSync(path.join(pathA, 'only-in-a.txt'), 'uncommitted\n');
+  const closePreview = await rpc(ws, { t: 'get_close_preview', agentId: idA });
+  const previewOk = closePreview.preview?.uncommitted.includes('only-in-a.txt') && closePreview.preview?.unmerged.includes('agent work');
 
   // ---- (f) list_dirs, while wt-a/wt-b are still live so hasLiveAgent=true ----
   const dirsFrame = await rpc(ws, { t: 'list_dirs' });
@@ -184,6 +189,16 @@ async function main() {
   const cleanRemoved = !closeClean.error && !fs.existsSync(pathB);
   const branchBKeptAfterClean = git(repo, ['branch', '--list', 'tandem/wt-b']).includes('tandem/wt-b');
 
+  // ---- (d2) confirmed close can keep the checkout, even when dirty ----
+  const spawnKeep = await rpc(ws, { t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo }, name: 'wt-keep' } });
+  const pathKeep = pathFor('wt-keep');
+  await sleep(150);
+  fs.writeFileSync(path.join(pathKeep, 'keep-me.txt'), 'still here\n');
+  const closeKeep = await rpc(ws, { t: 'close_agent', agentId: spawnKeep.agentId, deleteWorktree: false });
+  await sleep(100);
+  const checkoutKept = !closeKeep.error && fs.existsSync(path.join(pathKeep, 'keep-me.txt'));
+  git(repo, ['worktree', 'remove', '--force', pathKeep]);
+
   // ---- (e) restart: spawn wt-c, delete its worktree dir, restart, expect recreation ----
   const spawnC = await rpc(ws, { t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo }, name: 'wt-c' } });
   const pathC = pathFor('wt-c');
@@ -208,9 +223,11 @@ async function main() {
     ["(a) repo's original working tree untouched", repoUntouched, `repo status clean, still on main @ ${originalHead.slice(0, 8)}`],
     ['(b) two agents on one repo get independent worktree paths', independentPaths && worktreeExistsB, `A=${pathA} B=${pathB}`],
     ['(b) a file in one worktree is invisible in the other', isolated, 'only-in-a.txt present in A, absent in B'],
+    ['(b) close preview includes uncommitted status and one-line unmerged commits', !!previewOk, JSON.stringify(closePreview.preview)],
     ['(c) close with uncommitted changes refused (dirty_worktree)', dirtyRefused, `error="${closeDirtyNoForce.error}"`],
     ['(c) force:true removes the worktree, keeps the branch', forcedRemoved && branchAKeptAfterForce, `removed=${forcedRemoved} branchKept=${branchAKeptAfterForce}`],
     ['(d) clean close removes the worktree, keeps the branch', cleanRemoved && branchBKeptAfterClean, `removed=${cleanRemoved} branchKept=${branchBKeptAfterClean}`],
+    ['(d) close with deleteWorktree:false preserves a dirty checkout', checkoutKept, `path=${pathKeep}`],
     ['(e) worktree dir recreated from branch after restart', recreatedAfterRestart && branchCAfterRestart === 'tandem/wt-c', `existedPreRestart=${cExistedBeforeRestart} recreated=${recreatedAfterRestart} branch=${branchCAfterRestart}`],
     ['(f) list_dirs finds the repo with branch/dirty/hasLiveAgent', listDirsOk, JSON.stringify(found)],
     ['(g) collision on kind:existing refused', collisionRefused, `error="${spawnE2.error}"`],

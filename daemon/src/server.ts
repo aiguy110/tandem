@@ -251,10 +251,19 @@ export function startServer(
         }
         break;
       }
+      case 'get_close_preview': {
+        try {
+          const preview = await registry.closePreview(m.agentId);
+          conn.send({ t: 'close_preview', corrId: m.corrId, preview, error: preview ? undefined : 'no such agent' });
+        } catch (error) {
+          conn.send({ t: 'close_preview', corrId: m.corrId, error: (error as Error).message });
+        }
+        break;
+      }
       case 'close_agent': {
         let ok = false;
         try {
-          ok = await registry.close(m.agentId, m.force);
+          ok = await registry.close(m.agentId, m.force, m.deleteWorktree);
         } catch (e) {
           // Teardown refused (e.g. dirty_worktree) — the agent is untouched
           // and still running; surface the structured reason, don't broadcast

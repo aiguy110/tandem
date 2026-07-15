@@ -397,15 +397,22 @@ export class AgentRegistry {
     });
   }
 
-  // Teardown one agent (docs D8): keep the branch, drop the checkout.
+  async closePreview(agentId: string) {
+    const s = this.sessions.get(agentId);
+    if (!s) return undefined;
+    const cwd = this.cwdByAgent.get(agentId) ?? this.defaultCwd(s.spec);
+    return this.workspace.closePreview(cwd, s.spec.workspace);
+  }
+
+  // Teardown one agent (docs D8): keep the branch and optionally drop the checkout.
   // Uncommitted changes block the close unless `force` — this throws (a
   // WorkspaceError) rather than returning false, so the caller (server.ts)
   // can surface the structured reason instead of a generic "no such agent".
-  async close(agentId: string, force = false): Promise<boolean> {
+  async close(agentId: string, force = false, deleteWorktree = true): Promise<boolean> {
     const s = this.sessions.get(agentId);
     if (!s) return false;
     const cwd = this.cwdByAgent.get(agentId) ?? this.defaultCwd(s.spec);
-    await this.workspace.teardown(s.spec.workspace, cwd, force);
+    if (deleteWorktree) await this.workspace.teardown(s.spec.workspace, cwd, force);
     this.sessions.delete(agentId);
     this.cwdByAgent.delete(agentId);
     // Tear the (lazily-provisioned) browser down with the agent (docs/browser.md

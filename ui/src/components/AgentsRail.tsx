@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { useStore, rankedOrder } from '../store';
 import type { AgentView } from '../store';
+import type { ClosePreview } from '../wire';
+
+const COMMIT_MERGE_PROMPT = 'please commit your changes and merge them back into the main worktree';
 
 // Left rail — the orchestra. One row per agent; blocked/error float to the top
 // (rankedOrder). Click = focus.
@@ -9,19 +12,42 @@ export function AgentsRail() {
   const agents = useStore((s) => s.agents);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const setPane = useStore((s) => s.setPane);
+  const setDraft = useStore((s) => s.setDraft);
+  const getClosePreview = useStore((s) => s.getClosePreview);
   const closeAgent = useStore((s) => s.closeAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
+  const [deleteWorktree, setDeleteWorktree] = useState(true);
+  const [closeError, setCloseError] = useState('');
 
-  const doDelete = (id: string, force?: boolean) => {
-    void closeAgent(id, force).then((r) => {
-      if (r.error?.startsWith('dirty_worktree')) {
-        if (confirm(`${id} has uncommitted changes. Force close and drop the checkout? (branch is kept)`)) {
-          doDelete(id, true);
-        }
+  const requestDelete = async (id: string) => {
+    setCloseError('');
+    try {
+      const preview = await getClosePreview(id);
+      if (!preview.uncommitted && !preview.unmerged) {
+        const result = await closeAgent(id, false, true);
+        if (result.error) setCloseError(result.error);
+        return;
       }
-    });
+      setDeleteWorktree(preview.kind === 'worktree');
+      setConfirmation({ id, preview });
+    } catch (error) {
+      setCloseError((error as Error).message);
+    }
+  };
+
+  const promptForCommitMerge = (id: string) => {
+    setConfirmation(null);
+    focus(id);
+    setPane('transcript');
+    setDraft(id, COMMIT_MERGE_PROMPT);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const textarea = [...document.querySelectorAll<HTMLTextAreaElement>('[data-prompt-agent]')].find((el) => el.dataset.promptAgent === id);
+      textarea?.focus();
+      textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+    }));
   };
 
   if (collapsed) {
@@ -57,25 +83,40 @@ export function AgentsRail() {
             agent={agents[id]}
             active={id === focusedId}
             onClick={() => focus(id)}
-            onDelete={() => setConfirmId(id)}
+            onDelete={() => void requestDelete(id)}
           />
         ))
       )}
-      {confirmId && agents[confirmId] && (
-        <div className="modal-scrim" onClick={() => setConfirmId(null)}>
+      {closeError && <div className="rail-close-error">{closeError}</div>}
+      {confirmation && agents[confirmation.id] && (
+        <div className="modal-scrim" onClick={() => setConfirmation(null)}>
           <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-body">
-              Delete agent <b>{agents[confirmId].name}</b>? This tears down its session (the branch is kept).
+              <div>Delete agent <b>{agents[confirmation.id].name}</b>?</div>
+              {confirmation.preview.uncommitted && (
+                <section><strong>Uncommitted changes</strong><pre>{confirmation.preview.uncommitted}</pre></section>
+              )}
+              {confirmation.preview.unmerged && (
+                <section><strong>Unmerged commits</strong><pre>{confirmation.preview.unmerged}</pre></section>
+              )}
+              {confirmation.preview.kind === 'worktree' && (
+                <label className="delete-worktree-option">
+                  <input type="checkbox" checked={deleteWorktree} onChange={(e) => setDeleteWorktree(e.target.checked)} />
+                  Delete worktree
+                </label>
+              )}
             </div>
             <div className="foot">
-              <button className="btn" onClick={() => setConfirmId(null)}>
-                Cancel
+              <button className="btn" onClick={() => promptForCommitMerge(confirmation.id)}>
+                Prompt for commit+merge
               </button>
+              <button className="btn success" onClick={() => setConfirmation(null)}>Cancel</button>
               <button
                 className="btn danger"
-                onClick={() => {
-                  doDelete(confirmId);
-                  setConfirmId(null);
+                onClick={async () => {
+                  const result = await closeAgent(confirmation.id, deleteWorktree, deleteWorktree);
+                  if (result.error) setCloseError(result.error);
+                  else setConfirmation(null);
                 }}
               >
                 Delete
