@@ -324,6 +324,12 @@ export interface AgentSummary {
   controlMode: ControlMode;
 }
 
+export interface ClosePreview {
+  kind: 'worktree' | 'existing';
+  uncommitted: string;
+  unmerged: string;
+}
+
 // corrId is an optional client-supplied correlation token echoed back on `ack`.
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
@@ -345,7 +351,8 @@ export type ClientMsg =
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; cwd: string; corrId?: string }
-  | { t: 'close_agent'; agentId: string; force?: boolean; corrId?: string }
+  | { t: 'get_close_preview'; agentId: string; corrId?: string }
+  | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
   // Phase 5: forward the user's mouse/key/wheel to the browser (owner=user only).
@@ -381,6 +388,7 @@ export type ServerMsg =
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] } // reply to list_agents
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] } // reply to list_dirs
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
+  | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog } // reply to list_sessions
   // Phase 5 browser channel. `browser_frame` is a CDP screencast frame (JSON +
   // base64; real binary framing is a future optimization). `browser_state`

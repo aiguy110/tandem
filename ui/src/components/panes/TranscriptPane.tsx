@@ -457,6 +457,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       )}
       <textarea
         ref={textRef}
+        data-prompt-agent={agentId}
         placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
         value={text}
         onChange={(e) => {

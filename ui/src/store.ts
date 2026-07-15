@@ -13,6 +13,7 @@ import type {
   Approval,
   BrowserInputWire,
   Channel,
+  ClosePreview,
   ClientMsg,
   RepoInfo,
   ResumableSession,
@@ -129,7 +130,8 @@ interface StoreState {
   respond: (agentId: string, reqId: string, optionId: string) => void;
   setMode: (agentId: string, modeId: string) => void;
   setConfigOption: (agentId: string, configId: string, value: string | boolean) => void;
-  closeAgent: (agentId: string, force?: boolean) => Promise<AckResult>;
+  getClosePreview: (agentId: string) => Promise<ClosePreview>;
+  closeAgent: (agentId: string, force?: boolean, deleteWorktree?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
   nav: (dir: 1 | -1) => void;
   // Browser pane control (Phase 5).
@@ -144,6 +146,7 @@ let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
+const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -225,6 +228,15 @@ export const useStore = create<StoreState>((set, get) => {
       case 'sessions':
         set({ resumeCatalog: msg.catalog, resumeLoading: false });
         return;
+      case 'close_preview': {
+        const pending = msg.corrId ? pendingClosePreviews.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingClosePreviews.delete(msg.corrId);
+          if (msg.error || !msg.preview) pending.reject(new Error(msg.error || 'close preview unavailable'));
+          else pending.resolve(msg.preview);
+        }
+        return;
+      }
       case 'browser_frame':
         // Frames bypass the reactive store (browserHub) to avoid re-render storms.
         browserHub.push(msg.agentId, { dataB64: msg.dataB64, meta: msg.meta });
@@ -451,11 +463,17 @@ export const useStore = create<StoreState>((set, get) => {
     },
     setMode: (agentId, modeId) => client.send({ t: 'set_mode', agentId, modeId }),
     setConfigOption: (agentId, configId, value) => client.send({ t: 'set_config_option', agentId, configId, value }),
-    closeAgent: (agentId, force) =>
+    getClosePreview: (agentId) =>
+      new Promise<ClosePreview>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingClosePreviews.set(corrId, { resolve, reject });
+        client.send({ t: 'get_close_preview', agentId, corrId });
+      }),
+    closeAgent: (agentId, force, deleteWorktree) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'close_agent', agentId, force, corrId });
+        client.send({ t: 'close_agent', agentId, force, deleteWorktree, corrId });
       }),
     send: (m) => client.send(m),
     // Opt an agent's browser channel in/out (screencast focus rule). Re-subscribe
