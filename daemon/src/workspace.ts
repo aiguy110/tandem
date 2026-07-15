@@ -126,6 +126,23 @@ export class WorkspaceManager {
   }
 
   /**
+   * Rail worktree-state indicator: 'dirty' (uncommitted changes) beats
+   * 'unmerged' (committed commits not yet reachable from baseRef) beats
+   * 'synced' (clean and fully merged). `kind:'existing'` dirs have no
+   * baseRef to compare against, so they're only ever 'dirty'/'synced'.
+   */
+  async gitState(cwd: string, workspace: Workspace): Promise<'dirty' | 'unmerged' | 'synced'> {
+    if (await this.isDirty(cwd)) return 'dirty';
+    if (workspace.kind !== 'worktree' || !workspace.baseRef) return 'synced';
+    try {
+      const ahead = await runGit(cwd, ['rev-list', '--count', `${workspace.baseRef}..HEAD`]);
+      return Number(ahead) > 0 ? 'unmerged' : 'synced';
+    } catch {
+      return 'synced';
+    }
+  }
+
+  /**
    * Teardown (docs D8): worktree case removes the checkout but keeps the
    * branch; blocks on uncommitted changes unless `force`. Existing-dir case
    * is a pure detach (no-op here).

@@ -51,16 +51,21 @@ export class AgentRegistry {
   // Compact rail metadata for every live agent (docs/ws-protocol.md list_agents).
   // Derived from the resolved SpawnSpec + live session state, so it reflects the
   // durable declaration even for restored agents whose transcript is replay-only.
-  summaries(): AgentSummary[] {
-    return [...this.sessions.values()].map((s) => {
-      const ws = s.spec.workspace;
-      const cwd = this.cwdByAgent.get(s.id) ?? this.defaultCwd(s.spec);
-      const workspace =
-        ws.kind === 'worktree'
-          ? { kind: 'worktree' as const, repo: path.basename(ws.repo), repoPath: ws.repo, branch: ws.branch ?? `tandem/${s.name}`, cwd }
-          : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd };
-      return { id: s.id, name: s.name, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length };
-    });
+  // Async: `gitState` shells out to git, one `status --porcelain` (+ maybe one
+  // `rev-list --count`) per agent, run in parallel across agents.
+  async summaries(): Promise<AgentSummary[]> {
+    return Promise.all(
+      [...this.sessions.values()].map(async (s) => {
+        const ws = s.spec.workspace;
+        const cwd = this.cwdByAgent.get(s.id) ?? this.defaultCwd(s.spec);
+        const gitState = await this.workspace.gitState(cwd, ws).catch(() => undefined);
+        const workspace =
+          ws.kind === 'worktree'
+            ? { kind: 'worktree' as const, repo: path.basename(ws.repo), repoPath: ws.repo, branch: ws.branch ?? `tandem/${s.name}`, cwd, gitState }
+            : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd, gitState };
+        return { id: s.id, name: s.name, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length };
+      }),
+    );
   }
 
   // ---- workspace + naming ----

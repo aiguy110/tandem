@@ -40,7 +40,14 @@ export const PANES: PaneId[] = ['transcript', 'terminal', 'diff', 'browser'];
 export interface AgentView {
   id: string;
   name: string;
-  workspace: { kind: 'worktree' | 'existing'; repo: string; repoPath: string; branch: string; cwd: string };
+  workspace: {
+    kind: 'worktree' | 'existing';
+    repo: string;
+    repoPath: string;
+    branch: string;
+    cwd: string;
+    gitState?: 'dirty' | 'unmerged' | 'synced';
+  };
   status: AgentStatus;
   events: { seq: number; event: WireEvent }[]; // transcript/terminals channel, seq-ordered
   lastSeq: number;

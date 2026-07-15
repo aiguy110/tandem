@@ -249,7 +249,7 @@ export function startServer(
         break;
       }
       case 'list_agents': {
-        conn.send({ t: 'agents', corrId: m.corrId, agents: registry.summaries() });
+        conn.send({ t: 'agents', corrId: m.corrId, agents: await registry.summaries() });
         break;
       }
       case 'browser_control': {
@@ -328,12 +328,28 @@ export function startServer(
     conn.subs.set(session.id, { channels: chans, unsub });
   }
 
+  // Poll worktree git state (dirty/unmerged/synced) for the rail's status dot —
+  // it changes from outside the event stream (the agent committing, the user
+  // merging elsewhere), so nothing else would tell connected clients to refresh.
+  // Skipped entirely with no connections, since it's a `status --porcelain`
+  // (+ maybe `rev-list`) shell-out per live agent.
+  const gitStatePoll = setInterval(() => {
+    if (connections.size === 0) return;
+    registry
+      .summaries()
+      .then((agents) => {
+        for (const c of connections) c.send({ t: 'agents', agents });
+      })
+      .catch(() => {});
+  }, 5000);
+
   return new Promise((resolve) => {
     httpServer.listen(opts.port, opts.host, () => {
       resolve({
         http: httpServer,
         close: () =>
           new Promise<void>((res) => {
+            clearInterval(gitStatePoll);
             for (const c of connections) c.ws.terminate();
             wss.close(() => httpServer.close(() => res()));
           }),

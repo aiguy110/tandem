@@ -73,7 +73,14 @@ export interface RepoInfo {
 export interface AgentSummary {
   id: string;
   name: string;
-  workspace: { kind: 'worktree' | 'existing'; repo: string; repoPath: string; branch: string; cwd: string };
+  workspace: {
+    kind: 'worktree' | 'existing';
+    repo: string;
+    repoPath: string;
+    branch: string;
+    cwd: string;
+    gitState?: 'dirty' | 'unmerged' | 'synced';
+  };
   status: AgentStatus;
   pendingApprovals: number;
 }

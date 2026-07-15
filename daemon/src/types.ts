@@ -242,7 +242,17 @@ export interface AgentSummary {
   name: string;
   // `repo` is a display basename; `repoPath` is the full source-repo path (the
   // spawn origin, needed for "sibling" spawns); `cwd` is this agent's checkout.
-  workspace: { kind: 'worktree' | 'existing'; repo: string; repoPath: string; branch: string; cwd: string };
+  // `gitState`: 'dirty' (uncommitted changes) > 'unmerged' (committed but not yet
+  // merged into baseRef) > 'synced' (clean and merged) — undefined while unknown
+  // (e.g. right after spawn, before the first poll).
+  workspace: {
+    kind: 'worktree' | 'existing';
+    repo: string;
+    repoPath: string;
+    branch: string;
+    cwd: string;
+    gitState?: 'dirty' | 'unmerged' | 'synced';
+  };
   status: AgentStatus;
   pendingApprovals: number;
 }

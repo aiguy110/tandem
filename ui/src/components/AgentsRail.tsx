@@ -101,6 +101,9 @@ function Row({
 }) {
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
+  const gitStateTitle = ws.gitState
+    ? { dirty: 'uncommitted changes', unmerged: 'committed, not yet merged', synced: 'clean and merged' }[ws.gitState]
+    : undefined;
   return (
     <div className={`agent-row${active ? ' active' : ''}`} onClick={onClick}>
       <span className={`dot ${agent.status}`} title={agent.status} />
@@ -112,8 +115,11 @@ function Row({
           {agent.pendingApprovals.length > 0 && <span className="count hot badge">{agent.pendingApprovals.length}</span>}
         </div>
         <div className="ws" title={ws.cwd}>
-          {ws.repo || '—'}
-          {branch && ` · ${branch}`}
+          {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
+          <span className="ws-text">
+            {ws.repo || '—'}
+            {branch && ` · ${branch}`}
+          </span>
         </div>
       </div>
       <button
