@@ -80,6 +80,10 @@ interface StoreState {
   // Which agent (if any) currently has its browser channel subscribed (i.e. the
   // focused agent with the Browser pane open) — drives the screencast focus rule.
   browserSubAgent: string | null;
+  // Left/right rail collapse (mobile-friendly docking). Defaults from a
+  // matchMedia breakpoint at boot, then user-toggleable regardless of width.
+  agentsRailCollapsed: boolean;
+  approvalsRailCollapsed: boolean;
 
   // actions
   boot: () => void;
@@ -87,6 +91,8 @@ interface StoreState {
   focus: (id: string) => void;
   setPane: (p: PaneId) => void;
   toggleTheme: () => void;
+  toggleAgentsRail: () => void;
+  toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
   refreshDirs: () => void;
@@ -134,6 +140,12 @@ const initialTheme = (): 'dark' | 'light' => {
   const saved = localStorage.getItem('tandem.theme');
   return saved === 'light' ? 'light' : 'dark';
 };
+
+// Rails collapse by default on narrow viewports (phones/small tablets), but the
+// user can still toggle them open regardless of width.
+const MOBILE_BREAKPOINT = '(max-width: 860px)';
+const isNarrowViewport = (): boolean =>
+  typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(MOBILE_BREAKPOINT).matches;
 
 export const useStore = create<StoreState>((set, get) => {
   // Channels to subscribe for an agent: base always, plus 'browser' only for the
@@ -285,6 +297,8 @@ export const useStore = create<StoreState>((set, get) => {
     dirs: [],
     drafts: {},
     browserSubAgent: null,
+    agentsRailCollapsed: isNarrowViewport(),
+    approvalsRailCollapsed: isNarrowViewport(),
 
     boot: () => {
       const tok = resolveToken();
@@ -311,6 +325,8 @@ export const useStore = create<StoreState>((set, get) => {
         localStorage.setItem('tandem.theme', theme);
         return { theme };
       }),
+    toggleAgentsRail: () => set((st) => ({ agentsRailCollapsed: !st.agentsRailCollapsed })),
+    toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {
       if (m === 'spawn') get().refreshDirs();
       set({ modal: m });

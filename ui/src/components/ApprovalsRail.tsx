@@ -10,13 +10,30 @@ export function ApprovalsRail() {
   const focus = useStore((s) => s.focus);
   const setPane = useStore((s) => s.setPane);
   const toggleWheel = useStore((s) => s.toggleWheel);
+  const collapsed = useStore((s) => s.approvalsRailCollapsed);
+  const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
 
   const total = items.length + takeovers.length;
+
+  if (collapsed) {
+    return (
+      <div className="rail rail-r approvals collapsed">
+        <button className="rail-toggle" title="Show approvals" onClick={toggleCollapsed}>
+          <span className="chevron">‹</span>
+          <span className="label">Approvals</span>
+          {total > 0 && <span className="count hot">{total}</span>}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="rail rail-r approvals">
       <div className="rail-head">
         Approvals <span className={`count${total ? ' hot' : ''}`}>{total}</span>
+        <button className="rail-toggle-btn" title="Collapse approvals" onClick={toggleCollapsed}>
+          ›
+        </button>
       </div>
       {takeovers.map(({ agentId, takeover }) => (
         <div
