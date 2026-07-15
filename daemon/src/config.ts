@@ -66,6 +66,30 @@ function parseLaunchEnv(raw: string): AcpLaunch {
   return { cmd: parts[0], args: parts.slice(1) };
 }
 
+// systemd user services commonly have a deliberately narrow PATH that omits
+// ~/.local/bin even though interactive coding-agent installers place their
+// launchers there. Resolve resume CLIs once at daemon startup so node-pty never
+// depends on execvp seeing the user's shell PATH.
+function resolveUserExecutable(cmd: string): string {
+  if (cmd.includes(path.sep)) return cmd;
+  const dirs = [
+    ...(process.env.PATH ?? '').split(path.delimiter),
+    path.join(os.homedir(), '.local', 'bin'),
+    path.join(os.homedir(), 'bin'),
+  ].filter(Boolean);
+  for (const dir of [...new Set(dirs)]) {
+    const candidate = path.join(dir, cmd);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching; returning the bare command below preserves the useful
+      // native spawn error when the CLI truly is not installed.
+    }
+  }
+  return cmd;
+}
+
 // Bundled ACP entry for each supported agent, run via `node <dist/index.js>`.
 // Each ships as a devDependency so a fresh install always has a working
 // default; a per-agent env var (TANDEM_ACP_CMD_<NAME>) can point at a
@@ -100,6 +124,7 @@ function resumeClisFromEnv(): Record<string, ResumeCliLaunch> {
   for (const name of Object.keys(defaults)) {
     const raw = process.env[`TANDEM_RESUME_CMD_${name.toUpperCase()}`];
     if (raw) defaults[name] = parseLaunchEnv(raw);
+    defaults[name] = { ...defaults[name], cmd: resolveUserExecutable(defaults[name].cmd) };
   }
   return defaults;
 }

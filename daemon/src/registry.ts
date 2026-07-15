@@ -54,6 +54,13 @@ export class AgentRegistry {
   list(): AgentSession[] {
     return [...this.sessions.values()];
   }
+  // Exposed for diagnostics/de-risk: the exact executable a handoff will spawn.
+  resumeCliCommand(agentId: string): string {
+    const session = this.sessions.get(agentId);
+    if (!session) throw new Error(`no such agent: ${agentId}`);
+    const agentName = session.spec.agent ?? this.config.acp.default;
+    return this.config.resumeCli[agentName]?.cmd ?? '';
+  }
 
   // Compact rail metadata for every live agent (docs/ws-protocol.md list_agents).
   // Derived from the resolved SpawnSpec + live session state, so it reflects the

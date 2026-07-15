@@ -58,6 +58,7 @@ async function main() {
   const session = h.registry.get(agentId)!;
 
   const checks: [string, boolean, string][] = [
+    ['resume CLI is resolved to an absolute executable', h.registry.resumeCliCommand(agentId) === process.execPath, h.registry.resumeCliCommand(agentId)],
     ['busy ACP turn refuses an implicit takeover', !!busy.error?.startsWith('agent_busy:'), busy.error ?? 'missing error'],
     ['explicit takeover cancels then enters terminal', !takeover.error && modes.includes('terminal'), `modes=${modes.join(' → ')}`],
     ['resume CLI receives the persisted session id', !!ready, 'MOCK_RESUME_READY sess_mock'],
