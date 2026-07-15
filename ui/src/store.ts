@@ -18,6 +18,7 @@ import type {
   ServerMsg,
   SessionConfigOption,
   SessionModeState,
+  SlashCommand,
   SpawnSpec,
   WireEvent,
 } from './wire';
@@ -54,6 +55,9 @@ export interface AgentView {
   // session_config event. Null until the ACP agent reports it (or for pty agents,
   // which never do) — the picker bar hides itself in that case.
   sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
+  // The agent's slash-command menu (ACP available_commands_update), for the
+  // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
+  commands: SlashCommand[];
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command';
@@ -228,10 +232,11 @@ export const useStore = create<StoreState>((set, get) => {
           const transcript = msg.transcript.filter((e) => e.event.kind !== 'raw_pty');
           // Feed any pty frames in the snapshot into the terminal hub (rehydrate).
           for (const e of msg.transcript) if (e.event.kind === 'raw_pty') ptyHub.push(msg.agentId, e.event.dataB64);
-          // session_config isn't a top-level snapshot field (unlike status/
-          // pendingApprovals) — fold the latest one out of the replayed
-          // transcript, mirroring the live 'event' path's applyEventToView.
+          // session_config/available_commands aren't top-level snapshot fields
+          // (unlike status/pendingApprovals) — fold the latest one out of the
+          // replayed transcript, mirroring the live 'event' path's applyEventToView.
           const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
+          const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           agents[msg.agentId] = {
             ...prev,
             status: msg.status,
@@ -242,6 +247,7 @@ export const useStore = create<StoreState>((set, get) => {
               lastConfig && lastConfig.event.kind === 'session_config'
                 ? { modes: lastConfig.event.modes, configOptions: lastConfig.event.configOptions }
                 : prev.sessionConfig,
+            commands: lastCommands && lastCommands.event.kind === 'available_commands' ? lastCommands.event.commands : prev.commands,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
@@ -427,6 +433,7 @@ function shell(id: string): AgentView {
     browserOwner: 'agent',
     takeovers: [],
     sessionConfig: null,
+    commands: [],
   };
 }
 
@@ -451,6 +458,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
     if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason }];
   }
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
+  if (event.kind === 'available_commands') v.commands = event.commands;
 }
 
 // All pending browser takeovers across agents, for the attention rail.

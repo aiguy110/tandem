@@ -31,6 +31,12 @@ export interface SessionConfigOption {
   options?: SessionConfigSelectOption[];
 }
 
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  input?: string;
+}
+
 export type AgentEvent =
   | { kind: 'user_message'; text: string }
   | { kind: 'message_chunk'; text: string }
@@ -43,7 +49,8 @@ export type AgentEvent =
   | { kind: 'status'; status: AgentStatus }
   | { kind: 'error'; message: string }
   | { kind: 'takeover_request'; reqId: string; reason: string }
-  | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] };
+  | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
+  | { kind: 'available_commands'; commands: SlashCommand[] };
 
 // On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.
 export type WireEvent = AgentEvent | { kind: 'raw_pty'; dataB64: string };
