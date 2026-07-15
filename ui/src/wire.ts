@@ -91,6 +91,7 @@ export type Workspace =
 
 export interface SpawnSpec {
   adapter: 'acp' | 'pty';
+  agent?: string; // which ACP-speaking agent to launch (e.g. 'claude' | 'codex' | 'pi'); ignored for pty
   workspace: Workspace;
   name?: string;
   task?: string;

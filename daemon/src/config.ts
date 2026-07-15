@@ -7,6 +7,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
+export interface AcpLaunch {
+  cmd: string;
+  args: string[];
+}
+
 export interface Config {
   home: string;
   dbPath: string;
@@ -20,9 +25,15 @@ export interface Config {
   // for git repos for the spawn palette (list_dirs). 1 = root's immediate
   // children are checked (the common ~/Projects/<repo> layout).
   dirScanDepth: number;
-  // How to launch an ACP agent subprocess. Default targets the real
-  // claude-agent-acp; tests override via TANDEM_ACP_CMD (a JSON array).
-  acpLaunch: { cmd: string; args: string[] };
+  // How to launch each supported ACP agent subprocess, keyed by agent name
+  // (the SpawnSpec.agent selector — claude | codex | pi | …). `default` is used
+  // when a spec omits `agent`. `override`, when set (TANDEM_ACP_CMD), forces
+  // EVERY agent to that one launch — the mock hook every derisk suite relies on.
+  acp: {
+    default: string;
+    agents: Record<string, AcpLaunch>;
+    override?: AcpLaunch;
+  };
   // Shared-browser subsystem (Phase 5, D13).
   browser: {
     driver: 'local' | 'steel'; // TANDEM_BROWSER_DRIVER (default local)
@@ -36,21 +47,42 @@ export interface Config {
   };
 }
 
-function acpLaunchFromEnv(): { cmd: string; args: string[] } {
-  const raw = process.env.TANDEM_ACP_CMD;
-  if (raw) {
-    try {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr) && arr.length) return { cmd: String(arr[0]), args: arr.slice(1).map(String) };
-    } catch {
-      /* fall through to string form: "cmd arg arg" */
-      const parts = raw.split(/\s+/).filter(Boolean);
-      if (parts.length) return { cmd: parts[0], args: parts.slice(1) };
-    }
+// Parses a launch override from an env var, accepting either a JSON array
+// (`["cmd", "arg1", ...]`) or a plain whitespace-split string ("cmd arg arg").
+function parseLaunchEnv(raw: string): AcpLaunch {
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr) && arr.length) return { cmd: String(arr[0]), args: arr.slice(1).map(String) };
+  } catch {
+    /* fall through to string form */
   }
-  // Default: the real @agentclientprotocol/claude-agent-acp entry, run via node.
-  const entry = new URL('../node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js', import.meta.url).pathname;
-  return { cmd: process.execPath, args: [entry] };
+  const parts = raw.split(/\s+/).filter(Boolean);
+  return { cmd: parts[0], args: parts.slice(1) };
+}
+
+// Bundled ACP entry for each supported agent, run via `node <dist/index.js>`.
+// Each ships as a devDependency so a fresh install always has a working
+// default; a per-agent env var (TANDEM_ACP_CMD_<NAME>) can point at a
+// different install (e.g. a system-wide binary) instead.
+const BUNDLED_ENTRIES: Record<string, string> = {
+  claude: '../node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js',
+  codex: '../node_modules/@agentclientprotocol/codex-acp/dist/index.js',
+  pi: '../node_modules/pi-acp/dist/index.js',
+};
+
+function acpAgentsFromEnv(): Record<string, AcpLaunch> {
+  const agents: Record<string, AcpLaunch> = {};
+  for (const [name, relEntry] of Object.entries(BUNDLED_ENTRIES)) {
+    const envVar = `TANDEM_ACP_CMD_${name.toUpperCase()}`;
+    const raw = process.env[envVar];
+    if (raw) {
+      agents[name] = parseLaunchEnv(raw);
+      continue;
+    }
+    const entry = new URL(relEntry, import.meta.url).pathname;
+    agents[name] = { cmd: process.execPath, args: [entry] };
+  }
+  return agents;
 }
 
 export function loadConfig(): Config {
@@ -70,7 +102,13 @@ export function loadConfig(): Config {
     uiDir: process.env.TANDEM_UI_DIR || undefined,
     projectRoots: roots,
     dirScanDepth: Number(process.env.TANDEM_DIR_SCAN_DEPTH || 1),
-    acpLaunch: acpLaunchFromEnv(),
+    acp: {
+      default: 'claude',
+      agents: acpAgentsFromEnv(),
+      // TANDEM_ACP_CMD forces every agent to this one launch — the mock hook
+      // every derisk suite (and testHarness.ts) points at a fake ACP server.
+      override: process.env.TANDEM_ACP_CMD ? parseLaunchEnv(process.env.TANDEM_ACP_CMD) : undefined,
+    },
     browser: {
       driver: process.env.TANDEM_BROWSER_DRIVER === 'steel' ? 'steel' : 'local',
       userDataRoot: path.join(home, 'browser-profiles'),
