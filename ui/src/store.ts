@@ -68,6 +68,7 @@ export interface AgentView {
   // session_config event. Null until the ACP agent reports it (or for pty agents,
   // which never do) — the picker bar hides itself in that case.
   sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
+  usage: { used: number; size: number; cost?: { amount: number; currency: string } | null } | null;
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
   commands: SlashCommand[];
@@ -547,6 +548,7 @@ function shell(id: string): AgentView {
     browserOwner: 'agent',
     takeovers: [],
     sessionConfig: null,
+    usage: null,
     commands: [],
     imagePromptSupport: null,
     controlMode: 'transcript',
@@ -576,6 +578,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
+  if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost };
   if (event.kind === 'control_state') v.controlMode = event.mode;
 }
 

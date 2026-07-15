@@ -63,6 +63,7 @@ export type AgentEvent =
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
   | { kind: 'available_commands'; commands: SlashCommand[] }
   | { kind: 'prompt_capabilities'; image: boolean }
+  | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
   | { kind: 'control_state'; mode: ControlMode };
 
 // On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.

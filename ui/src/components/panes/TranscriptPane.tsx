@@ -163,7 +163,7 @@ export function TranscriptPane() {
         )}
       </div>
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
-      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} />
+      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
       {agent.controlMode !== 'transcript' && (
         <div className="handoff-shroud">
           <div className="handoff-card">
@@ -349,12 +349,41 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
 // docs/acp-notes.md). `sessionConfig` is null until the agent reports it (or
 // always, for pty agents) — the bar renders nothing in that case rather than an
 // empty shell.
-function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; sessionConfig: AgentView['sessionConfig'] }) {
+function compactTokens(value: number): string {
+  const units = [
+    { value: 1_000_000_000, suffix: 'B' },
+    { value: 1_000_000, suffix: 'M' },
+    { value: 1_000, suffix: 'k' },
+  ];
+  const unit = units.find((candidate) => value >= candidate.value);
+  if (!unit) return Math.round(value).toString();
+  const scaled = value / unit.value;
+  return `${scaled >= 100 || Number.isInteger(scaled) ? scaled.toFixed(0) : scaled.toFixed(1)}${unit.suffix}`;
+}
+
+function UsageMeter({ usage }: { usage: NonNullable<AgentView['usage']> }) {
+  const percentage = Math.round((usage.used / usage.size) * 100);
+  const fill = Math.max(0, Math.min(100, (usage.used / usage.size) * 100));
+  const label = `${compactTokens(usage.used)}/${compactTokens(usage.size)} (${percentage}%)`;
+  const title = usage.cost
+    ? `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens · ${usage.cost.amount} ${usage.cost.currency} cumulative`
+    : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens`;
+
+  return (
+    <div className="usage-meter" role="meter" aria-label="Context window usage" aria-valuemin={0} aria-valuemax={usage.size} aria-valuenow={usage.used} title={title}>
+      <div className="usage-meter-fill" style={{ width: `${fill}%` }} />
+      <span className="usage-meter-label usage-meter-label-empty">{label}</span>
+      <span className="usage-meter-label usage-meter-label-filled" style={{ clipPath: `inset(0 ${100 - fill}% 0 0)` }}>{label}</span>
+    </div>
+  );
+}
+
+function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; sessionConfig: AgentView['sessionConfig']; usage: AgentView['usage'] }) {
   const setMode = useStore((s) => s.setMode);
   const setConfigOption = useStore((s) => s.setConfigOption);
-  if (!sessionConfig) return null;
+  if (!sessionConfig && !usage) return null;
 
-  const { modes, configOptions } = sessionConfig;
+  const { modes, configOptions } = sessionConfig ?? { modes: null, configOptions: [] };
   // The model selector is a config option with category 'model' (pinned id
   // "model" on the real agent, but category is the spec-sanctioned way to find
   // it). 'thought_level' is the spec's thinking-effort selector. Everything
@@ -362,7 +391,7 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
   const modelOpt = configOptions.find((o) => o.category === 'model' && o.type === 'select');
   const thoughtLevelOpt = configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
   const hasModes = !!modes && modes.availableModes.length > 0;
-  if (!hasModes && !modelOpt && !thoughtLevelOpt) return null;
+  if (!hasModes && !modelOpt && !thoughtLevelOpt && !usage) return null;
 
   return (
     <div className="session-config-bar">
@@ -405,6 +434,7 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
           </select>
         </label>
       )}
+      {usage && <UsageMeter usage={usage} />}
     </div>
   );
 }
