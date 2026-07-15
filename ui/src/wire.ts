@@ -36,7 +36,7 @@ export type AgentEvent =
   | { kind: 'message_chunk'; text: string }
   | { kind: 'thought_chunk'; text: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown }
-  | { kind: 'tool_call_update'; id: string; status?: ToolStatus }
+  | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown }
   | { kind: 'plan'; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal_output'; termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }

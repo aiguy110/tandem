@@ -61,7 +61,10 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       }
       case 'tool_call_update': {
         const t = tools.get(ev.id);
-        if (t && ev.status) t.status = ev.status;
+        if (t) {
+          if (ev.status) t.status = ev.status;
+          if (ev.content != null) t.content = ev.content;
+        }
         break;
       }
       case 'plan':
@@ -172,9 +175,30 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
   }
 }
 
+// ACP tool_call content is an array of ToolCallContent blocks — most are
+// `{ type: 'content', content: { type: 'text', text } }`, some are
+// `{ type: 'diff', path, oldText, newText }`. Flatten to plain text for
+// display rather than dumping the raw JSON envelope.
+function formatToolContent(content: unknown): string | null {
+  if (content == null) return null;
+  if (typeof content === 'string') return content || null;
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((block: any) => {
+        if (block?.type === 'content' && block.content?.type === 'text') return block.content.text ?? '';
+        if (block?.type === 'diff') return `--- ${block.path}\n${block.newText ?? ''}`;
+        return null;
+      })
+      .filter((s): s is string => !!s);
+    return parts.length ? parts.join('\n') : null;
+  }
+  return JSON.stringify(content, null, 2);
+}
+
 function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   const [open, setOpen] = useState(false);
-  const hasBody = item.content != null;
+  const body = formatToolContent(item.content);
+  const hasBody = body != null;
   return (
     <div className="card">
       <div className="card-head" onClick={() => hasBody && setOpen((o) => !o)}>
@@ -182,7 +206,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
         <span className="title">{item.title}</span>
         <span className={`chip ${item.status}`}>{item.status}</span>
       </div>
-      {open && hasBody && <div className="card-body">{typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)}</div>}
+      {open && hasBody && <div className="card-body">{body}</div>}
     </div>
   );
 }
