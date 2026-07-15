@@ -127,18 +127,24 @@ export class WorkspaceManager {
 
   /**
    * Rail worktree-state indicator: 'dirty' (uncommitted changes) beats
-   * 'unmerged' (committed commits not yet reachable from baseRef) beats
-   * 'synced' (clean and fully merged). `kind:'existing'` dirs have no
-   * baseRef to compare against, so they're only ever 'dirty'/'synced'.
+   * 'unmerged' (this branch's HEAD isn't reachable from the source repo's
+   * *current* checked-out tip) beats 'synced'. Deliberately checks against
+   * the repo's live HEAD rather than the frozen fork-point `baseRef` — once
+   * someone merges the branch back into the repo's checked-out branch
+   * (elsewhere, out of band), this must flip to 'synced' even though HEAD
+   * has long since diverged from that stale fork point. `kind:'existing'`
+   * dirs have no separate branch to reconcile, so they're only ever
+   * 'dirty'/'synced'.
    */
   async gitState(cwd: string, workspace: Workspace): Promise<'dirty' | 'unmerged' | 'synced'> {
     if (await this.isDirty(cwd)) return 'dirty';
-    if (workspace.kind !== 'worktree' || !workspace.baseRef) return 'synced';
+    if (workspace.kind !== 'worktree') return 'synced';
     try {
-      const ahead = await runGit(cwd, ['rev-list', '--count', `${workspace.baseRef}..HEAD`]);
-      return Number(ahead) > 0 ? 'unmerged' : 'synced';
-    } catch {
+      const repoHead = await runGit(workspace.repo, ['rev-parse', 'HEAD']);
+      await runGit(cwd, ['merge-base', '--is-ancestor', 'HEAD', repoHead]);
       return 'synced';
+    } catch {
+      return 'unmerged';
     }
   }
 
