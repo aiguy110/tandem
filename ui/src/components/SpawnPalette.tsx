@@ -153,18 +153,19 @@ export function SpawnPalette() {
   const doSpawn = async (dir: RepoInfo, forceWorktree = false) => {
     setBusy(true);
     setError(null);
+    const spawnAdapter = advanced ? adapter : 'acp';
     const existing = useExisting && !forceWorktree;
     const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
     const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
     const spec: SpawnSpec = {
-      adapter: advanced ? adapter : 'acp',
-      agent: advanced && adapter === 'acp' ? agent : undefined,
+      adapter: spawnAdapter,
+      agent: spawnAdapter === 'acp' ? agent : undefined,
       workspace: existing
         ? { kind: 'existing', cwd: dir.path }
         : { kind: 'worktree', repo: dir.path, branch: branch || undefined, baseRef: baseRef || undefined },
       name: name || undefined,
       task: task.trim() || undefined,
-      sessionConfig: adapter === 'acp' ? {
+      sessionConfig: spawnAdapter === 'acp' ? {
         modeId: permission || undefined,
         configOptions: {
           ...(model && modelOption ? { [modelOption.id]: model } : {}),
@@ -172,7 +173,7 @@ export function SpawnPalette() {
         },
       } : undefined,
     };
-    if (adapter === 'acp') {
+    if (spawnAdapter === 'acp') {
       saveProjectAgent(dir.path, agent);
       saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
     }
