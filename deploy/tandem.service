@@ -6,6 +6,11 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/Projects/tandem
 Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/bin:/bin
+# Shared browser: drive per-agent CDP sessions through a self-hosted Steel
+# (docker: ghcr.io/steel-dev/steel-browser on :3000). Falls back to the
+# bundled LocalChromiumDriver only if these are unset (see docs/browser.md).
+Environment=TANDEM_BROWSER_DRIVER=steel
+Environment=STEEL_BASE_URL=http://localhost:3000
 ExecStart=%h/Projects/tandem/start-dev-server.sh
 Restart=on-failure
 RestartSec=5
