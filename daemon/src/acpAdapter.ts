@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { AsyncQueue } from './asyncQueue.ts';
 import { PathEscapeError } from './workspaceFs.ts';
-import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SpawnOpts } from './types.ts';
+import type { AgentAdapter, AgentEvent, ClientServices, SessionConfigOption, SessionModeState, SlashCommand, SpawnOpts } from './types.ts';
 
 let permCounter = 0;
 
@@ -36,6 +36,12 @@ function normalizeConfigOption(o: any): SessionConfigOption {
     }
   }
   return { id: o.id, name: o.name, description: o.description ?? undefined, category: o.category ?? undefined, type, currentValue: o.currentValue, options };
+}
+
+// Normalizes ACP's AvailableCommand (name/description/input.hint) into our flat
+// SlashCommand (input is just the hint string, or undefined if no input).
+function normalizeCommand(c: any): SlashCommand {
+  return { name: c.name, description: c.description ?? undefined, input: c.input?.hint ?? undefined };
 }
 
 function normalizeModes(m: any): SessionModeState | null {
@@ -69,6 +75,7 @@ export class AcpAdapter implements AgentAdapter {
   // config_option_update notifications. Null modes = agent doesn't support them.
   private modes: SessionModeState | null = null;
   private configOptions: SessionConfigOption[] = [];
+  private commands: SlashCommand[] = [];
 
   constructor(readonly id: string, private launch: { cmd: string; args: string[] }) {}
 
@@ -322,8 +329,12 @@ export class AcpAdapter implements AgentAdapter {
         this.configOptions = (u.configOptions ?? []).map(normalizeConfigOption);
         this.q.push({ kind: 'session_config', modes: this.modes, configOptions: this.configOptions });
         break;
-      // user_message_chunk / usage_update / available_commands_update / plan_removed
-      // / session_info_update are ignored for now.
+      case 'available_commands_update':
+        this.commands = (u.availableCommands ?? []).map(normalizeCommand);
+        this.q.push({ kind: 'available_commands', commands: this.commands });
+        break;
+      // user_message_chunk / usage_update / plan_removed / session_info_update
+      // are ignored for now.
     }
   }
 

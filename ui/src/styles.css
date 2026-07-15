@@ -220,7 +220,17 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .err-banner { border: 1px solid var(--err); background: var(--err-soft); color: var(--err); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-sm); }
 
 /* ---- prompt bar ---- */
-.prompt-bar { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); align-items: flex-end; }
+.prompt-bar { position: relative; display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); align-items: flex-end; }
+.slash-popup {
+  position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  box-shadow: var(--shadow); max-height: 220px; overflow-y: auto; z-index: 20;
+}
+.slash-row { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: var(--fs-sm); }
+.slash-row:hover, .slash-row.sel { background: var(--surface-2); }
+.slash-row .name { font-family: var(--font-mono); color: var(--agent); font-weight: 600; white-space: nowrap; }
+.slash-row .hint { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
+.slash-row .desc { color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .prompt-bar textarea {
   flex: 1; resize: none; min-height: 38px; max-height: 160px;
   background: var(--surface-2); color: var(--text); border: 1px solid var(--border);

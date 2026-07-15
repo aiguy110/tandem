@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
-import type { Approval, ToolStatus, WireEvent } from '../../wire';
+import type { Approval, SlashCommand, ToolStatus, WireEvent } from '../../wire';
 import { renderMarkdown } from '../../markdown';
+import { fuzzyFilter } from '../../fuzzy';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -258,6 +259,20 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
   );
 }
 
+// Finds a slash-command token ending at `caret`: a run of alphanumeric/-/_
+// chars immediately preceded by "/", anywhere in the text (not just at the
+// start of a line). Returns null once nothing has been typed after the "/"
+// yet, so the popup only appears once there's something to fuzzy-match.
+function findSlashToken(text: string, caret: number): { start: number; end: number; query: string } | null {
+  if (caret <= 0 || caret > text.length) return null;
+  let i = caret;
+  while (i > 0 && /[A-Za-z0-9_-]/.test(text[i - 1])) i--;
+  if (i === 0 || text[i - 1] !== '/') return null;
+  const query = text.slice(i, caret);
+  if (!query) return null;
+  return { start: i - 1, end: caret, query };
+}
+
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
   const interrupt = useStore((s) => s.interrupt);
@@ -265,6 +280,42 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[agentId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
+  const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const [caret, setCaret] = useState(0);
+  const [sel, setSel] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
+  const matches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
+  const showPopup = !!slash && matches.length > 0 && !dismissed;
+
+  // Re-arm the popup (and reset the highlighted row) whenever the token itself
+  // changes — a fresh "/" or continued typing should reopen it even if the
+  // previous token was dismissed with Escape.
+  useEffect(() => {
+    setSel(0);
+    setDismissed(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slash?.start, slash?.query]);
+
+  const updateCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart ?? 0);
+
+  const applyCommand = (cmd: SlashCommand | undefined) => {
+    if (!slash || !cmd) return;
+    const insertion = `/${cmd.name} `;
+    const next = text.slice(0, slash.start) + insertion + text.slice(slash.end);
+    setDraft(agentId, next);
+    const pos = slash.start + insertion.length;
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const el = textRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
 
   const send = () => {
     const t = text.trim();
@@ -274,11 +325,58 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
 
   return (
     <div className="prompt-bar">
+      {showPopup && (
+        <div className="slash-popup">
+          {matches.map((c, i) => (
+            <div
+              key={c.name}
+              className={`slash-row${i === sel ? ' sel' : ''}`}
+              onMouseEnter={() => setSel(i)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyCommand(c);
+              }}
+            >
+              <span className="name">/{c.name}</span>
+              {c.input && <span className="hint">{c.input}</span>}
+              {c.description && <span className="desc">{c.description}</span>}
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
+        ref={textRef}
         placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
         value={text}
-        onChange={(e) => setDraft(agentId, e.target.value)}
+        onChange={(e) => {
+          setDraft(agentId, e.target.value);
+          updateCaret(e.target);
+        }}
+        onClick={(e) => updateCaret(e.currentTarget)}
+        onKeyUp={(e) => updateCaret(e.currentTarget)}
         onKeyDown={(e) => {
+          if (showPopup) {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setSel((i) => Math.min(matches.length - 1, i + 1));
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setSel((i) => Math.max(0, i - 1));
+              return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+              e.preventDefault();
+              applyCommand(matches[sel]);
+              return;
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              setDismissed(true);
+              return;
+            }
+          }
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             send();
