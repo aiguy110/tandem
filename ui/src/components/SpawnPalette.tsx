@@ -5,6 +5,28 @@ import type { RepoInfo, SpawnSpec } from '../wire';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
+const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
+
+type SavedSettings = { model?: string; effort?: string; permission?: string };
+
+function settingsKey(agent: string, project: string) {
+  return `${agent}\u0000${project}`;
+}
+
+function loadSpawnSettings(agent: string, project: string): SavedSettings {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPAWN_SETTINGS_KEY) || '{}') as Record<string, SavedSettings>;
+    return all[settingsKey(agent, project)] ?? {};
+  } catch { return {}; }
+}
+
+function saveSpawnSettings(agent: string, project: string, value: SavedSettings) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPAWN_SETTINGS_KEY) || '{}') as Record<string, SavedSettings>;
+    all[settingsKey(agent, project)] = value;
+    localStorage.setItem(SPAWN_SETTINGS_KEY, JSON.stringify(all));
+  } catch { /* localStorage unavailable */ }
+}
 
 function loadRecentDirs(): string[] {
   try {
@@ -48,6 +70,9 @@ export function SpawnPalette() {
   const [baseRef, setBaseRef] = useState('');
   const [name, setName] = useState('');
   const [useExisting, setUseExisting] = useState(false);
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const [permission, setPermission] = useState('');
   const [error, setError] = useState<{ code: string; msg: string; dir: RepoInfo } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -62,6 +87,14 @@ export function SpawnPalette() {
     return recent.length > 0 ? recent.slice(0, RECENT_DIRS_MAX) : matched.slice(0, RECENT_DIRS_MAX);
   }, [query, dirs]);
   useEffect(() => setSel(0), [query]);
+  const selectedDir = filtered[sel];
+  useEffect(() => {
+    if (!selectedDir || adapter !== 'acp') return;
+    const saved = loadSpawnSettings(agent, selectedDir.path);
+    setModel(saved.model ?? '');
+    setEffort(saved.effort ?? '');
+    setPermission(saved.permission ?? '');
+  }, [agent, adapter, selectedDir?.path]);
   useEffect(() => {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
@@ -78,7 +111,15 @@ export function SpawnPalette() {
         : { kind: 'worktree', repo: dir.path, branch: branch || undefined, baseRef: baseRef || undefined },
       name: name || undefined,
       task: task.trim() || undefined,
+      sessionConfig: adapter === 'acp' ? {
+        modeId: permission || undefined,
+        configOptions: {
+          ...(model ? { model } : {}),
+          ...(effort ? { thought_level: effort } : {}),
+        },
+      } : undefined,
     };
+    if (adapter === 'acp') saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
     const r = await spawn(spec);
     setBusy(false);
     if (r.error) {
@@ -145,7 +186,7 @@ export function SpawnPalette() {
         <div className="rows">
           {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
           {filtered.map((d, i) => (
-            <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => !busy && doSpawn(d)}>
+            <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => !advanced && setSel(i)} onClick={() => !busy && doSpawn(d)}>
               <div>
                 <div className="primary">{d.name}</div>
                 <div className="sub">{d.path}</div>
@@ -168,14 +209,22 @@ export function SpawnPalette() {
               </select>
             </label>
             {adapter === 'acp' && (
-              <label>
-                Agent
-                <select value={agent} onChange={(e) => setAgent(e.target.value)}>
-                  <option value="claude">claude</option>
-                  <option value="codex">codex</option>
-                  <option value="pi">pi</option>
-                </select>
-              </label>
+              <>
+                <label>
+                  Agent
+                  <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+                    <option value="claude">claude</option>
+                    <option value="codex">codex</option>
+                    <option value="pi">pi</option>
+                  </select>
+                </label>
+                <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="agent default" list="spawn-models" /></label>
+                <label>Effort<input value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="agent default" list="spawn-efforts" /></label>
+                <label>Permissions<input value={permission} onChange={(e) => setPermission(e.target.value)} placeholder="agent default" list="spawn-permissions" /></label>
+                <datalist id="spawn-models">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.configOptions.find((o) => o.category === 'model')?.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</datalist>
+                <datalist id="spawn-efforts">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.configOptions.find((o) => o.category === 'thought_level')?.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</datalist>
+                <datalist id="spawn-permissions">{Object.values(agents).filter((a) => a.agent === agent).flatMap((a) => a.sessionConfig?.modes?.availableModes ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</datalist>
+              </>
             )}
             <label>
               Name
@@ -223,7 +272,10 @@ export function SpawnPalette() {
             <span className="kbd">⇥</span> add task
           </span>
           <span>
-            <span className="kbd">⌘↵</span> advanced
+            <button className="btn" type="button" onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced}>
+              {advanced ? 'Hide advanced' : 'Advanced settings'}
+            </button>
+            <span className="kbd">⌘↵</span>
           </span>
           <span>
             <span className="kbd">↑↓</span> select

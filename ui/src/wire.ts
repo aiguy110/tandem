@@ -75,6 +75,7 @@ export interface RepoInfo {
 export interface AgentSummary {
   id: string;
   name: string;
+  agent?: string;
   workspace: {
     kind: 'worktree' | 'existing';
     repo: string;
@@ -125,6 +126,7 @@ export interface SpawnSpec {
   workspace: Workspace;
   name?: string;
   task?: string;
+  sessionConfig?: { modeId?: string; configOptions?: Record<string, string | boolean> };
   preset?: string;
 }
 

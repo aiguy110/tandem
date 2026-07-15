@@ -80,7 +80,7 @@ export class AgentRegistry {
           ws.kind === 'worktree'
             ? { kind: 'worktree' as const, repo: path.basename(ws.repo), repoPath: ws.repo, branch: ws.branch ?? `tandem/${s.name}`, cwd, gitState }
             : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd, gitState };
-        return { id: s.id, name: s.name, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length, controlMode: s.controlMode };
+        return { id: s.id, name: s.name, agent: s.spec.agent ?? this.config.acp.default, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length, controlMode: s.controlMode };
       }),
     );
   }
@@ -215,6 +215,12 @@ export class AgentRegistry {
     await session.start({ cwd, mcpServers: this.mcpServersFor(id) });
     // The ACP sessionId is known once session/new resolves — persist it for restore.
     if (session.acpSessionId) this.db.setSessionId(id, session.acpSessionId);
+
+    const initial = spec.sessionConfig;
+    if (initial?.modeId) await session.setMode(initial.modeId).catch((e) => console.warn(`[spawn] ignored saved permission mode ${initial.modeId}:`, (e as Error).message));
+    for (const [configId, value] of Object.entries(initial?.configOptions ?? {})) {
+      await session.setConfigOption(configId, value).catch((e) => console.warn(`[spawn] ignored saved config option ${configId}:`, (e as Error).message));
+    }
 
     if (spec.task) void session.prompt(spec.task); // dispatch initial prompt (fire-and-forget turn)
     return session;

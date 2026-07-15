@@ -212,6 +212,9 @@ export interface SpawnSpec {
   workspace: Workspace;
   name?: string; // auto: web-1, api-2…
   task?: string; // optional initial prompt, dispatched on spawn
+  // Initial ACP configuration, applied after session/new reveals the session's
+  // controls and before an optional first task is dispatched.
+  sessionConfig?: { modeId?: string; configOptions?: Record<string, string | boolean> };
   preset?: string; // reserved; single default agent for now
 }
 
@@ -297,6 +300,7 @@ export interface Approval {
 export interface AgentSummary {
   id: string;
   name: string;
+  agent?: string;
   // `repo` is a display basename; `repoPath` is the full source-repo path (the
   // spawn origin, needed for "sibling" spawns); `cwd` is this agent's checkout.
   // `gitState`: 'dirty' (uncommitted changes) > 'unmerged' (committed but not yet
