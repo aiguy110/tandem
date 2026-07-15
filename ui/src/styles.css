@@ -209,6 +209,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: var(--fs-sm); }
 .card-head .title { flex: 1; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-body { border-top: 1px solid var(--border); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: pre-wrap; }
+.tool-args { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.tool-args-label { font-family: var(--font-sans, inherit); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-dim)); margin-bottom: 4px; }
+.tool-args pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .chip { font-size: var(--fs-xs); padding: 1px 7px; border-radius: 4px; text-transform: capitalize; white-space: nowrap; }
 .chip.pending { color: var(--text-dim); background: var(--surface-3); }
 .chip.running { color: var(--working); background: var(--working-soft); }

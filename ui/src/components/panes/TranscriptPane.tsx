@@ -14,7 +14,7 @@ type Item =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'message'; key: string; text: string }
   | { kind: 'thought'; key: string; text: string }
-  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown }
+  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
@@ -53,8 +53,9 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           existing.title = ev.title || existing.title;
           existing.status = ev.status;
           if (ev.content != null) existing.content = ev.content;
+          if (ev.rawInput != null) existing.rawInput = ev.rawInput;
         } else {
-          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content };
+          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput };
           tools.set(ev.id, item);
           items.push(item);
         }
@@ -230,10 +231,25 @@ function formatToolContent(content: unknown): string | null {
   return JSON.stringify(content, null, 2);
 }
 
+// rawInput is the ACP tool_call's arguments (e.g. { path, content } for a
+// write) — kept separate from `content`, which is the tool's *output*. Shown
+// as pretty-printed JSON since it's a structured params object, not prose.
+function formatArgs(rawInput: unknown): string | null {
+  if (rawInput == null) return null;
+  if (typeof rawInput === 'string') return rawInput || null;
+  try {
+    const s = JSON.stringify(rawInput, null, 2);
+    return s === '{}' ? null : s;
+  } catch {
+    return null;
+  }
+}
+
 function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   const [open, setOpen] = useState(false);
   const body = formatToolContent(item.content);
-  const hasBody = body != null;
+  const args = formatArgs(item.rawInput);
+  const hasBody = body != null || args != null;
   return (
     <div className="card">
       <div className="card-head" onClick={() => hasBody && setOpen((o) => !o)}>
@@ -241,7 +257,17 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
         <span className="title">{item.title}</span>
         <span className={`chip ${item.status}`}>{item.status}</span>
       </div>
-      {open && hasBody && <div className="card-body">{body}</div>}
+      {open && hasBody && (
+        <div className="card-body">
+          {args != null && (
+            <div className="tool-args">
+              <div className="tool-args-label">Arguments</div>
+              <pre>{args}</pre>
+            </div>
+          )}
+          {body != null && <div className="tool-output">{body}</div>}
+        </div>
+      )}
     </div>
   );
 }
