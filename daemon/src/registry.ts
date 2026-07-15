@@ -10,7 +10,7 @@ import { WorkspaceManager, listRepos } from './workspace.ts';
 import { buildBrowserMcpServers, type BrowserWiring } from './browser/mcpWiring.ts';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
-import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnSpec } from './types.ts';
+import type { AgentAdapter, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
 
 // A short rotating word pool for auto-names: web-1, api-2, db-3, … (docs D9).
 const NAME_WORDS = ['web', 'api', 'db', 'cli', 'ui', 'svc', 'job', 'net'];
@@ -115,6 +115,17 @@ export class AgentRegistry {
   /** Repo discovery for the quick-spawn palette (list_dirs). */
   listDirs(): Promise<RepoInfo[]> {
     return listRepos(this.config.projectRoots, this.config.dirScanDepth, (repo) => this.hasLiveAgentForRepo(repo));
+  }
+  async spawnOptions(agent: string, cwd: string): Promise<SpawnOptions> {
+    const launch = this.config.acp.override ?? this.config.acp.agents[agent];
+    if (!launch) throw new Error(`unknown agent: ${agent}`);
+    const probe = new AcpAdapter(`spawn-options-${agent}`, launch);
+    try {
+      await probe.spawn({ cwd, mcpServers: [] });
+      return probe.sessionConfig;
+    } finally {
+      await probe.dispose();
+    }
   }
   private autoName(): string {
     const n = ++this.counter;

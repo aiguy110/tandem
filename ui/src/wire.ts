@@ -130,6 +130,11 @@ export interface SpawnSpec {
   preset?: string;
 }
 
+export interface SpawnOptions {
+  modes: SessionModeState | null;
+  configOptions: SessionConfigOption[];
+}
+
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
@@ -141,6 +146,7 @@ export type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; cwd: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
@@ -174,6 +180,7 @@ export type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
+  | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }
   | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; agentId: string; active: boolean; controlOwner: 'agent' | 'user' };

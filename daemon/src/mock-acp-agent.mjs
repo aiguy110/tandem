@@ -108,7 +108,14 @@ function handle(msg) {
     return;
   }
   if (msg.method === 'session/new') {
-    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId } });
+    send({ jsonrpc: '2.0', id: msg.id, result: {
+      sessionId,
+      modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'auto', name: 'Automatic' }] },
+      configOptions: [
+        { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'mock-large', options: [{ value: 'mock-large', name: 'Mock Large' }] },
+        { id: 'thought_level', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'medium', options: [{ value: 'medium', name: 'Medium' }] },
+      ],
+    } });
     return;
   }
   if (msg.method === 'session/load') {

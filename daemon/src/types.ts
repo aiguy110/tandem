@@ -218,6 +218,11 @@ export interface SpawnSpec {
   preset?: string; // reserved; single default agent for now
 }
 
+export interface SpawnOptions {
+  modes: SessionModeState | null;
+  configOptions: SessionConfigOption[];
+}
+
 // A persisted agent row (D14). `spec` + `acpSessionId` are what restore needs.
 // `cwd` (Phase 2) is the resolved working directory — the worktree checkout
 // path for `kind:'worktree'`, or the raw dir for `kind:'existing'` — so
@@ -339,6 +344,7 @@ export type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; cwd: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
@@ -374,6 +380,7 @@ export type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] } // reply to list_agents
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] } // reply to list_dirs
+  | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog } // reply to list_sessions
   // Phase 5 browser channel. `browser_frame` is a CDP screencast frame (JSON +
   // base64; real binary framing is a future optimization). `browser_state`

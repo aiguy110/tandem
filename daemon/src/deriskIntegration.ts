@@ -68,6 +68,17 @@ async function main() {
   const found = dirs.find((d: any) => d.path === repo);
   checks.push(['list_dirs discovered the temp repo', !!found, `repos=${dirs.length}, branch=${found?.currentBranch}`]);
 
+  // ── ACP-backed advanced spawn controls ─────────────────────────────
+  c.send({ t: 'get_spawn_options', agent: 'claude', cwd: repo, corrId: 'spawn-options' });
+  await sleep(500);
+  const spawnOptions = (c.frames.find((f) => f.t === 'spawn_options' && f.corrId === 'spawn-options') as any)?.options;
+  const optionCategories = spawnOptions?.configOptions?.map((o: any) => o.category) ?? [];
+  checks.push([
+    'spawn options came from a fresh ACP session',
+    spawnOptions?.modes?.availableModes?.length === 2 && optionCategories.includes('model') && optionCategories.includes('thought_level'),
+    `modes=${spawnOptions?.modes?.availableModes?.length ?? 0}, categories=${optionCategories.join(',')}`,
+  ]);
+
   // ── spawn a worktree agent (Phases 1+2) ─────────────────────────────
   c.send({ t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo } } });
   await sleep(1500);

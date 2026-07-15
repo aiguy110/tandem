@@ -242,6 +242,15 @@ export function startServer(
         conn.send({ t: 'ack', corrId: m.corrId, agentId: session.id });
         break;
       }
+      case 'get_spawn_options': {
+        try {
+          const options = await registry.spawnOptions(m.agent, m.cwd);
+          conn.send({ t: 'spawn_options', corrId: m.corrId, options });
+        } catch (error) {
+          conn.send({ t: 'spawn_options', corrId: m.corrId, error: (error as Error).message });
+        }
+        break;
+      }
       case 'close_agent': {
         let ok = false;
         try {
