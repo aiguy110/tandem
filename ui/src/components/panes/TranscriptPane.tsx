@@ -284,10 +284,12 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
   const { modes, configOptions } = sessionConfig;
   // The model selector is a config option with category 'model' (pinned id
   // "model" on the real agent, but category is the spec-sanctioned way to find
-  // it). Everything else with category 'mode' is redundant with `modes` below.
+  // it). 'thought_level' is the spec's thinking-effort selector. Everything
+  // else with category 'mode' is redundant with `modes` below.
   const modelOpt = configOptions.find((o) => o.category === 'model' && o.type === 'select');
+  const thoughtLevelOpt = configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
   const hasModes = !!modes && modes.availableModes.length > 0;
-  if (!hasModes && !modelOpt) return null;
+  if (!hasModes && !modelOpt && !thoughtLevelOpt) return null;
 
   return (
     <div className="session-config-bar">
@@ -296,6 +298,21 @@ function SessionConfigBar({ agentId, sessionConfig }: { agentId: string; session
           Model
           <select value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
             {(modelOpt.options ?? []).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {thoughtLevelOpt && (
+        <label>
+          Thinking
+          <select
+            value={String(thoughtLevelOpt.currentValue)}
+            onChange={(e) => setConfigOption(agentId, thoughtLevelOpt.id, e.target.value)}
+          >
+            {(thoughtLevelOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.name}
               </option>
