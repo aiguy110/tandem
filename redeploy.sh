@@ -28,6 +28,7 @@ if [[ -r "$token_path" ]]; then
       echo "==> Deferred restart requested."
     fi
     echo "==> ${active_turns} agent(s) currently mid-turn; tandem.service will automatically restart once all agents are finished."
+    echo "==> If you are an AI agent, the count above likely includes you. You must first end your turn for the restart to proceed."
     exit 0
   fi
 fi
