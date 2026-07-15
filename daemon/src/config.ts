@@ -46,6 +46,7 @@ export interface Config {
     userDataRoot: string; // per-agent chromium user-data dirs under TANDEM_HOME
     steelBaseUrl?: string; // STEEL_BASE_URL (required for driver=steel)
     steelApiKey?: string; // STEEL_API_KEY (optional)
+    steelSessionOptions: Record<string, unknown>; // merged into POST /v1/sessions
     // Register the Playwright + Tandem-control MCP servers at session/new.
     // TANDEM_BROWSER_MCP=off disables it (mock/derisk suites keep it off unless
     // testing browsers); default ON for real agents.
@@ -129,6 +130,18 @@ function resumeClisFromEnv(): Record<string, ResumeCliLaunch> {
   return defaults;
 }
 
+function parseSteelSessionOptions(raw?: string): Record<string, unknown> {
+  if (!raw) return {};
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`STEEL_SESSION_OPTIONS must be valid JSON: ${(error as Error).message}`);
+  }
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('STEEL_SESSION_OPTIONS must be a JSON object');
+  return value as Record<string, unknown>;
+}
+
 export function loadConfig(): Config {
   const home = process.env.TANDEM_HOME || path.join(os.homedir(), '.tandem');
   fs.mkdirSync(home, { recursive: true });
@@ -159,6 +172,7 @@ export function loadConfig(): Config {
       userDataRoot: path.join(home, 'browser-profiles'),
       steelBaseUrl: process.env.STEEL_BASE_URL || undefined,
       steelApiKey: process.env.STEEL_API_KEY || undefined,
+      steelSessionOptions: parseSteelSessionOptions(process.env.STEEL_SESSION_OPTIONS),
       // Default ON; TANDEM_BROWSER_MCP=off disables. (The mock-agent derisk suites
       // set it off; derisk:browser drives the broker directly.)
       mcpEnabled: process.env.TANDEM_BROWSER_MCP !== 'off',

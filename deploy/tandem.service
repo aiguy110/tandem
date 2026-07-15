@@ -11,6 +11,10 @@ Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/bin:/bin
 # bundled LocalChromiumDriver only if these are unset (see docs/browser.md).
 Environment=TANDEM_BROWSER_DRIVER=steel
 Environment=STEEL_BASE_URL=http://localhost:3000
+# Keep this major version aligned with the Chromium bundled by the Steel image.
+# This removes the explicit HeadlessChrome token; CHROME_HEADLESS=false on the
+# Steel container is preferable when the host can run its display-capable mode.
+Environment="STEEL_SESSION_OPTIONS={\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36\",\"dimensions\":{\"width\":1365,\"height\":768},\"persistProfile\":true}"
 ExecStart=%h/Projects/tandem/start-dev-server.sh
 Restart=on-failure
 RestartSec=5

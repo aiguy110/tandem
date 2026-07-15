@@ -166,8 +166,9 @@ function killAndWait(proc: ChildProcess): Promise<void> {
 export class SteelDriver implements BrowserDriver {
   readonly kind = 'steel';
   private sessions = new Map<string, string>(); // agentId -> steel session id
+  private profiles = new Map<string, string>(); // agentId -> reusable Steel Cloud profile
 
-  constructor(private opts: { baseUrl: string; apiKey?: string }) {}
+  constructor(private opts: { baseUrl: string; apiKey?: string; sessionOptions?: Record<string, unknown> }) {}
 
   isProvisioned(agentId: string): boolean {
     return this.sessions.has(agentId);
@@ -190,14 +191,27 @@ export class SteelDriver implements BrowserDriver {
     const existing = this.sessions.get(agentId);
     if (existing) return { cdpUrl: this.cdpUrlFor(existing) };
 
+    const profileId = this.profiles.get(agentId);
+    const sessionOptions = {
+      dimensions: { width: 1280, height: 800 },
+      // Steel Cloud persists the browser user-data directory when supported.
+      // Self-hosted Steel safely ignores fields outside its smaller schema.
+      persistProfile: true,
+      ...(profileId ? { profileId } : {}),
+      ...this.opts.sessionOptions,
+    };
     const res = await fetch(`${this.base}/v1/sessions`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ dimensions: { width: 1280, height: 800 } }),
+      body: JSON.stringify(sessionOptions),
     });
-    if (!res.ok) throw new Error(`steel: create session failed (${res.status} ${res.statusText})`);
-    const body = (await res.json()) as { id: string; websocketUrl?: string; cdpUrl?: string };
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`steel: create session failed (${res.status} ${res.statusText})${detail ? `: ${detail}` : ''}`);
+    }
+    const body = (await res.json()) as { id: string; websocketUrl?: string; cdpUrl?: string; profileId?: string };
     this.sessions.set(agentId, body.id);
+    if (body.profileId) this.profiles.set(agentId, body.profileId);
     const cdpUrl = this.normalizeWs(body.cdpUrl ?? body.websocketUrl) ?? this.cdpUrlFor(body.id);
     return { cdpUrl };
   }
@@ -241,12 +255,13 @@ export interface BrowserDriverConfig {
   userDataRoot: string;
   steelBaseUrl?: string;
   steelApiKey?: string;
+  steelSessionOptions?: Record<string, unknown>;
 }
 
 export function makeDriver(cfg: BrowserDriverConfig): BrowserDriver {
   if (cfg.driver === 'steel') {
     if (!cfg.steelBaseUrl) throw new Error('TANDEM_BROWSER_DRIVER=steel requires STEEL_BASE_URL');
-    return new SteelDriver({ baseUrl: cfg.steelBaseUrl, apiKey: cfg.steelApiKey });
+    return new SteelDriver({ baseUrl: cfg.steelBaseUrl, apiKey: cfg.steelApiKey, sessionOptions: cfg.steelSessionOptions });
   }
   return new LocalChromiumDriver({ userDataRoot: cfg.userDataRoot });
 }

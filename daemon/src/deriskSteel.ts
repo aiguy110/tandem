@@ -28,6 +28,7 @@ import { sleep, rule, report } from './testHarness.ts';
 
 const BASE = (process.env.STEEL_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const API_KEY = process.env.STEEL_API_KEY || undefined;
+const SESSION_OPTIONS = process.env.STEEL_SESSION_OPTIONS ? (JSON.parse(process.env.STEEL_SESSION_OPTIONS) as Record<string, unknown>) : undefined;
 
 function steelHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'content-type': 'application/json' };
@@ -81,7 +82,7 @@ async function main() {
   console.log(`  Steel: ${BASE}${API_KEY ? ' (api key set)' : ''}\n`);
 
   const checks: [string, boolean, string][] = [];
-  const driver = new SteelDriver({ baseUrl: BASE, apiKey: API_KEY });
+  const driver = new SteelDriver({ baseUrl: BASE, apiKey: API_KEY, sessionOptions: SESSION_OPTIONS });
   const broker = new BrowserBroker(driver);
   await broker.start();
   const id = 'web-1';
@@ -99,9 +100,13 @@ async function main() {
   await page.goto('data:text/html,<title>tandem-steel</title><h1 id="h">shared browser via Steel</h1>', { waitUntil: 'load' });
   const heading = await page.locator('#h').innerText().catch(() => '');
   const agentDrives = /shared browser via steel/i.test(heading);
+  const userAgent = await page.evaluate(() => navigator.userAgent);
   const provisioned = driver.isProvisioned(id);
   checks.push(['(a) laziness: no Steel session until first CDP hit', coldAtStart, `coldAtStart=${coldAtStart}`]);
   checks.push(['(b) agent drives a page through the broker proxy (connectOverCDP)', agentDrives && provisioned, `#h="${heading}" provisioned=${provisioned}`]);
+  if (typeof SESSION_OPTIONS?.userAgent === 'string') {
+    checks.push(['(b2) configured Steel user agent reaches the page', userAgent === SESSION_OPTIONS.userAgent, userAgent]);
+  }
 
   // ============ (c) provision created a live Steel session ============
   await sleep(200);

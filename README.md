@@ -61,7 +61,9 @@ Docker and point Tandem at it:
 
 ```bash
 docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
-  ghcr.io/steel-dev/steel-browser:latest
+  -e CHROME_HEADLESS=false -e DISPLAY=:10 \
+  --entrypoint /bin/sh ghcr.io/steel-dev/steel-browser:latest \
+  -c 'Xvfb :10 -screen 0 1920x1080x24 -nolisten tcp & exec /app/api/entrypoint.sh'
 TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
 ```
 

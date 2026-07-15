@@ -25,6 +25,7 @@ async function main() {
     userDataRoot: config.browser.userDataRoot,
     steelBaseUrl: config.browser.steelBaseUrl,
     steelApiKey: config.browser.steelApiKey,
+    steelSessionOptions: config.browser.steelSessionOptions,
   });
   const broker = new BrowserBroker(driver);
   await broker.start();
