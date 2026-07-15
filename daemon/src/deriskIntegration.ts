@@ -97,6 +97,12 @@ async function main() {
   const permEv = c.eventsFor(a1).find((e) => e.kind === 'permission_request') as any;
   const streamed = c.eventsFor(a1).some((e) => e.kind === 'message_chunk' || e.kind === 'tool_call');
   checks.push(['prompt streamed and raised a permission_request', !!permEv && streamed, `reqId=${permEv?.reqId}, streamed=${streamed}`]);
+  const usageEv = c.eventsFor(a1).find((e) => e.kind === 'usage') as any;
+  checks.push([
+    'ACP usage_update reached the durable client event stream',
+    usageEv?.used === 12300 && usageEv?.size === 1000000 && usageEv?.cost?.currency === 'USD',
+    `used=${usageEv?.used}, size=${usageEv?.size}, currency=${usageEv?.cost?.currency}`,
+  ]);
 
   if (permEv) {
     const allow = permEv.options?.[0]?.optionId;

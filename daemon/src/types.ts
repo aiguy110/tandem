@@ -74,6 +74,9 @@ export type AgentEvent =
   // The agent's slash-command menu, pushed once known and again on every
   // available_commands_update. The UI folds this to "latest wins" like `status`.
   | { kind: 'available_commands'; commands: SlashCommand[] }
+  // Current context-window occupancy and optional cumulative session cost,
+  // normalized from ACP usage_update. Latest value wins in client projections.
+  | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
   // Agent-initiated browser handoff (docs/browser.md Attention): the agent called
   // the Tandem-control MCP's browser.request_takeover. A normalized event so it
   // logs, replays, and folds into the attention rail. `reason` is human-facing.

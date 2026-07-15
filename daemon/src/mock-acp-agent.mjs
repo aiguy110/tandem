@@ -159,6 +159,7 @@ function handle(msg) {
 
 // ---- default turn (Phase 1/2 approval flow, unchanged) ----
 function runDefault() {
+  note({ sessionUpdate: 'usage_update', used: 12300, size: 1000000, cost: { amount: 0.045, currency: 'USD' } });
   note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working on it. ' } });
   note({
     sessionUpdate: 'plan',

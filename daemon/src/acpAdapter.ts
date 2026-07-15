@@ -363,7 +363,15 @@ export class AcpAdapter implements AgentAdapter {
         this.commands = (u.availableCommands ?? []).map(normalizeCommand);
         this.push({ kind: 'available_commands', commands: this.commands });
         break;
-      // user_message_chunk / usage_update / plan_removed / session_info_update
+      case 'usage_update':
+        if (Number.isFinite(u.used) && Number.isFinite(u.size) && u.used >= 0 && u.size > 0) {
+          const cost = u.cost && Number.isFinite(u.cost.amount) && typeof u.cost.currency === 'string'
+            ? { amount: u.cost.amount, currency: u.cost.currency }
+            : u.cost === null ? null : undefined;
+          this.push({ kind: 'usage', used: u.used, size: u.size, cost });
+        }
+        break;
+      // user_message_chunk / plan_removed / session_info_update
       // are ignored for now.
     }
   }
