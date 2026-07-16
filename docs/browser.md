@@ -119,6 +119,9 @@ One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(age
 Config: `TANDEM_BROWSER_DRIVER=local|steel` (default `local`; `steel` requires
 `STEEL_BASE_URL`, optional `STEEL_API_KEY`). `TANDEM_BROWSER_MCP=off` disables the MCP
 registration at `session/new` (mock-agent derisk suites run with it off; default on).
+The Go local driver accepts `TANDEM_CHROMIUM_EXECUTABLE`; when unset it searches ordinary
+Chromium/Chrome executable names on `PATH` (and standard macOS application paths). It does
+not depend on Playwright's private browser installation or `chromium.executablePath()`.
 
 ### Self-hosting Steel
 

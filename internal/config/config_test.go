@@ -33,7 +33,8 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 		"TANDEM_NODE_CMD": "/fixtures/bin/node", "TANDEM_BIND": "0.0.0.0", "TANDEM_PORT": "8123",
 		"TANDEM_UI_DIR": "/ui", "TANDEM_PROJECT_ROOTS": filepath.Join("", "one") + string(os.PathListSeparator) + filepath.Join("", "two"),
 		"TANDEM_DIR_SCAN_DEPTH": "3", "TANDEM_BROWSER_DRIVER": "steel", "TANDEM_BROWSER_MCP": "off",
-		"STEEL_BASE_URL": "https://steel.invalid", "STEEL_API_KEY": "secret", "STEEL_SESSION_OPTIONS": `{"width":1280}`,
+		"TANDEM_CHROMIUM_EXECUTABLE": "/fixtures/bin/chromium",
+		"STEEL_BASE_URL":             "https://steel.invalid", "STEEL_API_KEY": "secret", "STEEL_SESSION_OPTIONS": `{"width":1280}`,
 		"TANDEM_ACP_CMD": `["mock","--stdio"]`, "TANDEM_ACP_CMD_CODEX": "codex-custom --acp",
 		"TANDEM_RESUME_CMD_PI": `["pi-custom","--session","{sessionId}"]`,
 	})
@@ -58,6 +59,9 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	}
 	if c.Browser.Driver != "steel" || c.Browser.MCPEnabled || c.Browser.SteelSessionOptions["width"] != float64(1280) {
 		t.Fatalf("browser env missing: %+v", c.Browser)
+	}
+	if c.Browser.ChromiumExecutable != "/fixtures/bin/chromium" {
+		t.Fatalf("explicit chromium executable missing: %+v", c.Browser)
 	}
 	if c.DBPath != filepath.Join(c.Home, "tandem.db") || c.TokenPath != filepath.Join(c.Home, "token") {
 		t.Fatalf("home derivation incorrect: %+v", c)

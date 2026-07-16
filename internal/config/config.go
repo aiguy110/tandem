@@ -53,6 +53,7 @@ type ACPConfig struct {
 type BrowserConfig struct {
 	Driver              string         `json:"driver"`
 	UserDataRoot        string         `json:"userDataRoot"`
+	ChromiumExecutable  string         `json:"chromiumExecutable,omitempty"`
 	SteelBaseURL        string         `json:"steelBaseUrl,omitempty"`
 	SteelAPIKey         string         `json:"steelApiKey,omitempty"`
 	SteelSessionOptions map[string]any `json:"steelSessionOptions"`
@@ -168,7 +169,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Profiles: cat.profiles, DefaultProfile: cat.defaultProfile,
-		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off"},
+		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off"},
 	}, nil
 }
 
