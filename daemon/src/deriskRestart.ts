@@ -13,60 +13,29 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { rule, report, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon as startDaemonProcess, type RunningDaemon } from './processHarness.ts';
 
-const PORT = 7725;
+const PORT = Number(process.env.TANDEM_TEST_PORT || 7725);
 const mockPath = new URL('./mock-acp-agent.mjs', import.meta.url).pathname;
-const indexPath = new URL('./index.ts', import.meta.url).pathname;
-const tsxBin = new URL('../node_modules/.bin/tsx', import.meta.url).pathname;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 );
 
-interface Daemon {
-  proc: ChildProcess;
-  token: string;
-  stderr: () => string;
-  stop: () => Promise<void>;
-}
+type Daemon = RunningDaemon;
 
 function startDaemon(home: string): Promise<Daemon> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(tsxBin, [indexPath], {
+  return startDaemonProcess({
+      command: parseDaemonCommand(), home, port: PORT,
       env: {
-        ...process.env,
         TANDEM_HOME: home,
         TANDEM_PORT: String(PORT),
         TANDEM_BIND: '127.0.0.1',
         TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]),
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = '';
-    let err = '';
-    proc.stdout!.on('data', (d) => {
-      out += d.toString();
-      const m = /TANDEM_READY port=\d+ token=(\S+)/.exec(out);
-      if (m) {
-        resolve({
-          proc,
-          token: m[1],
-          stderr: () => err,
-          stop: () =>
-            new Promise<void>((res) => {
-              proc.on('exit', () => res());
-              proc.kill('SIGTERM');
-            }),
-        });
-      }
-    });
-    proc.stderr!.on('data', (d) => (err += d.toString()));
-    proc.on('exit', (code) => reject(new Error(`daemon exited early (code ${code})\n${err}`)));
-    setTimeout(() => reject(new Error('daemon did not become ready in 10s')), 10000);
   });
 }
 

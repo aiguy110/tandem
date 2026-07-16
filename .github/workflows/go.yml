@@ -51,3 +51,41 @@ jobs:
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go build -ldflags "-X github.com/aiguy110/tandem/internal/buildinfo.Version=${VERSION} -X github.com/aiguy110/tandem/internal/buildinfo.Commit=${COMMIT} -X github.com/aiguy110/tandem/internal/buildinfo.BuildTime=${BUILD_TIME}" ./cmd/tandem
           test "$(./tandem version)" = "tandem version=${VERSION} commit=${COMMIT} built=${BUILD_TIME}"
+
+  implementation-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: daemon/package-lock.json
+      - name: Install harness dependencies
+        working-directory: daemon
+        run: npm ci
+      - name: Build native daemon
+        run: go build -o "${RUNNER_TEMP}/tandem-go" ./cmd/tandem
+      - name: Run Node deep de-risk suite
+        working-directory: daemon
+        run: npm test
+      - name: Compare public behavior and cross-runtime restore
+        working-directory: daemon
+        env:
+          TANDEM_NODE_DAEMON_CMD: '["./node_modules/.bin/tsx","src/index.ts"]'
+          TANDEM_GO_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
+        run: npm run derisk:parity
+      - name: Run process restart suite against both implementations
+        working-directory: daemon
+        run: |
+          TANDEM_DAEMON_CMD='["./node_modules/.bin/tsx","src/index.ts"]' TANDEM_TEST_PORT=17725 npx tsx src/deriskRestart.ts
+          TANDEM_DAEMON_CMD='["${{ runner.temp }}/tandem-go","daemon"]' TANDEM_TEST_PORT=17726 npx tsx src/deriskRestart.ts
+      - name: Run process workspace suite against both implementations
+        working-directory: daemon
+        run: |
+          TANDEM_DAEMON_CMD='["./node_modules/.bin/tsx","src/index.ts"]' TANDEM_TEST_PORT=17729 npx tsx src/deriskWorkspace.ts
+          TANDEM_DAEMON_CMD='["${{ runner.temp }}/tandem-go","daemon"]' TANDEM_TEST_PORT=17730 npx tsx src/deriskWorkspace.ts
