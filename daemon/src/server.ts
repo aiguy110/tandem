@@ -37,7 +37,7 @@ function channelOf(ev: AgentEvent): Channel {
 }
 
 // raw_pty carries bytes; JSON can't, so base64 it on the wire.
-function serialize(ev: AgentEvent): WireEvent {
+export function serializeWireEvent(ev: AgentEvent): WireEvent {
   if (ev.kind === 'raw_pty') return { kind: 'raw_pty', dataB64: Buffer.from(ev.data).toString('base64') };
   return ev;
 }
@@ -431,19 +431,19 @@ export function startServer(
     const log = session.log;
     if (sinceSeq > 0 && !log.hasGap(sinceSeq) && sinceSeq <= log.head) {
       // Gapless replay from the client's checkpoint (ring or SQLite backstop).
-      for (const le of log.since(sinceSeq)) if (wants(le.event)) conn.send({ t: 'event', agentId: session.id, seq: le.seq, event: serialize(le.event) });
+      for (const le of log.since(sinceSeq)) if (wants(le.event)) conn.send({ t: 'event', agentId: session.id, seq: le.seq, event: serializeWireEvent(le.event) });
     } else {
       // Fresh (or gap too large): full snapshot reconstructed from the persisted
       // log — this is how a restored agent's pre-restart history reaches a client.
       const transcript = session.log
         .fullHistory()
         .filter((le) => wants(le.event))
-        .map((le) => ({ seq: le.seq, event: serialize(le.event) }));
+        .map((le) => ({ seq: le.seq, event: serializeWireEvent(le.event) }));
       conn.send({ t: 'snapshot', agentId: session.id, seq: log.head, transcript, status: session.status, controlMode: session.controlMode, pendingApprovals: session.pendingApprovals() });
     }
 
     const eventUnsub = session.onEvent((le) => {
-      if (wants(le.event)) conn.send({ t: 'event', agentId: session.id, seq: le.seq, event: serialize(le.event) });
+      if (wants(le.event)) conn.send({ t: 'event', agentId: session.id, seq: le.seq, event: serializeWireEvent(le.event) });
     });
 
     // Browser channel: stream screencast frames + control-owner state for THIS

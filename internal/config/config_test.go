@@ -1,0 +1,259 @@
+package config
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+type catalogGolden struct {
+	DefaultAgent   string             `json:"defaultAgent"`
+	DefaultProfile string             `json:"defaultProfile,omitempty"`
+	Agents         map[string]Agent   `json:"agents"`
+	Profiles       map[string]Profile `json:"profiles"`
+}
+
+func options(t *testing.T, env map[string]string) Options {
+	t.Helper()
+	home := t.TempDir()
+	if env == nil {
+		env = map[string]string{}
+	}
+	env["TANDEM_HOME"] = home
+	return Options{Env: env, HomeDir: "/fixtures/user", DaemonRoot: "/fixtures/tandem/daemon", TandemRoot: "/fixtures/tandem"}
+}
+
+func TestDefaultsAndEnvironment(t *testing.T) {
+	o := options(t, map[string]string{
+		"TANDEM_NODE_CMD": "/fixtures/bin/node", "TANDEM_BIND": "0.0.0.0", "TANDEM_PORT": "8123",
+		"TANDEM_UI_DIR": "/ui", "TANDEM_PROJECT_ROOTS": filepath.Join("", "one") + string(os.PathListSeparator) + filepath.Join("", "two"),
+		"TANDEM_DIR_SCAN_DEPTH": "3", "TANDEM_BROWSER_DRIVER": "steel", "TANDEM_BROWSER_MCP": "off",
+		"TANDEM_CHROMIUM_EXECUTABLE": "/fixtures/bin/chromium",
+		"STEEL_BASE_URL":             "https://steel.invalid", "STEEL_API_KEY": "secret", "STEEL_SESSION_OPTIONS": `{"width":1280}`,
+		"TANDEM_ACP_CMD": `["mock","--stdio"]`, "TANDEM_ACP_CMD_CODEX": "codex-custom --acp",
+		"TANDEM_RESUME_CMD_PI": `["pi-custom","--session","{sessionId}"]`,
+	})
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Host != "0.0.0.0" || c.Port != 8123 || c.DirScanDepth != 3 || c.UIDir != "/ui" {
+		t.Fatalf("environment not applied: %+v", c)
+	}
+	if c.ACP.Default != "claude" || len(c.Agents) != 3 || c.Agents["claude"].Name != "Claude" {
+		t.Fatalf("shipped catalog not loaded: %+v", c.Agents)
+	}
+	if c.Agents["claude"].ACP.Cmd != "/fixtures/bin/node" {
+		t.Fatalf("explicit node launcher = %q", c.Agents["claude"].ACP.Cmd)
+	}
+	if c.Agents["codex"].ACP.Cmd != "codex-custom" || c.Agents["pi"].Terminal.Cmd != "pi-custom" {
+		t.Fatalf("legacy overrides missing: %+v", c.Agents)
+	}
+	if c.ACP.Override == nil || c.ACP.Override.Cmd != "mock" {
+		t.Fatalf("global ACP override missing: %+v", c.ACP.Override)
+	}
+	if c.Browser.Driver != "steel" || c.Browser.MCPEnabled || c.Browser.SteelSessionOptions["width"] != float64(1280) {
+		t.Fatalf("browser env missing: %+v", c.Browser)
+	}
+	if c.Browser.ChromiumExecutable != "/fixtures/bin/chromium" {
+		t.Fatalf("explicit chromium executable missing: %+v", c.Browser)
+	}
+	if c.Browser.NodeRuntime != "/fixtures/bin/node" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/daemon/node_modules/@playwright/mcp/cli.js" {
+		t.Fatalf("browser MCP tool runtime missing: %+v", c.Browser)
+	}
+	if c.DBPath != filepath.Join(c.Home, "tandem.db") || c.TokenPath != filepath.Join(c.Home, "token") {
+		t.Fatalf("home derivation incorrect: %+v", c)
+	}
+}
+
+func TestOverlayExpansionProfilesAndPartialAgentMerge(t *testing.T) {
+	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
+	config := `
+defaults: {agent: custom, profile: custom-fast}
+agents:
+  claude:
+    name: Renamed Claude
+  custom:
+    name: Custom Agent
+    acp:
+      command: "{node}"
+      args: ["{daemonRoot}/mock.mjs", "{tandemRoot}"]
+      env: {HOME_PATH: "{home}"}
+profiles:
+  custom-fast:
+    agent: custom
+    name: Custom Fast
+    acpArgs: [--fast]
+    terminalArgs: []
+`
+	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACP.Default != "custom" || c.DefaultProfile != "custom-fast" {
+		t.Fatalf("defaults = %q/%q", c.ACP.Default, c.DefaultProfile)
+	}
+	if c.Agents["claude"].ACP == nil || c.Agents["claude"].Terminal == nil || c.Agents["claude"].Name != "Renamed Claude" {
+		t.Fatalf("partial overlay did not inherit: %+v", c.Agents["claude"])
+	}
+	custom := c.Agents["custom"].ACP
+	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/daemon/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
+		t.Fatalf("placeholders not expanded: %+v", custom)
+	}
+	if !reflect.DeepEqual(c.Profiles["custom-fast"].ACPArgs, []string{"--fast"}) {
+		t.Fatalf("profile not loaded: %+v", c.Profiles)
+	}
+}
+
+func TestInvalidConfiguration(t *testing.T) {
+	tests := []struct{ name, body, contains string }{
+		{"malformed YAML", "agents: [", "invalid"},
+		{"missing command", "agents:\n  broken:\n    acp:\n      args: []\n", "agents.broken.acp.command must be a non-empty string"},
+		{"bad argument list", "agents:\n  broken:\n    terminal:\n      command: node\n      startArgs: nope\n", "agents.broken.terminal.startArgs must be an array of strings"},
+		{"bad environment", "agents:\n  broken:\n    acp:\n      command: node\n      env: {COUNT: 3}\n", "agents.broken.acp.env must be a mapping of string values"},
+		{"unknown profile agent", "profiles:\n  bad: {agent: missing}\n", "profiles.bad references unknown agent: missing"},
+		{"unknown default profile", "defaults: {profile: absent}\n", "defaults.profile references unknown profile: absent"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := options(t, nil)
+			if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadWithOptions(o)
+			if err == nil || !strings.Contains(err.Error(), tt.contains) {
+				t.Fatalf("error = %v, want containing %q", err, tt.contains)
+			}
+		})
+	}
+	for _, env := range []map[string]string{{"TANDEM_PORT": "nope"}, {"STEEL_SESSION_OPTIONS": "[]"}} {
+		o := options(t, env)
+		if _, err := LoadWithOptions(o); err == nil {
+			t.Fatalf("LoadWithOptions(%v) succeeded", env)
+		}
+	}
+}
+
+func TestExecutableResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable mode test")
+	}
+	bin := t.TempDir()
+	executable := filepath.Join(bin, "agent-cli")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := options(t, map[string]string{"PATH": bin, "TANDEM_NODE_CMD": "agent-cli"})
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Agents["claude"].ACP.Cmd; got != executable {
+		t.Fatalf("resolved command = %q, want %q", got, executable)
+	}
+}
+
+func TestEnsureTokenCreationReuseAndPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "token")
+	token, err := EnsureToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(token) != 64 {
+		t.Fatalf("token length = %d, want 64", len(token))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("token mode = %o", info.Mode().Perm())
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	again, err := EnsureToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != token {
+		t.Fatalf("token was not reused")
+	}
+	info, _ = os.Stat(path)
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("reused token mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestDebugJSONIsDeterministicAndRedacted(t *testing.T) {
+	o := options(t, map[string]string{"STEEL_API_KEY": "steel-secret", "STEEL_SESSION_OPTIONS": `{"nested":{"apiKey":"option-secret"}}`, "TANDEM_ACP_CMD": `["mock"]`})
+	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte("agents:\n  custom:\n    acp:\n      command: custom\n      env: {PASSWORD: hidden}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := DebugJSON(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, _ := DebugJSON(c)
+	if string(one) != string(two) {
+		t.Fatal("debug JSON is not deterministic")
+	}
+	if strings.Contains(string(one), "steel-secret") || strings.Contains(string(one), "option-secret") || strings.Contains(string(one), "hidden") || !strings.Contains(string(one), "[REDACTED]") {
+		t.Fatalf("debug JSON did not redact secrets: %s", one)
+	}
+	var decoded Config
+	if err := json.Unmarshal(one, &decoded); err != nil {
+		t.Fatalf("invalid debug JSON: %v", err)
+	}
+}
+
+func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "daemon", "migration-contract", "fixtures", "config-examples.json")
+	raw, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var examples struct {
+		Overlay json.RawMessage `json:"overlay"`
+	}
+	if err := json.Unmarshal(raw, &examples); err != nil {
+		t.Fatal(err)
+	}
+	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
+	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), examples.Overlay, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Normalize the one intentionally runtime-specific placeholder.
+	custom := c.Agents["custom"]
+	custom.ACP.Env["FIXTURE_HOME"] = "{home}"
+	c.Agents["custom"] = custom
+	actual, err := json.MarshalIndent(catalogGolden{c.ACP.Default, c.DefaultProfile, c.Agents, c.Profiles}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual = append(actual, '\n')
+	wantPath := filepath.Join("..", "..", "daemon", "migration-contract", "fixtures", "config-normalized.json")
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, want) {
+		t.Fatalf("normalized catalog differs from Node golden\nactual:\n%s\nwant:\n%s", actual, want)
+	}
+}

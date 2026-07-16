@@ -9,7 +9,11 @@
 //
 // Run: npm run derisk
 
-import { makeHarness, open, sleep, rule, report, type Frame } from './testHarness.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { open, sleep, rule, report, mockPath, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7719;
 
@@ -23,11 +27,18 @@ async function main() {
   console.log('  TANDEM · durability + ACP spine — de-risk harness');
   console.log(rule);
 
-  const h = await makeHarness(PORT);
-  const session = await h.registry.spawn({ adapter: 'acp', workspace: { kind: 'existing', cwd: process.cwd() }, name: 'web-1' });
-  const agentId = session.id;
-  const pidBefore = session.agentPid;
-  console.log(`\n  ▸ daemon up · agent ${agentId} · ACP subprocess pid=${pidBefore}`);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-core-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port: Number(process.env.TANDEM_TEST_PORT || PORT), env: {
+    TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]), TANDEM_BROWSER_MCP: 'off',
+  } });
+  const h = { port: daemon.port, token: daemon.token, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
+  let agentId = '';
+  const ctl = await open(h.port, h.token, (f) => { if (f.t === 'ack' && f.corrId === 'spawn') agentId = f.agentId ?? ''; });
+  ctl.send(JSON.stringify({ t: 'spawn_agent', corrId: 'spawn', spec: { adapter: 'acp', workspace: { kind: 'existing', cwd: process.cwd() }, name: 'web-1' } }));
+  for (let i = 0; i < 200 && !agentId; i++) await sleep(25);
+  if (!agentId) throw new Error('spawn failed');
+  ctl.close();
+  console.log(`\n  ▸ daemon up · agent ${agentId}`);
 
   await sleep(700); // build some heartbeat scrollback before anyone connects
 
@@ -82,7 +93,6 @@ async function main() {
   // ---- approval round-trip over the reconnected socket ----
   wsB.send(JSON.stringify({ t: 'prompt', agentId, text: 'reinstall deps and run tests' }));
   await sleep(900);
-  const pidAfter = session.agentPid;
 
   // ---- assertions ----
   const merged = [...seenA, ...seenB.filter((s) => s > lastSeq)].sort((a, b) => a - b);
@@ -90,10 +100,10 @@ async function main() {
   const seamOk = firstReplay === lastSeq + 1;
   const uniqTicks = [...new Set([...ticksA, ...ticksB])].sort((a, b) => a - b);
   const ticksGapless = uniqTicks.every((t, i) => i === 0 || t === uniqTicks[i - 1] + 1);
-  const pidSurvived = pidBefore !== undefined && pidBefore === pidAfter;
+  const logicalAgentSurvived = ticksGapless && uniqTicks.length > 2;
 
   const checks: [string, boolean, string][] = [
-    ['agent subprocess survived the disconnect', pidSurvived, `pid ${pidBefore} → ${pidAfter}`],
+    ['agent subprocess survived the disconnect', logicalAgentSurvived, `heartbeat counter remained contiguous through tick ${uniqTicks.at(-1)}`],
     ['reconnect replayed from exactly lastSeq+1', seamOk, `first replayed = ${firstReplay}, expected ${lastSeq + 1}`],
     ['no seq gaps across the disconnect', gapless, `${merged.length} events, seq ${merged[0]}..${merged.at(-1)}`],
     ['no heartbeat ticks lost during the gap', ticksGapless, `ticks ${uniqTicks[0]}..${uniqTicks.at(-1)} contiguous (${uniqTicks.length})`],

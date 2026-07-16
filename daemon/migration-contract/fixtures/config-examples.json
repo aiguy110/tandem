@@ -1,0 +1,93 @@
+{
+  "shipped": {
+    "version": 1,
+    "defaults": {
+      "agent": "claude"
+    },
+    "agents": {
+      "claude": {
+        "name": "Claude",
+        "acp": {
+          "command": "{node}",
+          "args": [
+            "{daemonRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+          ]
+        },
+        "terminal": {
+          "command": "claude",
+          "startArgs": [],
+          "resumeArgs": [
+            "--resume",
+            "{sessionId}"
+          ]
+        }
+      },
+      "codex": {
+        "name": "Codex",
+        "acp": {
+          "command": "{node}",
+          "args": [
+            "{daemonRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+          ]
+        },
+        "terminal": {
+          "command": "codex",
+          "startArgs": [],
+          "resumeArgs": [
+            "resume",
+            "{sessionId}"
+          ]
+        }
+      },
+      "pi": {
+        "name": "Pi",
+        "acp": {
+          "command": "{node}",
+          "args": [
+            "{daemonRoot}/node_modules/pi-acp/dist/index.js"
+          ]
+        },
+        "terminal": {
+          "command": "pi",
+          "startArgs": [],
+          "resumeArgs": [
+            "--session",
+            "{sessionId}"
+          ]
+        }
+      }
+    },
+    "profiles": {}
+  },
+  "overlay": {
+    "version": 1,
+    "defaults": {
+      "agent": "custom",
+      "profile": "custom-fast"
+    },
+    "agents": {
+      "custom": {
+        "name": "Custom Agent",
+        "acp": {
+          "command": "{node}",
+          "args": [
+            "{daemonRoot}/src/mock-acp-agent.mjs"
+          ],
+          "env": {
+            "FIXTURE_HOME": "{home}"
+          }
+        }
+      }
+    },
+    "profiles": {
+      "custom-fast": {
+        "agent": "custom",
+        "name": "Custom Fast",
+        "acpArgs": [
+          "--fast"
+        ],
+        "terminalArgs": []
+      }
+    }
+  }
+}

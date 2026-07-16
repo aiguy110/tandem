@@ -1,9 +1,8 @@
-# tandem-daemon — multi-agent daemon core
+# Legacy Node daemon and compatibility harness
 
-The Tandem daemon: a long-lived process that owns many coding agents, survives browser
-disconnects, and persists everything to SQLite so agents come back after a restart. This
-evolved out of the single-agent durability/ACP spine PoC (still proven — see the derisk
-harness) into the real Phase 1 core.
+The TypeScript implementation remains available for immediate rollback while the native Go
+daemon under `cmd/` and `internal/` is the production default. This directory also owns the
+black-box de-risk harness used to keep both implementations compatible.
 
 ## What's real now
 
@@ -92,7 +91,10 @@ harness) into the real Phase 1 core.
 | `merge_back` | **stub** | error ack; awaits diff/merge UI |
 | `raw_pty` / `browser_frame` binary framing | **stub** | base64-in-JSON for now |
 
-## Run it
+## Run the rollback implementation
+
+Stop the Go process first; the implementations must never write the same `TANDEM_HOME`
+concurrently. See [`docs/deployment.md`](../docs/deployment.md) for the complete switch.
 
 ```bash
 cd daemon
@@ -113,6 +115,9 @@ npm run acp:live          # drive the REAL @agentclientprotocol/claude-agent-acp
 npm run pty-smoke         # optional: proves the pty adapter (needs node-pty)
 ```
 
+For full cross-runtime validation, build `../tandem` and run
+`TANDEM_GO_DAEMON_CMD='["../tandem","daemon"]' npm run derisk:matrix`.
+
 ### Config (env)
 
 | Env | Default | Meaning |
@@ -120,9 +125,10 @@ npm run pty-smoke         # optional: proves the pty adapter (needs node-pty)
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, `worktrees/` (honored everywhere) |
 | `TANDEM_PORT` | `7717` | HTTP + WS port |
 | `TANDEM_BIND` | `127.0.0.1` | Bind address |
-| `TANDEM_UI_DIR` | — | Static UI dist to serve (else a placeholder page) |
+| `TANDEM_UI_DIR` | — | Static UI dist for this rollback daemon (else a placeholder page) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Scanned for repos (spawn palette `list_dirs`) |
 | `TANDEM_DIR_SCAN_DEPTH` | `1` | Directories to descend under each project root when scanning for repos |
+| `TANDEM_NODE_CMD` | current Node executable (Node daemon); `node` (Go daemon) | Explicit Node launcher used to expand `{node}` in Node-based adapter definitions |
 | `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches, regardless of `SpawnSpec.agent` (tests point it at the mock) |
 | `TANDEM_ACP_CMD_CLAUDE` / `_CODEX` / `_PI` | bundled `claude-agent-acp` / `codex-acp` / `pi-acp` | Per-agent launch override (JSON array or `"cmd arg arg"`), selected by `SpawnSpec.agent` |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (Playwright's bundled Chromium) or `steel` (requires `STEEL_BASE_URL`) |

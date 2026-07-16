@@ -1,0 +1,60 @@
+{
+  "canonicalRefs": {
+    "local": {
+      "ref": "refs/heads/feature/migration",
+      "kind": "local-branch",
+      "commit": "1111111111111111111111111111111111111111"
+    },
+    "remote": {
+      "ref": "refs/remotes/origin/main",
+      "kind": "remote-branch",
+      "commit": "2222222222222222222222222222222222222222"
+    },
+    "tag": {
+      "ref": "refs/tags/v1.0.0",
+      "kind": "tag",
+      "commit": "3333333333333333333333333333333333333333"
+    },
+    "detached": {
+      "ref": "4444444444444444444444444444444444444444",
+      "kind": "detached",
+      "commit": "4444444444444444444444444444444444444444"
+    }
+  },
+  "create": {
+    "kind": "worktree",
+    "repo": "/fixtures/repo",
+    "branch": "tandem/migration/api-1",
+    "branchMode": "create",
+    "source": {
+      "ref": "refs/heads/feature/migration",
+      "commit": "1111111111111111111111111111111111111111"
+    },
+    "integration": {
+      "kind": "local-branch",
+      "ref": "refs/heads/feature/migration"
+    },
+    "baseRef": "1111111111111111111111111111111111111111"
+  },
+  "attach": {
+    "kind": "worktree",
+    "repo": "/fixtures/repo",
+    "branch": "tandem/migration/api-1",
+    "branchMode": "attach",
+    "source": {
+      "ref": "refs/heads/tandem/migration/api-1",
+      "commit": "5555555555555555555555555555555555555555"
+    },
+    "integration": {
+      "kind": "remote-branch",
+      "ref": "refs/remotes/origin/main"
+    },
+    "baseRef": "5555555555555555555555555555555555555555"
+  },
+  "legacy": {
+    "kind": "worktree",
+    "repo": "/fixtures/repo",
+    "branch": "tandem/legacy/api-1",
+    "baseRef": "main"
+  }
+}

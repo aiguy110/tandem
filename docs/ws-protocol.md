@@ -14,8 +14,9 @@ state exists. An unauthenticated or wrong-token socket is **accepted then immedi
 with code `4401`** (so the client sees a clean, distinguishable close rather than a raw
 transport error). The token is generated on first run into `$TANDEM_HOME/token` (mode
 `0600`); the daemon prints a bootstrap URL `http://<host>:<port>/#t=<token>` whose fragment
-the UI reads once and stores. Static UI assets are served from `TANDEM_UI_DIR` if set, else a
-placeholder page.
+the UI reads once and stores. The native daemon serves its embedded UI by default;
+`TANDEM_UI_DIR` optionally overrides those assets for frontend development. A build made
+with the `tandem_dev` tag has no embedded assets and shows a placeholder without an override.
 
 ### Transcript image assets
 

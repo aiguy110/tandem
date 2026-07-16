@@ -10,7 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import { makeHarness, open, sleep, rule, report, type Frame } from './testHarness.ts';
+import { open, sleep, rule, report, mockPath, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7721;
 
@@ -43,7 +44,11 @@ async function main() {
   console.log('  TANDEM · multi-agent de-risk (two independent ACP agents)');
   console.log(rule);
 
-  const h = await makeHarness(PORT);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-multi-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port: Number(process.env.TANDEM_TEST_PORT || PORT), env: {
+    TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]), TANDEM_BROWSER_MCP: 'off',
+  } });
+  const h = { port: daemon.port, token: daemon.token, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
 
   // Two distinct existing-dirs: Phase 2 collision detection now refuses a
   // second kind:'existing' spawn into a dir a live agent already occupies
@@ -102,8 +107,15 @@ async function main() {
   view.send(JSON.stringify({ t: 'close_agent', agentId: idA }));
   await sleep(700);
   const bStillLive = Math.max(...col[idB].seqs) > bTicksBeforeClose;
-  const aTornDown = col[idA].closed && !h.registry.get(idA);
-  const bUntouched = !!h.registry.get(idB) && !col[idB].closed;
+  view.send(JSON.stringify({ t: 'list_agents', corrId: 'after-close' }));
+  await sleep(100);
+  const live = await new Promise<any[]>((resolve) => {
+    const onMsg = (raw: any) => { const f = JSON.parse(raw.toString()); if (f.t === 'agents' && f.corrId === 'after-close') { view.off('message', onMsg); resolve(f.agents ?? []); } };
+    view.on('message', onMsg); view.send(JSON.stringify({ t: 'list_agents', corrId: 'after-close' }));
+    setTimeout(() => resolve([]), 2000);
+  });
+  const aTornDown = col[idA].closed && !live.some((a) => a.id === idA);
+  const bUntouched = live.some((a) => a.id === idB) && !col[idB].closed;
 
   const checks: [string, boolean, string][] = [
     ['two agents spawned via spawn_agent', !!idA && !!idB && idA !== idB, `${idA}, ${idB}`],

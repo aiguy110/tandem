@@ -21,23 +21,23 @@ experience.
 
 ## Quick start
 
-Prerequisites: **Node 22+**, a C toolchain (for `better-sqlite3`'s native build), and an
-authenticated `claude` CLI if you want to drive the real agent. `git` on `PATH`.
+Prerequisites: **Node 22+** for the UI and Node-based agent adapters, **Go 1.24+** for the
+native daemon, and `git` on `PATH`. An authenticated agent CLI is required to drive its
+corresponding real agent.
 
 ```bash
 ./start-dev-server.sh
 ```
 
-This builds the UI, installs daemon deps (compiling `better-sqlite3`), and starts the
-daemon pointing at the built UI (`127.0.0.1:7717`). Equivalent manual steps:
+This builds the UI, embeds it in the Go executable, installs the external Node-based agent
+and browser adapters, and starts the native daemon on `127.0.0.1:7717`. Equivalent manual
+steps:
 
 ```bash
-# 1. Build the UI (the daemon serves the compiled dist)
-cd ui && npm install && npm run build && cd ..
-
-# 2. Install + start the daemon, pointing it at the built UI
-cd daemon && npm install                     # compiles better-sqlite3
-TANDEM_UI_DIR=../ui/dist npm run daemon       # → 127.0.0.1:7717
+./scripts/stage-go-ui.sh
+(cd daemon && npm install)                    # external ACP + Playwright adapters
+go build -o tandem ./cmd/tandem
+./tandem daemon                              # → 127.0.0.1:7717
 ```
 
 The daemon prints a **bootstrap URL** with an embedded token on first run, e.g.
@@ -49,10 +49,11 @@ Common configuration (full table in [`daemon/README.md`](daemon/README.md#config
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `TANDEM_UI_DIR` | — | Path to the built UI (`ui/dist`); omit to serve a placeholder |
+| `TANDEM_UI_DIR` | embedded UI | Optional filesystem UI override for frontend development |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
+| `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
 
 **Self-hosting Steel (optional):** for the shared browser you can back agents with
@@ -74,8 +75,14 @@ are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 **Remote access:** the daemon binds localhost by default; front it with `tailscale serve`
 (TLS + network identity) rather than exposing the port. The bearer token is a second layer.
 
-**Validate the build:** `cd daemon && npm test` runs eight de-risk suites end-to-end
-(each on a throwaway `TANDEM_HOME`, so your real `~/.tandem` is untouched).
+**Validate the build:** `go test ./...` runs native unit tests. After building `./tandem`,
+run `TANDEM_GO_DAEMON_CMD='["../tandem","daemon"]' npm run derisk:matrix` from `daemon/`
+to exercise both implementations (each suite uses a throwaway `TANDEM_HOME`).
+
+Deployment, deferred restart, and the one-writer rollback procedure are documented in
+[`docs/deployment.md`](docs/deployment.md). The immediate rollback command, after stopping
+Go, is `cd daemon && npm install && TANDEM_UI_DIR=../ui/dist npm run daemon`; it uses the
+same `TANDEM_HOME` and the already-built UI.
 
 ## Architecture at a glance
 
@@ -146,21 +153,23 @@ built end-to-end, each proven by an automated de-risk suite. What exists:
 
 - **`docs/`** — the architecture and locked decisions (below).
 - **`design/`** — an interactive wireframe of the docked-rails UI.
-- **`daemon/`** — the real multi-agent daemon: multi-agent registry, **SQLite persistence**
-  (`~/.tandem/tandem.db`) with restore-on-restart, the full browser↔daemon **WS protocol**
-  with **bearer-token auth**, **git-worktree workspaces**, ACP **fs/terminal servicing**
-  (daemon is the ACP client), and the **shared-browser broker** (control token + hard-pause).
-  `cd daemon && npm install && npm test` runs eight de-risk suites — all pass. See
-  [`daemon/README.md`](daemon/README.md).
+- **`cmd/` + `internal/`** — the production native daemon: multi-agent registry, **SQLite
+  persistence** (`~/.tandem/tandem.db`) with restore-on-restart, the full browser↔daemon
+  **WS protocol** with **bearer-token auth**, **git-worktree workspaces**, ACP
+  **fs/terminal servicing**, and the **shared-browser broker**. `go test ./...` covers its
+  packages; the shared process suites verify it against the Node compatibility baseline.
+- **`daemon/`** — the temporary TypeScript rollback implementation and the black-box
+  compatibility harness. It is not the default production entrypoint.
 - **`ui/`** — the React "mission control" front-end: durable WS client (reconnect + replay),
   docked rails + focus, streaming transcript, always-on approvals rail, quick-spawn +
   command palettes with a rebindable keymap, ghostty-web terminal, and the shared-browser
-  pane (screencast + grab/release wheel). `cd ui && npm install && npm run build`; the
-  daemon serves the built `dist` (`TANDEM_UI_DIR`).
+  pane (screencast + grab/release wheel). `scripts/stage-go-ui.sh` builds it and the Go
+  daemon embeds the resulting assets; `TANDEM_UI_DIR` can override them during development.
 - **`spike/`** — the original de-risk spikes (terminal + shared browser) the production code
   was ported from.
 
-**Validation.** `daemon/`'s `npm test` runs eight suites: durability/ACP spine, multi-agent,
+**Validation.** `daemon/`'s `derisk:matrix` runs the process suites against both Go and
+Node: durability/ACP spine, multi-agent,
 restart-restore, auth, git worktrees, ACP fs+terminal+cancel, shared browser (10-check CDP
 harness), and a **full-slice integration smoke** (discover → spawn worktree agent → prompt →
 approval → second isolated agent → hard-drop reconnect replay → dirty-close teardown). The UI

@@ -220,3 +220,20 @@ in their native CLI.
 **Deferred:** Registry discovery, installation/update management, and custom Git sources.
 Those features must preserve resolved versions for durable-session restoration rather than
 silently changing the executable beneath an existing session.
+
+## D17 — Go ACP client: generated schema types, internal transport
+
+**Choice:** Generate Go wire types from the official schema shipped by the exactly pinned
+`@agentclientprotocol/sdk` 1.2.1 package and keep a small internal newline-JSON-RPC
+subprocess transport. The schema package version and its SHA-256 are recorded in
+`internal/acp/schema.lock`; ACP's negotiated wire protocol remains separately pinned at 1.
+
+**Why:** The available community Go SDKs do not yet demonstrate the complete ACP client
+role Tandem needs, especially agent-initiated client-service requests for `fs/*`,
+`terminal/*`, and permissions. Generating types avoids a broad hand-maintained schema copy,
+while the internal transport is small enough to test exhaustively and keeps session/event
+mapping behind Tandem's adapter boundary.
+
+**Regeneration:** Install the daemon's locked npm dependencies (`npm ci` in `daemon`), then
+run `go generate ./internal/acp`. Generation consumes the SDK's `schema/schema.json`; the
+checked-in generated header exposes both the source package version and schema digest.

@@ -298,6 +298,9 @@ sessions and WebSockets.
 
 **Out of scope:** HTTP routes and ACP request dispatch.
 
+**Implementation note:** The Go filesystem boundary uses the descriptor-backed `os.Root`
+API, so the native daemon requires Go 1.24 or newer.
+
 ## Phase 7 - Build the process and PTY primitives
 
 **Goal:** Provide cancellable subprocess and pseudoterminal foundations without agent
@@ -661,6 +664,10 @@ external.
 
 **Out of scope:** Automatic publication on every commit and production cutover.
 
+**Implementation note:** The initial workflow publishes Linux amd64 and arm64 only. macOS
+remains unadvertised until native runners exercise real PTY and Chromium integration tests
+on both architectures, as required above.
+
 ## Phase 23 - Cut the development and production entrypoints over to Go
 
 **Goal:** Make the Go daemon the default while retaining an immediate rollback path.
@@ -691,6 +698,16 @@ external.
 
 **Entry condition:** The Go daemon has been the production default through an agreed
 stabilization window with no unresolved data-compatibility or lifecycle regressions.
+
+**Entry-condition audit (2026-07-16): Blocked.** Phase 23's cutover commit exists on the
+migration branch, but the production `tandem.service` was still running the Node daemon at
+the time of this audit. Consequently, Go has not yet been the production default for any
+stabilization window, and no duration or completion record for an agreed window is present.
+Do not remove `daemon/src`, Node rollback commands, or cross-runtime compatibility coverage
+yet. After Phase 23 is merged and deployed, record the agreed window, its start and end,
+production observations, and the disposition of any data-compatibility or lifecycle
+regressions. Re-audit this entry condition only after that evidence exists; then perform the
+cleanup and acceptance checks below as a separate phase.
 
 **Work:**
 

@@ -22,8 +22,8 @@ The dev server does **not** proxy the daemon. Point the UI at a running daemon a
 token in the URL fragment:
 
 ```bash
-# in another terminal — start the daemon (prints a bootstrap URL + token)
-cd ../daemon && npm run daemon
+# in another terminal — start the native daemon (prints a bootstrap URL + token)
+cd .. && ./start-dev-server.sh
 
 # then open the dev server with the daemon's WS origin + token, e.g.
 #   http://localhost:5178/?#t=<token>
@@ -70,29 +70,32 @@ agent-initiated `takeover_request` events show a Browser-pane banner and an atte
 the approvals rail. Only the focused, browser-viewing client subscribes the channel, so only
 that agent streams (bandwidth rule).
 
-## Build & serve from the daemon
+## Build & embed in the daemon
 
 ```bash
 cd ui
 npm run build          # tsc --noEmit + vite build → ui/dist (includes ghostty-vt.wasm)
 ```
 
-Point the daemon at the build output and open its bootstrap URL:
+Stage the build, compile the native daemon, and open its bootstrap URL:
 
 ```bash
-cd ../daemon
-TANDEM_UI_DIR=../ui/dist npm run daemon
+cd ..
+./scripts/stage-go-ui.sh
+go build -o tandem ./cmd/tandem
+./tandem daemon
 # → open the printed http://127.0.0.1:7717/#t=<token>
 ```
 
-The daemon serves `dist/` statically on the same port as the WS (`daemon/src/server.ts`),
-with correct MIME types including `application/wasm` for the terminal engine.
+The Go daemon embeds `internal/ui/dist` and serves it on the same port as the WS
+(`internal/httpserver`), with correct MIME types including `application/wasm` for the
+terminal engine. Set `TANDEM_UI_DIR=ui/dist` to override the embedded files while developing.
 
 ## Layout of the source
 
 ```
 src/
-  wire.ts                 wire types mirrored from daemon/src/types.ts
+  wire.ts                 wire types mirrored by the Go daemon protocol types
   store.ts                zustand store: the projection of daemon messages + actions
   ws/client.ts            durable WS client (token auth, backoff reconnect, sinceSeq resub)
   useGlobalKeys.ts        scope-aware global key handler

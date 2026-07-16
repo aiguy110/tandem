@@ -1,0 +1,58 @@
+{
+  "pragmas": {
+    "journal_mode": "wal",
+    "synchronous": 1,
+    "foreign_keys": 1,
+    "user_version": 0
+  },
+  "schema": [
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_assets_1",
+      "tableName": "agent_assets",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agents_1",
+      "tableName": "agents",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_assets_1",
+      "tableName": "assets",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_events_1",
+      "tableName": "events",
+      "sql": null
+    },
+    {
+      "type": "table",
+      "name": "agent_assets",
+      "tableName": "agent_assets",
+      "sql": "CREATE TABLE agent_assets (\n        agentId   TEXT NOT NULL,\n        assetId   TEXT NOT NULL,\n        createdAt INTEGER NOT NULL,\n        PRIMARY KEY (agentId, assetId),\n        FOREIGN KEY (assetId) REFERENCES assets(id)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agents",
+      "tableName": "agents",
+      "sql": "CREATE TABLE agents (\n        id           TEXT PRIMARY KEY,\n        name         TEXT NOT NULL,\n        spec         TEXT NOT NULL,\n        cwd          TEXT NOT NULL DEFAULT '',\n        acpSessionId TEXT,\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        closedAt     INTEGER\n      )"
+    },
+    {
+      "type": "table",
+      "name": "assets",
+      "tableName": "assets",
+      "sql": "CREATE TABLE assets (\n        id        TEXT PRIMARY KEY,\n        mimeType  TEXT NOT NULL,\n        size      INTEGER NOT NULL,\n        createdAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "events",
+      "tableName": "events",
+      "sql": "CREATE TABLE events (\n        agentId TEXT NOT NULL,\n        seq     INTEGER NOT NULL,\n        kind    TEXT NOT NULL,\n        payload TEXT NOT NULL,\n        ts      INTEGER NOT NULL,\n        PRIMARY KEY (agentId, seq)\n      )"
+    }
+  ]
+}

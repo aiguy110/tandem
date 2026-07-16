@@ -8,9 +8,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { WebSocket } from 'ws';
-import { makeHarness, open, report, sleep, type Frame, type Harness } from './testHarness.ts';
+import { open, report, sleep, mockPath, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7761;
+interface Harness { port: number; token: string; stop(): Promise<void> }
+async function processHarness(port: number): Promise<Harness> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-images-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port, env: {
+    TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]),
+    TANDEM_BROWSER_MCP: 'off',
+    TANDEM_MOCK_IMAGE_CAPABILITY: process.env.TANDEM_MOCK_IMAGE_CAPABILITY,
+  } });
+  return { port, token: daemon.token, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
+}
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
@@ -91,7 +102,7 @@ async function main(): Promise<void> {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-images-cwd-'));
   const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-images-other-'));
   process.env.TANDEM_MOCK_IMAGE_CAPABILITY = 'true';
-  const h = await makeHarness(PORT);
+  const h = await processHarness(PORT);
   let client: Client | undefined;
 
   try {
@@ -215,7 +226,7 @@ async function main(): Promise<void> {
   // An independently initialized adapter that explicitly advertises image=false
   // must reject before appending user_message or calling session/prompt.
   process.env.TANDEM_MOCK_IMAGE_CAPABILITY = 'false';
-  const h2 = await makeHarness(PORT + 1);
+  const h2 = await processHarness(PORT + 1);
   try {
     const incapable = await spawn(h2, cwd);
     const uploaded = await upload(h2, incapable.agentId, PNG);

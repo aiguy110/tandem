@@ -1,0 +1,51 @@
+[
+  {
+    "t": "snapshot",
+    "agentId": "api-1",
+    "seq": 7,
+    "transcript": [
+      {
+        "seq": 1,
+        "event": {
+          "kind": "user_message",
+          "text": "inspect"
+        }
+      },
+      {
+        "seq": 2,
+        "event": {
+          "kind": "message_chunk",
+          "text": "working"
+        }
+      }
+    ],
+    "status": "idle",
+    "controlMode": "transcript",
+    "pendingApprovals": []
+  },
+  {
+    "t": "event",
+    "agentId": "api-1",
+    "seq": 8,
+    "event": {
+      "kind": "tool_call",
+      "id": "tool-1",
+      "title": "Read file",
+      "status": "running",
+      "rawInput": {
+        "path": "README.md"
+      }
+    }
+  },
+  {
+    "t": "ack",
+    "corrId": "c-3",
+    "agentId": "api-1"
+  },
+  {
+    "t": "browser_state",
+    "agentId": "api-1",
+    "active": true,
+    "controlOwner": "user"
+  }
+]

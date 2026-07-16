@@ -1,6 +1,8 @@
 # Architecture
 
-Tandem is a browser-based orchestration layer over terminal coding agents. This document
+Tandem is a browser-based orchestration layer over terminal coding agents. The production
+daemon is a native Go executable with the React application embedded; the TypeScript daemon
+remains available temporarily as a rollback implementation. This document
 covers the system decomposition, the durability model, each subsystem, and the proposed
 v1 build slice.
 
@@ -27,8 +29,9 @@ Tandem's answer is to **become the thing that owns the pty**:
 
 ### Validated (PoC)
 
-This model is proven in [`daemon/`](../daemon/README.md), not just asserted. The
-`npm run derisk` harness hard-kills a client socket mid-stream (no close handshake —
+This model is proven by the shared black-box suites in [`daemon/`](../daemon/README.md), not
+just asserted. The `derisk:matrix` harness runs both Go and Node and hard-kills a
+client socket mid-stream (no close handshake —
 a real dropped pipe), waits with no client attached, then reconnects from the client's
 last `seq`. It asserts, and passes, that:
 
@@ -38,9 +41,21 @@ last `seq`. It asserts, and passes, that:
 - the ACP `session/request_permission` loop is delivered *after* reconnect and answered
   over the new socket.
 
-The pty path is likewise proven (`npm run pty-smoke`): the daemon owns the pty master fd
-and captures the child's scrollback. So both adapter paths sit on the correct side of the
-durability boundary.
+The native pty path is likewise covered by Go process and adapter tests: the daemon owns the
+pty master fd and captures the child's scrollback. So both adapter paths sit on the correct
+side of the durability boundary.
+
+## Runtime layout
+
+`cmd/tandem` is the production entrypoint. Packages under `internal/` own configuration,
+SQLite, registry/session state, ACP and PTY adapters, HTTP/WebSocket serving, and direct CDP
+browser control. `scripts/stage-go-ui.sh` builds `ui/` into `internal/ui/dist`; `go build`
+then embeds that directory so production does not need a loose `ui/dist` tree.
+
+Node remains an external runtime dependency only for configured Node-based ACP adapters and
+`@playwright/mcp`. The legacy implementation under `daemon/src/` is not started in normal
+operation. Both implementations use the same additive SQLite schema and assets directory,
+but only one daemon may open a Tandem home at a time. See [deployment](deployment.md).
 
 ## Subsystems
 
@@ -62,7 +77,7 @@ Agents are reached through a normalized `AgentAdapter` interface with two implem
 - **`AcpAdapter`** — speaks Zed's **Agent Client Protocol** (JSON-RPC 2.0 over the agent
   subprocess's stdio). The daemon is the ACP *client*. This is the primary path for Claude
   Code (via `claude-code-acp`), Gemini CLI, and anything ACP-speaking.
-- **`PtyAdapter`** — a raw pty child (`node-pty`). Used for TUI-only agents and for the
+- **`PtyAdapter`** — a raw pty child (native Unix PTY). Used for TUI-only agents and for the
   user's escape-hatch shell. No structured events.
 
 ### Why ACP fits

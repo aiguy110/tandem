@@ -1,0 +1,125 @@
+name: Go foundation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal)"
+
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build with metadata
+        env:
+          VERSION: dev
+          COMMIT: ${{ github.sha }}
+        run: |
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -ldflags "-X github.com/aiguy110/tandem/internal/buildinfo.Version=${VERSION} -X github.com/aiguy110/tandem/internal/buildinfo.Commit=${COMMIT} -X github.com/aiguy110/tandem/internal/buildinfo.BuildTime=${BUILD_TIME}" ./cmd/tandem
+          test "$(./tandem version)" = "tandem version=${VERSION} commit=${COMMIT} built=${BUILD_TIME}"
+
+  implementation-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: daemon/package-lock.json
+      - name: Install harness dependencies
+        working-directory: daemon
+        run: npm ci
+      - name: Build native daemon
+        run: go build -o "${RUNNER_TEMP}/tandem-go" ./cmd/tandem
+      - name: Run full Node/Go parity matrix
+        working-directory: daemon
+        env:
+          TANDEM_NODE_DAEMON_CMD: '["./node_modules/.bin/tsx","src/index.ts"]'
+          TANDEM_GO_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
+        run: npm run derisk:matrix
+
+  release:
+    name: Release ${{ matrix.goos }}/${{ matrix.goarch }}
+    # macOS is intentionally absent until real PTY and Chromium integration
+    # tests (not only unit tests) pass on both macOS architectures.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build release artifact
+        env:
+          VERSION: 0.0.0-${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          RELEASE_DIR: ${{ runner.temp }}/release
+        run: scripts/release.sh
+      - name: Smoke artifact without source checkout
+        env:
+          VERSION: 0.0.0-${{ github.run_id }}
+        run: |
+          cd "${RUNNER_TEMP}"
+          "${GITHUB_WORKSPACE}/scripts/smoke-release.sh" "${RUNNER_TEMP}/release/tandem_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}/tandem"
+      - name: Upload native release
+        uses: actions/upload-artifact@v4
+        with:
+          name: tandem_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: ${{ runner.temp }}/release/tandem_0.0.0-${{ github.run_id }}_${{ matrix.goos }}_${{ matrix.goarch }}/
+          if-no-files-found: error

@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
-# Build the UI and start the daemon serving it, per README Quick Start.
+# Build the native daemon with its embedded UI and start it, per README Quick Start.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-echo "==> Building UI"
-(cd ui && npm install && npm run build)
+go_cmd="${TANDEM_GO_CMD:-}"
+if [[ -z "$go_cmd" ]]; then
+  if command -v go >/dev/null 2>&1; then
+    go_cmd="$(command -v go)"
+  elif [[ -x /usr/local/go/bin/go ]]; then
+    go_cmd=/usr/local/go/bin/go
+  else
+    echo "Go 1.24+ is required (set TANDEM_GO_CMD if go is not on PATH)." >&2
+    exit 1
+  fi
+fi
 
-echo "==> Starting daemon"
-cd daemon
-npm install
-TANDEM_UI_DIR=../ui/dist exec npm run daemon
+./scripts/stage-go-ui.sh
+
+echo "==> Installing Node-based agent and browser adapters"
+(cd daemon && npm install)
+
+echo "==> Building native daemon"
+"$go_cmd" build -o tandem ./cmd/tandem
+
+echo "==> Starting native daemon with embedded UI"
+exec ./tandem daemon
