@@ -699,6 +699,16 @@ on both architectures, as required above.
 **Entry condition:** The Go daemon has been the production default through an agreed
 stabilization window with no unresolved data-compatibility or lifecycle regressions.
 
+**Entry-condition audit (2026-07-16): Blocked.** Phase 23's cutover commit exists on the
+migration branch, but the production `tandem.service` was still running the Node daemon at
+the time of this audit. Consequently, Go has not yet been the production default for any
+stabilization window, and no duration or completion record for an agreed window is present.
+Do not remove `daemon/src`, Node rollback commands, or cross-runtime compatibility coverage
+yet. After Phase 23 is merged and deployed, record the agreed window, its start and end,
+production observations, and the disposition of any data-compatibility or lifecycle
+regressions. Re-audit this entry condition only after that evidence exists; then perform the
+cleanup and acceptance checks below as a separate phase.
+
 **Work:**
 
 - Remove Node daemon source and Node-only daemon dependencies.
