@@ -3,6 +3,7 @@ package wsserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
@@ -23,6 +25,16 @@ type testBackend struct {
 	mu       sync.RWMutex
 	sessions map[string]*session.Session
 }
+
+type inertBrowserDriver struct{}
+
+func (inertBrowserDriver) Kind() string { return "test" }
+func (inertBrowserDriver) Provision(context.Context, string) (browser.ProvisionResult, error) {
+	return browser.ProvisionResult{}, errors.New("not provisioned by this test")
+}
+func (inertBrowserDriver) Teardown(context.Context, string) error { return nil }
+func (inertBrowserDriver) IsProvisioned(string) bool              { return false }
+func (inertBrowserDriver) PID(string) int                         { return 0 }
 
 func (b *testBackend) Get(id string) *session.Session {
 	b.mu.RLock()
@@ -308,6 +320,40 @@ func TestSnapshotReplayChannelsMultipleClientsAndUnsubscribe(t *testing.T) {
 	one.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if err := one.ReadJSON(&map[string]any{}); err == nil {
 		t.Fatal("event after unsubscribe")
+	}
+}
+
+func TestBrowserSubscriptionControlAndInput(t *testing.T) {
+	_, backend, _, old, _ := setupWS(t, 0)
+	old.Close()
+	broker := browser.NewBroker(inertBrowserDriver{}, browser.BrokerConfig{})
+	server := httptest.NewServer(New(Options{Token: "secret", Registry: backend, Browser: broker}))
+	defer server.Close()
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+	send(t, c, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"browser"}})
+	if got := recv(t, c); got["t"] != "snapshot" {
+		t.Fatalf("snapshot = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "browser_state" || got["active"] != false || got["controlOwner"] != "agent" {
+		t.Fatalf("cold browser state = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "ack" {
+		t.Fatalf("subscribe ack = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "browser_control", "agentId": "a", "action": "grab", "corrId": "grab"})
+	if got := recv(t, c); got["t"] != "browser_state" || got["controlOwner"] != "user" {
+		t.Fatalf("grab state = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "ack" || got["corrId"] != "grab" {
+		t.Fatalf("grab ack = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "browser_input", "agentId": "a", "event": map[string]any{"kind": "keydown", "key": "Enter"}, "corrId": "input"})
+	if got := recv(t, c); got["t"] != "ack" || got["corrId"] != "input" {
+		t.Fatalf("input ack = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "browser_control", "agentId": "a", "action": "release", "corrId": "release"})
+	if got := recv(t, c); got["t"] != "browser_state" || got["controlOwner"] != "agent" {
+		t.Fatalf("release state = %#v", got)
 	}
 }
 

@@ -13,14 +13,15 @@ import (
 
 // ScreencastFrame is a browser image and the viewport metadata reported by CDP.
 type ScreencastFrame struct {
-	DataB64 string
-	Meta    ScreencastMetadata
+	DataB64 string             `json:"dataB64"`
+	Meta    ScreencastMetadata `json:"meta"`
 }
 
 type ScreencastMetadata struct {
-	DeviceWidth, DeviceHeight float64
-	OffsetTop                 float64
-	Timestamp                 float64
+	DeviceWidth  float64 `json:"deviceWidth"`
+	DeviceHeight float64 `json:"deviceHeight"`
+	OffsetTop    float64 `json:"offsetTop"`
+	Timestamp    float64 `json:"timestamp"`
 }
 
 // BrowserInputEvent is the normalized browser_input.event wire shape.

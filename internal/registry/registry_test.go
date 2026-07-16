@@ -273,3 +273,16 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 		t.Fatalf("closed retained ref=%+v", retained)
 	}
 }
+
+func TestACPEnvironmentInheritsDaemonAndAppliesLaunchOverlay(t *testing.T) {
+	t.Setenv("TANDEM_INHERITED_FIXTURE", "parent")
+	t.Setenv("TANDEM_OVERLAID_FIXTURE", "parent")
+	got := map[string]string{}
+	for _, entry := range envList(map[string]string{"TANDEM_OVERLAID_FIXTURE": "launch", "TANDEM_ADDED_FIXTURE": "added"}) {
+		key, value, _ := strings.Cut(entry, "=")
+		got[key] = value
+	}
+	if got["TANDEM_INHERITED_FIXTURE"] != "parent" || got["TANDEM_OVERLAID_FIXTURE"] != "launch" || got["TANDEM_ADDED_FIXTURE"] != "added" {
+		t.Fatalf("merged environment = %#v", got)
+	}
+}

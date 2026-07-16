@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/aiguy110/tandem/internal/acp"
@@ -72,9 +74,25 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 }
 
 func envList(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k, v := range m {
-		out = append(out, k+"="+v)
+	out := append([]string{}, os.Environ()...)
+	positions := make(map[string]int, len(out))
+	for i, entry := range out {
+		key, _, _ := strings.Cut(entry, "=")
+		positions[key] = i
+	}
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		entry := key + "=" + m[key]
+		if i, ok := positions[key]; ok {
+			out[i] = entry
+		} else {
+			positions[key] = len(out)
+			out = append(out, entry)
+		}
 	}
 	return out
 }

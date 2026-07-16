@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
@@ -38,6 +39,7 @@ type Options struct {
 	Registry   Backend
 	Fallback   http.Handler
 	WriteQueue int
+	Browser    *browser.Broker
 }
 
 type Handler struct {
@@ -123,6 +125,8 @@ type clientMessage struct {
 	DeleteWorktree *bool                      `json:"deleteWorktree"`
 	SessionID      string                     `json:"sessionId"`
 	InterruptFirst bool                       `json:"interrupt"`
+	Action         string                     `json:"action"`
+	Event          browser.BrowserInputEvent  `json:"event"`
 }
 
 type connection struct {
@@ -400,6 +404,37 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.server.broadcastClosed(m.AgentID)
 		c.commandAck(m, m.AgentID)
+	case "browser_control":
+		if c.server.opts.Browser == nil {
+			c.commandError(m, errors.New("browser subsystem disabled"))
+			return
+		}
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		switch m.Action {
+		case "grab":
+			c.server.opts.Browser.Grab(m.AgentID)
+		case "release":
+			if err := c.server.opts.Browser.Release(m.AgentID); err != nil {
+				c.commandError(m, err)
+				return
+			}
+		default:
+			c.commandError(m, errors.New("invalid browser control action"))
+			return
+		}
+		c.commandAck(m, m.AgentID)
+	case "browser_input":
+		if c.server.opts.Browser == nil {
+			c.commandError(m, errors.New("browser subsystem disabled"))
+			return
+		}
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		go func() { _ = c.server.opts.Browser.DispatchUserInput(context.Background(), m.AgentID, m.Event) }()
+		c.commandAck(m, m.AgentID)
 	case "merge_back":
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
@@ -498,6 +533,7 @@ type subscription struct {
 	pending      []eventlog.LoggedEvent
 	active       atomic.Bool
 	unlisten     func()
+	browserOff   func()
 }
 
 func (s *subscription) wants(ev eventlog.Event) bool {
@@ -506,8 +542,17 @@ func (s *subscription) wants(ev eventlog.Event) bool {
 	return s.channels[channelOf(ev.Kind)]
 }
 func (s *subscription) stop() {
-	if s.active.Swap(false) && s.unlisten != nil {
-		s.unlisten()
+	if s.active.Swap(false) {
+		if s.unlisten != nil {
+			s.unlisten()
+		}
+		s.mu.Lock()
+		browserOff := s.browserOff
+		s.browserOff = nil
+		s.mu.Unlock()
+		if browserOff != nil {
+			browserOff()
+		}
 	}
 }
 
@@ -580,6 +625,19 @@ func (c *connection) subscribe(m clientMessage) {
 			c.send(eventMessage(sess.ID, le))
 		}
 	}
+	if sub.channels["browser"] && c.server.opts.Browser != nil {
+		offState := c.server.opts.Browser.OnState(sess.ID, func(state browser.BrowserState) {
+			c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
+		})
+		state := c.server.opts.Browser.State(sess.ID)
+		c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
+		offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
+			c.send(map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
+		})
+		sub.mu.Lock()
+		sub.browserOff = func() { offFrames(); offState() }
+		sub.mu.Unlock()
+	}
 	c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID}, m.CorrID))
 }
 
@@ -588,11 +646,22 @@ func (c *connection) unsubscribe(m clientMessage) {
 	sub := c.subs[m.AgentID]
 	if sub != nil && len(m.Channels) > 0 {
 		sub.mu.Lock()
+		removeBrowser := false
 		for _, ch := range m.Channels {
 			delete(sub.channels, ch)
+			if ch == "browser" {
+				removeBrowser = true
+			}
 		}
 		empty := len(sub.channels) == 0
+		browserOff := sub.browserOff
+		if removeBrowser {
+			sub.browserOff = nil
+		}
 		sub.mu.Unlock()
+		if removeBrowser && browserOff != nil {
+			browserOff()
+		}
 		if empty {
 			sub.stop()
 			delete(c.subs, m.AgentID)

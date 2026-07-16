@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -49,6 +50,14 @@ type agentBrowser struct {
 	owner             ControlOwner
 	links             map[*proxyLink]struct{}
 	shared            *SharedBrowser
+	nextListener      uint64
+	stateListeners    map[uint64]func(BrowserState)
+	frameListeners    map[uint64]func(ScreencastFrame)
+}
+
+type BrowserState struct {
+	Active       bool         `json:"active"`
+	ControlOwner ControlOwner `json:"controlOwner"`
 }
 type Broker struct {
 	driver   Driver
@@ -95,10 +104,110 @@ func (b *Broker) record(id string) *agentBrowser {
 	defer b.mu.Unlock()
 	a := b.agents[id]
 	if a == nil {
-		a = &agentBrowser{owner: ControlAgent, links: make(map[*proxyLink]struct{}), wsRoutes: make(map[string]string)}
+		a = &agentBrowser{owner: ControlAgent, links: make(map[*proxyLink]struct{}), wsRoutes: make(map[string]string), stateListeners: make(map[uint64]func(BrowserState)), frameListeners: make(map[uint64]func(ScreencastFrame))}
 		b.agents[id] = a
 	}
 	return a
+}
+func (b *Broker) State(id string) BrowserState {
+	b.mu.Lock()
+	a := b.agents[id]
+	b.mu.Unlock()
+	if a == nil {
+		return BrowserState{ControlOwner: ControlAgent}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+}
+
+func (b *Broker) OnState(id string, callback func(BrowserState)) func() {
+	a := b.record(id)
+	a.mu.Lock()
+	a.nextListener++
+	listenerID := a.nextListener
+	a.stateListeners[listenerID] = callback
+	a.mu.Unlock()
+	return func() {
+		a.mu.Lock()
+		delete(a.stateListeners, listenerID)
+		a.mu.Unlock()
+	}
+}
+
+func (b *Broker) AddFrameListener(id string, callback func(ScreencastFrame)) func() {
+	a := b.record(id)
+	a.mu.Lock()
+	a.nextListener++
+	listenerID := a.nextListener
+	a.frameListeners[listenerID] = callback
+	active := a.provisioned
+	a.mu.Unlock()
+	if active {
+		go b.startCast(id)
+	}
+	return func() {
+		a.mu.Lock()
+		delete(a.frameListeners, listenerID)
+		remaining := len(a.frameListeners)
+		shared := a.shared
+		a.mu.Unlock()
+		if remaining == 0 && shared != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = shared.StopScreencast(ctx)
+		}
+	}
+}
+
+func (b *Broker) emitState(id string) {
+	a := b.record(id)
+	a.mu.Lock()
+	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	callbacks := make([]func(BrowserState), 0, len(a.stateListeners))
+	for _, callback := range a.stateListeners {
+		callbacks = append(callbacks, callback)
+	}
+	a.mu.Unlock()
+	for _, callback := range callbacks {
+		callback(state)
+	}
+}
+
+func (b *Broker) emitFrame(id string, frame ScreencastFrame) {
+	a := b.record(id)
+	a.mu.Lock()
+	callbacks := make([]func(ScreencastFrame), 0, len(a.frameListeners))
+	for _, callback := range a.frameListeners {
+		callbacks = append(callbacks, callback)
+	}
+	a.mu.Unlock()
+	for _, callback := range callbacks {
+		callback(frame)
+	}
+}
+
+func (b *Broker) startCast(id string) {
+	a := b.record(id)
+	a.mu.Lock()
+	listeners := len(a.frameListeners)
+	a.mu.Unlock()
+	if listeners == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	shared, err := b.SharedBrowser(ctx, id)
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	listeners = len(a.frameListeners)
+	a.mu.Unlock()
+	if listeners == 0 {
+		return
+	}
+	_ = shared.StartScreencast(ctx, func(frame ScreencastFrame) { b.emitFrame(id, frame) })
 }
 func (b *Broker) Owner(id string) ControlOwner {
 	a := b.record(id)
@@ -151,9 +260,15 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 	}
 	a.provisioning = nil
 	close(wait)
+	listenerCount := len(a.frameListeners)
 	a.mu.Unlock()
 	if err != nil {
 		_ = b.driver.Teardown(context.Background(), id)
+	} else {
+		b.emitState(id)
+		if listenerCount > 0 {
+			go b.startCast(id)
+		}
 	}
 	return err
 }
@@ -463,8 +578,12 @@ func (b *Broker) bridge(ctx context.Context, id, rest string, agent *websocket.C
 func (b *Broker) Grab(id string) {
 	a := b.record(id)
 	a.mu.Lock()
+	changed := a.owner != ControlUser
 	a.owner = ControlUser
 	a.mu.Unlock()
+	if changed {
+		b.emitState(id)
+	}
 }
 func (b *Broker) Release(id string) error {
 	a := b.record(id)
@@ -490,6 +609,7 @@ func (b *Broker) Release(id string) error {
 	if b.cfg.OnRelease != nil {
 		b.cfg.OnRelease(id)
 	}
+	b.emitState(id)
 	return nil
 }
 func (b *Broker) Teardown(ctx context.Context, id string) error {
