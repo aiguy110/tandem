@@ -1,8 +1,8 @@
 // Workspace de-risk (D8 / Phase 2): proves the WorkspaceManager end-to-end —
 //
-//   a) spawn_agent(worktree) → worktree exists under worktreesDir, branch
-//      tandem/<name> checked out, based on the right ref; the repo's original
-//      working tree is untouched.
+//   a) spawn_agent(worktree) → worktree exists under worktreesDir, a
+//      context-qualified tandem/<source>/<name> branch is checked out from the
+//      selected immutable source commit, and the original checkout is untouched.
 //   b) two agents on the same repo get independent worktrees (a file written
 //      in one doesn't appear in the other).
 //   c) close_agent with uncommitted changes is refused with a structured
@@ -11,7 +11,8 @@
 //   e) daemon restart (real child-process restart, deriskRestart.ts's
 //      pattern) restores an agent attached to the same worktree path; if the
 //      worktree dir is deleted first, it's recreated from the branch.
-//   f) list_dirs returns the temp repo with correct branch/dirty/hasLiveAgent.
+//   f) list_dirs/list_git_refs return repository and feature-branch context,
+//      including integration targets, checkout occupancy, and divergence.
 //   g) a second kind:'existing' spawn into an already-occupied dir is
 //      refused with a structured collision error.
 //
@@ -96,7 +97,7 @@ function rpc(ws: WebSocket, msg: any): Promise<Frame> {
     const corrId = msg.corrId ?? Math.random().toString(36).slice(2);
     const onMsg = (raw: any) => {
       const f = JSON.parse(raw.toString()) as Frame;
-      if (f.corrId === corrId && (f.t === 'ack' || f.t === 'dirs' || f.t === 'close_preview')) {
+    if (f.corrId === corrId && (f.t === 'ack' || f.t === 'dirs' || f.t === 'git_refs' || f.t === 'agents' || f.t === 'close_preview')) {
         ws.off('message', onMsg);
         resolve(f);
       }
@@ -122,6 +123,12 @@ async function main() {
   git(repo, ['add', '.']);
   git(repo, ['commit', '-q', '-m', 'init']);
   const originalHead = git(repo, ['rev-parse', 'HEAD']);
+  git(repo, ['switch', '-q', '-c', 'feature/migration']);
+  fs.writeFileSync(path.join(repo, 'FEATURE.md'), 'feature context\n');
+  git(repo, ['add', 'FEATURE.md']);
+  git(repo, ['commit', '-q', '-m', 'feature base']);
+  const featureHead = git(repo, ['rev-parse', 'HEAD']);
+  git(repo, ['switch', '-q', 'main']);
 
   console.log(`\n  ▸ TANDEM_HOME  = ${home}`);
   console.log(`  ▸ project root = ${projectRoot}`);
@@ -134,6 +141,32 @@ async function main() {
   const d1 = await startDaemon(home, projectRoot);
   const ws = await connect(d1.token, () => {});
 
+  // ---- branch discovery: canonical local refs + checked-out metadata ----
+  const refsFrame = await rpc(ws, { t: 'list_git_refs', repo });
+  const mainRef = (refsFrame.refs ?? []).find((ref: any) => ref.ref === 'refs/heads/main');
+  const featureRef = (refsFrame.refs ?? []).find((ref: any) => ref.ref === 'refs/heads/feature/migration');
+  const refsOk = mainRef?.isCurrent === true && path.resolve(mainRef.checkedOutAt) === path.resolve(repo)
+    && featureRef?.commit === featureHead && featureRef?.kind === 'local-branch';
+  const checkedOutAttach = await rpc(ws, {
+    t: 'spawn_agent',
+    spec: { adapter: 'acp', workspace: { kind: 'worktree', repo, branchMode: 'attach', branch: 'main', source: { ref: 'refs/heads/main' } }, name: 'checked-out' },
+  });
+  const checkedOutAttachRefused = checkedOutAttach.error?.includes('branch_checked_out') === true;
+  const failedStart = await rpc(ws, {
+    t: 'spawn_agent',
+    spec: {
+      adapter: 'acp',
+      resolvedLaunch: { agent: 'failing-adapter', acp: { cmd: '/bin/false', args: [] } },
+      workspace: { kind: 'worktree', repo, branchMode: 'create', branch: 'tandem/rollback-test', source: { ref: 'refs/heads/main' } },
+      name: 'rollback-test',
+    },
+  });
+  const afterFailedStart = await rpc(ws, { t: 'list_agents' });
+  const failedStartRolledBack = !!failedStart.error
+    && !fs.existsSync(pathFor('rollback-test'))
+    && git(repo, ['branch', '--list', 'tandem/rollback-test']) === ''
+    && !(afterFailedStart.agents ?? []).some((agent: any) => agent.id === 'rollback-test');
+
   // ---- (a) spawn a worktree agent ----
   const spawnA = await rpc(ws, { t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo }, name: 'wt-a' } });
   const idA = spawnA.agentId;
@@ -143,6 +176,83 @@ async function main() {
   const branchA = worktreeExistsA ? git(pathA, ['rev-parse', '--abbrev-ref', 'HEAD']) : '';
   const branchedFromHead = worktreeExistsA && git(pathA, ['rev-parse', 'HEAD']) === originalHead;
   const repoUntouched = git(repo, ['status', '--porcelain']) === '' && git(repo, ['rev-parse', 'HEAD']) === originalHead && git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']) === 'main';
+
+  // ---- feature context: immutable source commit + integration target ----
+  const spawnFeature = await rpc(ws, {
+    t: 'spawn_agent',
+    spec: {
+      adapter: 'acp',
+      workspace: {
+        kind: 'worktree',
+        repo,
+        branchMode: 'create',
+        source: { ref: 'refs/heads/feature/migration' },
+        integration: { kind: 'local-branch', ref: 'refs/heads/feature/migration' },
+      },
+      name: 'wt-feature',
+    },
+  });
+  const idFeature = spawnFeature.agentId;
+  const pathFeature = pathFor('wt-feature');
+  await sleep(150);
+  const featureBranch = git(pathFeature, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const featureStartsAtSelectedCommit = git(pathFeature, ['rev-parse', 'HEAD']) === featureHead && fs.existsSync(path.join(pathFeature, 'FEATURE.md'));
+  fs.writeFileSync(path.join(pathFeature, 'feature-work.txt'), 'agent feature work\n');
+  git(pathFeature, ['add', 'feature-work.txt']);
+  git(pathFeature, ['commit', '-q', '-m', 'feature agent work']);
+  // Advance the integration target independently after the agent forked.
+  const targetCheckout = path.join(projectRoot, 'feature-target-checkout');
+  git(repo, ['worktree', 'add', '-q', targetCheckout, 'feature/migration']);
+  fs.writeFileSync(path.join(targetCheckout, 'TARGET.md'), 'target advanced\n');
+  git(targetCheckout, ['add', 'TARGET.md']);
+  git(targetCheckout, ['commit', '-q', '-m', 'feature target moved']);
+  git(repo, ['worktree', 'remove', targetCheckout]);
+  // Move main independently. Feature close/status must not compare against it.
+  fs.writeFileSync(path.join(repo, 'MAIN.md'), 'main moved\n');
+  git(repo, ['add', 'MAIN.md']);
+  git(repo, ['commit', '-q', '-m', 'main moved']);
+  const featurePreview = await rpc(ws, { t: 'get_close_preview', agentId: idFeature });
+  const featurePreviewOk = featurePreview.preview?.targetRef === 'refs/heads/feature/migration'
+    && featurePreview.preview?.ahead === 1
+    && featurePreview.preview?.behind === 1
+    && featurePreview.preview?.unmerged.includes('feature agent work');
+  const featureSummary = await rpc(ws, { t: 'list_agents' });
+  const summarizedFeature = (featureSummary.agents ?? []).find((agent: any) => agent.id === idFeature);
+  const featureSummaryOk = summarizedFeature?.workspace.targetRef === 'refs/heads/feature/migration'
+    && summarizedFeature?.workspace.startCommit === featureHead
+    && summarizedFeature?.workspace.ahead === 1
+    && summarizedFeature?.workspace.behind === 1
+    && summarizedFeature?.workspace.gitState === 'diverged';
+  const createCollision = await rpc(ws, {
+    t: 'spawn_agent',
+    spec: {
+      adapter: 'acp',
+      workspace: { kind: 'worktree', repo, branchMode: 'create', branch: featureBranch, source: { ref: featureHead } },
+      name: 'wt-feature-collision',
+    },
+  });
+  const explicitCreateCollision = createCollision.error?.includes('branch_exists') === true;
+  await rpc(ws, { t: 'close_agent', agentId: idFeature });
+  const retainedRefs = await rpc(ws, { t: 'list_git_refs', repo });
+  const retainedFeatureRef = (retainedRefs.refs ?? []).find((ref: any) => ref.ref === `refs/heads/${featureBranch}`);
+  const retainedContextDiscoverable = retainedFeatureRef?.tandem?.closed === true
+    && retainedFeatureRef?.tandem?.integrationRef === 'refs/heads/feature/migration';
+  const attachFeature = await rpc(ws, {
+    t: 'spawn_agent',
+    spec: {
+      adapter: 'acp',
+      workspace: {
+        kind: 'worktree', repo, branchMode: 'attach', branch: featureBranch,
+        source: { ref: 'refs/heads/feature/migration' },
+        integration: { kind: 'local-branch', ref: 'refs/heads/feature/migration' },
+      },
+      name: 'wt-feature-attach',
+    },
+  });
+  const attachPath = pathFor('wt-feature-attach');
+  await sleep(150);
+  const explicitAttachWorks = !!attachFeature.agentId && git(attachPath, ['rev-parse', '--abbrev-ref', 'HEAD']) === featureBranch;
+  if (attachFeature.agentId) await rpc(ws, { t: 'close_agent', agentId: attachFeature.agentId });
 
   // ---- (b) a second agent on the same repo gets an independent worktree ----
   const spawnB = await rpc(ws, { t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo }, name: 'wt-b' } });
@@ -181,13 +291,13 @@ async function main() {
   const closeDirtyForced = await rpc(ws, { t: 'close_agent', agentId: idA, force: true });
   await sleep(150);
   const forcedRemoved = !closeDirtyForced.error && !fs.existsSync(pathA);
-  const branchAKeptAfterForce = git(repo, ['branch', '--list', 'tandem/wt-a']).includes('tandem/wt-a');
+  const branchAKeptAfterForce = git(repo, ['branch', '--list', 'tandem/main/wt-a']).includes('tandem/main/wt-a');
 
   // ---- (d) clean close (wt-b has no changes) → removed, branch kept ----
   const closeClean = await rpc(ws, { t: 'close_agent', agentId: idB });
   await sleep(150);
   const cleanRemoved = !closeClean.error && !fs.existsSync(pathB);
-  const branchBKeptAfterClean = git(repo, ['branch', '--list', 'tandem/wt-b']).includes('tandem/wt-b');
+  const branchBKeptAfterClean = git(repo, ['branch', '--list', 'tandem/main/wt-b']).includes('tandem/main/wt-b');
 
   // ---- (d2) confirmed close can keep the checkout, even when dirty ----
   const spawnKeep = await rpc(ws, { t: 'spawn_agent', spec: { adapter: 'acp', workspace: { kind: 'worktree', repo }, name: 'wt-keep' } });
@@ -218,17 +328,26 @@ async function main() {
 
   // ---- results ----
   const checks: [string, boolean, string][] = [
-    ['(a) worktree provisioned under worktreesDir on tandem/<name>', worktreeExistsA && branchA === 'tandem/wt-a', `path=${pathA} branch=${branchA}`],
+    ['branch picker discovery returns canonical refs + checkout metadata', refsOk, `main=${JSON.stringify(mainRef)} feature=${JSON.stringify(featureRef)}`],
+    ['explicit attach refuses a branch already checked out elsewhere', checkedOutAttachRefused, `error="${checkedOutAttach.error}"`],
+    ['adapter startup failure rolls back DB row, worktree, and new branch', failedStartRolledBack, `error="${failedStart.error}"`],
+    ['(a) worktree provisioned on a context-qualified tandem branch', worktreeExistsA && branchA === 'tandem/main/wt-a', `path=${pathA} branch=${branchA}`],
     ['(a) worktree based on the repo\'s current HEAD', branchedFromHead, `pathA HEAD == original HEAD (${originalHead.slice(0, 8)})`],
     ["(a) repo's original working tree untouched", repoUntouched, `repo status clean, still on main @ ${originalHead.slice(0, 8)}`],
     ['(b) two agents on one repo get independent worktree paths', independentPaths && worktreeExistsB, `A=${pathA} B=${pathB}`],
     ['(b) a file in one worktree is invisible in the other', isolated, 'only-in-a.txt present in A, absent in B'],
     ['(b) close preview includes uncommitted status and one-line unmerged commits', !!previewOk, JSON.stringify(closePreview.preview)],
+    ['feature spawn starts at selected immutable commit on a context-qualified branch', featureBranch === 'tandem/migration/wt-feature' && featureStartsAtSelectedCommit, `branch=${featureBranch} start=${featureHead.slice(0, 8)}`],
+    ['feature close preview compares with integration target, not source checkout HEAD', featurePreviewOk, JSON.stringify(featurePreview.preview)],
+    ['agent summary exposes target, start commit, and ahead count', featureSummaryOk, JSON.stringify(summarizedFeature?.workspace)],
+    ['explicit create refuses an existing branch instead of silently attaching', explicitCreateCollision, `error="${createCollision.error}"`],
+    ['retained Tandem branch advertises its original integration context', retainedContextDiscoverable, JSON.stringify(retainedFeatureRef?.tandem)],
+    ['explicit attach checks out a retained existing agent branch', explicitAttachWorks, `branch=${featureBranch} path=${attachPath}`],
     ['(c) close with uncommitted changes refused (dirty_worktree)', dirtyRefused, `error="${closeDirtyNoForce.error}"`],
     ['(c) force:true removes the worktree, keeps the branch', forcedRemoved && branchAKeptAfterForce, `removed=${forcedRemoved} branchKept=${branchAKeptAfterForce}`],
     ['(d) clean close removes the worktree, keeps the branch', cleanRemoved && branchBKeptAfterClean, `removed=${cleanRemoved} branchKept=${branchBKeptAfterClean}`],
     ['(d) close with deleteWorktree:false preserves a dirty checkout', checkoutKept, `path=${pathKeep}`],
-    ['(e) worktree dir recreated from branch after restart', recreatedAfterRestart && branchCAfterRestart === 'tandem/wt-c', `existedPreRestart=${cExistedBeforeRestart} recreated=${recreatedAfterRestart} branch=${branchCAfterRestart}`],
+    ['(e) worktree dir recreated from branch after restart', recreatedAfterRestart && branchCAfterRestart === 'tandem/main/wt-c', `existedPreRestart=${cExistedBeforeRestart} recreated=${recreatedAfterRestart} branch=${branchCAfterRestart}`],
     ['(f) list_dirs finds the repo with branch/dirty/hasLiveAgent', listDirsOk, JSON.stringify(found)],
     ['(g) collision on kind:existing refused', collisionRefused, `error="${spawnE2.error}"`],
   ];

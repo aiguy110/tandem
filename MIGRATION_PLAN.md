@@ -23,6 +23,9 @@ The desired end state is:
   `playwright-core`;
 - the existing SQLite database, `$TANDEM_HOME` layout, `config.yml`, and WebSocket protocol
   remaining compatible across rollback to the Node daemon.
+- the feature-aware workspace lineage implemented by the Node daemon—explicit create/attach
+  intent, canonical source ref, immutable source commit, integration target, and
+  feature-relative status—remaining intact in Go.
 
 ## Non-goals
 
@@ -145,6 +148,8 @@ can drift from it.
 - Record the current SQLite schema, indexes, pragma values, and a small seeded database as
   test inputs. Generate the database during tests rather than committing WAL files.
 - Record exit codes and observable startup output such as `TANDEM_READY`.
+- Include feature-workspace fixtures for canonical Git refs, explicit create/attach modes,
+  immutable source commits, integration targets, and legacy `baseRef` records.
 - Add a document mapping every `derisk:*` suite to its owning subsystem.
 
 **Acceptance:**
@@ -255,6 +260,10 @@ sessions and WebSockets.
 - Port existing-directory validation and live-directory collision detection.
 - Port worktree/branch naming, provisioning, restoration, missing-directory recreation,
   dirty-close refusal, forced close, and branch retention.
+- Port read-only local/remote/tag discovery, checked-out-worktree metadata, explicit
+  create-versus-attach errors, immutable source-commit resolution, integration targets,
+  context-qualified agent branches, and feature-relative ahead/behind/diverged state.
+- Preserve transactional cleanup when adapter startup fails after provisioning.
 - Port project-root scanning, depth limits, skip directories, repository metadata, and
   collision reporting.
 - Centralize Git command execution with context cancellation and captured diagnostics.

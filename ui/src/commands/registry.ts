@@ -34,11 +34,48 @@ export function buildCommands(): Command[] {
         const st = s();
         const a = st.focusedId ? st.agents[st.focusedId] : undefined;
         if (a && a.workspace.kind === 'worktree' && a.workspace.repoPath) {
-          void st.spawn({ adapter: 'acp', workspace: { kind: 'worktree', repo: a.workspace.repoPath } });
+          const targetRef = a.workspace.targetRef ?? 'HEAD';
+          void st.spawn({
+            adapter: 'acp',
+            agent: a.agent,
+            workspace: {
+              kind: 'worktree',
+              repo: a.workspace.repoPath,
+              branchMode: 'create',
+              source: { ref: targetRef },
+              integration: a.workspace.targetRef ? { kind: a.workspace.targetKind ?? 'detached', ref: a.workspace.targetRef } : undefined,
+            },
+          });
           return;
         } else {
           st.setModal('spawn');
         }
+      },
+    },
+    {
+      id: 'agent.spawn.sibling.dependent',
+      title: 'Spawn dependent sibling agent',
+      subtitle: 'New agent starting from the focused agent’s current commits',
+      enabled: () => {
+        const st = s();
+        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        return !!a && a.workspace.kind === 'worktree' && !!a.workspace.repoPath && !!a.workspace.branch;
+      },
+      run: () => {
+        const st = s();
+        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        if (!a || a.workspace.kind !== 'worktree' || !a.workspace.repoPath || !a.workspace.branch) return;
+        void st.spawn({
+          adapter: 'acp',
+          agent: a.agent,
+          workspace: {
+            kind: 'worktree',
+            repo: a.workspace.repoPath,
+            branchMode: 'create',
+            source: { ref: `refs/heads/${a.workspace.branch}` },
+            integration: a.workspace.targetRef ? { kind: a.workspace.targetKind ?? 'detached', ref: a.workspace.targetRef } : undefined,
+          },
+        });
       },
     },
     { id: 'palette.open', title: 'Command palette', subtitle: 'All commands, jump-to-agent', run: () => s().setModal('command') },

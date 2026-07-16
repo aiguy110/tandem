@@ -84,6 +84,30 @@ export interface RepoInfo {
   hasLiveAgent: boolean;
 }
 
+export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';
+export interface GitRefInfo {
+  ref: string;
+  displayName: string;
+  kind: GitRefKind;
+  commit: string;
+  subject?: string;
+  updatedAt?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  checkedOutAt?: string;
+  isCurrent: boolean;
+  isDefault: boolean;
+  tandem?: {
+    agentId: string;
+    agentName: string;
+    integrationRef?: string;
+    integrationKind?: 'local-branch' | 'remote-branch' | 'detached';
+    live: boolean;
+    closed: boolean;
+  };
+}
+
 export interface AgentSummary {
   id: string;
   name: string;
@@ -94,7 +118,12 @@ export interface AgentSummary {
     repoPath: string;
     branch: string;
     cwd: string;
-    gitState?: 'dirty' | 'unmerged' | 'synced';
+    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+    ahead?: number;
+    behind?: number;
+    targetRef?: string;
+    targetKind?: 'local-branch' | 'remote-branch' | 'detached';
+    startCommit?: string;
   };
   status: AgentStatus;
   pendingApprovals: number;
@@ -129,7 +158,15 @@ export interface ResumeCatalog {
 }
 
 export type Workspace =
-  | { kind: 'worktree'; repo: string; branch?: string; baseRef?: string }
+  | {
+      kind: 'worktree';
+      repo: string;
+      branch?: string;
+      branchMode?: 'create' | 'attach';
+      source?: { ref: string; commit?: string };
+      integration?: { kind: 'local-branch' | 'remote-branch' | 'detached'; ref: string };
+      baseRef?: string;
+    }
   | { kind: 'existing'; cwd: string };
 
 export interface SpawnSpec {
@@ -174,6 +211,9 @@ export interface ClosePreview {
   kind: 'worktree' | 'existing';
   uncommitted: string;
   unmerged: string;
+  targetRef?: string;
+  ahead?: number;
+  behind?: number;
 }
 
 export type ClientMsg =
@@ -194,6 +234,7 @@ export type ClientMsg =
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; corrId?: string }
+  | { t: 'list_git_refs'; repo: string; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
@@ -224,6 +265,7 @@ export type ServerMsg =
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
+  | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }

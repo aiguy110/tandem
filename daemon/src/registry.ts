@@ -6,12 +6,12 @@ import path from 'node:path';
 import { AcpAdapter, probeAcpSessions } from './acpAdapter.ts';
 import { PtyAdapter } from './ptyAdapter.ts';
 import { AgentSession } from './session.ts';
-import { WorkspaceManager, listRepos } from './workspace.ts';
+import { WorkspaceManager, listGitRefs, listRepos } from './workspace.ts';
 import { buildBrowserMcpServers, type BrowserWiring } from './browser/mcpWiring.ts';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
 import { AssetStore } from './assetStore.ts';
-import type { AgentAdapter, AgentCatalog, AgentRecord, AgentSummary, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
+import type { AgentAdapter, AgentCatalog, AgentRecord, AgentSummary, GitRefInfo, McpServerSpec, RepoInfo, ResumableSession, ResumeAdapterInfo, ResumeCatalog, SpawnOptions, SpawnSpec } from './types.ts';
 
 // A short rotating word pool for auto-names: web-1, api-2, db-3, … (docs D9).
 const NAME_WORDS = ['web', 'api', 'db', 'cli', 'ui', 'svc', 'job', 'net'];
@@ -86,11 +86,23 @@ export class AgentRegistry {
       [...this.sessions.values()].map(async (s) => {
         const ws = s.spec.workspace;
         const cwd = this.cwdByAgent.get(s.id) ?? this.defaultCwd(s.spec);
-        const gitState = await this.workspace.gitState(cwd, ws).catch(() => undefined);
+        const git = await this.workspace.gitState(cwd, ws).catch(() => undefined);
         const workspace =
           ws.kind === 'worktree'
-            ? { kind: 'worktree' as const, repo: path.basename(ws.repo), repoPath: ws.repo, branch: ws.branch ?? `tandem/${s.name}`, cwd, gitState }
-            : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd, gitState };
+            ? {
+                kind: 'worktree' as const,
+                repo: path.basename(ws.repo),
+                repoPath: ws.repo,
+                branch: ws.branch ?? `tandem/${s.name}`,
+                cwd,
+                gitState: git?.status,
+                ahead: git?.ahead,
+                behind: git?.behind,
+                targetRef: git?.targetRef ?? ws.integration?.ref,
+                targetKind: ws.integration?.kind,
+                startCommit: ws.source?.commit,
+              }
+            : { kind: 'existing' as const, repo: path.basename(ws.cwd), repoPath: ws.cwd, branch: '', cwd, gitState: git?.status, ahead: 0, behind: 0 };
         return { id: s.id, name: s.name, agent: s.spec.agent ?? this.config.acp.default, workspace, status: s.status, pendingApprovals: s.pendingApprovals().length, controlMode: s.controlMode };
       }),
     );
@@ -126,6 +138,33 @@ export class AgentRegistry {
   /** Repo discovery for the quick-spawn palette (list_dirs). */
   listDirs(): Promise<RepoInfo[]> {
     return listRepos(this.config.projectRoots, this.config.dirScanDepth, (repo) => this.hasLiveAgentForRepo(repo));
+  }
+  async listGitRefs(repo: string): Promise<GitRefInfo[]> {
+    const refs = await listGitRefs(repo);
+    const repoRoot = path.resolve(repo);
+    const byBranch = new Map<string, AgentRecord>();
+    for (const rec of this.db.allAgents()) {
+      const ws = rec.spec.workspace;
+      if (ws.kind === 'worktree' && ws.branch && path.resolve(ws.repo) === repoRoot) {
+        const ref = `refs/heads/${ws.branch}`;
+        if (!byBranch.has(ref)) byBranch.set(ref, rec);
+      }
+    }
+    return refs.map((ref) => {
+      const rec = byBranch.get(ref.ref);
+      if (!rec || rec.spec.workspace.kind !== 'worktree') return ref;
+      return {
+        ...ref,
+        tandem: {
+          agentId: rec.id,
+          agentName: rec.name,
+          integrationRef: rec.spec.workspace.integration?.ref,
+          integrationKind: rec.spec.workspace.integration?.kind,
+          live: this.sessions.has(rec.id),
+          closed: rec.closedAt != null,
+        },
+      };
+    });
   }
   async spawnOptions(agent: string, cwd: string, profileId?: string, acpArgs: string[] = []): Promise<SpawnOptions> {
     const profile = profileId ? this.config.profiles[profileId] : undefined;
@@ -263,21 +302,31 @@ export class AgentRegistry {
     // Provision the workspace BEFORE creating the session/adapter: a failed
     // provision (collision, missing dir, git error) must not register a
     // half-spawned agent.
-    const { cwd, workspace } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
+    const { cwd, workspace, createdBranch } = await this.workspace.provision(spec, name, (dir) => this.occupantOfDir(dir));
     const resolvedSpec: SpawnSpec = { ...spec, name, workspace };
-    const adapter = this.makeAdapter(id, resolvedSpec);
-    const session = new AgentSession(id, name, resolvedSpec, adapter, this.db, this.assets);
+    let session: AgentSession | undefined;
+    try {
+      const adapter = this.makeAdapter(id, resolvedSpec);
+      session = new AgentSession(id, name, resolvedSpec, adapter, this.db, this.assets);
 
-    const rec: AgentRecord = { id, name, spec: resolvedSpec, cwd, acpSessionId: null, status: 'idle', createdAt: Date.now(), closedAt: null };
-    this.db.upsertAgent(rec);
-    this.wireStatus(session);
-    this.sessions.set(id, session);
-    this.cwdByAgent.set(id, cwd);
+      const rec: AgentRecord = { id, name, spec: resolvedSpec, cwd, acpSessionId: null, status: 'idle', createdAt: Date.now(), closedAt: null };
+      this.db.upsertAgent(rec);
+      this.wireStatus(session);
+      this.sessions.set(id, session);
+      this.cwdByAgent.set(id, cwd);
 
-    const launch = resolvedSpec.resolvedLaunch;
-    await session.start(resolvedSpec.adapter === 'pty'
-      ? { cwd, cmd: launch?.terminal?.cmd, args: this.expandTerminalArgs(launch?.terminal?.startArgs ?? [], { cwd, agentId: id, agentName: name }), env: launch?.terminal?.env }
-      : { cwd, mcpServers: this.mcpServersFor(id) });
+      const launch = resolvedSpec.resolvedLaunch;
+      await session.start(resolvedSpec.adapter === 'pty'
+        ? { cwd, cmd: launch?.terminal?.cmd, args: this.expandTerminalArgs(launch?.terminal?.startArgs ?? [], { cwd, agentId: id, agentName: name }), env: launch?.terminal?.env }
+        : { cwd, mcpServers: this.mcpServersFor(id) });
+    } catch (error) {
+      this.sessions.delete(id);
+      this.cwdByAgent.delete(id);
+      await session?.dispose().catch(() => {});
+      this.db.deleteAgent(id);
+      await this.workspace.rollback(workspace, cwd, createdBranch);
+      throw error;
+    }
     // The ACP sessionId is known once session/new resolves — persist it for restore.
     if (session.acpSessionId) this.db.setSessionId(id, session.acpSessionId);
 

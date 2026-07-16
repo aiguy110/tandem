@@ -29,7 +29,11 @@ interface SpawnSpec {
   acpArgs?: string[];                     // one-off ACP arguments, after profile arguments
   terminalArgs?: string[];                // one-off direct-terminal arguments
   workspace:                              // where it works
-    | { kind: 'worktree'; repo: string; branch: string; baseRef: string }
+    | { kind: 'worktree'; repo: string;
+        branchMode?: 'create' | 'attach'; branch?: string;
+        source?: { ref: string; commit?: string };
+        integration?: { kind: 'local-branch' | 'remote-branch' | 'detached'; ref: string };
+        baseRef?: string }                // accepted for legacy clients
     | { kind: 'existing'; cwd: string };  // reuse a dir as-is (non-git, or opt-in)
   name?: string;                          // auto: web-1, api-2… (renamable)
   task?: string;                          // optional initial prompt, dispatched on spawn
@@ -98,7 +102,8 @@ Two keyboard surfaces, one for speed and one for discoverability:
    that dir.
    - `Enter` on a dir → spawn with defaults; **focus jumps to the new agent**.
    - `⇥` then type a task → spawn **and dispatch** in one shot (focus jumps to it too).
-   - `⌘Enter` → reveal advanced fields (adapter, model, branch, base ref, name).
+   - `⌘Enter` → reveal advanced fields, including a fuzzy Git-ref picker and explicit
+     new-branch / continue-branch / existing-checkout workspace modes.
 2. **Command palette** (`⌘K`) — everything: all commands, jump-to-agent-by-name, spawn,
    assign, approve, kill, merge-back. Every row shows its current keybinding inline, so the
    palette *teaches* the hotkeys. Discoverability layer + "I forgot the key" fallback.
@@ -153,9 +158,19 @@ never clobber each other. It's still just a different host directory.
 
 - **Location:** central — `~/.tandem/worktrees/<repo>/<agent>/`. Keeps the real repo dir
   uncluttered, avoids sibling sprawl, and makes worktrees easy to enumerate and GC.
-- **Branch:** `tandem/<agent-name>` (e.g. `tandem/web-1`), renamable; if spawned with a
-  task, offer `tandem/<slug-of-task>`.
-- **Base ref:** the repo's **current HEAD** by default; advanced picker for `main`/other.
+- **Integration target:** the local/remote feature branch where work is intended to land;
+  this is distinct from the agent's private branch.
+- **Source commit:** the selected ref is resolved to an immutable OID at spawn time. Both
+  ref and OID are persisted, so later branch movement cannot rewrite the fork point.
+- **Agent branch:** `tandem/<context>/<agent-name>` (for example
+  `tandem/go-backend-migration/web-1`), with an expert override.
+- **Branch picker:** Advanced Settings fuzzy-finds local branches, remote branches, and
+  tags, including checked-out and upstream-divergence metadata. Refresh is read-only and
+  never performs an implicit `git fetch`.
+- **Explicit intent:** create refuses an existing explicit branch; attach requires an
+  existing, currently-unchecked-out local branch.
+- **Uncommitted changes:** worktrees start from a committed revision. The picker warns when
+  changes in an existing checkout will not be included.
 - **Opt-out:** a toggle reuses the existing working tree (`kind: 'existing'`) for quick
   throwaway work.
 
@@ -178,6 +193,10 @@ offer "open a worktree instead" or "attach to the existing agent."
   diff and either merges its branch into the base or opens a PR. The human conductor
   decides — nothing merges on its own.
 - **Respawn:** a closed agent's branch can be re-checked-out into a fresh worktree.
+- **Feature-relative status:** dirty/ahead/behind/diverged/merged state and close previews
+  compare with the persisted integration target, not the source checkout's mutable HEAD.
+- **Sibling spawn:** the ordinary command starts from the integration target; the dependent
+  sibling command starts from the focused agent's commits while retaining the same target.
 
 ## Persistence & restore
 
@@ -200,22 +219,17 @@ agent's `SpawnSpec` + ACP `sessionId` (and its worktree/branch). On daemon resta
 
 See [`decisions.md`](decisions.md) D8–D10 for the rationale.
 
-## Implementation status (Phase 2)
+## Implementation status
 
 The daemon's `WorkspaceManager` (`daemon/src/workspace.ts`) implements this doc's git-worktree
 mechanics for real, wired through `AgentRegistry.spawn`/`close`/`restoreOne` — see
 [`ws-protocol.md`](ws-protocol.md) for the wire-level `spawn_agent`/`close_agent`/`list_dirs`
-details. Two small deviations from the illustrative `SpawnSpec` above:
-
-- `workspace.branch` and `workspace.baseRef` are **optional** on the wire (not plain
-  `string`s) — the manager fills the documented defaults (`tandem/<agent-name>`, current
-  HEAD) and persists the *resolved* values back into the stored spec, so restore and a later
-  respawn are unambiguous.
-- If an auto-derived branch name collides with an unrelated existing branch, the manager
-  suffixes it (`tandem/web-1-2`) rather than erroring; an **explicit** `branch` that already
-  exists is treated as the respawn path (re-checkout, not create) — the cheap version of
-  "Respawn" above: point `spec.workspace.branch` at a still-live `tandem/<name>` branch and
-  spawn normally.
+details. Legacy `branch`/`baseRef` records remain supported. New spawns persist canonical
+`source.ref`, immutable `source.commit`, `integration`, and explicit `branchMode`. Only a
+legacy request may infer attach from an explicitly named existing branch. Auto-generated
+collisions receive a suffix; explicit conflicts return `branch_exists`, `branch_missing`,
+or `branch_checked_out`. Adapter-start failure rolls back its new DB row, worktree, and
+newly-created branch.
 
 Merge-back remains future UI/daemon work; the daemon side (`merge_back`) still returns an
 error `ack`.
