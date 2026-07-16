@@ -362,12 +362,25 @@ function compactTokens(value: number): string {
 }
 
 function UsageMeter({ usage }: { usage: NonNullable<AgentView['usage']> }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const percentage = Math.round((usage.used / usage.size) * 100);
   const fill = Math.max(0, Math.min(100, (usage.used / usage.size) * 100));
-  const label = `${compactTokens(usage.used)}/${compactTokens(usage.size)} (${percentage}%)`;
+  const ageSeconds = Math.max(0, Math.floor((now - usage.updatedAt) / 1_000));
+  const relativeTime = ageSeconds < 60
+    ? `${ageSeconds}s ago`
+    : ageSeconds < 3_600
+      ? `${Math.floor(ageSeconds / 60)}m ago`
+      : ageSeconds < 86_400
+        ? `${Math.floor(ageSeconds / 3_600)}h ago`
+        : `${Math.floor(ageSeconds / 86_400)}d ago`;
+  const label = `${compactTokens(usage.used)}/${compactTokens(usage.size)} (${percentage}%) · ${relativeTime}`;
   const title = usage.cost
-    ? `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens · ${usage.cost.amount} ${usage.cost.currency} cumulative`
-    : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens`;
+    ? `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens · updated ${relativeTime} · ${usage.cost.amount} ${usage.cost.currency} cumulative`
+    : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens · updated ${relativeTime}`;
 
   return (
     <div className="usage-meter" role="meter" aria-label="Context window usage" aria-valuemin={0} aria-valuemax={usage.size} aria-valuenow={usage.used} title={title}>
