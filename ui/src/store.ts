@@ -16,6 +16,7 @@ import type {
   Channel,
   ClosePreview,
   ClientMsg,
+  GitRefInfo,
   RepoInfo,
   ResumableSession,
   ResumeCatalog,
@@ -53,7 +54,12 @@ export interface AgentView {
     repoPath: string;
     branch: string;
     cwd: string;
-    gitState?: 'dirty' | 'unmerged' | 'synced';
+    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+    ahead?: number;
+    behind?: number;
+    targetRef?: string;
+    targetKind?: 'local-branch' | 'remote-branch' | 'detached';
+    startCommit?: string;
   };
   status: AgentStatus;
   events: { seq: number; event: WireEvent }[]; // transcript/terminals channel, seq-ordered
@@ -130,6 +136,7 @@ interface StoreState {
   leaveTerminal: (agentId: string) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string, profile?: string) => Promise<SpawnOptions>;
+  listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
@@ -152,6 +159,7 @@ let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
+const pendingGitRefs = new Map<string, { resolve: (refs: GitRefInfo[]) => void; reject: (error: Error) => void }>();
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
@@ -222,6 +230,15 @@ export const useStore = create<StoreState>((set, get) => {
       case 'dirs':
         set({ dirs: msg.dirs });
         return;
+      case 'git_refs': {
+        const pending = msg.corrId ? pendingGitRefs.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingGitRefs.delete(msg.corrId);
+          if (msg.error || !msg.refs) pending.reject(new Error(msg.error ?? 'Git refs unavailable'));
+          else pending.resolve(msg.refs);
+        }
+        return;
+      }
       case 'agent_catalog':
         set({ agentCatalog: msg.catalog });
         return;
@@ -463,6 +480,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingSpawnOptions.set(corrId, { resolve, reject });
         client.send({ t: 'get_spawn_options', agent, profile, cwd, corrId });
+      }),
+    listGitRefs: (repo) =>
+      new Promise<GitRefInfo[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingGitRefs.set(corrId, { resolve, reject });
+        client.send({ t: 'list_git_refs', repo, corrId });
       }),
     prompt: (agentId, input) =>
       new Promise<AckResult>((resolve) => {

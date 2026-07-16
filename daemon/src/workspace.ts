@@ -3,8 +3,9 @@
 //
 //   kind:'worktree'  → `git worktree add` a fresh checkout under
 //                       <worktreesDir>/<repo-basename>/<agent-name>/ on a new
-//                       branch `tandem/<agent-name>` (or spec.branch), based
-//                       on spec.baseRef (default: the repo's current HEAD).
+//                       context-qualified `tandem/<target>/<agent-name>` branch
+//                       (or spec.branch), based on an immutable resolved source
+//                       commit and linked to an integration target.
 //   kind:'existing'  → use the directory as-is (validated to exist).
 //
 // Teardown removes the worktree checkout but NEVER deletes the branch — work
@@ -20,7 +21,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.ts';
-import type { RepoInfo, SpawnSpec, Workspace } from './types.ts';
+import type { GitRefInfo, GitRefKind, RepoInfo, SpawnSpec, Workspace, WorkspaceIntegration } from './types.ts';
 
 // A structured workspace error. `code` is a stable machine-readable token; by
 // convention it's also prefixed onto `message` (`"<code>: <detail>"`) so it
@@ -40,7 +41,15 @@ export class WorkspaceError extends Error {
 
 export interface ProvisionResult {
   cwd: string;
-  workspace: Workspace; // resolved: repo is the abs repo root; branch/baseRef filled in
+  workspace: Workspace; // resolved repo, branch, source ref/OID, and integration target
+  createdBranch: boolean;
+}
+
+export interface GitWorkspaceState {
+  status: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+  ahead: number;
+  behind: number;
+  targetRef?: string;
 }
 
 function runGit(cwd: string, args: string[]): Promise<string> {
@@ -73,7 +82,7 @@ export class WorkspaceManager {
     if (occupant) {
       throw new WorkspaceError('dir_occupied', `${cwd} is already in use by agent "${occupant}" — open a worktree instead, or attach to the existing agent`);
     }
-    return { cwd, workspace: { kind: 'existing', cwd } };
+    return { cwd, workspace: { kind: 'existing', cwd }, createdBranch: false };
   }
 
   private async provisionWorktree(ws: Extract<Workspace, { kind: 'worktree' }>, agentName: string): Promise<ProvisionResult> {
@@ -85,29 +94,57 @@ export class WorkspaceManager {
     }
     fs.mkdirSync(path.dirname(worktreeDir), { recursive: true });
 
-    const baseRef = ws.baseRef || (await runGit(repoRoot, ['rev-parse', 'HEAD']));
-    const explicit = !!ws.branch;
-    let branch = ws.branch || `tandem/${agentName}`;
-    const exists = await this.branchExists(repoRoot, branch);
+    const requestedSource = ws.source?.ref || ws.baseRef || 'HEAD';
+    let source = await resolveRef(repoRoot, requestedSource);
+    const requestedIntegration = ws.integration?.ref || source.ref;
+    const integrationResolved = await resolveRef(repoRoot, requestedIntegration);
+    const integration: WorkspaceIntegration = {
+      kind: integrationKind(integrationResolved.kind),
+      ref: integrationResolved.ref,
+    };
 
-    if (exists && explicit) {
-      // Respawn / reuse path: the caller named an existing tandem/<name>
-      // branch (e.g. re-spawning after a clean close) — re-checkout rather
-      // than error or silently create a duplicate.
+    const explicit = !!ws.branch;
+    let branch = normalizeLocalBranch(ws.branch || defaultAgentBranch(integration.ref, agentName));
+    await validateBranch(repoRoot, branch);
+    const exists = await this.branchExists(repoRoot, branch);
+    // New clients state intent. Legacy callers retain the old behavior where an
+    // explicitly named existing branch means respawn/attach.
+    const mode = ws.branchMode ?? (explicit && exists ? 'attach' : 'create');
+    const checkedOutAt = await checkedOutPath(repoRoot, `refs/heads/${branch}`);
+
+    if (mode === 'attach') {
+      if (!exists) throw new WorkspaceError('branch_missing', `local branch does not exist: ${branch}`);
+      if (checkedOutAt) throw new WorkspaceError('branch_checked_out', `branch "${branch}" is already checked out at ${checkedOutAt}`);
+      source = await resolveRef(repoRoot, `refs/heads/${branch}`);
       await runGit(repoRoot, ['worktree', 'add', worktreeDir, branch]);
-    } else if (exists && !explicit) {
+    } else if (exists && explicit) {
+      throw new WorkspaceError('branch_exists', `local branch already exists: ${branch} — choose Continue existing branch or a different agent branch`);
+    } else if (exists) {
       // Auto-derived name collided with an unrelated existing branch — suffix
       // rather than fail the spawn outright.
       let i = 2;
       let candidate = `${branch}-${i}`;
       while (await this.branchExists(repoRoot, candidate)) candidate = `${branch}-${++i}`;
       branch = candidate;
-      await runGit(repoRoot, ['worktree', 'add', '-b', branch, worktreeDir, baseRef]);
+      await runGit(repoRoot, ['worktree', 'add', '-b', branch, worktreeDir, source.commit]);
     } else {
-      await runGit(repoRoot, ['worktree', 'add', '-b', branch, worktreeDir, baseRef]);
+      await runGit(repoRoot, ['worktree', 'add', '-b', branch, worktreeDir, source.commit]);
     }
 
-    return { cwd: worktreeDir, workspace: { kind: 'worktree', repo: repoRoot, branch, baseRef } };
+    return {
+      cwd: worktreeDir,
+      createdBranch: mode === 'create',
+      workspace: {
+        kind: 'worktree',
+        repo: repoRoot,
+        branch,
+        branchMode: mode,
+        source: { ref: source.ref, commit: source.commit },
+        integration,
+        // Retained so older daemon builds can still restore this row.
+        baseRef: source.commit,
+      },
+    };
   }
 
   private async branchExists(repoRoot: string, branch: string): Promise<boolean> {
@@ -136,27 +173,62 @@ export class WorkspaceManager {
    * dirs have no separate branch to reconcile, so they're only ever
    * 'dirty'/'synced'.
    */
-  async gitState(cwd: string, workspace: Workspace): Promise<'dirty' | 'unmerged' | 'synced'> {
-    if (await this.isDirty(cwd)) return 'dirty';
-    if (workspace.kind !== 'worktree') return 'synced';
+  async gitState(cwd: string, workspace: Workspace): Promise<GitWorkspaceState> {
+    const dirty = await this.isDirty(cwd);
+    if (workspace.kind !== 'worktree') return { status: dirty ? 'dirty' : 'synced', ahead: 0, behind: 0 };
+    const targetRef = await this.targetRef(workspace);
     try {
-      const repoHead = await runGit(workspace.repo, ['rev-parse', 'HEAD']);
-      await runGit(cwd, ['merge-base', '--is-ancestor', 'HEAD', repoHead]);
-      return 'synced';
+      await runGit(workspace.repo, ['rev-parse', '--verify', `${targetRef}^{commit}`]);
     } catch {
-      return 'unmerged';
+      return { status: dirty ? 'dirty' : 'target_missing', ahead: 0, behind: 0, targetRef };
     }
+    const { ahead, behind } = await aheadBehind(cwd, targetRef, 'HEAD');
+    if (dirty) return { status: 'dirty', ahead, behind, targetRef };
+    if (ahead > 0 && behind > 0) return { status: 'diverged', ahead, behind, targetRef };
+    if (ahead > 0) return { status: 'ahead', ahead, behind, targetRef };
+    if (behind > 0) {
+      const head = await runGit(cwd, ['rev-parse', 'HEAD']);
+      const status = workspace.source?.commit && head !== workspace.source.commit ? 'merged' : 'behind';
+      return { status, ahead, behind, targetRef };
+    }
+    return { status: 'synced', ahead, behind, targetRef };
   }
 
   /** Exact details shown before closing an agent with work that may be lost. */
-  async closePreview(cwd: string, workspace: Workspace): Promise<{ kind: 'worktree' | 'existing'; uncommitted: string; unmerged: string }> {
+  async closePreview(cwd: string, workspace: Workspace): Promise<{ kind: 'worktree' | 'existing'; uncommitted: string; unmerged: string; targetRef?: string; ahead?: number; behind?: number }> {
     const uncommitted = await runGit(cwd, ['status', '--short']);
     let unmerged = '';
+    let targetRef: string | undefined;
+    let ahead: number | undefined;
+    let behind: number | undefined;
     if (workspace.kind === 'worktree') {
-      const repoHead = await runGit(workspace.repo, ['rev-parse', 'HEAD']);
-      unmerged = await runGit(cwd, ['log', '--oneline', `${repoHead}..HEAD`]);
+      targetRef = await this.targetRef(workspace);
+      try {
+        ({ ahead, behind } = await aheadBehind(cwd, targetRef, 'HEAD'));
+        unmerged = await runGit(cwd, ['log', '--oneline', `${targetRef}..HEAD`]);
+      } catch {
+        // Surface the missing target in the preview rather than comparing with
+        // an unrelated checkout's HEAD.
+        unmerged = `[integration target missing: ${targetRef}]`;
+      }
     }
-    return { kind: workspace.kind, uncommitted, unmerged };
+    return { kind: workspace.kind, uncommitted, unmerged, targetRef, ahead, behind };
+  }
+
+  private async targetRef(workspace: Extract<Workspace, { kind: 'worktree' }>): Promise<string> {
+    if (workspace.integration?.ref) return workspace.integration.ref;
+    if (workspace.source?.ref) return workspace.source.ref;
+    // Legacy rows often persisted baseRef as an OID. Preserve their historical
+    // live-HEAD comparison because no integration branch was recorded.
+    return runGit(workspace.repo, ['symbolic-ref', '-q', 'HEAD']).catch(() => workspace.baseRef || 'HEAD');
+  }
+
+  /** Roll back a workspace whose adapter failed before spawn completed. */
+  async rollback(workspace: Workspace, cwd: string, createdBranch: boolean): Promise<void> {
+    if (workspace.kind !== 'worktree') return;
+    if (fs.existsSync(cwd)) await runGit(workspace.repo, ['worktree', 'remove', '--force', cwd]).catch(() => {});
+    await runGit(workspace.repo, ['worktree', 'prune']).catch(() => {});
+    if (createdBranch && workspace.branch) await runGit(workspace.repo, ['branch', '-D', workspace.branch]).catch(() => {});
   }
 
   /**
@@ -198,9 +270,136 @@ export class WorkspaceManager {
   }
 }
 
+interface ResolvedRef { ref: string; commit: string; kind: GitRefKind }
+
+async function resolveRef(repoRoot: string, requested: string): Promise<ResolvedRef> {
+  let commit: string;
+  try {
+    commit = await runGit(repoRoot, ['rev-parse', '--verify', `${requested}^{commit}`]);
+  } catch {
+    throw new WorkspaceError('ref_not_found', `Git ref does not resolve to a commit: ${requested}`);
+  }
+  let ref = await runGit(repoRoot, ['rev-parse', '--symbolic-full-name', requested]).catch(() => '');
+  if (!ref && requested === 'HEAD') ref = await runGit(repoRoot, ['symbolic-ref', '-q', 'HEAD']).catch(() => '');
+  if (!ref) ref = commit;
+  return { ref, commit, kind: refKind(ref) };
+}
+
+function refKind(ref: string): GitRefKind {
+  if (ref.startsWith('refs/heads/')) return 'local-branch';
+  if (ref.startsWith('refs/remotes/')) return 'remote-branch';
+  if (ref.startsWith('refs/tags/')) return 'tag';
+  return 'detached';
+}
+
+function integrationKind(kind: GitRefKind): WorkspaceIntegration['kind'] {
+  return kind === 'local-branch' || kind === 'remote-branch' ? kind : 'detached';
+}
+
+function displayRef(ref: string): string {
+  if (ref.startsWith('refs/heads/')) return ref.slice('refs/heads/'.length);
+  if (ref.startsWith('refs/remotes/')) return ref.slice('refs/remotes/'.length);
+  if (ref.startsWith('refs/tags/')) return ref.slice('refs/tags/'.length);
+  return ref;
+}
+
+function normalizeLocalBranch(branch: string): string {
+  return branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch;
+}
+
+function defaultAgentBranch(integrationRef: string, agentName: string): string {
+  let context = displayRef(integrationRef).replace(/^[^/]+\//, (prefix) => prefix === 'origin/' ? '' : prefix);
+  context = context.replace(/^feature\//, '').replace(/[^A-Za-z0-9._/-]+/g, '-').replace(/\/+|\.+$/g, '-');
+  context = context.replace(/^[-./]+|[-./]+$/g, '').slice(0, 64) || 'detached';
+  const agent = agentName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || 'agent';
+  return `tandem/${context}/${agent}`;
+}
+
+async function validateBranch(repoRoot: string, branch: string): Promise<void> {
+  try {
+    await runGit(repoRoot, ['check-ref-format', '--branch', branch]);
+  } catch {
+    throw new WorkspaceError('invalid_branch', `invalid branch name: ${branch}`);
+  }
+}
+
+async function worktreeBranches(repoRoot: string): Promise<Map<string, string>> {
+  const out = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
+  const result = new Map<string, string>();
+  let worktree = '';
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length);
+    else if (line.startsWith('branch ') && worktree) result.set(line.slice('branch '.length), worktree);
+    else if (!line) worktree = '';
+  }
+  return result;
+}
+
+async function checkedOutPath(repoRoot: string, fullRef: string): Promise<string | undefined> {
+  return (await worktreeBranches(repoRoot)).get(fullRef);
+}
+
+async function aheadBehind(cwd: string, target: string, branch: string): Promise<{ ahead: number; behind: number }> {
+  const raw = await runGit(cwd, ['rev-list', '--left-right', '--count', `${target}...${branch}`]);
+  const [behind = 0, ahead = 0] = raw.split(/\s+/).map(Number);
+  return { ahead, behind };
+}
+
 // ---- repo discovery for the spawn palette (docs/spawn-and-workspaces.md) ----
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'target', 'vendor', '.venv', '__pycache__']);
+
+/** Branch/ref discovery for the Advanced spawn picker. This is deliberately
+ * read-only: refreshing the picker never fetches or mutates the repository. */
+export async function listGitRefs(repo: string): Promise<GitRefInfo[]> {
+  const repoRoot = await runGit(repo, ['rev-parse', '--show-toplevel']);
+  const [raw, currentRef, defaultRemoteRef, checkedOut] = await Promise.all([
+    runGit(repoRoot, [
+      'for-each-ref',
+      '--format=%(refname)%1f%(objectname)%1f%(subject)%1f%(committerdate:iso-strict)%1f%(upstream:short)%00',
+      'refs/heads', 'refs/remotes', 'refs/tags',
+    ]),
+    runGit(repoRoot, ['symbolic-ref', '-q', 'HEAD']).catch(() => ''),
+    runGit(repoRoot, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD']).catch(() => ''),
+    worktreeBranches(repoRoot),
+  ]);
+  const refs = await Promise.all(
+    raw.split('\0').map((record) => record.trim()).filter(Boolean).map(async (record): Promise<GitRefInfo | undefined> => {
+      const [ref, commit, subject, updatedAt, upstream] = record.split('\x1f');
+      if (!ref || !commit) return undefined;
+      // origin/HEAD and similar symbolic aliases add noise; the actual target is
+      // already present and marked isDefault below.
+      const symbolicTarget = await runGit(repoRoot, ['symbolic-ref', '-q', ref]).catch(() => '');
+      if (symbolicTarget) return undefined;
+      const kind = refKind(ref);
+      let ahead: number | undefined;
+      let behind: number | undefined;
+      if (kind === 'local-branch' && upstream) {
+        try {
+          ({ ahead, behind } = await aheadBehind(repoRoot, upstream, ref));
+        } catch {
+          // A stale/missing upstream is still a valid local branch picker row.
+        }
+      }
+      return {
+        ref,
+        displayName: displayRef(ref),
+        kind,
+        commit,
+        subject: subject || undefined,
+        updatedAt: updatedAt || undefined,
+        upstream: upstream || undefined,
+        ahead,
+        behind,
+        checkedOutAt: checkedOut.get(ref),
+        isCurrent: ref === currentRef,
+        isDefault: ref === defaultRemoteRef || (!defaultRemoteRef && ref === currentRef),
+      };
+    }),
+  );
+  const rank = (item: GitRefInfo): number => item.isCurrent ? 0 : item.isDefault ? 1 : item.kind === 'local-branch' ? 2 : item.kind === 'remote-branch' ? 3 : 4;
+  return refs.filter((item): item is GitRefInfo => !!item).sort((a, b) => rank(a) - rank(b) || a.displayName.localeCompare(b.displayName));
+}
 
 async function findGitRepos(root: string, maxDepth: number): Promise<string[]> {
   const found: string[] = [];

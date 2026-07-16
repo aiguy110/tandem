@@ -31,6 +31,14 @@ export function Inspector() {
             <span className="v">{agent.workspace.branch || '—'}</span>
           </div>
           <div className="field">
+            <span className="k">Integration target</span>
+            <span className="v">{agent.workspace.targetRef?.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '') || '—'}</span>
+          </div>
+          <div className="field">
+            <span className="k">Divergence</span>
+            <span className="v">+{agent.workspace.ahead ?? 0} / -{agent.workspace.behind ?? 0}</span>
+          </div>
+          <div className="field">
             <span className="k">Status</span>
             <span className="v">{agent.status}</span>
           </div>

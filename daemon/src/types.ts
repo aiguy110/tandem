@@ -209,13 +209,34 @@ export interface AgentAdapter {
 }
 
 // ---- SpawnSpec (docs/spawn-and-workspaces.md) ----------------------------
-// `branch`/`baseRef` are optional on input (Phase 2 deviation from the doc's
-// illustrative interface, which showed them as plain strings): the
-// WorkspaceManager fills sensible defaults — branch `tandem/<agent-name>`,
-// baseRef the repo's current HEAD — and persists the *resolved* values back
-// into the stored spec so restore/respawn are unambiguous.
+// Feature-aware worktrees keep the private agent branch separate from their
+// source ref/OID and integration target. `baseRef` remains for persisted legacy
+// records; WorkspaceManager normalizes new spawns before they are stored.
+export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';
+export interface WorkspaceSource {
+  ref: string;
+  // Filled by WorkspaceManager when the worktree is provisioned. Persisting the
+  // immutable OID means later ref movement never changes what "started from"
+  // means for restore, status, or review.
+  commit?: string;
+}
+export interface WorkspaceIntegration {
+  kind: 'local-branch' | 'remote-branch' | 'detached';
+  ref: string;
+}
 export type Workspace =
-  | { kind: 'worktree'; repo: string; branch?: string; baseRef?: string }
+  | {
+      kind: 'worktree';
+      repo: string;
+      branch?: string;
+      // Explicit intent for new clients. Legacy records omit this; an explicit
+      // existing branch retains the old attach behavior in that case.
+      branchMode?: 'create' | 'attach';
+      source?: WorkspaceSource;
+      integration?: WorkspaceIntegration;
+      // Legacy input/persistence field. New spawns normalize it into source.
+      baseRef?: string;
+    }
   | { kind: 'existing'; cwd: string };
 
 export interface SpawnSpec {
@@ -323,6 +344,29 @@ export interface RepoInfo {
   hasLiveAgent: boolean;
 }
 
+export interface GitRefInfo {
+  ref: string;
+  displayName: string;
+  kind: GitRefKind;
+  commit: string;
+  subject?: string;
+  updatedAt?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  checkedOutAt?: string;
+  isCurrent: boolean;
+  isDefault: boolean;
+  tandem?: {
+    agentId: string;
+    agentName: string;
+    integrationRef?: string;
+    integrationKind?: 'local-branch' | 'remote-branch' | 'detached';
+    live: boolean;
+    closed: boolean;
+  };
+}
+
 // ---- WS protocol (docs/ws-protocol.md) -----------------------------------
 export type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 
@@ -344,16 +388,20 @@ export interface AgentSummary {
   agent?: string;
   // `repo` is a display basename; `repoPath` is the full source-repo path (the
   // spawn origin, needed for "sibling" spawns); `cwd` is this agent's checkout.
-  // `gitState`: 'dirty' (uncommitted changes) > 'unmerged' (committed but not yet
-  // merged into baseRef) > 'synced' (clean and merged) — undefined while unknown
-  // (e.g. right after spawn, before the first poll).
+  // Git state is computed relative to the persisted integration target, never
+  // the mutable branch checked out in the source repo.
   workspace: {
     kind: 'worktree' | 'existing';
     repo: string;
     repoPath: string;
     branch: string;
     cwd: string;
-    gitState?: 'dirty' | 'unmerged' | 'synced';
+    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+    ahead?: number;
+    behind?: number;
+    targetRef?: string;
+    targetKind?: 'local-branch' | 'remote-branch' | 'detached';
+    startCommit?: string;
   };
   status: AgentStatus;
   pendingApprovals: number;
@@ -364,6 +412,9 @@ export interface ClosePreview {
   kind: 'worktree' | 'existing';
   uncommitted: string;
   unmerged: string;
+  targetRef?: string;
+  ahead?: number;
+  behind?: number;
 }
 
 // corrId is an optional client-supplied correlation token echoed back on `ack`.
@@ -371,6 +422,7 @@ export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'list_agents'; corrId?: string } // rail discovery: which agents exist + their metadata
   | { t: 'list_agent_catalog'; corrId?: string }
+  | { t: 'list_git_refs'; repo: string; corrId?: string }
   | { t: 'list_sessions'; corrId?: string } // Resume picker: the resumable-session catalog
   // Resume a session (Resume picker). For a Tandem-owned session only sessionId
   // is needed; for an external one, `agent`+`cwd` (from the catalog) say how/where
@@ -425,6 +477,7 @@ export type ServerMsg =
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] } // reply to list_agents
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] } // reply to list_dirs
+  | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog } // reply to list_sessions

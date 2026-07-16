@@ -106,6 +106,12 @@ export class AcpAdapter implements AgentAdapter {
     this.services = services;
     this.proc = spawn(this.launch.cmd, this.launch.args, { stdio: ['pipe', 'pipe', 'inherit'], cwd: opts.cwd, env: { ...process.env, ...this.launch.env, ...opts.env } });
     this.proc.stdout!.on('data', (d: Buffer) => this.onData(d));
+    this.proc.on('error', (error) => {
+      for (const [, p] of this.pending) p.reject(new Error(`agent failed to start: ${error.message}`));
+      this.pending.clear();
+      this.q.push({ kind: 'status', status: 'error' });
+      this.q.close();
+    });
     this.proc.on('exit', (code) => {
       for (const [, p] of this.pending) p.reject(new Error(`agent exited (code ${code}) before responding`));
       this.pending.clear();

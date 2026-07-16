@@ -32,6 +32,7 @@ export function FocusArea() {
           <span className="sub">
             {agent.workspace.repo}
             {agent.workspace.branch ? ` · ${agent.workspace.branch}` : ''}
+            {agent.workspace.targetRef ? ` → ${agent.workspace.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}` : ''}
           </span>
         </span>
         <div className="tabs">

@@ -3,8 +3,6 @@ import { useStore, rankedOrder } from '../store';
 import type { AgentView } from '../store';
 import type { ClosePreview } from '../wire';
 
-const COMMIT_MERGE_PROMPT = 'please commit your changes and merge them back into the main worktree';
-
 // Left rail — the orchestra. One row per agent; blocked/error float to the top
 // (rankedOrder). Click = focus.
 export function AgentsRail() {
@@ -42,7 +40,10 @@ export function AgentsRail() {
     setConfirmation(null);
     focus(id);
     setPane('transcript');
-    setDraft(id, COMMIT_MERGE_PROMPT);
+    const target = agents[id]?.workspace.targetRef;
+    setDraft(id, target
+      ? `please commit your changes and prepare them to merge into ${target.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}`
+      : 'please commit your changes and prepare them for integration');
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const textarea = [...document.querySelectorAll<HTMLTextAreaElement>('[data-prompt-agent]')].find((el) => el.dataset.promptAgent === id);
       textarea?.focus();
@@ -101,6 +102,9 @@ export function AgentsRail() {
               {confirmation.preview.unmerged && (
                 <section><strong>Unmerged commits</strong><pre>{confirmation.preview.unmerged}</pre></section>
               )}
+              {confirmation.preview.targetRef && (
+                <section><strong>Integration target</strong><pre>{confirmation.preview.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}{typeof confirmation.preview.ahead === 'number' ? `\n${confirmation.preview.ahead} ahead · ${confirmation.preview.behind ?? 0} behind` : ''}</pre></section>
+              )}
               {confirmation.preview.kind === 'worktree' && (
                 <label className="delete-worktree-option">
                   <input type="checkbox" checked={deleteWorktree} onChange={(e) => setDeleteWorktree(e.target.checked)} />
@@ -144,8 +148,17 @@ function Row({
 }) {
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
+  const target = ws.targetRef?.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '');
   const gitStateTitle = ws.gitState
-    ? { dirty: 'uncommitted changes', unmerged: 'committed, not yet merged', synced: 'clean and merged' }[ws.gitState]
+    ? {
+        dirty: 'uncommitted changes',
+        ahead: `${ws.ahead ?? 0} commit(s) ahead of ${target ?? 'target'}`,
+        behind: `${ws.behind ?? 0} commit(s) behind ${target ?? 'target'}`,
+        diverged: `diverged from ${target ?? 'target'}`,
+        merged: `merged into ${target ?? 'target'}`,
+        synced: 'clean and synchronized',
+        target_missing: 'integration target is missing',
+      }[ws.gitState]
     : undefined;
   return (
     <div className={`agent-row${active ? ' active' : ''}`} onClick={onClick}>
@@ -162,6 +175,8 @@ function Row({
           <span className="ws-text">
             {ws.repo || '—'}
             {branch && ` · ${branch}`}
+            {target && ` → ${target}`}
+            {(ws.ahead || ws.behind) ? ` · +${ws.ahead ?? 0}/-${ws.behind ?? 0}` : ''}
           </span>
         </div>
       </div>

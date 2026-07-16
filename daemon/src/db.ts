@@ -142,6 +142,15 @@ export class Db {
   closeAgent(id: string): void {
     this.sCloseAgent.run(Date.now(), id);
   }
+  /** Remove a spawn that never completed adapter startup. No externally visible
+   * session existed, so retaining a closed ghost row/event stream is misleading. */
+  deleteAgent(id: string): void {
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM agent_assets WHERE agentId = ?').run(id);
+      this.db.prepare('DELETE FROM events WHERE agentId = ?').run(id);
+      this.db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+    })();
+  }
   liveAgents(): AgentRecord[] {
     return (this.sLiveAgents.all() as any[]).map(rowToRecord);
   }

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { fuzzyFilter } from '../fuzzy';
-import type { RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import type { GitRefInfo, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
 const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
+const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
 const FALLBACK_PROFILES = [
   { id: 'agent:claude', name: 'Claude', agent: 'claude', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
   { id: 'agent:codex', name: 'Codex', agent: 'codex', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
@@ -68,15 +69,38 @@ function recordRecentDir(path: string) {
   }
 }
 
+function loadBranchContext(project: string): string | undefined {
+  try {
+    return (JSON.parse(localStorage.getItem(BRANCH_CONTEXT_KEY) || '{}') as Record<string, string>)[project];
+  } catch { return undefined; }
+}
+
+function saveBranchContext(project: string, ref: string) {
+  try {
+    const all = JSON.parse(localStorage.getItem(BRANCH_CONTEXT_KEY) || '{}') as Record<string, string>;
+    all[project] = ref;
+    localStorage.setItem(BRANCH_CONTEXT_KEY, JSON.stringify(all));
+  } catch { /* localStorage unavailable */ }
+}
+
+function proposedBranch(ref: GitRefInfo | undefined, name: string): string {
+  let context = ref?.displayName ?? 'current';
+  context = context.replace(/^origin\//, '').replace(/^feature\//, '').replace(/[^A-Za-z0-9._/-]+/g, '-');
+  context = context.replace(/^[-./]+|[-./]+$/g, '').slice(0, 64) || 'detached';
+  const agent = name ? name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') : '<agent-name>';
+  return `tandem/${context}/${agent || 'agent'}`;
+}
+
 // Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs.
 //   Enter               → spawn worktree defaults + focus jumps
 //   Tab → type task → Enter → spawn AND dispatch
-//   ⌘/Ctrl+Enter        → reveal advanced (adapter / branch / baseRef / name / existing)
+//   ⌘/Ctrl+Enter        → reveal advanced (adapter / workspace mode / Git refs / name)
 // Structured spawn errors (dir_occupied) offer worktree-instead / attach.
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
   const spawn = useStore((s) => s.spawn);
   const getSpawnOptions = useStore((s) => s.getSpawnOptions);
+  const listGitRefs = useStore((s) => s.listGitRefs);
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
@@ -108,10 +132,15 @@ export function SpawnPalette() {
   const [adapter, setAdapter] = useState<'acp' | 'pty'>('acp');
   const [agent, setAgent] = useState<string>('agent:claude');
   const [terminalArgsText, setTerminalArgsText] = useState('');
-  const [branch, setBranch] = useState('');
-  const [baseRef, setBaseRef] = useState('');
+  const [workspaceMode, setWorkspaceMode] = useState<'create' | 'attach' | 'existing'>('create');
+  const [sourceRef, setSourceRef] = useState('');
+  const [attachBranchRef, setAttachBranchRef] = useState('');
+  const [agentBranch, setAgentBranch] = useState('');
+  const [gitRefs, setGitRefs] = useState<GitRefInfo[]>([]);
+  const [gitRefsBusy, setGitRefsBusy] = useState(false);
+  const [gitRefsError, setGitRefsError] = useState('');
+  const [gitRefsRefresh, setGitRefsRefresh] = useState(0);
   const [name, setName] = useState('');
-  const [useExisting, setUseExisting] = useState(false);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [permission, setPermission] = useState('');
@@ -134,6 +163,8 @@ export function SpawnPalette() {
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
   const selectedProfile = profiles.find((profile) => profile.id === agent) ?? profiles[0];
+  const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
+  const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
   const agentSlug = selectedProfile?.agent ?? agent.replace(/^agent:/, '');
   useEffect(() => {
     if (!selectedDir) return;
@@ -187,6 +218,30 @@ export function SpawnPalette() {
     return () => { cancelled = true; };
   }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedProfile?.profile, getSpawnOptions]);
   useEffect(() => {
+    if (!advanced || !selectedDir) {
+      setGitRefs([]);
+      setGitRefsError('');
+      return;
+    }
+    let cancelled = false;
+    setGitRefsBusy(true);
+    setGitRefsError('');
+    void listGitRefs(selectedDir.path).then((refs) => {
+      if (cancelled) return;
+      setGitRefs(refs);
+      const remembered = loadBranchContext(selectedDir.path);
+      const selected = refs.find((ref) => ref.ref === remembered)
+        ?? refs.find((ref) => ref.isCurrent)
+        ?? refs.find((ref) => ref.kind === 'local-branch')
+        ?? refs[0];
+      setSourceRef(selected?.ref ?? '');
+      setAttachBranchRef(refs.find((ref) => ref.kind === 'local-branch' && ref.displayName.startsWith('tandem/'))?.ref ?? '');
+    }).catch((error: Error) => {
+      if (!cancelled) setGitRefsError(error.message);
+    }).finally(() => { if (!cancelled) setGitRefsBusy(false); });
+    return () => { cancelled = true; };
+  }, [advanced, selectedDir?.path, listGitRefs, gitRefsRefresh]);
+  useEffect(() => {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
 
@@ -194,7 +249,8 @@ export function SpawnPalette() {
     setBusy(true);
     setError(null);
     const spawnAdapter = advanced ? adapter : (selectedProfile?.hasAcp ? 'acp' : 'pty');
-    const existing = useExisting && !forceWorktree;
+    const mode = forceWorktree ? 'create' : workspaceMode;
+    const workSource = mode === 'attach' ? selectedAttachRef : selectedGitRef;
     const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
     const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
     const spec: SpawnSpec = {
@@ -204,9 +260,19 @@ export function SpawnPalette() {
       terminalArgs: spawnAdapter === 'pty'
         ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
-      workspace: existing
+      workspace: mode === 'existing'
         ? { kind: 'existing', cwd: dir.path }
-        : { kind: 'worktree', repo: dir.path, branch: branch || undefined, baseRef: baseRef || undefined },
+        : {
+            kind: 'worktree',
+            repo: dir.path,
+            branchMode: mode,
+            branch: mode === 'attach' ? selectedAttachRef?.displayName : agentBranch || undefined,
+            source: workSource ? { ref: workSource.ref, commit: workSource.commit } : undefined,
+            integration: selectedGitRef ? {
+              kind: selectedGitRef.kind === 'local-branch' || selectedGitRef.kind === 'remote-branch' ? selectedGitRef.kind : 'detached',
+              ref: selectedGitRef.ref,
+            } : undefined,
+          },
       name: name || undefined,
       task: task.trim() || undefined,
       sessionConfig: spawnAdapter === 'acp' ? {
@@ -218,6 +284,7 @@ export function SpawnPalette() {
       } : undefined,
     };
     saveProjectAgent(dir.path, agent);
+    if (selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
     if (spawnAdapter === 'acp') {
       saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
     }
@@ -344,17 +411,71 @@ export function SpawnPalette() {
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="auto: web-1…" />
             </label>
             <label>
-              Branch
-              <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="tandem/<name>" disabled={useExisting} />
+              Git workspace
+              <select value={workspaceMode} onChange={(e) => {
+                const mode = e.target.value as 'create' | 'attach' | 'existing';
+                setWorkspaceMode(mode);
+                if (mode === 'attach') {
+                  const local = gitRefs.find((ref) => ref.ref === attachBranchRef && ref.kind === 'local-branch')
+                    ?? gitRefs.find((ref) => ref.kind === 'local-branch' && ref.displayName.startsWith('tandem/'));
+                  setAttachBranchRef(local?.ref ?? '');
+                }
+              }}>
+                <option value="create">New agent branch</option>
+                <option value="attach">Continue existing branch</option>
+                <option value="existing">Use existing checkout</option>
+              </select>
             </label>
-            <label>
-              Base ref
-              <input value={baseRef} onChange={(e) => setBaseRef(e.target.value)} placeholder="HEAD" disabled={useExisting} />
-            </label>
-            <label style={{ gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={useExisting} onChange={(e) => setUseExisting(e.target.checked)} />
-              Reuse existing working tree (kind: existing) instead of a worktree
-            </label>
+            {workspaceMode === 'attach' && (
+              <label style={{ gridColumn: '1 / -1' }}>
+                Existing agent branch
+                <GitRefPicker
+                  refs={gitRefs.filter((ref) => ref.kind === 'local-branch')}
+                  value={attachBranchRef}
+                  onChange={(refName) => {
+                    setAttachBranchRef(refName);
+                    const historical = gitRefs.find((ref) => ref.ref === refName)?.tandem;
+                    if (historical?.integrationRef && gitRefs.some((ref) => ref.ref === historical.integrationRef)) setSourceRef(historical.integrationRef);
+                  }}
+                  busy={gitRefsBusy}
+                />
+              </label>
+            )}
+            {workspaceMode !== 'existing' && (
+              <label style={{ gridColumn: '1 / -1' }}>
+                {workspaceMode === 'attach' ? 'Merge target' : 'Start from / merge target'}
+                <GitRefPicker refs={gitRefs} value={sourceRef} onChange={setSourceRef} busy={gitRefsBusy} />
+              </label>
+            )}
+            {workspaceMode === 'create' && (
+              <label style={{ gridColumn: '1 / -1' }}>
+                Agent branch <span className="sub">(optional override)</span>
+                <input value={agentBranch} onChange={(e) => setAgentBranch(e.target.value)} placeholder={proposedBranch(selectedGitRef, name)} />
+              </label>
+            )}
+            {workspaceMode === 'existing' && (
+              <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                The agent will use <code>{selectedDir?.path}</code> directly. No isolated branch is created.
+              </div>
+            )}
+            {workspaceMode !== 'existing' && selectedGitRef && (
+              <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                <div>
+                  {workspaceMode === 'create' ? <>Starting at <b>{selectedGitRef.displayName}</b> @ <code>{selectedGitRef.commit.slice(0, 8)}</code></> : <>Attaching <b>{selectedAttachRef?.displayName ?? '—'}</b>; merge target <b>{selectedGitRef.displayName}</b></>}
+                </div>
+                {workspaceMode === 'create' && <div>Agent branch <code>{agentBranch || proposedBranch(selectedGitRef, name)}</code></div>}
+                {selectedAttachRef?.checkedOutAt && workspaceMode === 'attach' && <div className="modal-err">This branch is already checked out at {selectedAttachRef.checkedOutAt}.</div>}
+                {selectedGitRef.checkedOutAt === selectedDir?.path && selectedDir?.dirty && workspaceMode === 'create' && (
+                  <div className="branch-warning">Uncommitted changes in the existing checkout are not included; the agent starts from the committed revision above.</div>
+                )}
+              </div>
+            )}
+            {gitRefsError && workspaceMode !== 'existing' && <div className="modal-err" style={{ gridColumn: '1 / -1' }}>{gitRefsError}</div>}
+            {workspaceMode !== 'existing' && (
+              <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end' }}>
+                <button type="button" className="btn ghost" onClick={() => setGitRefsRefresh((value) => value + 1)} disabled={gitRefsBusy}>Refresh local refs</button>
+              </div>
+            )}
           </div>
         )}
         {error && (
@@ -399,6 +520,96 @@ export function SpawnPalette() {
           {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function GitRefPicker({
+  refs,
+  value,
+  onChange,
+  busy,
+}: {
+  refs: GitRefInfo[];
+  value: string;
+  onChange: (ref: string) => void;
+  busy: boolean;
+}) {
+  const selected = refs.find((ref) => ref.ref === value);
+  const [query, setQuery] = useState(selected?.displayName ?? '');
+  const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  const closeTimer = useRef<number>();
+  useEffect(() => setQuery(selected?.displayName ?? ''), [selected?.displayName]);
+  const filtered = useMemo(() => {
+    const items = fuzzyFilter(query === selected?.displayName ? '' : query, refs, (ref) => `${ref.displayName} ${ref.kind} ${ref.subject ?? ''}`);
+    return items.slice(0, 10);
+  }, [query, refs, selected?.displayName]);
+  useEffect(() => setIndex(0), [query, refs]);
+
+  const choose = (ref: GitRefInfo) => {
+    onChange(ref.ref);
+    setQuery(ref.displayName);
+    setOpen(false);
+  };
+  return (
+    <div className="git-ref-picker">
+      <input
+        value={query}
+        placeholder={busy ? 'Loading branches…' : 'Fuzzy-find a branch, remote, or tag…'}
+        disabled={busy}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { closeTimer.current = window.setTimeout(() => setOpen(false), 120); }}
+        onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+            setIndex((current) => Math.min(filtered.length - 1, current + 1));
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setIndex((current) => Math.max(0, current - 1));
+          } else if (event.key === 'Enter' && open && filtered[index]) {
+            event.preventDefault();
+            choose(filtered[index]);
+          } else if (event.key === 'Escape' && open) {
+            event.preventDefault();
+            setOpen(false);
+            setQuery(selected?.displayName ?? '');
+          }
+        }}
+      />
+      {open && !busy && (
+        <div className="git-ref-results">
+          {filtered.length === 0 && <div className="git-ref-empty">No matching Git refs.</div>}
+          {filtered.map((ref, row) => (
+            <button
+              type="button"
+              key={ref.ref}
+              className={`git-ref-row${row === index ? ' selected' : ''}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setIndex(row)}
+              onClick={() => {
+                if (closeTimer.current) window.clearTimeout(closeTimer.current);
+                choose(ref);
+              }}
+            >
+              <span className="git-ref-main">
+                <strong>{ref.displayName}</strong>
+                <small>{ref.subject}</small>
+              </span>
+              <span className="git-ref-meta">
+                {ref.isCurrent && <em>current</em>}
+                {ref.checkedOutAt && <em>checked out</em>}
+                {ref.tandem && <em>{ref.tandem.live ? 'live Tandem agent' : 'Tandem branch'}</em>}
+                <span>{ref.kind.replace('-branch', '')}</span>
+                {(ref.ahead || ref.behind) ? <span>+{ref.ahead ?? 0}/-{ref.behind ?? 0}</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

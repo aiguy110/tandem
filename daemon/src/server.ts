@@ -351,6 +351,14 @@ export function startServer(
         conn.send({ t: 'dirs', corrId: m.corrId, dirs });
         break;
       }
+      case 'list_git_refs': {
+        try {
+          conn.send({ t: 'git_refs', corrId: m.corrId, refs: await registry.listGitRefs(m.repo) });
+        } catch (error) {
+          conn.send({ t: 'git_refs', corrId: m.corrId, error: (error as Error).message });
+        }
+        break;
+      }
       case 'list_agents': {
         conn.send({ t: 'agents', corrId: m.corrId, agents: await registry.summaries() });
         break;

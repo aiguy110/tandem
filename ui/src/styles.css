@@ -175,7 +175,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-row .badge { margin-left: auto; }
 .git-state { flex: none; width: 6px; height: 6px; border-radius: 50%; }
 .git-state.dirty { background: var(--err); }
-.git-state.unmerged { background: var(--warn); }
+.git-state.ahead, .git-state.behind, .git-state.diverged, .git-state.target_missing { background: var(--warn); }
+.git-state.merged { background: var(--human); }
 .git-state.synced { background: var(--ok); }
 .status-chip { font-size: var(--fs-xs); padding: 0 6px; border-radius: 4px; text-transform: capitalize; }
 .status-chip.idle { color: var(--ok); background: var(--ok-soft); }
@@ -383,10 +384,26 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .row .sub { color: var(--text-faint); font-size: var(--fs-xs); }
 .modal .foot { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-faint); flex-wrap: wrap; }
 .modal .foot .kbd { margin-right: 4px; }
-.modal .adv { padding: 10px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modal .adv { padding: 10px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-height: 56vh; overflow-y: auto; }
 .modal .adv label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); }
 .modal .adv input, .modal .adv select, .modal .adv textarea { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
 .modal .adv textarea { min-height: 72px; resize: vertical; }
+.git-context-preview { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.55; }
+.git-context-preview code { color: var(--text); font-family: var(--font-mono); }
+.branch-warning { margin-top: 5px; color: var(--warn); }
+.git-ref-picker { position: relative; }
+.modal .adv .git-ref-picker > input { width: 100%; }
+.git-ref-results { position: absolute; z-index: 20; top: calc(100% + 3px); left: 0; right: 0; max-height: 240px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow); }
+.git-ref-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.git-ref-row:last-child { border-bottom: 0; }
+.git-ref-row:hover, .git-ref-row.selected { background: var(--agent-soft); }
+.git-ref-main { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.git-ref-main strong, .git-ref-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-ref-main strong { font: 600 var(--fs-sm) var(--font-mono); }
+.git-ref-main small { color: var(--text-faint); }
+.git-ref-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; color: var(--text-faint); font: var(--fs-xs) var(--font-mono); }
+.git-ref-meta em { padding: 1px 4px; border-radius: 3px; background: var(--agent-soft); color: var(--agent); font-style: normal; }
+.git-ref-empty { padding: 10px; color: var(--text-faint); font-size: var(--fs-xs); }
 .confirm-modal { width: min(560px, 92vw); }
 .confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
 .confirm-modal section { margin-top: 14px; }

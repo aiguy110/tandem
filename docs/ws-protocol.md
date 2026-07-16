@@ -70,8 +70,8 @@ to every client. CLI exit automatically performs `leave_terminal` daemon-side.
 
 ### `spawn_agent` / `close_agent` (Phase 2: real workspaces)
 
-`spawn_agent`'s `workspace.kind:'worktree'` now provisions a real `git worktree` (branch
-`tandem/<name>`, based on `baseRef` or the repo's current HEAD) under
+`spawn_agent`'s `workspace.kind:'worktree'` provisions a real `git worktree` (by default a
+context-qualified `tandem/<feature>/<name>` branch) under
 `$TANDEM_HOME/worktrees/<repo>/<agent>/`; `kind:'existing'` validates the dir exists and
 isn't already occupied by a live agent. A failed provision (missing dir, git error, or a
 `kind:'existing'` collision) rejects the `spawn_agent` call — no agent is registered — with
@@ -86,7 +86,9 @@ overrides and removes the checkout anyway. `kind:'existing'` workspaces just det
 WorkspaceManager errors are conventionally prefixed `"<code>: <detail>"` so a client can
 `error.split(':')[0]` to branch on the reason. Codes in use: `no_such_dir`, `dir_occupied`
 (the UI's cue to offer "open a worktree instead" / "attach to the existing agent" — see
-spawn-and-workspaces.md's Collision section), `dirty_worktree`, `worktree_exists`.
+spawn-and-workspaces.md's Collision section), `dirty_worktree`, `worktree_exists`,
+`ref_not_found`, `invalid_branch`, `branch_exists`, `branch_missing`, and
+`branch_checked_out`.
 
 ### `list_dirs` (Phase 2: spawn-palette repo discovery)
 
@@ -101,6 +103,23 @@ Scans `TANDEM_PROJECT_ROOTS` (depth configurable via `TANDEM_DIR_SCAN_DEPTH`, de
 git repos, skipping `node_modules`/`dist`/etc. `hasLiveAgent` is true if any live agent's
 worktree or existing-dir workspace is tied to that repo.
 
+### `list_git_refs` (feature-branch context picker)
+
+```ts
+{ t: 'list_git_refs'; repo: string; corrId?: string }
+// →
+{ t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
+```
+
+This read-only request returns canonical local/remote/tag refs, immutable commit IDs,
+current/default markers, upstream ahead/behind counts, and the path of any worktree currently
+checking out a local branch. It never runs `git fetch`. The Advanced spawn UI fuzzy-filters
+the result and sends explicit `branchMode`, `source`, and `integration` workspace fields.
+
+New worktrees resolve `source.ref` to `source.commit`, create the private branch from that
+OID, and use `integration.ref` for rail state and close previews. Legacy `baseRef` requests
+remain accepted.
+
 ### `list_agents` (Phase 4: rail discovery)
 
 ```ts
@@ -109,7 +128,9 @@ worktree or existing-dir workspace is tied to that repo.
 
 interface AgentSummary {
   id: string; name: string;
-  workspace: { kind: 'worktree'|'existing'; repo: string; repoPath: string; branch: string; cwd: string };
+  workspace: { kind: 'worktree'|'existing'; repo: string; repoPath: string; branch: string; cwd: string;
+               gitState?: 'dirty'|'ahead'|'behind'|'diverged'|'merged'|'synced'|'target_missing';
+               ahead?: number; behind?: number; targetRef?: string; startCommit?: string };
   status: AgentStatus; pendingApprovals: number;
 }
 ```

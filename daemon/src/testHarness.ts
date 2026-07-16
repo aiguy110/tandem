@@ -84,6 +84,7 @@ export interface Frame {
   status?: string;
   pendingApprovals?: any[];
   dirs?: any[];
+  refs?: any[];
   error?: string;
   corrId?: string;
   // browser channel (Phase 5)
