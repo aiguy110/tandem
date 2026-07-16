@@ -4,7 +4,11 @@
 // Run: npm run derisk:auth
 
 import { WebSocket } from 'ws';
-import { makeHarness, sleep, rule, report } from './testHarness.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { sleep, rule, report } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7723;
 
@@ -28,7 +32,9 @@ async function main() {
   console.log('  TANDEM · auth de-risk (bearer token, D15)');
   console.log(rule);
 
-  const h = await makeHarness(PORT);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-auth-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port: Number(process.env.TANDEM_TEST_PORT || PORT), env: { TANDEM_BROWSER_MCP: 'off' } });
+  const h = { port: daemon.port, token: daemon.token, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
 
   // No token → accepted then closed 4401.
   const noTok = await tryConnect(h.port);
