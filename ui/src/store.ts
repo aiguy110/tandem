@@ -75,7 +75,7 @@ export interface AgentView {
   // session_config event. Null until the ACP agent reports it (or for pty agents,
   // which never do) — the picker bar hides itself in that case.
   sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
-  usage: { used: number; size: number; cost?: { amount: number; currency: string } | null } | null;
+  usage: { used: number; size: number; cost?: { amount: number; currency: string } | null; updatedAt: number } | null;
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
   commands: SlashCommand[];
@@ -183,6 +183,30 @@ const initialTheme = (): 'dark' | 'light' => {
   const saved = localStorage.getItem('tandem.theme');
   return saved === 'light' ? 'light' : 'dark';
 };
+
+const USAGE_STORAGE_KEY = 'tandem.agentUsage';
+type StoredUsage = NonNullable<AgentView['usage']>;
+
+function readStoredUsage(agentId: string): StoredUsage | null {
+  try {
+    const all = JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || '{}') as Record<string, StoredUsage>;
+    const usage = all[agentId];
+    return usage && usage.used >= 0 && usage.size > 0 && Number.isFinite(usage.updatedAt) ? usage : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredUsage(agentId: string, usage: StoredUsage | null): void {
+  try {
+    const all = JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || '{}') as Record<string, StoredUsage>;
+    if (usage) all[agentId] = usage;
+    else delete all[agentId];
+    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // Persistence is best-effort when storage is unavailable or malformed.
+  }
+}
 
 // Rails collapse by default on narrow viewports (phones/small tablets), but the
 // user can still toggle them open regardless of width.
@@ -295,6 +319,7 @@ export const useStore = create<StoreState>((set, get) => {
         });
         ptyHub.clear(msg.agentId);
         browserHub.clear(msg.agentId);
+        writeStoredUsage(msg.agentId, null);
         return;
       }
       case 'snapshot': {
@@ -344,11 +369,13 @@ export const useStore = create<StoreState>((set, get) => {
           });
           return;
         }
+        const usageReceivedAt = event.kind === 'usage' ? Date.now() : undefined;
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
           const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
-          applyEventToView(next, event);
+          applyEventToView(next, event, usageReceivedAt);
+          if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
@@ -581,7 +608,7 @@ function shell(id: string): AgentView {
     browserOwner: 'agent',
     takeovers: [],
     sessionConfig: null,
-    usage: null,
+    usage: readStoredUsage(id),
     commands: [],
     imagePromptSupport: null,
     controlMode: 'transcript',
@@ -595,7 +622,7 @@ function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
 
 // Fold status/permission side effects of an event into the view (mirrors the
 // daemon's session-side handling so the rail stays correct between snapshots).
-function applyEventToView(v: AgentView, event: WireEvent): void {
+function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now()): void {
   if (event.kind === 'status') v.status = event.status;
   if (event.kind === 'permission_request') {
     v.status = 'blocked';
@@ -611,7 +638,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
-  if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost };
+  if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: receivedAt };
   if (event.kind === 'control_state') v.controlMode = event.mode;
 }
 

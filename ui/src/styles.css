@@ -320,7 +320,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .session-config-bar select:focus { outline: none; border-color: var(--agent); color: var(--text); }
 .model-select { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-meter {
-  position: relative; width: 154px; height: 22px; margin-left: auto; overflow: hidden;
+  position: relative; width: 231px; height: 22px; margin-left: auto; overflow: hidden;
   border: 1px solid var(--border-strong); border-radius: var(--r-sm);
   background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums; flex: 0 0 auto;
