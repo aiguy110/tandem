@@ -15,7 +15,7 @@
     "derisk:browser": "tsx src/deriskBrowser.ts",
     "derisk:integration": "tsx src/deriskIntegration.ts",
     "derisk:resume": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskResume.ts",
-    "derisk:handoff": "tsx src/deriskHandoff.ts",
+    "derisk:handoff": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskHandoff.ts",
     "derisk:images": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskImages.ts",
     "derisk:config": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskConfig.ts",
     "derisk:parity": "tsx src/deriskParity.ts",
