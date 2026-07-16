@@ -38,8 +38,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
 	case "daemon":
-		fmt.Fprintln(stderr, daemon.ErrNotReady)
-		return 1
+		if err := daemon.Run(stdout); err != nil {
+			fmt.Fprintf(stderr, "run daemon: %v\n", err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
 		return 2
