@@ -1,0 +1,5 @@
+package=@agentclientprotocol/sdk
+package_version=1.2.1
+schema_path=schema/schema.json
+schema_sha256=8bdfd8347ce8bd2c8620b71bfd5460625f91c7db47a51268bb42b67014ea5b1f
+wire_protocol_version=1
