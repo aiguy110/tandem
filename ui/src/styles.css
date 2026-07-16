@@ -315,6 +315,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .session-config-bar select:hover { border-color: var(--border-strong); color: var(--text); }
 .session-config-bar select:focus { outline: none; border-color: var(--agent); color: var(--text); }
+.model-select { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-meter {
   position: relative; width: 154px; height: 22px; margin-left: auto; overflow: hidden;
   border: 1px solid var(--border-strong); border-radius: var(--r-sm);

@@ -5,7 +5,6 @@ import type { Approval, PromptBlock, SlashCommand, ToolStatus, WireEvent } from 
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
-import { truncateLabel } from '../../display';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -399,10 +398,10 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
       {modelOpt && (
         <label>
           Model
-          <select value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
+          <select className="model-select" value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
             {(modelOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value} title={o.name}>
-                {truncateLabel(o.name)}
+                {o.name}
               </option>
             ))}
           </select>
