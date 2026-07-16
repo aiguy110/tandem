@@ -10,7 +10,7 @@
         "acp": {
           "command": "{node}",
           "args": [
-            "{daemonRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+            "{runtimeRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
           ]
         },
         "terminal": {
@@ -27,7 +27,7 @@
         "acp": {
           "command": "{node}",
           "args": [
-            "{daemonRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+            "{runtimeRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
           ]
         },
         "terminal": {
@@ -44,7 +44,7 @@
         "acp": {
           "command": "{node}",
           "args": [
-            "{daemonRoot}/node_modules/pi-acp/dist/index.js"
+            "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
           ]
         },
         "terminal": {
@@ -71,7 +71,7 @@
         "acp": {
           "command": "{node}",
           "args": [
-            "{daemonRoot}/src/mock-acp-agent.mjs"
+            "{runtimeRoot}/mock-acp-agent.mjs"
           ],
           "env": {
             "FIXTURE_HOME": "{home}"

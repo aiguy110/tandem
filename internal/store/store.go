@@ -1,6 +1,4 @@
-// Package store owns Tandem's durable SQLite representation. Its schema and
-// query semantics intentionally mirror daemon/src/db.ts so either daemon may
-// open a database last written by the other one.
+// Package store owns Tandem's durable SQLite representation.
 package store
 
 import (
@@ -59,8 +57,7 @@ type Store struct {
 	eventMu sync.Mutex
 }
 
-// StoredEvent is the store-level representation of a normalized event. Payload
-// is the exact JSON object understood by the Node daemon.
+// StoredEvent is the store-level representation of a normalized event.
 type StoredEvent struct {
 	Seq     int64
 	Kind    string

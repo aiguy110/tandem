@@ -29,13 +29,13 @@ corresponding real agent.
 ./start-dev-server.sh
 ```
 
-This builds the UI, embeds it in the Go executable, installs the external Node-based agent
-and browser adapters, and starts the native daemon on `127.0.0.1:7717`. Equivalent manual
+This builds the UI, embeds it in the Go executable, installs external agent and browser
+runtime dependencies, and starts the native daemon on `127.0.0.1:7717`. Equivalent manual
 steps:
 
 ```bash
 ./scripts/stage-go-ui.sh
-(cd daemon && npm install)                    # external ACP + Playwright adapters
+(cd runtime && npm install)                   # external ACP bridges + Playwright MCP
 go build -o tandem ./cmd/tandem
 ./tandem daemon                              # → 127.0.0.1:7717
 ```
@@ -45,7 +45,7 @@ The daemon prints a **bootstrap URL** with an embedded token on first run, e.g.
 fragment once and stores it; later visits to `http://127.0.0.1:7717/` just work. Press `c`
 to quick-spawn an agent into a repo under your project roots.
 
-Common configuration (full table in [`daemon/README.md`](daemon/README.md#configuration)):
+Common configuration:
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -68,21 +68,16 @@ docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
 TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
 ```
 
-Verify with `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
 Setup notes and troubleshooting (bundled-Chromium launch crashes, `CHROME_EXECUTABLE_PATH`)
 are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 
 **Remote access:** the daemon binds localhost by default; front it with `tailscale serve`
 (TLS + network identity) rather than exposing the port. The bearer token is a second layer.
 
-**Validate the build:** `go test ./...` runs native unit tests. After building `./tandem`,
-run `TANDEM_GO_DAEMON_CMD='["../tandem","daemon"]' npm run derisk:matrix` from `daemon/`
-to exercise both implementations (each suite uses a throwaway `TANDEM_HOME`).
+**Validate the build:** `go test ./...` runs the backend test suite. Build the UI with
+`npm run build` from `ui/`.
 
-Deployment, deferred restart, and the one-writer rollback procedure are documented in
-[`docs/deployment.md`](docs/deployment.md). The immediate rollback command, after stopping
-Go, is `cd daemon && npm install && TANDEM_UI_DIR=../ui/dist npm run daemon`; it uses the
-same `TANDEM_HOME` and the already-built UI.
+Deployment and deferred restart are documented in [`docs/deployment.md`](docs/deployment.md).
 
 ## Architecture at a glance
 
@@ -157,9 +152,9 @@ built end-to-end, each proven by an automated de-risk suite. What exists:
   persistence** (`~/.tandem/tandem.db`) with restore-on-restart, the full browser↔daemon
   **WS protocol** with **bearer-token auth**, **git-worktree workspaces**, ACP
   **fs/terminal servicing**, and the **shared-browser broker**. `go test ./...` covers its
-  packages; the shared process suites verify it against the Node compatibility baseline.
-- **`daemon/`** — the temporary TypeScript rollback implementation and the black-box
-  compatibility harness. It is not the default production entrypoint.
+  packages and native integration tests cover the full backend.
+- **`runtime/`** — locked external ACP bridge and Playwright MCP dependencies. It contains
+  no Tandem backend implementation.
 - **`ui/`** — the React "mission control" front-end: durable WS client (reconnect + replay),
   docked rails + focus, streaming transcript, always-on approvals rail, quick-spawn +
   command palettes with a rebindable keymap, ghostty-web terminal, and the shared-browser
@@ -168,27 +163,24 @@ built end-to-end, each proven by an automated de-risk suite. What exists:
 - **`spike/`** — the original de-risk spikes (terminal + shared browser) the production code
   was ported from.
 
-**Validation.** `daemon/`'s `derisk:matrix` runs the process suites against both Go and
-Node: durability/ACP spine, multi-agent,
-restart-restore, auth, git worktrees, ACP fs+terminal+cancel, shared browser (10-check CDP
-harness), and a **full-slice integration smoke** (discover → spawn worktree agent → prompt →
-approval → second isolated agent → hard-drop reconnect replay → dirty-close teardown). The UI
-was driven end-to-end against a live daemon + mock ACP agent via Playwright.
+**Validation.** Go package and integration tests cover durability, multi-agent lifecycle,
+restart restore, authentication, worktrees, ACP services, browser control, and WebSocket
+replay. The UI is typechecked and built independently.
 
 ### Deviations from the specs (recorded during the build)
 
 - **Persistence + auth** were unspecified and are now decided: SQLite (D14) and a
   localhost-bind + bearer-token with URL-fragment bootstrap (D15), fronted by `tailscale
   serve` for remote. See [`docs/decisions.md`](docs/decisions.md).
-- **`BrowserDriver` interface** with `SteelDriver` (self-hosted Steel over its REST + CDP API,
-  verified by `npm run derisk:steel`) and `LocalChromiumDriver` (Playwright-launched, the
+- **`BrowserDriver` interface** with `SteelDriver` (self-hosted Steel over its REST + CDP API)
+  and `LocalChromiumDriver` (Playwright-launched, the
   default). Steel is the intended production driver per D4/D13; the local driver is a drop-in
   behind one interface. See D13's amendment.
 - **`takeover_request`** rides the always-on `transcript` channel, not the `browser` channel,
   so the attention rail surfaces it even when the Browser pane is closed.
 - The **real `claude-agent-acp`** accepts our advertised `fs`/`terminal` capabilities and MCP
   registrations, but does its own file/command I/O and did not delegate to the client during
-  spot checks — so the fs/terminal *servicing* path is exercised by the mock agent. See
-  [`daemon/README.md`](daemon/README.md).
+  spot checks — so the fs/terminal *servicing* path is exercised by the mock agent in
+  `internal/acpadapter/testdata/`.
 
 See [`docs/architecture.md`](docs/architecture.md#v1-build-slice) for the build slice.

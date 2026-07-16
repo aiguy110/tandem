@@ -3,11 +3,8 @@ package eventlog
 import (
 	"database/sql"
 	"encoding/json"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -220,66 +217,6 @@ func TestMultipleLogsCannotReuseSequence(t *testing.T) {
 			t.Fatalf("row %d seq=%d", i, row.Seq)
 		}
 	}
-}
-
-func TestNodeGoEventHistoryCompatibility(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fixture helper paths are POSIX")
-	}
-	repo, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(repo, "daemon", "node_modules", "tsx")); err != nil {
-		t.Skip("run npm install in daemon to enable Node-Go compatibility acceptance")
-	}
-	path := filepath.Join(t.TempDir(), "compat.db")
-	helper := filepath.Join(repo, "daemon", "migration-contract", "eventlog-compat.ts")
-	runNode := func(mode string) {
-		t.Helper()
-		cmd := exec.Command("node", "--import", "tsx", helper, mode, path)
-		cmd.Dir = filepath.Join(repo, "daemon")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("node %s: %v\n%s", mode, err, out)
-		}
-	}
-	runNode("create")
-	s, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	log, err := New("api-1", s, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := log.FullHistory()
-	if err != nil || len(history) != 6 {
-		t.Fatalf("Node history=%d err=%v", len(history), err)
-	}
-	fixture, err := os.ReadFile(filepath.Join(repo, "daemon", "migration-contract", "fixtures", "normalized-events.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []json.RawMessage
-	if err := json.Unmarshal(fixture, &want); err != nil {
-		t.Fatal(err)
-	}
-	for i, event := range history {
-		got, _ := event.Event.NormalizedJSON()
-		if !jsonEqual(got, want[i]) || event.TS != 1700000010000+int64(i) {
-			t.Fatalf("event %d got=%s ts=%d want=%s", i, got, event.TS, want[i])
-		}
-	}
-	if _, err := log.Append(message(t, "from-go")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := log.Append(RawPTY([]byte{1, 2, 3, 254})); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	runNode("check")
 }
 
 func jsonEqual(a, b []byte) bool {

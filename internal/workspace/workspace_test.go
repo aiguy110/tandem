@@ -2,12 +2,10 @@ package workspace_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -263,43 +261,6 @@ func TestRepositoryDiscoveryIsBoundedAndReportsCollisions(t *testing.T) {
 	}
 	if len(repos) != 1 || repos[0].Path != f.repo || repos[0].Name != "demo-repo" || repos[0].CurrentBranch != "main" || repos[0].Dirty || !repos[0].HasLiveAgent {
 		t.Fatalf("repos=%+v", repos)
-	}
-}
-
-func TestGoRecordCanBeReattachedByNode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Node compatibility command uses repository paths")
-	}
-	f := newFixture(t)
-	ctx := context.Background()
-	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
-	r, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "node-restore", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(r.Workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(payload), `"branchMode":"create"`) || !strings.Contains(string(payload), `"baseRef":"`+f.initial+`"`) {
-		t.Fatalf("not Node-compatible JSON: %s", payload)
-	}
-	if err = m.Teardown(ctx, r.Workspace, r.CWD, false); err != nil {
-		t.Fatal(err)
-	}
-	record := filepath.Join(f.root, "workspace.json")
-	if err = os.WriteFile(record, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	script := `import fs from 'node:fs'; import {WorkspaceManager} from './src/workspace.ts'; const w=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); await new WorkspaceManager({}).reattach(w,process.argv[2]);`
-	cmd := exec.Command("node", "--import", "tsx", "--input-type=module", "-e", script, record, r.CWD)
-	cmd.Dir = filepath.Join(repoRoot(t), "daemon")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Node failed to restore Go workspace: %v\n%s", err, out)
-	}
-	if got := git(t, r.CWD, "rev-parse", "--abbrev-ref", "HEAD"); got != r.Workspace.Branch {
-		t.Fatalf("Node restored branch %s", got)
 	}
 }
 

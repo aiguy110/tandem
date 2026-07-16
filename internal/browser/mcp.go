@@ -28,7 +28,7 @@ type MCPWiring struct {
 
 // BuildMCPServers returns the external Playwright MCP and Tandem's internal
 // control MCP declarations for one agent. A missing Playwright installation is
-// tolerated, matching the Node daemon; tandem-control remains available.
+// tolerated; tandem-control remains available.
 func BuildMCPServers(w MCPWiring, agentID string) []MCPServer {
 	servers := make([]MCPServer, 0, 2)
 	if w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {

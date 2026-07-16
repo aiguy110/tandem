@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./redeploy.sh                  # requests a deferred rebuild/restart of tandem.service
 ```
 
-The production entrypoint is the native Go daemon (`cmd/tandem` + `internal/`). The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh`; a restart rebuilds the React UI, embeds it in the Go binary, and starts that binary. `daemon/` is the temporary TypeScript rollback implementation plus compatibility harness, not the production daemon. Logs: `journalctl --user -u tandem -f`.
+The backend is exclusively the native Go daemon (`cmd/tandem` + `internal/`). The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh`; a restart builds the React UI, installs external agent runtime dependencies, embeds the UI in the Go binary, and starts that binary. Logs: `journalctl --user -u tandem -f`.
 
 Manual equivalent:
 
@@ -30,34 +30,11 @@ cd ui && npm install && npm run build   # tsc --noEmit && vite build
 cd ui && npm run typecheck              # tsc --noEmit only
 cd ui && npm run dev                    # vite dev server
 
-# Cross-runtime compatibility / rollback harness
-cd daemon && npm install
-TANDEM_GO_DAEMON_CMD='["../tandem","daemon"]' npm run derisk:matrix
-TANDEM_UI_DIR=../ui/dist npm run daemon # start rollback TypeScript daemon
-
-# Daemon tests — de-risk suites, each against a throwaway TANDEM_HOME
-cd daemon && npm test                   # = derisk:all, runs all suites below in sequence
-npm run derisk             # durability + ACP approval loop (single agent)
-npm run derisk:multi       # two agents: independent seq streams, queues, isolated teardown
-npm run derisk:restart     # persist → stop → restart → restore from SQLite + session/load
-npm run derisk:deferred-restart # wait for active turns, then cleanly stop for systemd restart
-npm run derisk:auth        # no/bad token → 4401; valid token → connects
-npm run derisk:workspace   # git worktrees: provision, isolation, dirty-block, restart-recreate, list_dirs, collisions
-npm run derisk:services    # ACP client services: fs round-trip, path-escape reject, terminal buffering, cancel
-npm run derisk:browser     # shared browser: laziness, broker CDP proxy, screencast, grab/hold/release, takeover MCP
-npm run derisk:integration # full-slice smoke: discover → spawn → prompt → approval → 2nd agent → reconnect replay → dirty-close teardown
-npm run derisk:resume      # resumable-session catalog + live/closed/external resume paths
-npm run derisk:handoff     # ACP cancel → resumable CLI terminal → automatic ACP reload
-npm run derisk:config      # config.yml agents/profiles + direct Terminal argv/env + durable launch resolution
-
-# Opt-in (NOT part of `npm test`): needs a self-hosted Steel (Docker). Skips+passes if unreachable.
-STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel # SteelDriver + broker against a live Steel (see docs/browser.md › Self-hosting Steel)
-
-npm run acp:live           # drive the real @agentclientprotocol/claude-agent-acp (needs an authenticated `claude` CLI)
-npm run pty-smoke          # exercise the pty adapter (needs node-pty)
+# External ACP bridges and Playwright MCP (no Tandem backend code)
+cd runtime && npm install
 ```
 
-For Go changes, run the relevant package tests (or `go test ./...`). Each `derisk:*` script is a standalone black-box compatibility scenario; use the relevant suite when a change crosses process or runtime boundaries.
+For Go changes, run the relevant package tests or `go test ./...`.
 
 ### Config (env)
 
@@ -117,7 +94,7 @@ Self-hosted Daemon
 - `internal/workspace/` + `internal/workspacefs/` — isolated worktrees and ACP filesystem sandboxing.
 - `internal/terminalhost/` + `internal/browser/` — daemon-owned terminals and shared browser control.
 
-The TypeScript files under `daemon/src/` remain the rollback baseline and black-box test drivers. New production behavior must be implemented and tested in Go, with parity coverage added where appropriate.
+There is no TypeScript backend or rollback daemon in the repository. Backend behavior must be implemented and tested in Go.
 
 ### UI (`ui/src/`)
 
@@ -147,7 +124,7 @@ The daemon serves the built UI (`ui/dist`) via `TANDEM_UI_DIR`; there is no sepa
 
 - `merge_back` — accepted over WS but returns an error `ack`; no diff review / merge-or-PR UI yet.
 - `raw_pty` / `browser_frame` payloads are base64-in-JSON, not binary framing.
-- `SteelDriver` is verified against a self-hosted Steel via `npm run derisk:steel` (opt-in, needs Docker); `LocalChromiumDriver` remains the default, no-Docker path.
+- `LocalChromiumDriver` remains the default, no-Docker path; `SteelDriver` is opt-in and requires a self-hosted Steel instance.
 
 ## Agent catalog TODOs
 

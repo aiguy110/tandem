@@ -84,7 +84,7 @@ Commands and arguments are arrays rather than shell command strings, avoiding sh
 quoting and injection surprises. Profile arguments are appended to the selected launch
 mode's configured arguments. Direct Terminal launches use `terminal.startArgs`; ACP-to-CLI
 handoff uses `terminal.resumeArgs` and is offered only when that template is present.
-`{node}`, `{daemonRoot}`, `{tandemRoot}`, and `{home}` are expanded while loading either
+`{node}`, `{runtimeRoot}`, `{tandemRoot}`, and `{home}` are expanded while loading either
 catalog layer. Runtime terminal argument templates additionally substitute `{sessionId}`,
 `{cwd}`, `{agentId}`, and `{agentName}`. Environment entries are passed only to the
 configured child process.
@@ -224,8 +224,8 @@ See [`decisions.md`](decisions.md) D8–D10 for the rationale.
 
 ## Implementation status
 
-The daemon's `WorkspaceManager` (`daemon/src/workspace.ts`) implements this doc's git-worktree
-mechanics for real, wired through `AgentRegistry.spawn`/`close`/`restoreOne` — see
+The native workspace package (`internal/workspace/`) implements these git-worktree
+mechanics, wired through the Go registry — see
 [`ws-protocol.md`](ws-protocol.md) for the wire-level `spawn_agent`/`close_agent`/`list_dirs`
 details. Legacy `branch`/`baseRef` records remain supported. New spawns persist canonical
 `source.ref`, immutable `source.commit`, `integration`, and explicit `branchMode`. Only a

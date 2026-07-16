@@ -1,4 +1,4 @@
-# Deployment and rollback
+# Deployment
 
 Production runs the native Go daemon under the user unit in `deploy/tandem.service`.
 `start-dev-server.sh` is the unit entrypoint: it builds and stages the React UI, installs
@@ -19,30 +19,8 @@ SIGTERM, clean deferred exit, bind/port configuration, `TANDEM_HOME`, browser se
 launcher settings, and all other inherited environment variables retain their existing
 semantics.
 
-## Immediate Node rollback
-
-Never run the Go and Node daemons against one Tandem home concurrently. Stop the native
-service first, then start the rollback daemon with the same environment and home:
-
-```bash
-systemctl --user stop tandem.service
-cd /home/josiah/Projects/tandem/daemon
-npm install
-TANDEM_UI_DIR=../ui/dist npm run daemon
-```
-
-This serves the loose UI built by the normal entrypoint. Stop that foreground Node process
-with Ctrl-C before moving forward again:
-
-```bash
-cd /home/josiah/Projects/tandem
-systemctl --user start tandem.service
-```
-
-The two implementations share the additive SQLite schema, token, assets, and worktree
-metadata. A rollback is therefore a process switch, not a data conversion. Back up
-`TANDEM_HOME` before an operational upgrade as normal practice, and preserve the same
-`TANDEM_HOME`, `TANDEM_PROJECT_ROOTS`, and agent-launch environment on both sides.
+Back up `TANDEM_HOME` before an operational upgrade. Rollbacks use a previous native release
+or Git revision; there is no alternate TypeScript daemon.
 
 Check startup or a deferred restart with `journalctl --user -u tandem -f`. The daemon prints
 `TANDEM_READY`, the bound port, and the bootstrap URL after restoration succeeds.

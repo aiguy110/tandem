@@ -9,7 +9,7 @@ agents:
     acp:
       command: "{node}"
       args:
-        - "{daemonRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+        - "{runtimeRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
     terminal:
       command: claude
       startArgs: []
@@ -20,7 +20,7 @@ agents:
     acp:
       command: "{node}"
       args:
-        - "{daemonRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+        - "{runtimeRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
     terminal:
       command: codex
       startArgs: []
@@ -31,7 +31,7 @@ agents:
     acp:
       command: "{node}"
       args:
-        - "{daemonRoot}/node_modules/pi-acp/dist/index.js"
+        - "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
     terminal:
       command: pi
       startArgs: []

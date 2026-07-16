@@ -18,8 +18,8 @@ fi
 
 ./scripts/stage-go-ui.sh
 
-echo "==> Installing Node-based agent and browser adapters"
-(cd daemon && npm install)
+echo "==> Installing external agent and browser runtimes"
+(cd runtime && npm install)
 
 echo "==> Building native daemon"
 "$go_cmd" build -o tandem ./cmd/tandem

@@ -1,4 +1,4 @@
-// The wire contract — mirrored from daemon/src/types.ts (docs/ws-protocol.md).
+// The browser wire contract. The Go server implementation lives in internal/wsserver.
 // The browser holds NO authoritative state; every shape here is a projection of
 // what the daemon sends. Kept as a hand-maintained copy so the UI has no build
 // dependency on the daemon package.

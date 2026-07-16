@@ -1,8 +1,7 @@
 # Architecture
 
 Tandem is a browser-based orchestration layer over terminal coding agents. The production
-daemon is a native Go executable with the React application embedded; the TypeScript daemon
-remains available temporarily as a rollback implementation. This document
+daemon is a native Go executable with the React application embedded. This document
 covers the system decomposition, the durability model, each subsystem, and the proposed
 v1 build slice.
 
@@ -29,9 +28,7 @@ Tandem's answer is to **become the thing that owns the pty**:
 
 ### Validated (PoC)
 
-This model is proven by the shared black-box suites in [`daemon/`](../daemon/README.md), not
-just asserted. The `derisk:matrix` harness runs both Go and Node and hard-kills a
-client socket mid-stream (no close handshake —
+Go integration tests hard-kill a client socket mid-stream (no close handshake —
 a real dropped pipe), waits with no client attached, then reconnects from the client's
 last `seq`. It asserts, and passes, that:
 
@@ -52,10 +49,9 @@ SQLite, registry/session state, ACP and PTY adapters, HTTP/WebSocket serving, an
 browser control. `scripts/stage-go-ui.sh` builds `ui/` into `internal/ui/dist`; `go build`
 then embeds that directory so production does not need a loose `ui/dist` tree.
 
-Node remains an external runtime dependency only for configured Node-based ACP adapters and
-`@playwright/mcp`. The legacy implementation under `daemon/src/` is not started in normal
-operation. Both implementations use the same additive SQLite schema and assets directory,
-but only one daemon may open a Tandem home at a time. See [deployment](deployment.md).
+Node remains an external runtime dependency only for configured ACP bridges and
+`@playwright/mcp`; their locked dependencies live under `runtime/`. No Tandem backend code
+runs under Node. See [deployment](deployment.md).
 
 ## Subsystems
 

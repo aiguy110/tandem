@@ -40,7 +40,7 @@ func mockPath(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot locate mock")
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "daemon", "src", "mock-acp-agent.mjs"))
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "testdata", "mock-acp-agent.mjs"))
 }
 
 func startMock(t *testing.T, mutate func(*AdapterConfig)) *Adapter {

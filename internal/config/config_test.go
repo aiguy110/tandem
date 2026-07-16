@@ -25,7 +25,7 @@ func options(t *testing.T, env map[string]string) Options {
 		env = map[string]string{}
 	}
 	env["TANDEM_HOME"] = home
-	return Options{Env: env, HomeDir: "/fixtures/user", DaemonRoot: "/fixtures/tandem/daemon", TandemRoot: "/fixtures/tandem"}
+	return Options{Env: env, HomeDir: "/fixtures/user", RuntimeRoot: "/fixtures/tandem/runtime", TandemRoot: "/fixtures/tandem"}
 }
 
 func TestDefaultsAndEnvironment(t *testing.T) {
@@ -63,7 +63,7 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	if c.Browser.ChromiumExecutable != "/fixtures/bin/chromium" {
 		t.Fatalf("explicit chromium executable missing: %+v", c.Browser)
 	}
-	if c.Browser.NodeRuntime != "/fixtures/bin/node" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/daemon/node_modules/@playwright/mcp/cli.js" {
+	if c.Browser.NodeRuntime != "/fixtures/bin/node" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/runtime/node_modules/@playwright/mcp/cli.js" {
 		t.Fatalf("browser MCP tool runtime missing: %+v", c.Browser)
 	}
 	if c.DBPath != filepath.Join(c.Home, "tandem.db") || c.TokenPath != filepath.Join(c.Home, "token") {
@@ -82,7 +82,7 @@ agents:
     name: Custom Agent
     acp:
       command: "{node}"
-      args: ["{daemonRoot}/mock.mjs", "{tandemRoot}"]
+      args: ["{runtimeRoot}/mock.mjs", "{tandemRoot}"]
       env: {HOME_PATH: "{home}"}
 profiles:
   custom-fast:
@@ -105,7 +105,7 @@ profiles:
 		t.Fatalf("partial overlay did not inherit: %+v", c.Agents["claude"])
 	}
 	custom := c.Agents["custom"].ACP
-	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/daemon/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
+	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/runtime/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
 		t.Fatalf("placeholders not expanded: %+v", custom)
 	}
 	if !reflect.DeepEqual(c.Profiles["custom-fast"].ACPArgs, []string{"--fast"}) {
@@ -220,7 +220,7 @@ func TestDebugJSONIsDeterministicAndRedacted(t *testing.T) {
 }
 
 func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
-	fixturePath := filepath.Join("..", "..", "daemon", "migration-contract", "fixtures", "config-examples.json")
+	fixturePath := filepath.Join("testdata", "config-examples.json")
 	raw, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
@@ -248,12 +248,12 @@ func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual = append(actual, '\n')
-	wantPath := filepath.Join("..", "..", "daemon", "migration-contract", "fixtures", "config-normalized.json")
+	wantPath := filepath.Join("testdata", "config-normalized.json")
 	want, err := os.ReadFile(wantPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(actual, want) {
-		t.Fatalf("normalized catalog differs from Node golden\nactual:\n%s\nwant:\n%s", actual, want)
+		t.Fatalf("normalized catalog differs from golden\nactual:\n%s\nwant:\n%s", actual, want)
 	}
 }

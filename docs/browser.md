@@ -7,7 +7,7 @@ by a **control-owner token**. Builds on D4 (CDP-screencast, Steel-based) and D13
 > **Status: production on the Go daemon.** The broker, both drivers, CDP-proxy hard-pause
 > gate, MCP wiring, screencast/input over the daemon WS, and UI Browser pane live in
 > `internal/browser/` + `ui/src/components/panes/BrowserPane.tsx`. The process-level browser
-> suite runs against both Go and the rollback Node implementation.
+> tests live with the Go browser packages.
 
 ## Topology
 
@@ -77,26 +77,6 @@ Folds into the same attention/approvals rail as permissions. Two directions:
 - Browser auth/state is per-agent and **ephemeral in v1** — not restored across daemon
   restart (the agent re-navigates). Persisting browser cookies/state is deferred.
 
-## Spike (verified)
-
-[`spike/browser/`](../spike/browser/) proves the mechanics against a real headless Chrome —
-the same CDP surface Steel wraps. `npm run derisk` passes all five checks:
-
-- the agent drives the page via **Playwright over CDP** (`connectOverCDP` — exactly what
-  Playwright MCP uses under the hood);
-- a CDP **`Page.startScreencast`** streams the same page **concurrently** (12 frames) while
-  the agent acts;
-- **grabbing the wheel hard-pauses** the agent's actions (held until release);
-- **releasing resumes** the paused action;
-- the human's input reaches the page via CDP **`Input.*`** (a click flipped page state).
-
-`npm run broker` runs it live: a viewer renders the screencast while a demo agent loop types
-into the page — the human watches the agent drive in real time and can grab the wheel.
-
-**Transfer to production:** swap the raw Chrome + `connectOverCDP` URL for a **Steel
-session's CDP endpoint**; the Playwright-MCP layer is a thin wrapper over the same
-`connectOverCDP` proven here (wiring `--cdp-endpoint` + the lazy broker is a build-phase step).
-
 ## What's real (Phase 5)
 
 Implemented in `internal/browser/` (`driver.go`, `broker.go`, `shared_browser.go`, `mcp.go`,
@@ -112,8 +92,7 @@ One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(age
   Used by all automated tests and wherever no Steel/Docker exists.
 - **`SteelDriver`**: `POST {STEEL_BASE_URL}/v1/sessions` → the session's CDP websocket
   URL (host-normalized, see below); `POST .../{id}/release` on teardown. **Verified
-  end-to-end** against a self-hosted Steel by `npm run derisk:steel`; field names are
-  isolated in one class if a Steel build differs.
+  field names are isolated in one driver if a Steel build differs.
 
 Config: `TANDEM_BROWSER_DRIVER=local|steel` (default `local`; `steel` requires
 `STEEL_BASE_URL`, optional `STEEL_API_KEY`). `TANDEM_BROWSER_MCP=off` disables the MCP
@@ -146,8 +125,7 @@ docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
   TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
   ```
   (For Steel Cloud / an authed deployment, also set `STEEL_API_KEY`.)
-- Verify: `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
-  The production start script otherwise embeds and runs the same Go browser implementation.
+- Run the Go browser tests with `go test ./internal/browser`.
 
 Tandem passes optional Steel session settings from `STEEL_SESSION_OPTIONS`. For the bundled
 Chromium 149 image, a practical anti-detection baseline is:

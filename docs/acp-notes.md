@@ -1,11 +1,11 @@
 # ACP notes — pinned facts
 
-Reference for wiring the [`AcpAdapter`](../daemon/src/acpAdapter.ts). Pinned against:
+Reference for wiring the [`AcpAdapter`](../internal/acpadapter/adapter.go). Pinned against:
 
 - **`@agentclientprotocol/sdk` 1.2.1** (protocol version **`1`**) — the schema is at
   `node_modules/@agentclientprotocol/sdk/schema/schema.json`.
 - **`@agentclientprotocol/claude-agent-acp` 0.59.0** — the real Claude agent used for the
-  live test (`npm run acp:live`). Bin: `claude-agent-acp` → `dist/index.js`.
+  Claude ACP bridge. Bin: `claude-agent-acp` → `dist/index.js`.
 
 > Note: this is **not** `@zed-industries/claude-code-acp` (a different, older adapter on
 > SDK 0.14). The `@agentclientprotocol/*` packages are the ones to target.

@@ -9,10 +9,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${TANDEM_VAULT_DIR:-$HOME/Documents/my-vault/Tech/Tandem}"
 
-mkdir -p "$DEST/docs" "$DEST/daemon"
+mkdir -p "$DEST/docs"
 cp "$REPO/README.md"        "$DEST/README.md"
 cp "$REPO"/docs/*.md        "$DEST/docs/"
-cp "$REPO/daemon/README.md" "$DEST/daemon/README.md"
 
 echo "Synced Tandem specs → $DEST"
-ls -1 "$DEST"/*.md "$DEST"/docs/*.md "$DEST"/daemon/*.md | sed "s#$DEST/#  #"
+ls -1 "$DEST"/*.md "$DEST"/docs/*.md | sed "s#$DEST/#  #"

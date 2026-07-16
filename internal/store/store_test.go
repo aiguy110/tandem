@@ -4,10 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +124,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	var fixture struct {
 		Schema []schemaRow `json:"schema"`
 	}
-	contractPath := filepath.Join("..", "..", "daemon", "migration-contract", "fixtures", "sqlite-schema.json")
+	contractPath := filepath.Join("testdata", "sqlite-schema.json")
 	b, err := os.ReadFile(contractPath)
 	if err != nil {
 		t.Fatal(err)
@@ -260,58 +258,4 @@ func TestCloseCheckpointsWAL(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM agents").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("checkpointed count=%d err=%v", count, err)
 	}
-}
-
-func TestNodeGoNodeCompatibility(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fixture command paths are POSIX")
-	}
-	repo, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	helper := filepath.Join(repo, "daemon", "migration-contract", "store-compat.ts")
-	if _, err := os.Stat(filepath.Join(repo, "daemon", "node_modules", "tsx")); err != nil {
-		t.Skip("run npm install in daemon to enable Node-Go compatibility acceptance")
-	}
-	path := filepath.Join(t.TempDir(), "compat.db")
-	runNode := func(mode string) {
-		t.Helper()
-		cmd := exec.Command("node", "--import", "tsx", helper, mode, path)
-		cmd.Dir = filepath.Join(repo, "daemon")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("node %s: %v\n%s", mode, err, out)
-		}
-	}
-	runNode("create")
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, err := s.Agent("node-1")
-	if err != nil || a == nil || a.CWD != "/fixtures/node" || a.ACPSessionID == nil {
-		t.Fatalf("Node row=%#v err=%v", a, err)
-	}
-	if err := s.SetStatus("node-1", "blocked"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetSessionID("node-1", "go-session"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.PutAsset("node-1", Asset{ID: strings.Repeat("b", 64), MIMEType: "image/jpeg", Size: 99}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertAgent(Agent{ID: "go-2", Name: "go-2", Spec: json.RawMessage(`{"adapter":"acp","agent":"codex"}`), CWD: "/fixtures/go", Status: "working", CreatedAt: 1700000020000}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CloseAgent("go-2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReopenAgent("go-2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	runNode("check")
 }

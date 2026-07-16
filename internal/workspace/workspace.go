@@ -41,7 +41,7 @@ type Integration struct {
 }
 
 // Workspace deliberately mirrors the Node SpawnSpec workspace JSON. Fields not
-// applicable to KindExisting are omitted, preserving rollback compatibility.
+// applicable to KindExisting are omitted, preserving persisted-record compatibility.
 type Workspace struct {
 	Kind        Kind         `json:"kind"`
 	CWD         string       `json:"cwd,omitempty"`

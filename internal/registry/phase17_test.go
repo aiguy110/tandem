@@ -113,7 +113,7 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	if err != nil {
 		t.Skip("node unavailable")
 	}
-	mock, err := filepath.Abs(filepath.Join("..", "..", "daemon", "src", "mock-acp-agent.mjs"))
+	mock, err := filepath.Abs(filepath.Join("..", "acpadapter", "testdata", "mock-acp-agent.mjs"))
 	if err != nil {
 		t.Fatal(err)
 	}

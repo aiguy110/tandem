@@ -1,5 +1,5 @@
 // Package config resolves Tandem's environment, runtime paths, agent catalog,
-// profiles, and bearer token using the same precedence as the Node daemon.
+// profiles, and bearer token.
 package config
 
 import (
@@ -83,10 +83,10 @@ type Config struct {
 
 // Options makes environment and platform-dependent lookup deterministic in tests.
 type Options struct {
-	Env        map[string]string
-	HomeDir    string
-	DaemonRoot string
-	TandemRoot string
+	Env         map[string]string
+	HomeDir     string
+	RuntimeRoot string
+	TandemRoot  string
 }
 
 func Load() (Config, error) {
@@ -104,7 +104,7 @@ func Load() (Config, error) {
 			root = cwd
 		}
 	}
-	return LoadWithOptions(Options{Env: environ(), HomeDir: home, DaemonRoot: filepath.Join(root, "daemon"), TandemRoot: root})
+	return LoadWithOptions(Options{Env: environ(), HomeDir: home, RuntimeRoot: filepath.Join(root, "runtime"), TandemRoot: root})
 }
 
 func environ() map[string]string {
@@ -172,7 +172,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Profiles: cat.profiles, DefaultProfile: cat.defaultProfile,
-		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.DaemonRoot, "node_modules", "@playwright", "mcp", "cli.js")},
+		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 	}, nil
 }
 
@@ -204,7 +204,7 @@ func loadCatalog(o Options, home string) (catalog, error) {
 		return catalog{}, readErr
 	}
 
-	subs := map[string]string{"node": resolveExecutable(value(o.Env, "TANDEM_NODE_CMD", "node"), o), "daemonRoot": o.DaemonRoot, "tandemRoot": o.TandemRoot, "home": home}
+	subs := map[string]string{"node": resolveExecutable(value(o.Env, "TANDEM_NODE_CMD", "node"), o), "runtimeRoot": o.RuntimeRoot, "tandemRoot": o.TandemRoot, "home": home}
 	agents := make(map[string]Agent)
 	if err := mergeAgents(agents, shipped.Agents, subs, o); err != nil {
 		return catalog{}, err
