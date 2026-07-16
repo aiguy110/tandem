@@ -72,6 +72,20 @@ func (b *testBackend) Close(_ context.Context, id string, _, _ bool) (bool, erro
 	delete(b.sessions, id)
 	return true, nil
 }
+func (b *testBackend) SetMode(ctx context.Context, id, mode string) error {
+	s := b.Get(id)
+	if s == nil {
+		return errors.New("no such agent")
+	}
+	return s.SetMode(ctx, mode)
+}
+func (b *testBackend) SetConfigOption(ctx context.Context, id, configID string, value any) error {
+	s := b.Get(id)
+	if s == nil {
+		return errors.New("no such agent")
+	}
+	return s.SetConfigOption(ctx, configID, value)
+}
 
 type testAdapter struct {
 	events        chan eventlog.Event

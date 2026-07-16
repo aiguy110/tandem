@@ -32,6 +32,8 @@ type Backend interface {
 	ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error)
 	ClosePreview(context.Context, string) (*workspace.ClosePreview, error)
 	AgentCatalog() registry.Catalog
+	SetMode(context.Context, string, string) error
+	SetConfigOption(context.Context, string, string, any) error
 }
 
 type Options struct {
@@ -375,7 +377,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, errors.New("modeId is required"))
 			return
 		}
-		if err := sess.SetMode(context.Background(), m.ModeID); err != nil {
+		if err := c.server.opts.Registry.SetMode(context.Background(), sess.ID, m.ModeID); err != nil {
 			c.commandError(m, err)
 			return
 		}
@@ -389,7 +391,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, errors.New("configId and value are required"))
 			return
 		}
-		if err := sess.SetConfigOption(context.Background(), m.ConfigID, m.Value); err != nil {
+		if err := c.server.opts.Registry.SetConfigOption(context.Background(), sess.ID, m.ConfigID, m.Value); err != nil {
 			c.commandError(m, err)
 			return
 		}

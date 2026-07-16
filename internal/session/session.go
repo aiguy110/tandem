@@ -255,6 +255,12 @@ func (s *Session) SetConfigOption(ctx context.Context, configID string, value an
 	return configurable.SetConfigOption(ctx, configID, value)
 }
 
+func (s *Session) SetPersistedSessionConfig(config json.RawMessage) {
+	s.mu.Lock()
+	s.Spec.SessionConfig = append(json.RawMessage(nil), config...)
+	s.mu.Unlock()
+}
+
 // InterruptAndWait requests ACP cancellation and gives the active prompt a
 // bounded window to resolve before its process is replaced during handoff.
 func (s *Session) InterruptAndWait(ctx context.Context) error {
