@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/eventlog"
 )
 
@@ -152,16 +154,21 @@ func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 	if len(blocks) == 0 {
 		return errors.New("prompt must contain at least one block")
 	}
+	images := 0
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 		case "image":
+			images++
 			if !s.adapter.Capabilities().Image {
 				return errors.New("this agent does not support image prompts")
 			}
 		default:
 			return errors.New("invalid prompt block type " + block.Type)
 		}
+	}
+	if images > assets.MaxPromptImages {
+		return fmt.Errorf("prompt may contain at most %d images", assets.MaxPromptImages)
 	}
 	if validator, ok := s.adapter.(interface {
 		ValidatePrompt([]agentadapter.PromptBlock) error

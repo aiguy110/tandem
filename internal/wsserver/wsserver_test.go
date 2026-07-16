@@ -35,6 +35,13 @@ func (*testBackend) Summaries(context.Context) []registry.Summary {
 func (*testBackend) ListDirs(context.Context) ([]workspace.RepoInfo, error) {
 	return []workspace.RepoInfo{{Path: "/repo", Name: "repo"}}, nil
 }
+func (*testBackend) ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error) {
+	return []workspace.GitRefInfo{{Ref: "refs/heads/main", DisplayName: "main", Kind: workspace.RefLocalBranch, Commit: "abc", IsCurrent: true, IsDefault: true}}, nil
+}
+func (*testBackend) ClosePreview(context.Context, string) (*workspace.ClosePreview, error) {
+	ahead, behind := 1, 0
+	return &workspace.ClosePreview{Kind: workspace.KindWorktree, Uncommitted: "?? dirty", Unmerged: "abc work", TargetRef: "refs/heads/main", Ahead: &ahead, Behind: &behind}, nil
+}
 func (*testBackend) AgentCatalog() registry.Catalog {
 	return registry.Catalog{DefaultAgent: "codex", Agents: []registry.CatalogAgent{}}
 }
@@ -177,11 +184,17 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		t.Fatalf("close=%v", err)
 	}
 	c := dial(t, url)
-	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_agent_catalog", "corrId": "3"}} {
+	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_agent_catalog", "corrId": "3"}, {"t": "list_git_refs", "repo": "/repo", "corrId": "4"}, {"t": "get_close_preview", "agentId": "a", "corrId": "5"}} {
 		send(t, c, req)
 		got := recv(t, c)
 		if got["corrId"] != req["corrId"] {
 			t.Fatalf("corr %#v", got)
+		}
+		if req["t"] == "list_git_refs" && (got["t"] != "git_refs" || len(got["refs"].([]any)) != 1) {
+			t.Fatalf("refs %#v", got)
+		}
+		if req["t"] == "get_close_preview" && (got["t"] != "close_preview" || got["preview"] == nil) {
+			t.Fatalf("preview %#v", got)
 		}
 	}
 	server.CloseClientConnections()

@@ -20,14 +20,23 @@ type fakeAdapter struct {
 	mu                    sync.Mutex
 	inflight, maxInflight int
 	close                 sync.Once
+	image                 bool
+	validateCalls         int
 }
 
 func newFake() *fakeAdapter {
 	return &fakeAdapter{events: make(chan eventlog.Event, 16), done: make(chan struct{}), gate: make(chan struct{}, 4)}
 }
 func (f *fakeAdapter) Capabilities() agentadapter.Capabilities {
-	return agentadapter.Capabilities{Structured: true}
+	return agentadapter.Capabilities{Structured: true, Image: f.image}
 }
+func (f *fakeAdapter) ValidatePrompt([]agentadapter.PromptBlock) error {
+	f.mu.Lock()
+	f.validateCalls++
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeAdapter) validationCount() int          { f.mu.Lock(); defer f.mu.Unlock(); return f.validateCalls }
 func (f *fakeAdapter) Events() <-chan eventlog.Event { return f.events }
 func (f *fakeAdapter) Done() <-chan struct{}         { return f.done }
 func (f *fakeAdapter) Prompt(ctx context.Context, _ []agentadapter.PromptBlock) (string, error) {
@@ -132,4 +141,30 @@ func TestApprovalsInterruptAndRepeatedDispose(t *testing.T) {
 	if err := s.Dispose(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestImageValidationRejectsBeforeLoggingAndCountsBeforeResolution(t *testing.T) {
+	t.Run("negotiated capability false", func(t *testing.T) {
+		s, a, _ := testSession(t)
+		_, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "image", AssetID: "asset", MIMEType: "image/png"}})
+		if err == nil || err.Error() != "this agent does not support image prompts" {
+			t.Fatalf("err=%v", err)
+		}
+		history, historyErr := s.Log.FullHistory()
+		if historyErr != nil || len(history) != 0 || a.validationCount() != 0 {
+			t.Fatalf("history=%v err=%v validate=%d", history, historyErr, a.validationCount())
+		}
+	})
+	t.Run("image count precedes adapter byte resolution", func(t *testing.T) {
+		s, a, _ := testSession(t)
+		a.image = true
+		blocks := make([]agentadapter.PromptBlock, 5)
+		for i := range blocks {
+			blocks[i] = agentadapter.PromptBlock{Type: "image", AssetID: "asset", MIMEType: "image/png"}
+		}
+		err := s.ValidatePrompt(blocks)
+		if err == nil || err.Error() != "prompt may contain at most 4 images" || a.validationCount() != 0 {
+			t.Fatalf("err=%v validate=%d", err, a.validationCount())
+		}
+	})
 }

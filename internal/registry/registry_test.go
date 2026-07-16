@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -213,8 +214,39 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	cwdRec, _ := r.store.Agent(s.ID)
+	work := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = cwdRec.CWD
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@e")
+		if out, runErr := cmd.CombinedOutput(); runErr != nil {
+			t.Fatalf("worktree git %v: %v %s", args, runErr, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cwdRec.CWD, "committed"), []byte("work"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	work("add", "committed")
+	work("commit", "-m", "agent work")
 	if err := os.WriteFile(filepath.Join(cwdRec.CWD, "dirty"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
+	}
+	preview, err := r.ClosePreview(context.Background(), s.ID)
+	targetRef := s.Spec.Workspace.Integration.Ref
+	if err != nil || preview == nil || !strings.Contains(preview.Uncommitted, "dirty") || !strings.Contains(preview.Unmerged, "agent work") || preview.TargetRef != targetRef {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	refs, err := r.ListGitRefs(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained *workspace.GitRefInfo
+	for i := range refs {
+		if refs[i].Ref == "refs/heads/"+s.Spec.Workspace.Branch {
+			retained = &refs[i]
+		}
+	}
+	if retained == nil || retained.Tandem == nil || retained.Tandem.AgentID != s.ID || !retained.Tandem.Live || retained.Tandem.Closed || retained.Tandem.IntegrationRef != targetRef {
+		t.Fatalf("live retained ref=%+v", retained)
 	}
 	ok, err := r.Close(context.Background(), s.ID, false, true)
 	if ok || !workspace.IsCode(err, "dirty_worktree") {
@@ -222,5 +254,22 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 	}
 	if r.Get(s.ID) == nil {
 		t.Fatal("refused close removed live session")
+	}
+	ok, err = r.Close(context.Background(), s.ID, true, true)
+	if !ok || err != nil {
+		t.Fatalf("forced close ok=%v err=%v", ok, err)
+	}
+	refs, err = r.ListGitRefs(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained = nil
+	for i := range refs {
+		if refs[i].Ref == "refs/heads/"+s.Spec.Workspace.Branch {
+			retained = &refs[i]
+		}
+	}
+	if retained == nil || retained.Tandem == nil || retained.Tandem.Live || !retained.Tandem.Closed || retained.Tandem.IntegrationRef != targetRef {
+		t.Fatalf("closed retained ref=%+v", retained)
 	}
 }

@@ -238,6 +238,62 @@ func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
 	return workspace.ListRepos(ctx, r.config.ProjectRoots, r.config.DirScanDepth, func(p string) bool { abs, _ := filepath.Abs(p); return repos[abs] })
 }
 
+func (r *Registry) ListGitRefs(ctx context.Context, repo string) ([]workspace.GitRefInfo, error) {
+	refs, err := workspace.ListGitRefs(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	repoRoot, err := filepath.Abs(repo)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.store.AllAgents()
+	if err != nil {
+		return nil, err
+	}
+	byBranch := make(map[string]workspace.GitRefTandem)
+	for _, row := range rows {
+		var spec agentadapter.Spec
+		if json.Unmarshal(row.Spec, &spec) != nil || spec.Workspace.Kind != workspace.KindWorktree || spec.Workspace.Branch == "" {
+			continue
+		}
+		storedRoot, absErr := filepath.Abs(spec.Workspace.Repo)
+		if absErr != nil || storedRoot != repoRoot {
+			continue
+		}
+		ref := "refs/heads/" + spec.Workspace.Branch
+		if _, exists := byBranch[ref]; exists {
+			continue
+		}
+		meta := workspace.GitRefTandem{AgentID: row.ID, AgentName: row.Name, Live: r.Get(row.ID) != nil, Closed: row.ClosedAt != nil}
+		if integration := spec.Workspace.Integration; integration != nil {
+			meta.IntegrationRef, meta.IntegrationKind = integration.Ref, integration.Kind
+		}
+		byBranch[ref] = meta
+	}
+	for i := range refs {
+		if meta, ok := byBranch[refs[i].Ref]; ok {
+			copy := meta
+			refs[i].Tandem = &copy
+		}
+	}
+	return refs, nil
+}
+
+func (r *Registry) ClosePreview(ctx context.Context, id string) (*workspace.ClosePreview, error) {
+	r.mu.RLock()
+	s, cwd := r.sessions[id], r.cwds[id]
+	r.mu.RUnlock()
+	if s == nil {
+		return nil, nil
+	}
+	preview, err := r.workspace.ClosePreview(ctx, cwd, s.Spec.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	return &preview, nil
+}
+
 func (r *Registry) AgentCatalog() Catalog {
 	c := Catalog{DefaultAgent: r.config.ACP.Default, DefaultProfile: r.config.DefaultProfile, Agents: make([]CatalogAgent, 0, len(r.config.Agents)), Profiles: make([]CatalogProfile, 0, len(r.config.Profiles))}
 	for id, a := range r.config.Agents {

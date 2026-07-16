@@ -506,18 +506,28 @@ func aheadBehind(ctx context.Context, git GitRunner, cwd, target, branch string)
 
 // GitRefInfo is a read-only spawn-picker view of a ref.
 type GitRefInfo struct {
-	Ref          string  `json:"ref"`
-	DisplayName  string  `json:"displayName"`
-	Kind         RefKind `json:"kind"`
-	Commit       string  `json:"commit"`
-	Subject      string  `json:"subject,omitempty"`
-	UpdatedAt    string  `json:"updatedAt,omitempty"`
-	Upstream     string  `json:"upstream,omitempty"`
-	Ahead        *int    `json:"ahead,omitempty"`
-	Behind       *int    `json:"behind,omitempty"`
-	CheckedOutAt string  `json:"checkedOutAt,omitempty"`
-	IsCurrent    bool    `json:"isCurrent"`
-	IsDefault    bool    `json:"isDefault"`
+	Ref          string        `json:"ref"`
+	DisplayName  string        `json:"displayName"`
+	Kind         RefKind       `json:"kind"`
+	Commit       string        `json:"commit"`
+	Subject      string        `json:"subject,omitempty"`
+	UpdatedAt    string        `json:"updatedAt,omitempty"`
+	Upstream     string        `json:"upstream,omitempty"`
+	Ahead        *int          `json:"ahead,omitempty"`
+	Behind       *int          `json:"behind,omitempty"`
+	CheckedOutAt string        `json:"checkedOutAt,omitempty"`
+	IsCurrent    bool          `json:"isCurrent"`
+	IsDefault    bool          `json:"isDefault"`
+	Tandem       *GitRefTandem `json:"tandem,omitempty"`
+}
+
+type GitRefTandem struct {
+	AgentID         string  `json:"agentId"`
+	AgentName       string  `json:"agentName"`
+	IntegrationRef  string  `json:"integrationRef,omitempty"`
+	IntegrationKind RefKind `json:"integrationKind,omitempty"`
+	Live            bool    `json:"live"`
+	Closed          bool    `json:"closed"`
 }
 
 func ListGitRefs(ctx context.Context, repo string) ([]GitRefInfo, error) {

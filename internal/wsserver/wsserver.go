@@ -28,6 +28,8 @@ type Backend interface {
 	Close(context.Context, string, bool, bool) (bool, error)
 	Summaries(context.Context) []registry.Summary
 	ListDirs(context.Context) ([]workspace.RepoInfo, error)
+	ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error)
+	ClosePreview(context.Context, string) (*workspace.ClosePreview, error)
 	AgentCatalog() registry.Catalog
 }
 
@@ -116,6 +118,7 @@ type clientMessage struct {
 	Profile        string                     `json:"profile"`
 	ACPArgs        []string                   `json:"acpArgs"`
 	CWD            string                     `json:"cwd"`
+	Repo           string                     `json:"repo"`
 	Force          bool                       `json:"force"`
 	DeleteWorktree *bool                      `json:"deleteWorktree"`
 	SessionID      string                     `json:"sessionId"`
@@ -223,6 +226,16 @@ func (c *connection) handle(m clientMessage) {
 			dirs = []workspace.RepoInfo{}
 		}
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
+	case "list_git_refs":
+		refs, err := c.server.opts.Registry.ListGitRefs(context.Background(), m.Repo)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "git_refs", "error": err.Error()}, m.CorrID))
+			return
+		}
+		if refs == nil {
+			refs = []workspace.GitRefInfo{}
+		}
+		c.send(withCorr(map[string]any{"t": "git_refs", "refs": refs}, m.CorrID))
 	case "list_agent_catalog":
 		c.send(withCorr(map[string]any{"t": "agent_catalog", "catalog": c.server.opts.Registry.AgentCatalog()}, m.CorrID))
 	case "list_sessions":
@@ -360,6 +373,17 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
+	case "get_close_preview":
+		preview, err := c.server.opts.Registry.ClosePreview(context.Background(), m.AgentID)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "close_preview", "error": err.Error()}, m.CorrID))
+			return
+		}
+		if preview == nil {
+			c.send(withCorr(map[string]any{"t": "close_preview", "error": "no such agent"}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "close_preview", "preview": preview}, m.CorrID))
 	case "close_agent":
 		deleteWorktree := true
 		if m.DeleteWorktree != nil {
