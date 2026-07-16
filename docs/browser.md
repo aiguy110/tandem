@@ -4,11 +4,10 @@ Joint agent + human control of one browser **per agent**. The agent drives via P
 MCP over CDP; the user views and controls the same browser via a CDP screencast, arbitrated
 by a **control-owner token**. Builds on D4 (CDP-screencast, Steel-based) and D13.
 
-> **Status: BUILT (Phase 5).** The broker, both drivers, the CDP-proxy hard-pause gate,
-> MCP wiring, screencast/input over the daemon WS, and the UI Browser pane are implemented
-> in `daemon/src/browser/` + `ui/src/components/panes/BrowserPane.tsx` and validated by
-> `npm run derisk:browser` (checks a–h). See "What's real (Phase 5)" below for the concrete
-> shapes and the one pragmatic deviation from the sketch above (drivers, not Steel-only).
+> **Status: production on the Go daemon.** The broker, both drivers, CDP-proxy hard-pause
+> gate, MCP wiring, screencast/input over the daemon WS, and UI Browser pane live in
+> `internal/browser/` + `ui/src/components/panes/BrowserPane.tsx`. The process-level browser
+> suite runs against both Go and the rollback Node implementation.
 
 ## Topology
 
@@ -100,9 +99,9 @@ session's CDP endpoint**; the Playwright-MCP layer is a thin wrapper over the sa
 
 ## What's real (Phase 5)
 
-Implemented in `daemon/src/browser/` (`driver.ts`, `broker.ts`, `sharedBrowser.ts`,
-`controlMcp.mjs`, `mcpWiring.ts`) and wired through `registry.ts` / `server.ts` /
-`index.ts`; UI in `BrowserPane.tsx` + `browserHub.ts`.
+Implemented in `internal/browser/` (`driver.go`, `broker.go`, `shared_browser.go`, `mcp.go`,
+`takeover.go`) and wired through the native registry and daemon; the control MCP is the
+`tandem mcp-control` subcommand. UI code remains in `BrowserPane.tsx` + `browserHub.ts`.
 
 ### Driver selection (D13 amendment)
 
@@ -148,6 +147,7 @@ docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
   ```
   (For Steel Cloud / an authed deployment, also set `STEEL_API_KEY`.)
 - Verify: `STEEL_BASE_URL=http://localhost:3000 npm run derisk:steel` (from `daemon/`).
+  The production start script otherwise embeds and runs the same Go browser implementation.
 
 Tandem passes optional Steel session settings from `STEEL_SESSION_OPTIONS`. For the bundled
 Chromium 149 image, a practical anti-detection baseline is:

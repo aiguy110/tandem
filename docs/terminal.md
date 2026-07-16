@@ -33,8 +33,8 @@ interface TerminalRenderer {
 
 - **Output:** daemon `pty` channel (base64 `raw_pty` frames) → `write()`.
 - **Input:** `onData` → `{ t: 'input', bytesB64 }`.
-- **Resize:** fit-to-container → `{ t: 'resize', cols, rows }` → `PtyAdapter.resize()`
-  (node-pty).
+- **Resize:** fit-to-container → `{ t: 'resize', cols, rows }` → `PtyAdapter.resize()` →
+  the Go daemon's native Unix PTY backend.
 - **Reconnect:** replay the daemon's buffered `raw_pty` bytes into `write()` — no serialize
   addon needed; reuses the durability spine.
 
@@ -51,8 +51,8 @@ session through ACP automatically.
 
 CLI templates come from each agent's `terminal.resumeArgs` entry in `config.yml.example`
 or the `$TANDEM_HOME/config.yml` overlay. They can also be overridden with the legacy
-`TANDEM_RESUME_CMD_<AGENT>` environment variable. Tandem prefers `node-pty`; when its native
-module is unavailable, util-linux `script` supplies the required pseudoterminal.
+`TANDEM_RESUME_CMD_<AGENT>` environment variable. The production Go daemon uses a real Unix
+pseudoterminal directly on Linux and macOS; PTY-backed modes are unsupported on Windows.
 
 ## Multi-agent rendering constraint
 
@@ -69,7 +69,8 @@ engines.
 ## Spike
 
 [`spike/terminal/`](../spike/terminal/) — a Vite app that renders a live shell via
-ghostty-web, driven by the daemon's real `pty` channel (`npm run daemon -- --pty`).
+ghostty-web, driven by the daemon's real `pty` channel. The current native regression lives
+in `internal/ptyadapter` and exercises binary output, input, resize, exit, and cleanup.
 
 **Findings (verified, ghostty-web 0.4.0):** passed end-to-end against the live pty:
 

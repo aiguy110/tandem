@@ -2,9 +2,9 @@
 # Rebuild and restart the running app. Meant to be invoked from inside the
 # app itself (e.g. a terminal pane) after making code changes to it.
 #
-# The actual rebuild (npm install + vite build for the UI, npm install for
-# the daemon) happens in start-dev-server.sh, which is the unit's ExecStart —
-# restarting the systemd unit re-runs it.
+# The actual rebuild (React UI staging, Node-based adapter dependencies, and
+# the native Go binary) happens in start-dev-server.sh, which is the unit's
+# ExecStart. Restarting the systemd unit embeds the fresh UI and runs Go.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
