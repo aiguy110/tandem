@@ -30,7 +30,9 @@ export function ApprovalsRail() {
   return (
     <div className="rail rail-r approvals">
       <div className="rail-head">
-        Approvals <span className={`count${total ? ' hot' : ''}`}>{total}</span>
+        <span className="rail-head-label" onClick={toggleCollapsed}>
+          Approvals <span className={`count${total ? ' hot' : ''}`}>{total}</span>
+        </span>
         <button className="rail-toggle-btn" title="Collapse approvals" onClick={toggleCollapsed}>
           ›
         </button>

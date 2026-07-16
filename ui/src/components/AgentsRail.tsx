@@ -68,7 +68,9 @@ export function AgentsRail() {
         <button className="rail-toggle-btn" title="Collapse agents" onClick={toggleCollapsed}>
           ‹
         </button>
-        Agents <span className="count">{order.length}</span>
+        <span className="rail-head-label" onClick={toggleCollapsed}>
+          Agents <span className="count">{order.length}</span>
+        </span>
       </div>
       {order.length === 0 ? (
         <div className="empty">
