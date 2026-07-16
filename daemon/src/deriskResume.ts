@@ -1,7 +1,11 @@
 // Resume-session de-risk: catalog union/dedupe plus all three resume paths
 // (live focus, closed Tandem row restore, and external ACP import).
 
-import { makeHarness, open, report, rule, sleep, type Frame } from './testHarness.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { open, report, rule, sleep, mockPath, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7731;
 
@@ -10,9 +14,13 @@ async function main() {
   console.log('  TANDEM · resume-session de-risk');
   console.log(rule);
 
-  const h = await makeHarness(PORT);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-resume-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port: Number(process.env.TANDEM_TEST_PORT || PORT), env: {
+    TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]), TANDEM_BROWSER_MCP: 'off',
+  } });
+  const h = { port: daemon.port, token: daemon.token, home, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
   const frames: Frame[] = [];
-  const ws = await open(PORT, h.token, (frame) => frames.push(frame));
+  const ws = await open(h.port, h.token, (frame) => frames.push(frame));
   const send = (value: unknown) => ws.send(JSON.stringify(value));
   const waitFor = async (predicate: (frame: Frame) => boolean, timeoutMs = 8000): Promise<Frame> => {
     const start = Date.now();
@@ -45,14 +53,18 @@ async function main() {
   // with the reopened Tandem agent's directory.
   send({ t: 'resume_session', corrId: 'external', sessionId: 'sess_external', agent: 'claude', cwd: h.home });
   const imported = await waitFor((f) => f.t === 'ack' && f.corrId === 'external');
+  send({ t: 'list_agents', corrId: 'agents-after-resume' });
+  const agents = (await waitFor((f) => f.t === 'agents' && f.corrId === 'agents-after-resume')).agents ?? [];
+  send({ t: 'list_sessions', corrId: 'catalog-2' });
+  const secondCatalog = (await waitFor((f) => f.t === 'sessions' && f.corrId === 'catalog-2')).catalog;
 
   const checks: [string, boolean, string][] = [
     ['catalog dedupes ACP discovery against Tandem rows', mockEntries.length === 1 && mockEntries[0]?.source === 'tandem', `${mockEntries.length} sess_mock row(s), source=${mockEntries[0]?.source}`],
     ['catalog includes externally discovered sessions', external?.source === 'external' && external?.agent === 'claude', `${external?.sessionId ?? 'missing'} via ${external?.agent ?? '—'}`],
     ['adapter enumeration capability is reported', firstCatalog.adapters.some((a: any) => a.agent === 'claude' && a.supportsList), JSON.stringify(firstCatalog.adapters)],
     ['resuming a live session returns the existing agent', live.agentId === agentId && !live.error, `${live.agentId} === ${agentId}`],
-    ['resuming a closed Tandem session restores its agent id', closed.agentId === agentId && !closed.error && !!h.registry.get(agentId), `${closed.agentId} restored`],
-    ['resuming an external session imports a new agent', !!imported.agentId && imported.agentId !== agentId && !imported.error && h.db.getAgent(imported.agentId!)?.acpSessionId === 'sess_external', `${imported.agentId ?? 'missing'} bound to sess_external`],
+    ['resuming a closed Tandem session restores its agent id', closed.agentId === agentId && !closed.error && agents.some((a: any) => a.id === agentId), `${closed.agentId} restored`],
+    ['resuming an external session imports a new agent', !!imported.agentId && imported.agentId !== agentId && !imported.error && agents.some((a: any) => a.id === imported.agentId) && secondCatalog.sessions.some((s: any) => s.sessionId === 'sess_external' && s.source === 'tandem'), `${imported.agentId ?? 'missing'} bound to sess_external`],
   ];
 
   const pass = report(checks);
