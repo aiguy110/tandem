@@ -12,7 +12,7 @@ primarily protects during the Go migration. Cross-cutting coverage is noted expl
 | `derisk:auth` | HTTP/WebSocket server | bearer-token rejection and acceptance |
 | `derisk:workspace` | workspace manager | refs, feature lineage, worktrees, discovery, collision and restore |
 | `derisk:services` | ACP client services | contained filesystem, daemon terminals, buffering and cancellation |
-| `derisk:browser` | browser broker | local CDP, screencast, control pause/queue, input and takeover MCP |
+| `derisk:browser` | browser network boundary | lazy state, dev navigation, screencast, control/input commands and takeover MCP |
 | `derisk:browser-internal` | browser broker (Node depth) | private CDP proxy gate, exact browser process laziness and teardown |
 | `derisk:integration` | cross-subsystem integration | discover/spawn/prompt/approval/reconnect/dirty teardown slice |
 | `derisk:resume` | session catalog and registry | live, closed, and external resume paths |

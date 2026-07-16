@@ -6,6 +6,26 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { spawn, type ChildProcess } from 'node:child_process';
 
+const liveChildren = new Map<ChildProcess, string>();
+let exitCleanupInstalled = false;
+
+function track(proc: ChildProcess, home: string): void {
+  liveChildren.set(proc, home);
+  if (exitCleanupInstalled) return;
+  exitCleanupInstalled = true;
+  process.once('exit', () => {
+    for (const [child, childHome] of liveChildren) {
+      try {
+        if (child.exitCode === null && child.signalCode === null) {
+          if (process.platform === 'win32') child.kill('SIGKILL');
+          else process.kill(-(child.pid!), 'SIGKILL');
+        }
+      } catch { /* best-effort synchronous failure cleanup */ }
+      try { fs.rmSync(childHome, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+}
+
 export type DaemonCommand = readonly [string, ...string[]];
 
 export interface RunningDaemon {
@@ -61,6 +81,7 @@ export async function startDaemon(options: {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
+  track(proc, options.home);
   let stdout = '';
   let stderr = '';
   const ready = new Promise<string>((resolve, reject) => {
@@ -87,10 +108,15 @@ export async function startDaemon(options: {
       command, proc, port, token,
       stdout: () => stdout,
       stderr: () => stderr,
-      stop: () => stopping ??= stopProcessTree(proc),
+      stop: () => stopping ??= (async () => {
+        await stopProcessTree(proc);
+        liveChildren.delete(proc);
+        await assertPortReleased(port);
+      })(),
     };
   } catch (error) {
     await stopProcessTree(proc);
+    liveChildren.delete(proc);
     throw error;
   }
 }
