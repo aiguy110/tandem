@@ -11,7 +11,7 @@
     "derisk:deferred-restart": "tsx src/deriskDeferredRestart.ts",
     "derisk:auth": "tsx src/deriskAuth.ts",
     "derisk:workspace": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskWorkspace.ts",
-    "derisk:services": "tsx src/deriskServices.ts",
+    "derisk:services": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskServices.ts",
     "derisk:browser": "tsx src/deriskBrowser.ts",
     "derisk:integration": "tsx src/deriskIntegration.ts",
     "derisk:resume": "tsx src/deriskResume.ts",
