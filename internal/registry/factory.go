@@ -161,6 +161,13 @@ func (a *acpAdapter) Prompt(ctx context.Context, b []agentadapter.PromptBlock) (
 	}
 	return a.Adapter.Prompt(ctx, in)
 }
+func (a *acpAdapter) ValidatePrompt(b []agentadapter.PromptBlock) error {
+	in := make([]acpadapter.PromptBlock, len(b))
+	for i, x := range b {
+		in[i] = acpadapter.PromptBlock{Type: x.Type, Text: x.Text, AssetID: x.AssetID, MIMEType: x.MIMEType, Name: x.Name}
+	}
+	return a.Adapter.ValidatePrompt(in)
+}
 func (a *acpAdapter) SendInput([]byte) error {
 	return errors.New("ACP adapter does not accept raw input")
 }

@@ -350,6 +350,13 @@ func (a *Adapter) resolvePrompt(blocks []PromptBlock) ([]map[string]any, error) 
 	return out, nil
 }
 
+// ValidatePrompt resolves all referenced assets without starting a turn. The
+// WebSocket boundary uses this to reject invalid image prompts synchronously.
+func (a *Adapter) ValidatePrompt(blocks []PromptBlock) error {
+	_, err := a.resolvePrompt(blocks)
+	return err
+}
+
 func (a *Adapter) RespondPermission(reqID, optionID string) error {
 	a.mu.Lock()
 	pending, ok := a.permissions[reqID]
@@ -438,7 +445,10 @@ func (a *Adapter) Close() error {
 		a.serviceStop()
 		a.mu.Unlock()
 		a.cancel()
-		err = a.tr.Close()
+		// Transport.Close terminates the owned child, so an exit status caused by
+		// that termination is the expected disposal path rather than a close
+		// failure to surface through close_agent.
+		_ = a.tr.Close()
 		a.serviceWG.Wait()
 	})
 	return err

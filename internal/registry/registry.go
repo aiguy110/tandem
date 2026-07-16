@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/acpadapter"
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/session"
@@ -29,6 +31,7 @@ type Registry struct {
 	config    config.Config
 	workspace *workspace.Manager
 	factory   agentadapter.Factory
+	browser   *browser.Broker
 	ring      int
 	sessions  map[string]*session.Session
 	cwds      map[string]string
@@ -80,12 +83,17 @@ type Catalog struct {
 	Agents         []CatalogAgent   `json:"agents"`
 	Profiles       []CatalogProfile `json:"profiles"`
 }
+type SpawnOptions struct {
+	Modes         json.RawMessage   `json:"modes"`
+	ConfigOptions []json.RawMessage `json:"configOptions"`
+}
 type Options struct {
 	Store        *store.Store
 	Config       config.Config
 	Workspace    *workspace.Manager
 	Factory      agentadapter.Factory
 	Assets       *assets.Store
+	Browser      *browser.Broker
 	RingCapacity int
 }
 
@@ -123,7 +131,7 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max}, nil
 }
 
 func (r *Registry) Get(id string) *session.Session {
@@ -208,6 +216,37 @@ func (r *Registry) AgentCatalog() Catalog {
 	sort.Slice(c.Agents, func(i, j int) bool { return c.Agents[i].ID < c.Agents[j].ID })
 	sort.Slice(c.Profiles, func(i, j int) bool { return c.Profiles[i].ID < c.Profiles[j].ID })
 	return c
+}
+
+// SpawnOptions probes an ACP session without registering an agent or
+// provisioning a workspace. It mirrors the advanced spawn palette's Node
+// behavior and always tears the probe process down.
+func (r *Registry) SpawnOptions(ctx context.Context, agent, profile string, acpArgs []string, cwd string) (SpawnOptions, error) {
+	spec, err := r.resolve(agentadapter.Spec{Adapter: "acp", Agent: agent, Profile: profile, ACPArgs: acpArgs, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
+	if err != nil {
+		return SpawnOptions{}, err
+	}
+	a, err := r.factory.Start(ctx, agentadapter.StartRequest{AgentID: "spawn-options-" + agent, CWD: cwd, Spec: spec})
+	if err != nil {
+		return SpawnOptions{}, err
+	}
+	defer a.Close(context.Background())
+	provider, ok := a.(interface {
+		SessionState() acpadapter.SessionState
+	})
+	if !ok {
+		return SpawnOptions{}, errors.New("adapter does not expose spawn options")
+	}
+	state := provider.SessionState()
+	modes := state.Modes
+	if len(modes) == 0 {
+		modes = json.RawMessage("null")
+	}
+	options := state.ConfigOptions
+	if options == nil {
+		options = []json.RawMessage{}
+	}
+	return SpawnOptions{Modes: modes, ConfigOptions: options}, nil
 }
 func (r *Registry) ActiveTurnCount() int {
 	n := 0
@@ -426,6 +465,9 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree b
 	delete(r.sessions, id)
 	delete(r.cwds, id)
 	r.mu.Unlock()
+	if r.browser != nil {
+		_ = r.browser.Teardown(ctx, id)
+	}
 	if err := disposeSession(ctx, s); err != nil {
 		return false, err
 	}
@@ -437,6 +479,9 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree b
 func (r *Registry) DisposeAll(ctx context.Context) error {
 	var errs []error
 	for _, s := range r.List() {
+		if r.browser != nil {
+			_ = r.browser.Teardown(ctx, s.ID)
+		}
 		if err := disposeSession(ctx, s); err != nil {
 			errs = append(errs, err)
 		}

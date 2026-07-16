@@ -3,18 +3,23 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/store"
@@ -48,7 +53,58 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	agents, err := registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore})
+	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	displayHost := cfg.Host
+	if displayHost == "0.0.0.0" || displayHost == "::" {
+		displayHost = "127.0.0.1"
+	}
+	origin := "http://" + net.JoinHostPort(displayHost, strconv.Itoa(port))
+	bootstrapURL := origin + "/#t=" + token
+
+	var agents *registry.Registry
+	var broker *browser.Broker
+	var takeovers *browser.Takeovers
+	var factory agentadapter.Factory
+	if cfg.Browser.MCPEnabled {
+		driver, driverErr := browser.NewDriver(browser.DriverConfig{Driver: cfg.Browser.Driver, UserDataRoot: cfg.Browser.UserDataRoot, ChromiumExecutable: cfg.Browser.ChromiumExecutable, SteelBaseURL: cfg.Browser.SteelBaseURL, SteelAPIKey: cfg.Browser.SteelAPIKey, SteelSessionOptions: cfg.Browser.SteelSessionOptions})
+		if driverErr != nil {
+			return driverErr
+		}
+		broker = browser.NewBroker(driver, browser.BrokerConfig{OnRelease: func(id string) {
+			if takeovers != nil {
+				takeovers.Release(id)
+			}
+		}})
+		if err = broker.Start(); err != nil {
+			return err
+		}
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = broker.Stop(stopCtx)
+		}()
+		takeovers = browser.NewTakeovers(browser.TakeoverOptions{
+			Token:       token,
+			AgentExists: func(id string) bool { return agents != nil && agents.Get(id) != nil },
+			OnRequest: func(id, reqID, reason string) {
+				pushAgentEvent(agents, id, map[string]any{"kind": "takeover_request", "reqId": reqID, "reason": reason})
+				pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "blocked"})
+			},
+			OnResolved: func(id, _ string) { pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "working"}) },
+		})
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return exeErr
+		}
+		wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token}
+		factory = registry.DefaultFactory{Assets: assetStore, MCPServers: func(id string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id) }}
+	}
+	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker})
 	if err != nil {
 		return err
 	}
@@ -60,17 +116,6 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		defer cancel()
 		_ = agents.DisposeAll(disposeCtx)
 	}()
-	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
-	displayHost := cfg.Host
-	if displayHost == "0.0.0.0" || displayHost == "::" {
-		displayHost = "127.0.0.1"
-	}
-	bootstrapURL := "http://" + net.JoinHostPort(displayHost, strconv.Itoa(port)) + "/#t=" + token
 	httpHandler := httpserver.New(httpserver.Options{
 		Token: token, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
 		AgentExists: func(id string) bool {
@@ -78,7 +123,17 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			return lookupErr == nil && agent != nil
 		},
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: httpHandler})
+	fallback := http.Handler(httpHandler)
+	if takeovers != nil {
+		fallback = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/internal/browser/takeover" {
+				takeovers.ServeHTTP(w, r)
+				return
+			}
+			httpHandler.ServeHTTP(w, r)
+		})
+	}
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
@@ -106,5 +161,23 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func pushAgentEvent(agents *registry.Registry, id string, value any) {
+	if agents == nil {
+		return
+	}
+	s := agents.Get(id)
+	if s == nil {
+		return
+	}
+	payload, err := json.Marshal(value)
+	kind := ""
+	if object, ok := value.(map[string]any); ok {
+		kind, _ = object["kind"].(string)
+	}
+	if err == nil {
+		s.PushEvent(eventlog.Event{Kind: kind, Payload: payload})
 	}
 }

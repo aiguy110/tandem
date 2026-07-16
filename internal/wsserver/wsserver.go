@@ -1,16 +1,19 @@
 // Package wsserver implements Tandem's authenticated, multiplexed browser
-// WebSocket protocol. Mutating commands are added by later migration phases.
+// WebSocket protocol.
 package wsserver
 
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
@@ -20,6 +23,9 @@ import (
 
 type Backend interface {
 	Get(string) *session.Session
+	Spawn(context.Context, agentadapter.Spec) (*session.Session, error)
+	SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error)
+	Close(context.Context, string, bool, bool) (bool, error)
 	Summaries(context.Context) []registry.Summary
 	ListDirs(context.Context) ([]workspace.RepoInfo, error)
 	AgentCatalog() registry.Catalog
@@ -93,11 +99,25 @@ func tokenMatches(got, want string) bool {
 }
 
 type clientMessage struct {
-	T        string          `json:"t"`
-	AgentID  string          `json:"agentId"`
-	Channels []string        `json:"channels"`
-	SinceSeq int64           `json:"sinceSeq"`
-	CorrID   json.RawMessage `json:"corrId"`
+	T              string                     `json:"t"`
+	AgentID        string                     `json:"agentId"`
+	Channels       []string                   `json:"channels"`
+	SinceSeq       int64                      `json:"sinceSeq"`
+	CorrID         json.RawMessage            `json:"corrId"`
+	Text           string                     `json:"text"`
+	Blocks         []agentadapter.PromptBlock `json:"blocks"`
+	BytesB64       string                     `json:"bytesB64"`
+	Cols           int                        `json:"cols"`
+	Rows           int                        `json:"rows"`
+	ReqID          string                     `json:"reqId"`
+	OptionID       string                     `json:"optionId"`
+	Spec           agentadapter.Spec          `json:"spec"`
+	Agent          string                     `json:"agent"`
+	Profile        string                     `json:"profile"`
+	ACPArgs        []string                   `json:"acpArgs"`
+	CWD            string                     `json:"cwd"`
+	Force          bool                       `json:"force"`
+	DeleteWorktree *bool                      `json:"deleteWorktree"`
 }
 
 type connection struct {
@@ -203,8 +223,144 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
 	case "list_agent_catalog":
 		c.send(withCorr(map[string]any{"t": "agent_catalog", "catalog": c.server.opts.Registry.AgentCatalog()}, m.CorrID))
+	case "prompt":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		blocks := m.Blocks
+		if blocks == nil {
+			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
+		}
+		if err := sess.ValidatePrompt(blocks); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		go func() { _, _ = sess.Prompt(context.Background(), blocks) }()
+		c.commandAck(m, sess.ID)
+	case "input":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		data, err := base64.StdEncoding.DecodeString(m.BytesB64)
+		if err != nil {
+			c.commandError(m, errors.New("invalid base64 input"))
+			return
+		}
+		if err := sess.SendInput(data); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "resize":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if m.Cols < 1 || m.Cols > 65535 || m.Rows < 1 || m.Rows > 65535 {
+			c.commandError(m, errors.New("invalid terminal size"))
+			return
+		}
+		if err := sess.Resize(uint16(m.Cols), uint16(m.Rows)); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "permission_response":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if err := sess.RespondPermission(m.ReqID, m.OptionID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "interrupt":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if err := sess.Interrupt(); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "spawn_agent":
+		sess, err := c.server.opts.Registry.Spawn(context.Background(), m.Spec)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "get_spawn_options":
+		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Profile, m.ACPArgs, m.CWD)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "spawn_options", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
+	case "close_agent":
+		deleteWorktree := true
+		if m.DeleteWorktree != nil {
+			deleteWorktree = *m.DeleteWorktree
+		}
+		closed, err := c.server.opts.Registry.Close(context.Background(), m.AgentID, m.Force, deleteWorktree)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		if !closed {
+			c.commandError(m, errors.New("no such agent"))
+			return
+		}
+		c.server.broadcastClosed(m.AgentID)
+		c.commandAck(m, m.AgentID)
+	case "merge_back":
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
 		c.send(withCorr(map[string]any{"t": "ack", "error": m.T + " not implemented yet"}, m.CorrID))
+	}
+}
+
+func (c *connection) commandAck(m clientMessage, agentID string) {
+	c.send(withCorr(map[string]any{"t": "ack", "agentId": agentID}, m.CorrID))
+}
+func (c *connection) commandError(m clientMessage, err error) {
+	value := map[string]any{"t": "ack", "error": err.Error()}
+	if m.AgentID != "" {
+		value["agentId"] = m.AgentID
+	}
+	c.send(withCorr(value, m.CorrID))
+}
+func (c *connection) requireSession(m clientMessage) (*session.Session, bool) {
+	sess := c.server.opts.Registry.Get(m.AgentID)
+	if sess == nil {
+		c.commandError(m, errors.New("no such agent: "+m.AgentID))
+		return nil, false
+	}
+	return sess, true
+}
+
+func (h *Handler) broadcastClosed(agentID string) {
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	for _, c := range connections {
+		c.mu.Lock()
+		sub := c.subs[agentID]
+		if sub != nil {
+			sub.stop()
+			delete(c.subs, agentID)
+		}
+		c.mu.Unlock()
+		if sub != nil {
+			c.send(map[string]any{"t": "agent_closed", "agentId": agentID})
+		}
 	}
 }
 

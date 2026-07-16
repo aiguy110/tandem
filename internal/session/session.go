@@ -102,8 +102,12 @@ func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
 	return le, nil
 }
 
-func (s *Session) Status() Status                          { s.mu.RLock(); defer s.mu.RUnlock(); return s.status }
-func (s *Session) SetStatus(v Status)                      { s.mu.Lock(); s.status = v; s.mu.Unlock() }
+func (s *Session) Status() Status     { s.mu.RLock(); defer s.mu.RUnlock(); return s.status }
+func (s *Session) SetStatus(v Status) { s.mu.Lock(); s.status = v; s.mu.Unlock() }
+
+// PushEvent lets daemon-owned auxiliary services (notably browser takeover)
+// enter the same durable event stream as adapter updates.
+func (s *Session) PushEvent(ev eventlog.Event)             { s.emit(ev) }
 func (s *Session) SessionID() string                       { return s.adapter.SessionID() }
 func (s *Session) PID() int                                { return s.adapter.PID() }
 func (s *Session) Capabilities() agentadapter.Capabilities { return s.adapter.Capabilities() }
@@ -118,9 +122,35 @@ func (s *Session) PendingApprovals() []agentadapter.Approval {
 	return out
 }
 
-func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+// ValidatePrompt performs the synchronous prompt checks required by the wire
+// protocol. In particular, image failures must be reported before a user
+// message is persisted or an ACP turn starts.
+func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 	if len(blocks) == 0 {
-		return "", errors.New("prompt must contain at least one block")
+		return errors.New("prompt must contain at least one block")
+	}
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+		case "image":
+			if !s.adapter.Capabilities().Image {
+				return errors.New("this agent does not support image prompts")
+			}
+		default:
+			return errors.New("invalid prompt block type " + block.Type)
+		}
+	}
+	if validator, ok := s.adapter.(interface {
+		ValidatePrompt([]agentadapter.PromptBlock) error
+	}); ok {
+		return validator.ValidatePrompt(blocks)
+	}
+	return nil
+}
+
+func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+	if err := s.ValidatePrompt(blocks); err != nil {
+		return "", err
 	}
 	// A turn holds this gate through completion: concurrent callers are ordered,
 	// never rejected or allowed to overlap an adapter's session/prompt call.

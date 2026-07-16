@@ -38,25 +38,69 @@ func (*testBackend) ListDirs(context.Context) ([]workspace.RepoInfo, error) {
 func (*testBackend) AgentCatalog() registry.Catalog {
 	return registry.Catalog{DefaultAgent: "codex", Agents: []registry.CatalogAgent{}}
 }
+func (b *testBackend) Spawn(context.Context, agentadapter.Spec) (*session.Session, error) {
+	return b.Get("a"), nil
+}
+func (*testBackend) SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error) {
+	return registry.SpawnOptions{Modes: json.RawMessage(`null`), ConfigOptions: []json.RawMessage{}}, nil
+}
+func (b *testBackend) Close(_ context.Context, id string, _, _ bool) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sessions[id] == nil {
+		return false, nil
+	}
+	delete(b.sessions, id)
+	return true, nil
+}
 
 type testAdapter struct {
-	events chan eventlog.Event
-	done   chan struct{}
+	events             chan eventlog.Event
+	done               chan struct{}
+	mu                 sync.Mutex
+	prompts            [][]agentadapter.PromptBlock
+	inputs             [][]byte
+	cols, rows         uint16
+	permissions        [][2]string
+	interrupts, closes int
 }
 
 func (a *testAdapter) Capabilities() agentadapter.Capabilities { return agentadapter.Capabilities{} }
 func (a *testAdapter) Events() <-chan eventlog.Event           { return a.events }
 func (a *testAdapter) Done() <-chan struct{}                   { return a.done }
-func (*testAdapter) Prompt(context.Context, []agentadapter.PromptBlock) (string, error) {
+func (a *testAdapter) Prompt(_ context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+	a.mu.Lock()
+	a.prompts = append(a.prompts, blocks)
+	a.mu.Unlock()
 	return "", nil
 }
-func (*testAdapter) SendInput([]byte) error                 { return nil }
-func (*testAdapter) Resize(uint16, uint16) error            { return nil }
-func (*testAdapter) RespondPermission(string, string) error { return nil }
-func (*testAdapter) Interrupt() error                       { return nil }
-func (*testAdapter) Close(context.Context) error            { return nil }
-func (*testAdapter) SessionID() string                      { return "" }
-func (*testAdapter) PID() int                               { return 0 }
+func (a *testAdapter) SendInput(v []byte) error {
+	a.mu.Lock()
+	a.inputs = append(a.inputs, append([]byte{}, v...))
+	a.mu.Unlock()
+	return nil
+}
+func (a *testAdapter) Resize(cols, rows uint16) error {
+	a.mu.Lock()
+	a.cols, a.rows = cols, rows
+	a.mu.Unlock()
+	return nil
+}
+func (a *testAdapter) RespondPermission(req, option string) error {
+	a.mu.Lock()
+	a.permissions = append(a.permissions, [2]string{req, option})
+	a.mu.Unlock()
+	return nil
+}
+func (a *testAdapter) Interrupt() error { a.mu.Lock(); a.interrupts++; a.mu.Unlock(); return nil }
+func (a *testAdapter) Close(context.Context) error {
+	a.mu.Lock()
+	a.closes++
+	a.mu.Unlock()
+	return nil
+}
+func (*testAdapter) SessionID() string { return "" }
+func (*testAdapter) PID() int          { return 0 }
 
 func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
 	t.Helper()
@@ -68,7 +112,7 @@ func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter,
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &testAdapter{make(chan eventlog.Event, 10000), make(chan struct{})}
+	a := &testAdapter{events: make(chan eventlog.Event, 10000), done: make(chan struct{})}
 	s, err := session.New("a", "a", agentadapter.Spec{}, a, log)
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +187,82 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 	server.CloseClientConnections()
 }
 
+func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
+	_, _, a, _, url := setupWS(t, 0)
+	c := dial(t, url)
+	commands := []map[string]any{
+		{"t": "prompt", "agentId": "a", "text": "hello", "corrId": "prompt"},
+		{"t": "input", "agentId": "a", "bytesB64": "aGk=", "corrId": "input"},
+		{"t": "resize", "agentId": "a", "cols": 120, "rows": 40, "corrId": "resize"},
+		{"t": "permission_response", "agentId": "a", "reqId": "r1", "optionId": "allow", "corrId": "permission"},
+		{"t": "interrupt", "agentId": "a", "corrId": "interrupt"},
+		{"t": "spawn_agent", "spec": map[string]any{}, "corrId": "spawn"},
+	}
+	for _, command := range commands {
+		send(t, c, command)
+		got := recv(t, c)
+		if got["t"] != "ack" || got["corrId"] != command["corrId"] || got["error"] != nil {
+			t.Fatalf("command %#v: %#v", command, got)
+		}
+	}
+	send(t, c, map[string]any{"t": "get_spawn_options", "agent": "codex", "cwd": "/repo", "corrId": "options"})
+	if got := recv(t, c); got["t"] != "spawn_options" || got["corrId"] != "options" || got["options"] == nil {
+		t.Fatalf("spawn options %#v", got)
+	}
+	send(t, c, map[string]any{"t": "merge_back", "agentId": "a", "mode": "merge", "corrId": "merge"})
+	if got := recv(t, c); got["error"] != "merge_back not implemented yet" || got["agentId"] != "a" {
+		t.Fatalf("merge %#v", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		ready := len(a.prompts) == 1
+		if ready {
+			if a.prompts[0][0].Text != "hello" || string(a.inputs[0]) != "hi" || a.cols != 120 || a.rows != 40 || a.permissions[0] != [2]string{"r1", "allow"} || a.interrupts != 1 {
+				t.Fatalf("adapter calls: %#v %#v %dx%d %#v interrupts=%d", a.prompts, a.inputs, a.cols, a.rows, a.permissions, a.interrupts)
+			}
+		}
+		a.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("prompt was not dispatched")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	c.Close()
+	time.Sleep(20 * time.Millisecond)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closes != 0 {
+		t.Fatalf("disconnect disposed adapter %d times", a.closes)
+	}
+}
+
+func TestCloseBroadcastsSubscribersAndErrorsAreStructured(t *testing.T) {
+	_, _, _, _, url := setupWS(t, 0)
+	one, two, closer := dial(t, url), dial(t, url), dial(t, url)
+	for _, c := range []*websocket.Conn{one, two} {
+		send(t, c, map[string]any{"t": "subscribe", "agentId": "a"})
+		recv(t, c) // snapshot
+		recv(t, c) // ack
+	}
+	send(t, closer, map[string]any{"t": "resize", "agentId": "missing", "cols": 1, "rows": 1, "corrId": "missing"})
+	if got := recv(t, closer); got["error"] != "no such agent: missing" || got["agentId"] != "missing" {
+		t.Fatalf("missing agent %#v", got)
+	}
+	send(t, closer, map[string]any{"t": "close_agent", "agentId": "a", "corrId": "close"})
+	if got := recv(t, closer); got["t"] != "ack" || got["error"] != nil {
+		t.Fatalf("close ack %#v", got)
+	}
+	for _, c := range []*websocket.Conn{one, two} {
+		if got := recv(t, c); got["t"] != "agent_closed" || got["agentId"] != "a" {
+			t.Fatalf("closed %#v", got)
+		}
+	}
+}
+
 func TestSnapshotReplayChannelsMultipleClientsAndUnsubscribe(t *testing.T) {
 	_, b, a, _, url := setupWS(t, 0)
 	a.events <- event("one")
@@ -188,7 +308,7 @@ func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := &testAdapter{make(chan eventlog.Event, 10000), make(chan struct{})}
+	next := &testAdapter{events: make(chan eventlog.Event, 10000), done: make(chan struct{})}
 	restored, err := session.New("a", "a", agentadapter.Spec{}, next, log)
 	if err != nil {
 		t.Fatal(err)
