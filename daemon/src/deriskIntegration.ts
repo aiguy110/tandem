@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { WebSocket } from 'ws';
-import { makeHarness, open, report, sleep, type Frame } from './testHarness.ts';
+import { open, report, sleep, mockPath, type Frame } from './testHarness.ts';
+import { parseDaemonCommand, startDaemon } from './processHarness.ts';
 
 const PORT = 7754;
 
@@ -56,10 +57,14 @@ class Client {
 async function main() {
   const { root, repo } = makeRepo();
   process.env.TANDEM_PROJECT_ROOTS = root;
-  const h = await makeHarness(PORT);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tandem-integration-home-'));
+  const daemon = await startDaemon({ command: parseDaemonCommand(), home, port: Number(process.env.TANDEM_TEST_PORT || PORT), env: {
+    TANDEM_ACP_CMD: JSON.stringify([process.execPath, mockPath]), TANDEM_BROWSER_MCP: 'off', TANDEM_PROJECT_ROOTS: root,
+  } });
+  const h = { port: daemon.port, token: daemon.token, home, stop: async () => { await daemon.stop(); fs.rmSync(home, { recursive: true, force: true }); } };
 
   const checks: [string, boolean, string][] = [];
-  let c = new Client(await open(PORT, h.token, (f) => c.track(f)));
+  let c = new Client(await open(h.port, h.token, (f) => c.track(f)));
 
   // ── discovery (Phase 2) ─────────────────────────────────────────────
   c.send({ t: 'list_dirs' });
@@ -127,7 +132,7 @@ async function main() {
   c.ws.terminate(); // hard kill, no close handshake — a dropped pipe
   await sleep(200);
   // agent keeps working while nobody is attached
-  const c2 = new Client(await open(PORT, h.token, (f) => c2.track(f)));
+  const c2 = new Client(await open(h.port, h.token, (f) => c2.track(f)));
   c2.send({ t: 'subscribe', agentId: a1, channels: ['transcript', 'status'], sinceSeq: seqBefore });
   c2.send({ t: 'prompt', agentId: a1, text: 'again' });
   await sleep(1200);
@@ -147,7 +152,7 @@ async function main() {
   const firstWt = path.join(h.home, 'worktrees', 'checkout', wtNames[0]);
   fs.writeFileSync(path.join(firstWt, 'dirty.txt'), 'uncommitted\n');
   const closeErrs: string[] = [];
-  const c3 = new Client(await open(PORT, h.token, (f) => { c3.track(f); if (f.t === 'ack' && f.error) closeErrs.push(f.error); }));
+  const c3 = new Client(await open(h.port, h.token, (f) => { c3.track(f); if (f.t === 'ack' && f.error) closeErrs.push(f.error); }));
   // find which agent owns firstWt — just try closing both non-force; the dirty one must refuse
   c3.send({ t: 'close_agent', agentId: a1 });
   c3.send({ t: 'close_agent', agentId: a2 });

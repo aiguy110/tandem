@@ -13,7 +13,7 @@
     "derisk:workspace": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskWorkspace.ts",
     "derisk:services": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskServices.ts",
     "derisk:browser": "tsx src/deriskBrowser.ts",
-    "derisk:integration": "tsx src/deriskIntegration.ts",
+    "derisk:integration": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskIntegration.ts",
     "derisk:resume": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskResume.ts",
     "derisk:handoff": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskHandoff.ts",
     "derisk:images": "TANDEM_DAEMON_CMD='[\"./node_modules/.bin/tsx\",\"src/index.ts\"]' tsx src/deriskImages.ts",
