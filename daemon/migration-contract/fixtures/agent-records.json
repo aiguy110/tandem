@@ -1,0 +1,48 @@
+[
+  {
+    "id": "api-1",
+    "name": "api-1",
+    "spec": {
+      "adapter": "acp",
+      "agent": "codex",
+      "workspace": {
+        "kind": "worktree",
+        "repo": "/fixtures/repo",
+        "branch": "tandem/migration/api-1",
+        "branchMode": "create",
+        "source": {
+          "ref": "refs/heads/feature/migration",
+          "commit": "1111111111111111111111111111111111111111"
+        },
+        "integration": {
+          "kind": "local-branch",
+          "ref": "refs/heads/feature/migration"
+        },
+        "baseRef": "1111111111111111111111111111111111111111"
+      }
+    },
+    "cwd": "/fixtures/worktrees/repo/api-1",
+    "acpSessionId": "sess_fixture",
+    "status": "idle",
+    "createdAt": 1700000000000,
+    "closedAt": null
+  },
+  {
+    "id": "legacy-2",
+    "name": "legacy-2",
+    "spec": {
+      "adapter": "acp",
+      "workspace": {
+        "kind": "worktree",
+        "repo": "/fixtures/repo",
+        "branch": "tandem/legacy/api-1",
+        "baseRef": "main"
+      }
+    },
+    "cwd": "/fixtures/worktrees/repo/legacy-2",
+    "acpSessionId": null,
+    "status": "error",
+    "createdAt": 1700000001000,
+    "closedAt": 1700000002000
+  }
+]

@@ -18,9 +18,11 @@
     "derisk:handoff": "tsx src/deriskHandoff.ts",
     "derisk:images": "tsx src/deriskImages.ts",
     "derisk:config": "tsx src/deriskConfig.ts",
+    "contract:generate": "tsx migration-contract/generate.ts",
+    "contract:test": "tsx migration-contract/test.ts",
     "derisk:steel": "tsx src/deriskSteel.ts",
     "derisk:all": "npm run derisk && npm run derisk:multi && npm run derisk:restart && npm run derisk:deferred-restart && npm run derisk:auth && npm run derisk:workspace && npm run derisk:services && npm run derisk:browser && npm run derisk:integration && npm run derisk:resume && npm run derisk:handoff && npm run derisk:images && npm run derisk:config",
-    "test": "npm run derisk:all",
+    "test": "npm run contract:test && npm run derisk:all",
     "acp:live": "tsx src/acpLive.ts",
     "daemon": "tsx src/index.ts",
     "pty-smoke": "tsx src/ptySmoke.ts"
