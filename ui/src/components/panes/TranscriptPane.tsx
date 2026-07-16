@@ -386,12 +386,14 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
   const { modes, configOptions } = sessionConfig ?? { modes: null, configOptions: [] };
   // The model selector is a config option with category 'model' (pinned id
   // "model" on the real agent, but category is the spec-sanctioned way to find
-  // it). 'thought_level' is the spec's thinking-effort selector. Everything
-  // else with category 'mode' is redundant with `modes` below.
+  // it). 'thought_level' is the spec's thinking-effort selector. Newer ACP
+  // agents expose permission mode as a config option too; prefer that because
+  // it is authoritative when the legacy parallel `modes` state is stale.
   const modelOpt = configOptions.find((o) => o.category === 'model' && o.type === 'select');
   const thoughtLevelOpt = configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
+  const permissionOpt = configOptions.find((o) => o.category === 'mode' && o.type === 'select');
   const hasModes = !!modes && modes.availableModes.length > 0;
-  if (!hasModes && !modelOpt && !thoughtLevelOpt && !usage) return null;
+  if (!permissionOpt && !hasModes && !modelOpt && !thoughtLevelOpt && !usage) return null;
 
   return (
     <div className="session-config-bar">
@@ -422,7 +424,18 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
           </select>
         </label>
       )}
-      {hasModes && modes && (
+      {permissionOpt ? (
+        <label>
+          Permission Mode
+          <select value={String(permissionOpt.currentValue)} onChange={(e) => setConfigOption(agentId, permissionOpt.id, e.target.value)}>
+            {(permissionOpt.options ?? []).map((o) => (
+              <option key={o.value} value={o.value} title={o.description}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : hasModes && modes ? (
         <label>
           Permission Mode
           <select value={modes.currentModeId} onChange={(e) => setMode(agentId, e.target.value)}>
@@ -433,7 +446,7 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
             ))}
           </select>
         </label>
-      )}
+      ) : null}
       {usage && <UsageMeter usage={usage} />}
     </div>
   );
