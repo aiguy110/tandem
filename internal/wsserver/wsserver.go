@@ -613,6 +613,13 @@ func (c *connection) subscribe(m clientMessage) {
 		}
 		sub.mu.Unlock()
 		c.send(eventMessage(sess.ID, le))
+		// Status transitions (turn start/end, blocked/unblocked) are the
+		// moments the workspace's git state is likely to have changed, so
+		// refresh every client's agent list rather than waiting for the next
+		// spawn/resume/terminal action to happen to recompute it.
+		if le.Event.Kind == "status" {
+			go c.server.broadcastAgents()
+		}
 	})
 	c.mu.Lock()
 	if old := c.subs[sess.ID]; old != nil {
