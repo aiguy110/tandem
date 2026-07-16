@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -53,8 +54,18 @@ CREATE TABLE IF NOT EXISTS agent_assets (
 // Store serializes access through one connection. This makes connection-local
 // pragmas deterministic and gives later event sequence allocation one writer.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db      *sql.DB
+	now     func() time.Time
+	eventMu sync.Mutex
+}
+
+// StoredEvent is the store-level representation of a normalized event. Payload
+// is the exact JSON object understood by the Node daemon.
+type StoredEvent struct {
+	Seq     int64
+	Kind    string
+	Payload string
+	TS      int64
 }
 
 type Agent struct {
@@ -272,6 +283,59 @@ JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?`, ag
 		return nil, err
 	}
 	return &a, nil
+}
+
+// AppendEvent atomically allocates the next per-agent sequence and writes the
+// event. The lock deliberately covers allocation and INSERT so concurrent
+// EventLog instances cannot observe and reuse the same MAX(seq).
+func (s *Store) AppendEvent(agentID, kind, payload string, ts int64) (int64, error) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	if !json.Valid([]byte(payload)) {
+		return 0, errors.New("event payload is not valid JSON")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var seq int64
+	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE agentId = ?", agentID).Scan(&seq); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec("INSERT INTO events (agentId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", agentID, seq, kind, payload, ts); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
+// RangeEvents returns events strictly newer than afterSeq in sequence order.
+func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, error) {
+	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND seq > ? ORDER BY seq", agentID, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]StoredEvent, 0)
+	for rows.Next() {
+		var event StoredEvent
+		if err := rows.Scan(&event.Seq, &event.Kind, &event.Payload, &event.TS); err != nil {
+			return nil, err
+		}
+		if !json.Valid([]byte(event.Payload)) {
+			return nil, fmt.Errorf("event %q/%d has malformed payload JSON", agentID, event.Seq)
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) EventBounds(agentID string) (min, max int64, err error) {
+	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", agentID).Scan(&min, &max)
+	return
 }
 
 // Close checkpoints WAL contents into the main file for clean handoff to Node.
