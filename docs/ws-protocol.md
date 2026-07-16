@@ -203,6 +203,9 @@ interface BrowserInputWire {
 
 type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 
+// Successful set_mode/set_config_option changes are persisted in the agent spec and
+// reapplied after daemon restart, ACP session reload, and Transcript/Terminal handoff.
+
 // ---- Daemon → Browser ----
 // NOTE (Phase 1 deviation): `snapshot.transcript` carries `{ seq, event }[]`, not bare
 // AgentEvent[], so a reconnecting client can checkpoint per event. `terminals` / `browser`

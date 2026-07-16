@@ -45,6 +45,9 @@ type regAdapter struct {
 	gate   chan struct{}
 	sid    string
 	once   sync.Once
+	mu     sync.Mutex
+	modes  []string
+	config map[string]any
 }
 
 func (a *regAdapter) Capabilities() agentadapter.Capabilities {
@@ -64,6 +67,21 @@ func (a *regAdapter) SendInput([]byte) error                 { return nil }
 func (a *regAdapter) Resize(uint16, uint16) error            { return nil }
 func (a *regAdapter) RespondPermission(string, string) error { return nil }
 func (a *regAdapter) Interrupt() error                       { return nil }
+func (a *regAdapter) SetMode(_ context.Context, mode string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.modes = append(a.modes, mode)
+	return nil
+}
+func (a *regAdapter) SetConfigOption(_ context.Context, id string, value any) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.config == nil {
+		a.config = make(map[string]any)
+	}
+	a.config[id] = value
+	return nil
+}
 func (a *regAdapter) Close(context.Context) error {
 	a.once.Do(func() { close(a.events); close(a.done) })
 	return nil
@@ -161,6 +179,78 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	closed, _ := db.Agent("web-1")
 	if closed.ClosedAt == nil {
 		t.Fatal("close transition not persisted")
+	}
+}
+
+func TestSessionConfigPersistsAndReapplies(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	initial, _ := json.Marshal(persistedSessionConfig{ModeID: "agent", ConfigOptions: map[string]any{"model": "one"}})
+	spec := existing(t.TempDir())
+	spec.SessionConfig = initial
+	s, err := r.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := f.adapters[s.ID]
+	if len(first.modes) != 1 || first.modes[0] != "agent" || first.config["model"] != "one" {
+		t.Fatalf("initial config not applied: modes=%v config=%v", first.modes, first.config)
+	}
+	if err = r.SetMode(context.Background(), s.ID, "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.SetConfigOption(context.Background(), s.ID, "model", "two"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := db.Agent(s.ID)
+	if err != nil || rec == nil {
+		t.Fatal(err)
+	}
+	var stored agentadapter.Spec
+	if err = json.Unmarshal(rec.Spec, &stored); err != nil {
+		t.Fatal(err)
+	}
+	var saved persistedSessionConfig
+	if err = json.Unmarshal(stored.SessionConfig, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.ModeID != "read-only" || saved.ConfigOptions["model"] != "two" {
+		t.Fatalf("persisted config = %+v", saved)
+	}
+	if err = r.DisposeAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f2 := &fakeFactory{}
+	r2, err := New(Options{Store: db, Config: cfg, Factory: f2, RingCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.DisposeAll(context.Background())
+	if err = r2.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restored := f2.adapters[s.ID]
+	if restored == nil || len(restored.modes) != 1 || restored.modes[0] != "read-only" || restored.config["model"] != "two" {
+		t.Fatalf("restored config: %#v", restored)
+	}
+}
+
+func TestRecoverSessionConfigPrefersModeOption(t *testing.T) {
+	_, db, _ := setup(t, &fakeFactory{})
+	log, err := eventlog.New("legacy", db, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"kind":"session_config","modes":{"currentModeId":"stale"},"configOptions":[{"id":"mode","category":"mode","currentValue":"agent-full-access"},{"id":"reasoning_effort","category":"thought_level","currentValue":"high"}]}`)
+	if _, err = log.Append(eventlog.Event{Kind: "session_config", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	var recovered persistedSessionConfig
+	if err = json.Unmarshal(recoverSessionConfig(log), &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ModeID != "" || recovered.ConfigOptions["mode"] != "agent-full-access" || recovered.ConfigOptions["reasoning_effort"] != "high" {
+		t.Fatalf("recovered config = %+v", recovered)
 	}
 }
 

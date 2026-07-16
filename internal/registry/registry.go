@@ -97,6 +97,11 @@ type SpawnOptions struct {
 	ConfigOptions []json.RawMessage `json:"configOptions"`
 }
 
+type persistedSessionConfig struct {
+	ModeID        string         `json:"modeId,omitempty"`
+	ConfigOptions map[string]any `json:"configOptions,omitempty"`
+}
+
 type ResumableSession struct {
 	SessionID string         `json:"sessionId"`
 	Source    string         `json:"source"`
@@ -483,10 +488,26 @@ func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter
 	if err != nil {
 		return nil, err
 	}
+	if len(spec.SessionConfig) == 0 {
+		if recovered := recoverSessionConfig(log); len(recovered) > 0 {
+			spec.SessionConfig = recovered
+			rec.Spec, err = json.Marshal(spec)
+			if err != nil {
+				return nil, err
+			}
+			if err = r.store.UpsertAgent(rec); err != nil {
+				return nil, err
+			}
+		}
+	}
 	capture := len(captureReplay) > 0 && captureReplay[0]
 	a, err := r.factory.Start(ctx, agentadapter.StartRequest{AgentID: rec.ID, CWD: rec.CWD, ResumeSessionID: resume, CaptureReplay: capture, Spec: spec, Log: log})
 	if err != nil {
 		return nil, err
+	}
+	if err = applySessionConfig(ctx, a, spec.SessionConfig); err != nil {
+		a.Close(ctx)
+		return nil, fmt.Errorf("restore session config: %w", err)
 	}
 	s, err := session.NewWithStatus(rec.ID, rec.Name, spec, a, log, session.Status(rec.Status))
 	if err != nil {
@@ -512,6 +533,154 @@ func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter
 		_ = r.store.SetSessionID(rec.ID, sid)
 	}
 	return s, nil
+}
+
+func recoverSessionConfig(log *eventlog.Log) json.RawMessage {
+	history, err := log.FullHistory()
+	if err != nil {
+		return nil
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Event.Kind != "session_config" {
+			continue
+		}
+		var wire struct {
+			Modes *struct {
+				CurrentModeID string `json:"currentModeId"`
+			} `json:"modes"`
+			ConfigOptions []struct {
+				ID           string `json:"id"`
+				Category     string `json:"category"`
+				CurrentValue any    `json:"currentValue"`
+			} `json:"configOptions"`
+		}
+		if json.Unmarshal(history[i].Event.Payload, &wire) != nil {
+			continue
+		}
+		saved := persistedSessionConfig{ConfigOptions: make(map[string]any)}
+		hasModeOption := false
+		for _, option := range wire.ConfigOptions {
+			if option.ID == "" || option.CurrentValue == nil {
+				continue
+			}
+			saved.ConfigOptions[option.ID] = option.CurrentValue
+			if option.Category == "mode" {
+				hasModeOption = true
+			}
+		}
+		if len(saved.ConfigOptions) == 0 {
+			saved.ConfigOptions = nil
+		}
+		if !hasModeOption && wire.Modes != nil {
+			saved.ModeID = wire.Modes.CurrentModeID
+		}
+		if saved.ModeID == "" && len(saved.ConfigOptions) == 0 {
+			continue
+		}
+		raw, _ := json.Marshal(saved)
+		return raw
+	}
+	return nil
+}
+
+func applySessionConfig(ctx context.Context, adapter agentadapter.Adapter, raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var saved persistedSessionConfig
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		return fmt.Errorf("invalid persisted session config: %w", err)
+	}
+	if saved.ModeID != "" {
+		configurable, ok := adapter.(interface {
+			SetMode(context.Context, string) error
+		})
+		if !ok {
+			return errors.New("agent does not support persisted session modes")
+		}
+		if err := configurable.SetMode(ctx, saved.ModeID); err != nil {
+			return err
+		}
+	}
+	if len(saved.ConfigOptions) > 0 {
+		configurable, ok := adapter.(interface {
+			SetConfigOption(context.Context, string, any) error
+		})
+		if !ok {
+			return errors.New("agent does not support persisted session config options")
+		}
+		for id, value := range saved.ConfigOptions {
+			if err := configurable.SetConfigOption(ctx, id, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Registry) SetMode(ctx context.Context, id, modeID string) error {
+	lock := r.handoffLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s := r.Get(id)
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	if err := s.SetMode(ctx, modeID); err != nil {
+		return err
+	}
+	return r.persistSessionConfig(s, func(saved *persistedSessionConfig) { saved.ModeID = modeID })
+}
+
+func (r *Registry) SetConfigOption(ctx context.Context, id, configID string, value any) error {
+	lock := r.handoffLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s := r.Get(id)
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	if err := s.SetConfigOption(ctx, configID, value); err != nil {
+		return err
+	}
+	return r.persistSessionConfig(s, func(saved *persistedSessionConfig) {
+		if saved.ConfigOptions == nil {
+			saved.ConfigOptions = make(map[string]any)
+		}
+		saved.ConfigOptions[configID] = value
+	})
+}
+
+func (r *Registry) persistSessionConfig(s *session.Session, update func(*persistedSessionConfig)) error {
+	var saved persistedSessionConfig
+	if len(s.Spec.SessionConfig) > 0 {
+		if err := json.Unmarshal(s.Spec.SessionConfig, &saved); err != nil {
+			return err
+		}
+	}
+	update(&saved)
+	rawConfig, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	rec, err := r.store.Agent(s.ID)
+	if err != nil {
+		return err
+	}
+	if rec == nil {
+		return fmt.Errorf("no persisted agent: %s", s.ID)
+	}
+	spec := cloneSpec(s.Spec)
+	spec.SessionConfig = rawConfig
+	rec.Spec, err = json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	if err = r.store.UpsertAgent(*rec); err != nil {
+		return err
+	}
+	s.SetPersistedSessionConfig(rawConfig)
+	return nil
 }
 
 func (r *Registry) RestoreAll(ctx context.Context) error {
