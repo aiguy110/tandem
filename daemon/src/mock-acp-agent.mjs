@@ -144,6 +144,17 @@ function handle(msg) {
     const blocks = msg.params?.prompt ?? [];
     const text = blocks.map((b) => b?.text ?? '').join(' ');
     if (text.includes('DERISK_IMAGE')) return void runImagePrompt(blocks);
+    if (text.includes('DERISK_UNKNOWN_UPDATE')) {
+      note({ sessionUpdate: 'mock_future_optional_update', value: 1 });
+      finish('end_turn');
+      return;
+    }
+    if (text.includes('DERISK_MALFORMED_UPDATE')) {
+      // Used by both runtime adapter harnesses to verify that an understood
+      // variant missing required fields fails the session deterministically.
+      note({ sessionUpdate: 'tool_call', status: 'pending' });
+      return;
+    }
     if (text.includes('DERISK_SERVICES')) return void runServices();
     if (text.includes('DERISK_ESCAPE')) return void runEscape();
     if (text.includes('DERISK_SLOWTERM')) return void runSlowTerm();
