@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -33,6 +34,8 @@ type Session struct {
 	nextListener uint64
 	turnMu       sync.Mutex
 	active       int
+	controlMode  string
+	adapterEpoch uint64
 	disposeOnce  sync.Once
 	disposeErr   error
 	done         chan struct{}
@@ -46,18 +49,29 @@ func NewWithStatus(id, name string, spec agentadapter.Spec, adapter agentadapter
 	if adapter == nil || log == nil {
 		return nil, errors.New("session: adapter and event log are required")
 	}
-	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, approvals: map[string]agentadapter.Approval{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
+	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, controlMode: "transcript", approvals: map[string]agentadapter.Approval{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
 	if binder, ok := adapter.(agentadapter.EventBinder); ok {
 		binder.BindEventSink(s.append)
 	}
-	go s.pump()
+	s.adapterEpoch = 1
+	go s.pump(adapter, 1, nil)
 	return s, nil
 }
 
-func (s *Session) pump() {
-	defer close(s.done)
-	for ev := range s.adapter.Events() {
-		s.emit(ev)
+func (s *Session) pump(adapter agentadapter.Adapter, epoch uint64, onExit func()) {
+	for ev := range adapter.Events() {
+		s.mu.RLock()
+		current := epoch == s.adapterEpoch
+		s.mu.RUnlock()
+		if current {
+			s.emit(ev)
+		}
+	}
+	s.mu.RLock()
+	current := epoch == s.adapterEpoch
+	s.mu.RUnlock()
+	if current && onExit != nil {
+		onExit()
 	}
 }
 
@@ -107,11 +121,20 @@ func (s *Session) SetStatus(v Status) { s.mu.Lock(); s.status = v; s.mu.Unlock()
 
 // PushEvent lets daemon-owned auxiliary services (notably browser takeover)
 // enter the same durable event stream as adapter updates.
-func (s *Session) PushEvent(ev eventlog.Event)             { s.emit(ev) }
-func (s *Session) SessionID() string                       { return s.adapter.SessionID() }
-func (s *Session) PID() int                                { return s.adapter.PID() }
-func (s *Session) Capabilities() agentadapter.Capabilities { return s.adapter.Capabilities() }
-func (s *Session) ActiveTurn() bool                        { s.mu.RLock(); defer s.mu.RUnlock(); return s.active > 0 }
+func (s *Session) PushEvent(ev eventlog.Event) { s.emit(ev) }
+func (s *Session) SessionID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.adapter.SessionID()
+}
+func (s *Session) PID() int { s.mu.RLock(); defer s.mu.RUnlock(); return s.adapter.PID() }
+func (s *Session) Capabilities() agentadapter.Capabilities {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.adapter.Capabilities()
+}
+func (s *Session) ControlMode() string { s.mu.RLock(); defer s.mu.RUnlock(); return s.controlMode }
+func (s *Session) ActiveTurn() bool    { s.mu.RLock(); defer s.mu.RUnlock(); return s.active > 0 }
 func (s *Session) PendingApprovals() []agentadapter.Approval {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -149,6 +172,9 @@ func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 }
 
 func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+	if s.ControlMode() != "transcript" {
+		return "", errors.New("agent session is controlled by the terminal")
+	}
 	if err := s.ValidatePrompt(blocks); err != nil {
 		return "", err
 	}
@@ -182,12 +208,70 @@ func (s *Session) RespondPermission(reqID, optionID string) error {
 	return nil
 }
 func (s *Session) Interrupt() error {
-	if err := s.adapter.Interrupt(); err != nil {
+	s.mu.RLock()
+	a := s.adapter
+	s.mu.RUnlock()
+	if err := a.Interrupt(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	s.approvals = map[string]agentadapter.Approval{}
 	s.mu.Unlock()
+	return nil
+}
+
+// InterruptAndWait requests ACP cancellation and gives the active prompt a
+// bounded window to resolve before its process is replaced during handoff.
+func (s *Session) InterruptAndWait(ctx context.Context) error {
+	if err := s.Interrupt(); err != nil {
+		return err
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for s.ActiveTurn() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+	return nil
+}
+
+func (s *Session) SetControlMode(mode string) {
+	s.mu.Lock()
+	s.controlMode = mode
+	s.mu.Unlock()
+	payload, _ := json.Marshal(map[string]any{"kind": "control_state", "mode": mode})
+	s.emit(eventlog.Event{Kind: "control_state", Payload: payload})
+}
+
+// SwapAdapter disposes the current process, starts its replacement, and keeps
+// the Session/event log/listeners intact. The start callback is deliberately
+// invoked after disposal so ACP and its resumable CLI never own one session at
+// the same time. A caller can invoke SwapAdapter again to recover a failed start.
+func (s *Session) SwapAdapter(ctx context.Context, start func() (agentadapter.Adapter, error), mode string, onExit func()) error {
+	s.mu.Lock()
+	s.adapterEpoch++
+	old := s.adapter
+	s.mu.Unlock()
+	if err := old.Close(ctx); err != nil {
+		return err
+	}
+	a, err := start()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.adapter = a
+	s.adapterEpoch++
+	epoch := s.adapterEpoch
+	s.mu.Unlock()
+	if binder, ok := a.(agentadapter.EventBinder); ok {
+		binder.BindEventSink(s.append)
+	}
+	go s.pump(a, epoch, onExit)
+	s.SetControlMode(mode)
 	return nil
 }
 func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
@@ -199,7 +283,14 @@ func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
 	return func() { s.mu.Lock(); delete(s.listeners, id); s.mu.Unlock() }
 }
 func (s *Session) Dispose(ctx context.Context) error {
-	s.disposeOnce.Do(func() { s.disposeErr = s.adapter.Close(ctx) })
+	s.disposeOnce.Do(func() {
+		s.mu.Lock()
+		s.adapterEpoch++
+		a := s.adapter
+		s.mu.Unlock()
+		s.disposeErr = a.Close(ctx)
+		close(s.done)
+	})
 	return s.disposeErr
 }
 func (s *Session) Done() <-chan struct{} { return s.done }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/acp"
 	"github.com/aiguy110/tandem/internal/acpadapter"
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
@@ -37,6 +38,14 @@ type Registry struct {
 	cwds      map[string]string
 	known     map[string]bool
 	counter   int
+	handoffs  map[string]*sync.Mutex
+	external  *externalCache
+}
+
+type externalCache struct {
+	at       time.Time
+	sessions []ResumableSession
+	adapters []ResumeAdapterInfo
 }
 
 type SummaryWorkspace struct {
@@ -87,6 +96,30 @@ type SpawnOptions struct {
 	Modes         json.RawMessage   `json:"modes"`
 	ConfigOptions []json.RawMessage `json:"configOptions"`
 }
+
+type ResumableSession struct {
+	SessionID string         `json:"sessionId"`
+	Source    string         `json:"source"`
+	Agent     string         `json:"agent"`
+	Adapter   string         `json:"adapter"`
+	CWD       string         `json:"cwd"`
+	Title     string         `json:"title,omitempty"`
+	UpdatedAt string         `json:"updatedAt,omitempty"`
+	AgentID   string         `json:"agentId,omitempty"`
+	AgentName string         `json:"agentName,omitempty"`
+	Branch    string         `json:"branch,omitempty"`
+	Live      *bool          `json:"live,omitempty"`
+	Closed    *bool          `json:"closed,omitempty"`
+	Status    session.Status `json:"status,omitempty"`
+}
+type ResumeAdapterInfo struct {
+	Agent        string `json:"agent"`
+	SupportsList bool   `json:"supportsList"`
+}
+type ResumeCatalog struct {
+	Sessions []ResumableSession  `json:"sessions"`
+	Adapters []ResumeAdapterInfo `json:"adapters"`
+}
 type Options struct {
 	Store        *store.Store
 	Config       config.Config
@@ -131,7 +164,7 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}}, nil
 }
 
 func (r *Registry) Get(id string) *session.Session {
@@ -172,7 +205,7 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 		if agent == "" {
 			agent = r.config.ACP.Default
 		}
-		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: "transcript"}
+		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode()}
 		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
 		if ws.Integration != nil {
 			summary.Workspace.TargetKind = ws.Integration.Kind
@@ -338,10 +371,10 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	return spec, nil
 }
 
-func expand(args []string, id, name, cwd string) []string {
+func expand(args []string, id, name, cwd, sessionID string) []string {
 	out := append([]string{}, args...)
 	for i := range out {
-		out[i] = strings.NewReplacer("{cwd}", cwd, "{agentId}", id, "{agentName}", name).Replace(out[i])
+		out[i] = strings.NewReplacer("{cwd}", cwd, "{agentId}", id, "{agentName}", name, "{sessionId}", sessionID).Replace(out[i])
 	}
 	return out
 }
@@ -362,7 +395,7 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	spec.Name = name
 	spec.Workspace = provisioned.Workspace
 	if t := spec.ResolvedLaunch.Terminal; t != nil {
-		t.StartArgs = expand(t.StartArgs, id, name, provisioned.CWD)
+		t.StartArgs = expand(t.StartArgs, id, name, provisioned.CWD, "")
 	}
 	raw, err := json.Marshal(spec)
 	if err != nil {
@@ -389,12 +422,13 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	return s, nil
 }
 
-func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter.Spec, resume string) (*session.Session, error) {
+func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter.Spec, resume string, captureReplay ...bool) (*session.Session, error) {
 	log, err := eventlog.New(rec.ID, r.store, r.ring)
 	if err != nil {
 		return nil, err
 	}
-	a, err := r.factory.Start(ctx, agentadapter.StartRequest{AgentID: rec.ID, CWD: rec.CWD, ResumeSessionID: resume, Spec: spec, Log: log})
+	capture := len(captureReplay) > 0 && captureReplay[0]
+	a, err := r.factory.Start(ctx, agentadapter.StartRequest{AgentID: rec.ID, CWD: rec.CWD, ResumeSessionID: resume, CaptureReplay: capture, Spec: spec, Log: log})
 	if err != nil {
 		return nil, err
 	}
@@ -446,6 +480,297 @@ func (r *Registry) RestoreAll(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ResumeCatalog unions durable Tandem rows with ACP-discovered external
+// sessions. Durable rows win every session-ID collision because they carry the
+// workspace and agent linkage needed for an exact restore.
+func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
+	rows, err := r.store.AllAgents()
+	if err != nil {
+		return ResumeCatalog{}, err
+	}
+	seen := map[string]bool{}
+	sessions := make([]ResumableSession, 0, len(rows))
+	for _, rec := range rows {
+		if rec.ACPSessionID == nil || *rec.ACPSessionID == "" || seen[*rec.ACPSessionID] {
+			continue
+		}
+		var spec agentadapter.Spec
+		if json.Unmarshal(rec.Spec, &spec) != nil || spec.Adapter != "acp" {
+			continue
+		}
+		seen[*rec.ACPSessionID] = true
+		r.mu.RLock()
+		live := r.sessions[rec.ID]
+		r.mu.RUnlock()
+		updated := rec.CreatedAt
+		if rec.ClosedAt != nil {
+			updated = *rec.ClosedAt
+		}
+		isLive, isClosed := live != nil, rec.ClosedAt != nil
+		entry := ResumableSession{SessionID: *rec.ACPSessionID, Source: "tandem", Agent: spec.Agent, Adapter: "acp", CWD: rec.CWD, Title: rec.Name, UpdatedAt: time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), AgentID: rec.ID, AgentName: rec.Name, Live: &isLive, Closed: &isClosed}
+		if entry.Agent == "" {
+			entry.Agent = r.config.ACP.Default
+		}
+		if spec.Workspace.Kind == workspace.KindWorktree {
+			entry.Branch = spec.Workspace.Branch
+			if entry.Branch == "" {
+				entry.Branch = "tandem/" + rec.Name
+			}
+		}
+		if live != nil {
+			entry.Status = live.Status()
+		}
+		sessions = append(sessions, entry)
+	}
+	external, adapters := r.externalSessions(ctx)
+	for _, entry := range external {
+		if !seen[entry.SessionID] {
+			sessions = append(sessions, entry)
+		}
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].UpdatedAt > sessions[j].UpdatedAt })
+	return ResumeCatalog{Sessions: sessions, Adapters: adapters}, nil
+}
+
+func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []ResumeAdapterInfo) {
+	r.mu.RLock()
+	cache := r.external
+	r.mu.RUnlock()
+	if cache != nil && time.Since(cache.at) < 15*time.Second {
+		return append([]ResumableSession{}, cache.sessions...), append([]ResumeAdapterInfo{}, cache.adapters...)
+	}
+	type probe struct {
+		agent  string
+		launch config.Launch
+	}
+	probes := []probe{}
+	if r.config.ACP.Override != nil {
+		probes = append(probes, probe{r.config.ACP.Default, *r.config.ACP.Override})
+	} else {
+		keys := make([]string, 0, len(r.config.ACP.Agents))
+		for agent := range r.config.ACP.Agents {
+			keys = append(keys, agent)
+		}
+		sort.Strings(keys)
+		for _, agent := range keys {
+			probes = append(probes, probe{agent, r.config.ACP.Agents[agent]})
+		}
+	}
+	type result struct {
+		agent     string
+		supported bool
+		sessions  []acpadapter.ProbedSession
+	}
+	results := make(chan result, len(probes))
+	for _, p := range probes {
+		go func(p probe) {
+			supported, sessions := acpadapter.ProbeSessions(ctx, acp.Config{Command: p.launch.Cmd, Args: p.launch.Args, Env: envList(p.launch.Env)})
+			results <- result{p.agent, supported, sessions}
+		}(p)
+	}
+	discovered := []ResumableSession{}
+	adapters := []ResumeAdapterInfo{}
+	dedupe := map[string]bool{}
+	for range probes {
+		res := <-results
+		adapters = append(adapters, ResumeAdapterInfo{Agent: res.agent, SupportsList: res.supported})
+		for _, s := range res.sessions {
+			if dedupe[s.SessionID] {
+				continue
+			}
+			dedupe[s.SessionID] = true
+			discovered = append(discovered, ResumableSession{SessionID: s.SessionID, Source: "external", Agent: res.agent, Adapter: "acp", CWD: s.CWD, Title: s.Title, UpdatedAt: s.UpdatedAt})
+		}
+	}
+	sort.Slice(adapters, func(i, j int) bool { return adapters[i].Agent < adapters[j].Agent })
+	adapters = append(adapters, ResumeAdapterInfo{Agent: "pty (raw terminal)", SupportsList: false})
+	cache = &externalCache{at: time.Now(), sessions: discovered, adapters: adapters}
+	r.mu.Lock()
+	r.external = cache
+	r.mu.Unlock()
+	return append([]ResumableSession{}, discovered...), append([]ResumeAdapterInfo{}, adapters...)
+}
+
+// Resume focuses an existing live session, restores a closed Tandem row, or
+// imports an externally discovered ACP session when supplied its agent/cwd.
+func (r *Registry) Resume(ctx context.Context, sessionID, agent, cwd string) (*session.Session, error) {
+	for _, s := range r.List() {
+		if s.SessionID() == sessionID {
+			return s, nil
+		}
+	}
+	rec, err := r.store.AgentBySessionID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if rec != nil {
+		if live := r.Get(rec.ID); live != nil {
+			return live, nil
+		}
+		var spec agentadapter.Spec
+		if err := json.Unmarshal(rec.Spec, &spec); err != nil {
+			return nil, err
+		}
+		rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.store.ReopenAgent(rec.ID); err != nil {
+			return nil, err
+		}
+		rec.ClosedAt, rec.Status = nil, "idle"
+		return r.start(ctx, *rec, spec, sessionID)
+	}
+	if agent == "" || cwd == "" {
+		return nil, errors.New("resume: unknown session — agent and cwd are required to resume an external session")
+	}
+	return r.spawnResumed(ctx, agent, cwd, sessionID)
+}
+
+func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID string) (*session.Session, error) {
+	spec, err := r.resolve(agentadapter.Spec{Adapter: "acp", Agent: agent, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
+	if err != nil {
+		return nil, err
+	}
+	name := r.nextName("")
+	p, err := r.workspace.Provision(ctx, spec.Workspace, name, r.occupant)
+	if err != nil {
+		r.releaseKnown(name)
+		return nil, err
+	}
+	spec.Name, spec.Workspace = name, p.Workspace
+	raw, _ := json.Marshal(spec)
+	rec := store.Agent{ID: name, Name: name, Spec: raw, CWD: p.CWD, ACPSessionID: &sessionID, Status: "idle", CreatedAt: time.Now().UnixMilli()}
+	if err = r.store.UpsertAgent(rec); err == nil {
+		var s *session.Session
+		s, err = r.start(ctx, rec, spec, sessionID, true)
+		if err == nil {
+			return s, nil
+		}
+	}
+	_ = r.store.DeleteAgent(name)
+	r.workspace.Rollback(ctx, spec.Workspace, p.CWD, p.CreatedBranch)
+	r.releaseKnown(name)
+	return nil, err
+}
+
+func (r *Registry) handoffLock(id string) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.handoffs[id] == nil {
+		r.handoffs[id] = &sync.Mutex{}
+	}
+	return r.handoffs[id]
+}
+
+func cloneSpec(spec agentadapter.Spec) agentadapter.Spec {
+	b, _ := json.Marshal(spec)
+	var out agentadapter.Spec
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
+func (r *Registry) EnterTerminal(ctx context.Context, id string, interrupt bool) error {
+	lock := r.handoffLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s := r.Get(id)
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	if s.Spec.Adapter != "acp" {
+		return errors.New("terminal handoff is only available for ACP agents")
+	}
+	if s.ControlMode() == "terminal" {
+		return nil
+	}
+	if (s.Status() == session.Working || s.Status() == session.Blocked || s.ActiveTurn()) && !interrupt {
+		return errors.New("agent_busy: switching to Terminal will interrupt the active Transcript turn")
+	}
+	rec, err := r.store.Agent(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil || rec.ACPSessionID == nil || *rec.ACPSessionID == "" {
+		return errors.New("agent session has no resumable ACP session id")
+	}
+	terminal := s.Spec.ResolvedLaunch.Terminal
+	if terminal == nil {
+		return fmt.Errorf("no resume CLI configured for agent: %s", s.Spec.Agent)
+	}
+	if len(terminal.ResumeArgs) == 0 {
+		return fmt.Errorf("agent has no resumable terminal command configured: %s", s.Spec.Agent)
+	}
+	if interrupt {
+		wait, cancel := context.WithTimeout(ctx, 4*time.Second)
+		err = s.InterruptAndWait(wait)
+		cancel()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+	}
+	s.SetControlMode("switching")
+	ptySpec := cloneSpec(s.Spec)
+	ptySpec.Adapter = "pty"
+	ptySpec.ResolvedLaunch.Terminal.StartArgs = expand(terminal.ResumeArgs, id, s.Name, rec.CWD, *rec.ACPSessionID)
+	startPTY := func() (agentadapter.Adapter, error) {
+		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: id, CWD: rec.CWD, Spec: ptySpec, Log: s.Log})
+	}
+	err = s.SwapAdapter(ctx, startPTY, "terminal", func() {
+		if e := r.LeaveTerminal(context.Background(), id); e != nil {
+			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": "failed to return to Transcript: " + e.Error()})
+			s.PushEvent(eventlog.Event{Kind: "error", Payload: payload})
+		}
+	})
+	if err == nil {
+		return nil
+	}
+	// The ACP process was already stopped. Reload immediately so a broken CLI
+	// does not strand the durable agent in switching mode.
+	_ = r.reloadACP(ctx, s, rec.CWD, *rec.ACPSessionID)
+	return err
+}
+
+func (r *Registry) reloadACP(ctx context.Context, s *session.Session, cwd, sessionID string) error {
+	startACP := func() (agentadapter.Adapter, error) {
+		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: s.ID, CWD: cwd, ResumeSessionID: sessionID, Spec: s.Spec, Log: s.Log})
+	}
+	return s.SwapAdapter(ctx, startACP, "transcript", nil)
+}
+
+func (r *Registry) LeaveTerminal(ctx context.Context, id string) error {
+	lock := r.handoffLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s := r.Get(id)
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	if s.ControlMode() == "transcript" {
+		return nil
+	}
+	rec, err := r.store.Agent(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil || rec.ACPSessionID == nil || *rec.ACPSessionID == "" {
+		return errors.New("agent session has no resumable ACP session id")
+	}
+	s.SetControlMode("switching")
+	return r.reloadACP(ctx, s, rec.CWD, *rec.ACPSessionID)
+}
+
+func (r *Registry) ResumeCLICommand(id string) (string, error) {
+	s := r.Get(id)
+	if s == nil {
+		return "", fmt.Errorf("no such agent: %s", id)
+	}
+	if s.Spec.ResolvedLaunch != nil && s.Spec.ResolvedLaunch.Terminal != nil {
+		return s.Spec.ResolvedLaunch.Terminal.Cmd, nil
+	}
+	return "", nil
 }
 
 func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree bool) (bool, error) {

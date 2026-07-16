@@ -118,6 +118,8 @@ type clientMessage struct {
 	CWD            string                     `json:"cwd"`
 	Force          bool                       `json:"force"`
 	DeleteWorktree *bool                      `json:"deleteWorktree"`
+	SessionID      string                     `json:"sessionId"`
+	InterruptFirst bool                       `json:"interrupt"`
 }
 
 type connection struct {
@@ -223,6 +225,63 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
 	case "list_agent_catalog":
 		c.send(withCorr(map[string]any{"t": "agent_catalog", "catalog": c.server.opts.Registry.AgentCatalog()}, m.CorrID))
+	case "list_sessions":
+		backend, ok := c.server.opts.Registry.(interface {
+			ResumeCatalog(context.Context) (registry.ResumeCatalog, error)
+		})
+		if !ok {
+			c.commandError(m, errors.New("session resume is unsupported"))
+			return
+		}
+		catalog, err := backend.ResumeCatalog(context.Background())
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
+	case "resume_session":
+		backend, ok := c.server.opts.Registry.(interface {
+			Resume(context.Context, string, string, string) (*session.Session, error)
+		})
+		if !ok {
+			c.commandError(m, errors.New("session resume is unsupported"))
+			return
+		}
+		sess, err := backend.Resume(context.Background(), m.SessionID, m.Agent, m.CWD)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, sess.ID)
+	case "enter_terminal":
+		backend, ok := c.server.opts.Registry.(interface {
+			EnterTerminal(context.Context, string, bool) error
+		})
+		if !ok {
+			c.commandError(m, errors.New("terminal handoff is unsupported"))
+			return
+		}
+		if err := backend.EnterTerminal(context.Background(), m.AgentID, m.InterruptFirst); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, m.AgentID)
+	case "leave_terminal":
+		backend, ok := c.server.opts.Registry.(interface {
+			LeaveTerminal(context.Context, string) error
+		})
+		if !ok {
+			c.commandError(m, errors.New("terminal handoff is unsupported"))
+			return
+		}
+		if err := backend.LeaveTerminal(context.Background(), m.AgentID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, m.AgentID)
 	case "prompt":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -361,6 +420,19 @@ func (h *Handler) broadcastClosed(agentID string) {
 		if sub != nil {
 			c.send(map[string]any{"t": "agent_closed", "agentId": agentID})
 		}
+	}
+}
+
+func (h *Handler) broadcastAgents() {
+	agents := h.opts.Registry.Summaries(context.Background())
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	for _, c := range connections {
+		c.send(map[string]any{"t": "agents", "agents": agents})
 	}
 }
 
