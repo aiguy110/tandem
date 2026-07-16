@@ -21,7 +21,7 @@ experience.
 
 ## Quick start
 
-Prerequisites: **Node 22+**, a C toolchain (for `better-sqlite3`'s native build), and an
+Prerequisites: **Node 22+**, **Go 1.24+** for the native daemon, a C toolchain (for `better-sqlite3`'s native build), and an
 authenticated `claude` CLI if you want to drive the real agent. `git` on `PATH`.
 
 ```bash

@@ -298,6 +298,9 @@ sessions and WebSockets.
 
 **Out of scope:** HTTP routes and ACP request dispatch.
 
+**Implementation note:** The Go filesystem boundary uses the descriptor-backed `os.Root`
+API, so the native daemon requires Go 1.24 or newer.
+
 ## Phase 7 - Build the process and PTY primitives
 
 **Goal:** Provide cancellable subprocess and pseudoterminal foundations without agent
