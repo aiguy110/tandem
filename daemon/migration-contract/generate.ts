@@ -73,6 +73,10 @@ const configExamples = {
   },
 };
 
+// Phase 2 consumes config-normalized.json as the cross-language golden. It is
+// intentionally maintained separately: generating the normalized view requires
+// resolving platform executables, while these source examples are platform-free.
+
 export function createSeededDatabase(dbPath: string): void {
   const db = new Db(dbPath);
   for (const record of records) db.upsertAgent(record);

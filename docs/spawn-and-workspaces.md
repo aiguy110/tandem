@@ -50,6 +50,9 @@ agent-specific definitions in daemon code. User definitions with the same id ove
 fields, and environment-variable launch overrides remain supported for backwards
 compatibility. Copy `config.yml.example` to `~/.tandem/config.yml` to start from a fully
 editable catalog, or keep the home file small and override only selected fields.
+The `{node}` placeholder uses the explicitly configurable `TANDEM_NODE_CMD` launcher. This
+is important for the native daemon, which is not itself a Node executable; its default is
+the `node` executable resolved from `PATH`, `~/.local/bin`, or `~/bin`.
 
 An **agent definition** describes how to start the same tool through ACP and directly in a
 terminal. A **profile** gives that definition a reusable set of extra arguments:

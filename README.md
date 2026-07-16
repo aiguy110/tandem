@@ -53,6 +53,7 @@ Common configuration (full table in [`daemon/README.md`](daemon/README.md#config
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
+| `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
 
 **Self-hosting Steel (optional):** for the shared browser you can back agents with

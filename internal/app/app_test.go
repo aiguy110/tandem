@@ -2,12 +2,32 @@ package app
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aiguy110/tandem/internal/buildinfo"
 	"github.com/aiguy110/tandem/internal/daemon"
 )
+
+func TestDebugConfigCommand(t *testing.T) {
+	t.Setenv("TANDEM_HOME", t.TempDir())
+	t.Setenv("TANDEM_NODE_CMD", "node")
+	t.Setenv("STEEL_API_KEY", "must-not-appear")
+	t.Setenv("STEEL_SESSION_OPTIONS", "{}")
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"debug", "config"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run(debug config) exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "must-not-appear") || !strings.Contains(stdout.String(), `"steelApiKey": "[REDACTED]"`) {
+		t.Fatalf("debug output was not redacted: %s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("TANDEM_HOME"))); err != nil {
+		t.Fatalf("TANDEM_HOME not created: %v", err)
+	}
+}
 
 func TestVersionCommand(t *testing.T) {
 	oldVersion, oldCommit, oldBuildTime := buildinfo.Version, buildinfo.Commit, buildinfo.BuildTime

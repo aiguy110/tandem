@@ -159,7 +159,10 @@ function command(value: unknown, key: string): string {
 function catalogFromFile(home: string): { agents: Record<string, AgentDefinition>; profiles: Record<string, AgentProfile>; defaultAgent: string; defaultProfile?: string } {
   const daemonRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
   const tandemRoot = path.dirname(daemonRoot);
-  const substitutions = { node: process.execPath, daemonRoot, tandemRoot, home };
+  // The native Tandem daemon is not itself a Node executable. Keep the current
+  // Node-daemon default while allowing both implementations to use an explicit
+  // external Node launcher during migration.
+  const substitutions = { node: resolveUserExecutable(process.env.TANDEM_NODE_CMD || process.execPath), daemonRoot, tandemRoot, home };
   // This checked-in example is also the runtime default, keeping documentation
   // and shipped behavior in one declarative source of truth.
   const shipped = readFileConfig(path.join(tandemRoot, 'config.yml.example'), true);
