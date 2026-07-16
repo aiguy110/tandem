@@ -70,17 +70,9 @@ jobs:
         run: npm ci
       - name: Build native daemon
         run: go build -o "${RUNNER_TEMP}/tandem-go" ./cmd/tandem
-      - name: Run Node deep de-risk suite
-        working-directory: daemon
-        run: npm test && npm run derisk:browser-internal
-      - name: Run every standard de-risk suite against native Go
-        working-directory: daemon
-        env:
-          TANDEM_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
-        run: npm run derisk:all
-      - name: Compare public behavior and cross-runtime restore
+      - name: Run full Node/Go parity matrix
         working-directory: daemon
         env:
           TANDEM_NODE_DAEMON_CMD: '["./node_modules/.bin/tsx","src/index.ts"]'
           TANDEM_GO_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
-        run: npm run derisk:parity
+        run: npm run derisk:matrix

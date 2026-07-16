@@ -20,6 +20,7 @@
     "derisk:images": "TANDEM_DAEMON_CMD=${TANDEM_DAEMON_CMD:-'[\"./node_modules/.bin/tsx\",\"src/index.ts\"]'} tsx src/deriskImages.ts",
     "derisk:config": "TANDEM_DAEMON_CMD=${TANDEM_DAEMON_CMD:-'[\"./node_modules/.bin/tsx\",\"src/index.ts\"]'} tsx src/deriskConfig.ts",
     "derisk:parity": "tsx src/deriskParity.ts",
+    "derisk:matrix": "node scripts/run-parity-matrix.mjs",
     "contract:generate": "tsx migration-contract/generate.ts",
     "contract:test": "tsx migration-contract/test.ts",
     "derisk:steel": "tsx src/deriskSteel.ts",
