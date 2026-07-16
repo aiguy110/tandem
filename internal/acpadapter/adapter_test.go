@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -19,6 +20,9 @@ import (
 	"github.com/aiguy110/tandem/internal/acp"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/terminalhost"
+	"github.com/aiguy110/tandem/internal/workspacefs"
 )
 
 type fakeAssets struct{ stored assets.Stored }
@@ -66,6 +70,40 @@ func startMock(t *testing.T, mutate func(*AdapterConfig)) *Adapter {
 	}
 	t.Cleanup(func() { _ = a.Close() })
 	return a
+}
+
+func startServiceMock(t *testing.T) (*Adapter, string, *terminalhost.Host, *eventlog.Log) {
+	t.Helper()
+	workspace := t.TempDir()
+	fsService, err := workspacefs.Open(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fsService.Close() })
+	backing, err := store.Open(filepath.Join(t.TempDir(), "tandem.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backing.Close() })
+	log, err := eventlog.New("api-1", backing, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := terminalhost.New(terminalhost.Options{DefaultCwd: workspace, EventLog: log, ShutdownTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = host.Close(ctx)
+	})
+	a := startMock(t, func(cfg *AdapterConfig) {
+		cfg.Cwd = workspace
+		cfg.WorkspaceFS = fsService
+		cfg.Terminals = host
+	})
+	return a, workspace, host, log
 }
 
 func eventMap(t *testing.T, event eventlog.Event) map[string]any {
@@ -139,6 +177,10 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 			t.Fatal("timed out waiting for approval flow")
 		}
 	}
+	pending := a.PendingApprovals()
+	if len(pending) != 1 || pending[0].ReqID != permission["reqId"] || pending[0].ToolCallID != "tc1" || len(pending[0].Options) != 2 {
+		t.Fatalf("pending approvals = %#v", pending)
+	}
 	if err := a.RespondPermission(permission["reqId"].(string), "allow"); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +192,126 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("prompt did not finish")
+	}
+}
+
+func TestLiveClientServicesRoundTripEscapeAndTerminalLifecycle(t *testing.T) {
+	a, workspace, host, durable := startServiceMock(t)
+	stop, err := a.Prompt(context.Background(), []PromptBlock{{Type: "text", Text: "DERISK_SERVICES"}})
+	if err != nil || stop != "end_turn" {
+		t.Fatalf("services prompt = %q, %v", stop, err)
+	}
+	message := waitEvent(t, a, "message_chunk", func(e map[string]any) bool {
+		text, _ := e["text"].(string)
+		return strings.Contains(text, "SERVICES_DONE")
+	})
+	if !strings.Contains(message["text"].(string), "SERVICES_DONE") {
+		t.Fatalf("services message = %#v", message)
+	}
+	body, err := os.ReadFile(filepath.Join(workspace, "tandem-roundtrip.txt"))
+	if err != nil || string(body) != "hello from the agent\nline two\n" {
+		t.Fatalf("roundtrip body = %q, %v", body, err)
+	}
+	history, err := durable.FullHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminalID string
+	for _, logged := range history {
+		if logged.Event.Kind != "terminal_output" {
+			continue
+		}
+		var payload struct {
+			TermID string `json:"termId"`
+		}
+		if json.Unmarshal(logged.Event.Payload, &payload) == nil {
+			terminalID = payload.TermID
+			break
+		}
+	}
+	if terminalID == "" {
+		t.Fatal("terminal service produced no durable output event")
+	}
+	output, err := host.Output(terminalID)
+	if err != nil || !strings.Contains(output.Output, "chunk-a") || output.ExitStatus == nil {
+		t.Fatalf("released terminal output = %#v, %v", output, err)
+	}
+
+	outside := filepath.Join(filepath.Dir(workspace), "tandem-escape.txt")
+	_ = os.Remove(outside)
+	stop, err = a.Prompt(context.Background(), []PromptBlock{{Type: "text", Text: "DERISK_ESCAPE"}})
+	if err != nil || stop != "end_turn" {
+		t.Fatalf("escape prompt = %q, %v", stop, err)
+	}
+	escape := waitEvent(t, a, "message_chunk", func(e map[string]any) bool {
+		text, _ := e["text"].(string)
+		return strings.Contains(text, "ESCAPE_REJECTED")
+	})
+	if !strings.Contains(escape["text"].(string), "code=-32602") {
+		t.Fatalf("escape response = %q", escape["text"])
+	}
+	if _, err := os.Stat(outside); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("escape touched outside file: %v", err)
+	}
+}
+
+func TestInterruptCancelsPendingClientServiceOperation(t *testing.T) {
+	a, _, _, _ := startServiceMock(t)
+	done := make(chan error, 1)
+	go func() {
+		stop, err := a.Prompt(context.Background(), []PromptBlock{{Type: "text", Text: "DERISK_SERVICE_CANCEL"}})
+		if err == nil && stop != "cancelled" {
+			err = fmt.Errorf("stop reason = %q", stop)
+		}
+		done <- err
+	}()
+	waitEvent(t, a, "tool_call", func(e map[string]any) bool { return e["title"] == "terminal: pending wait" })
+	if err := a.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("interrupt did not settle prompt")
+	}
+	waitEvent(t, a, "message_chunk", func(e map[string]any) bool {
+		text, _ := e["text"].(string)
+		return strings.Contains(text, "SERVICE_WAIT_CANCELLED code=-32603")
+	})
+}
+
+func TestServiceValidationAndSessionScoping(t *testing.T) {
+	fsService, err := workspacefs.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsService.Close()
+	a := &Adapter{sessionID: "session-a", cfg: AdapterConfig{WorkspaceFS: fsService}}
+	tests := []struct {
+		method string
+		params string
+		code   int
+	}{
+		{"unknown/method", `{}`, methodNotFound},
+		{"fs/read_text_file", `{`, invalidParams},
+		{"fs/read_text_file", `{"sessionId":"session-b","path":"file"}`, invalidParams},
+	}
+	for _, test := range tests {
+		_, err := a.dispatchService(context.Background(), test.method, json.RawMessage(test.params))
+		if err == nil {
+			t.Fatalf("%s unexpectedly succeeded", test.method)
+		}
+		code := internalError
+		var coded rpcCodedError
+		if errors.As(err, &coded) {
+			code = coded.JSONRPCCode()
+		}
+		if code != test.code {
+			t.Fatalf("%s code = %d (%v), want %d", test.method, code, err, test.code)
+		}
 	}
 }
 

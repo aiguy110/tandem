@@ -19,6 +19,8 @@
 //                    (truncation contract test).
 //   DERISK_CANCEL    a running tool_call + permission request that never self-
 //                    completes — resolved only by session/cancel.
+//   DERISK_SERVICE_CANCEL  a pending terminal/wait_for_exit request that must
+//                    be unblocked when the client cancels the turn.
 
 import process from 'node:process';
 import path from 'node:path';
@@ -159,6 +161,7 @@ function handle(msg) {
     if (text.includes('DERISK_ESCAPE')) return void runEscape();
     if (text.includes('DERISK_SLOWTERM')) return void runSlowTerm();
     if (text.includes('DERISK_BIGTERM')) return void runBigTerm();
+    if (text.includes('DERISK_SERVICE_CANCEL')) return void runServiceCancel();
     if (text.includes('DERISK_CANCEL')) return void runCancel();
     return runDefault();
   }
@@ -309,6 +312,26 @@ async function runBigTerm() {
   } catch (e) {
     note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `BIGTERM_ERROR ${e.message}` } });
     finish('end_turn');
+  }
+}
+
+// ---- DERISK_SERVICE_CANCEL: cancellation unblocks an in-flight client call ----
+async function runServiceCancel() {
+  try {
+    const { terminalId } = await call('terminal/create', {
+      command: 'sh', args: ['-c', 'sleep 60'],
+    });
+    note({ sessionUpdate: 'tool_call', toolCallId: terminalId, title: 'terminal: pending wait', status: 'in_progress' });
+    try {
+      await call('terminal/wait_for_exit', { terminalId });
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'SERVICE_WAIT_UNEXPECTEDLY_COMPLETED' } });
+    } catch (e) {
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `SERVICE_WAIT_CANCELLED code=${e.rpcError?.code}` } });
+    } finally {
+      await call('terminal/release', { terminalId });
+    }
+  } catch (e) {
+    note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `SERVICE_CANCEL_ERROR ${e.message}` } });
   }
 }
 

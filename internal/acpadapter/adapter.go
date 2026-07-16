@@ -14,6 +14,8 @@ import (
 	"github.com/aiguy110/tandem/internal/acp"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/terminalhost"
+	"github.com/aiguy110/tandem/internal/workspacefs"
 )
 
 // AssetResolver is the narrow asset-store surface needed to turn durable image
@@ -37,6 +39,8 @@ type AdapterConfig struct {
 	CaptureReplay   bool
 	MCPServers      []MCPServer
 	Assets          AssetResolver
+	WorkspaceFS     *workspacefs.FS
+	Terminals       *terminalhost.Host
 	Logger          *log.Logger
 }
 
@@ -57,6 +61,25 @@ type PromptBlock struct {
 type SessionState struct {
 	Modes         json.RawMessage   `json:"modes,omitempty"`
 	ConfigOptions []json.RawMessage `json:"configOptions,omitempty"`
+}
+
+// Approval is the registry-facing view of an outstanding ACP permission
+// request. The wire request ID remains private to the adapter.
+type Approval struct {
+	ReqID      string           `json:"reqId"`
+	ToolCallID string           `json:"toolCallId"`
+	Title      string           `json:"title"`
+	Options    []ApprovalOption `json:"options"`
+}
+
+type ApprovalOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+}
+
+type pendingPermission struct {
+	wireID   json.RawMessage
+	approval Approval
 }
 
 // OptionalUpdateError is diagnostic only. ACP can add session/update variants;
@@ -83,8 +106,12 @@ type Adapter struct {
 	sessionID   string
 	state       SessionState
 	replaying   bool
-	permissions map[string]json.RawMessage
+	permissions map[string]pendingPermission
 	liveTools   map[string]struct{}
+	serviceCtx  context.Context
+	serviceStop context.CancelFunc
+	serviceWG   sync.WaitGroup
+	serviceDone bool
 	fatal       error
 	closeOnce   sync.Once
 }
@@ -107,7 +134,8 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		cancel()
 		return nil, err
 	}
-	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]json.RawMessage), liveTools: make(map[string]struct{})}
+	serviceCtx, serviceStop := context.WithCancel(childCtx)
+	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), serviceCtx: serviceCtx, serviceStop: serviceStop}
 	a.promptGate = make(chan struct{}, 1)
 	a.promptGate <- struct{}{}
 	go a.readLoop()
@@ -123,7 +151,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	}
 	if err := tr.Call(ctx, "initialize", map[string]any{
 		"protocolVersion":    1,
-		"clientCapabilities": map[string]any{},
+		"clientCapabilities": a.clientCapabilities(),
 		"clientInfo":         map[string]string{"name": "tandem", "version": "go"},
 	}, &init); err != nil {
 		a.Close()
@@ -156,6 +184,17 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	a.emitConfigIfPresent()
 	a.emit(map[string]any{"kind": "status", "status": "idle"})
 	return a, nil
+}
+
+func (a *Adapter) clientCapabilities() map[string]any {
+	caps := make(map[string]any)
+	if a.cfg.WorkspaceFS != nil {
+		caps["fs"] = map[string]bool{"readTextFile": true, "writeTextFile": true}
+	}
+	if a.cfg.Terminals != nil {
+		caps["terminal"] = true
+	}
+	return caps
 }
 
 func (a *Adapter) newSession(ctx context.Context) error {
@@ -239,6 +278,8 @@ func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, err
 	if len(blocks) == 0 {
 		return "", errors.New("prompt must contain at least one block")
 	}
+	stopServices := a.resetServiceContext(ctx)
+	defer stopServices()
 	wire, err := a.resolvePrompt(blocks)
 	if err != nil {
 		return "", err
@@ -255,6 +296,19 @@ func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, err
 		return "end_turn", nil
 	}
 	return response.StopReason, nil
+}
+
+func (a *Adapter) resetServiceContext(promptCtx context.Context) context.CancelFunc {
+	a.mu.Lock()
+	a.serviceStop()
+	a.serviceCtx, a.serviceStop = context.WithCancel(a.ctx)
+	cancel := a.serviceStop
+	a.mu.Unlock()
+	stopLink := context.AfterFunc(promptCtx, cancel)
+	return func() {
+		stopLink()
+		cancel()
+	}
 }
 
 func (a *Adapter) resolvePrompt(blocks []PromptBlock) ([]map[string]any, error) {
@@ -296,7 +350,7 @@ func (a *Adapter) resolvePrompt(blocks []PromptBlock) ([]map[string]any, error) 
 
 func (a *Adapter) RespondPermission(reqID, optionID string) error {
 	a.mu.Lock()
-	id, ok := a.permissions[reqID]
+	pending, ok := a.permissions[reqID]
 	if ok {
 		delete(a.permissions, reqID)
 	}
@@ -304,26 +358,40 @@ func (a *Adapter) RespondPermission(reqID, optionID string) error {
 	if !ok {
 		return fmt.Errorf("unknown permission request %s", reqID)
 	}
-	if err := a.tr.Respond(id, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}); err != nil {
+	if err := a.tr.Respond(pending.wireID, map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": optionID}}); err != nil {
 		return err
 	}
 	a.emit(map[string]any{"kind": "status", "status": "working"})
 	return nil
 }
 
+func (a *Adapter) PendingApprovals() []Approval {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]Approval, 0, len(a.permissions))
+	for _, pending := range a.permissions {
+		approval := pending.approval
+		approval.Options = append([]ApprovalOption(nil), approval.Options...)
+		out = append(out, approval)
+	}
+	return out
+}
+
 func (a *Adapter) Interrupt() error {
 	a.mu.Lock()
 	permissions := a.permissions
-	a.permissions = make(map[string]json.RawMessage)
+	a.permissions = make(map[string]pendingPermission)
 	tools := make([]string, 0, len(a.liveTools))
 	for id := range a.liveTools {
 		tools = append(tools, id)
 	}
 	a.liveTools = make(map[string]struct{})
 	sessionID := a.sessionID
+	a.serviceStop()
+	a.serviceCtx, a.serviceStop = context.WithCancel(a.ctx)
 	a.mu.Unlock()
-	for _, id := range permissions {
-		if err := a.tr.Respond(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}); err != nil {
+	for _, pending := range permissions {
+		if err := a.tr.Respond(pending.wireID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}); err != nil {
 			return err
 		}
 	}
@@ -362,7 +430,15 @@ func (a *Adapter) SetConfigOption(ctx context.Context, configID string, value an
 
 func (a *Adapter) Close() error {
 	var err error
-	a.closeOnce.Do(func() { a.cancel(); err = a.tr.Close() })
+	a.closeOnce.Do(func() {
+		a.mu.Lock()
+		a.serviceDone = true
+		a.serviceStop()
+		a.mu.Unlock()
+		a.cancel()
+		err = a.tr.Close()
+		a.serviceWG.Wait()
+	})
 	return err
 }
 
@@ -408,7 +484,18 @@ func (a *Adapter) readLoop() {
 
 func (a *Adapter) handleRequest(req acp.Request) {
 	if req.Method != "session/request_permission" {
-		_ = a.tr.RespondError(req.ID, -32601, "client does not support method: "+req.Method, nil)
+		a.mu.Lock()
+		if a.serviceDone {
+			a.mu.Unlock()
+			return
+		}
+		ctx := a.serviceCtx
+		a.serviceWG.Add(1)
+		a.mu.Unlock()
+		go func() {
+			defer a.serviceWG.Done()
+			a.handleServiceRequest(ctx, req)
+		}()
 		return
 	}
 	var p struct {
@@ -428,18 +515,220 @@ func (a *Adapter) handleRequest(req acp.Request) {
 		return
 	}
 	reqID := fmt.Sprintf("perm_%d", permissionCounter.Add(1))
-	a.mu.Lock()
-	a.permissions[reqID] = cloneRaw(req.ID)
-	a.mu.Unlock()
 	options := make([]map[string]string, len(p.Options))
+	approvalOptions := make([]ApprovalOption, len(p.Options))
 	for i, option := range p.Options {
 		options[i] = map[string]string{"optionId": option.OptionID, "name": option.Name}
+		approvalOptions[i] = ApprovalOption{OptionID: option.OptionID, Name: option.Name}
 	}
 	title := p.ToolCall.Title
 	if title == "" {
 		title = "(command)"
 	}
+	a.mu.Lock()
+	a.permissions[reqID] = pendingPermission{wireID: cloneRaw(req.ID), approval: Approval{ReqID: reqID, ToolCallID: p.ToolCall.ToolCallID, Title: title, Options: approvalOptions}}
+	a.mu.Unlock()
 	a.emit(map[string]any{"kind": "permission_request", "reqId": reqID, "toolCallId": p.ToolCall.ToolCallID, "title": title, "options": options})
+}
+
+const (
+	methodNotFound = -32601
+	invalidParams  = -32602
+	internalError  = -32603
+)
+
+type rpcCodedError interface{ JSONRPCCode() int }
+
+func (a *Adapter) handleServiceRequest(ctx context.Context, req acp.Request) {
+	result, err := a.dispatchService(ctx, req.Method, req.Params)
+	if err == nil {
+		if respondErr := a.tr.Respond(req.ID, result); respondErr != nil && a.ctx.Err() == nil {
+			a.diagnostic(respondErr)
+		}
+		return
+	}
+	code := internalError
+	var coded rpcCodedError
+	if errors.As(err, &coded) {
+		code = coded.JSONRPCCode()
+	}
+	if respondErr := a.tr.RespondError(req.ID, code, err.Error(), nil); respondErr != nil && a.ctx.Err() == nil {
+		a.diagnostic(respondErr)
+	}
+}
+
+type invalidServiceParams struct{ message string }
+
+func (e *invalidServiceParams) Error() string    { return e.message }
+func (e *invalidServiceParams) JSONRPCCode() int { return invalidParams }
+
+type unsupportedServiceMethod struct{ method string }
+
+func (e *unsupportedServiceMethod) Error() string {
+	return "client does not support method: " + e.method
+}
+func (e *unsupportedServiceMethod) JSONRPCCode() int { return methodNotFound }
+
+func decodeServiceParams(raw json.RawMessage, method string, dst any) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return &invalidServiceParams{message: "malformed " + method + ": params are required"}
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return &invalidServiceParams{message: "malformed " + method + ": " + err.Error()}
+	}
+	return nil
+}
+
+func (a *Adapter) validateServiceSession(method, sessionID string) error {
+	if sessionID == "" {
+		return &invalidServiceParams{message: "malformed " + method + ": sessionId is required"}
+	}
+	if sessionID != a.SessionID() {
+		return &invalidServiceParams{message: "malformed " + method + ": sessionId does not match the active session"}
+	}
+	return nil
+}
+
+func (a *Adapter) dispatchService(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	switch method {
+	case "fs/read_text_file":
+		if a.cfg.WorkspaceFS == nil {
+			return nil, errors.New("client filesystem service unavailable")
+		}
+		var p struct {
+			SessionID string `json:"sessionId"`
+			Path      string `json:"path"`
+			Line      *int   `json:"line"`
+			Limit     *int   `json:"limit"`
+		}
+		if err := decodeServiceParams(raw, method, &p); err != nil {
+			return nil, err
+		}
+		if err := a.validateServiceSession(method, p.SessionID); err != nil {
+			return nil, err
+		}
+		if p.Path == "" {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": path is required"}
+		}
+		if p.Line != nil && *p.Line < 1 {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": line must be at least 1"}
+		}
+		if p.Limit != nil && *p.Limit < 0 {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": limit cannot be negative"}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		content, err := a.cfg.WorkspaceFS.ReadTextFile(p.Path, p.Line, p.Limit)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"content": content}, nil
+
+	case "fs/write_text_file":
+		if a.cfg.WorkspaceFS == nil {
+			return nil, errors.New("client filesystem service unavailable")
+		}
+		var p struct {
+			SessionID string  `json:"sessionId"`
+			Path      string  `json:"path"`
+			Content   *string `json:"content"`
+		}
+		if err := decodeServiceParams(raw, method, &p); err != nil {
+			return nil, err
+		}
+		if err := a.validateServiceSession(method, p.SessionID); err != nil {
+			return nil, err
+		}
+		if p.Path == "" || p.Content == nil {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": path and content are required"}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if err := a.cfg.WorkspaceFS.WriteTextFile(p.Path, *p.Content); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, nil
+
+	case "terminal/create":
+		if a.cfg.Terminals == nil {
+			return nil, errors.New("client terminal service unavailable")
+		}
+		var p struct {
+			SessionID       string                     `json:"sessionId"`
+			Command         string                     `json:"command"`
+			Args            []string                   `json:"args"`
+			Cwd             string                     `json:"cwd"`
+			Env             []terminalhost.EnvVariable `json:"env"`
+			OutputByteLimit *int                       `json:"outputByteLimit"`
+		}
+		if err := decodeServiceParams(raw, method, &p); err != nil {
+			return nil, err
+		}
+		if err := a.validateServiceSession(method, p.SessionID); err != nil {
+			return nil, err
+		}
+		if p.Command == "" {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": command is required"}
+		}
+		if p.OutputByteLimit != nil && *p.OutputByteLimit < 0 {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": outputByteLimit cannot be negative"}
+		}
+		terminalID, err := a.cfg.Terminals.Create(ctx, terminalhost.CreateOptions{Command: p.Command, Args: p.Args, Cwd: p.Cwd, Env: p.Env, OutputByteLimit: p.OutputByteLimit})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"terminalId": terminalID}, nil
+
+	case "terminal/output", "terminal/wait_for_exit", "terminal/kill", "terminal/release":
+		if a.cfg.Terminals == nil {
+			return nil, errors.New("client terminal service unavailable")
+		}
+		var p struct {
+			SessionID  string `json:"sessionId"`
+			TerminalID string `json:"terminalId"`
+		}
+		if err := decodeServiceParams(raw, method, &p); err != nil {
+			return nil, err
+		}
+		if err := a.validateServiceSession(method, p.SessionID); err != nil {
+			return nil, err
+		}
+		if p.TerminalID == "" {
+			return nil, &invalidServiceParams{message: "malformed " + method + ": terminalId is required"}
+		}
+		switch method {
+		case "terminal/output":
+			output, err := a.cfg.Terminals.Output(p.TerminalID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"output": output.Output, "truncated": output.Truncated, "exitStatus": output.ExitStatus}, nil
+		case "terminal/wait_for_exit":
+			exit, err := a.cfg.Terminals.WaitForExit(ctx, p.TerminalID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"exitCode": exit.ExitCode, "signal": exit.Signal}, nil
+		case "terminal/kill":
+			if err := a.cfg.Terminals.Kill(p.TerminalID); err != nil {
+				return nil, err
+			}
+			return map[string]any{}, nil
+		default:
+			if err := a.cfg.Terminals.Release(p.TerminalID); err != nil {
+				return nil, err
+			}
+			return map[string]any{}, nil
+		}
+	default:
+		return nil, &unsupportedServiceMethod{method: method}
+	}
 }
 
 func (a *Adapter) handleUpdate(params json.RawMessage) error {
