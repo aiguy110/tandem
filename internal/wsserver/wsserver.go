@@ -115,6 +115,9 @@ type clientMessage struct {
 	Rows           int                        `json:"rows"`
 	ReqID          string                     `json:"reqId"`
 	OptionID       string                     `json:"optionId"`
+	ModeID         string                     `json:"modeId"`
+	ConfigID       string                     `json:"configId"`
+	Value          any                        `json:"value"`
 	Spec           agentadapter.Spec          `json:"spec"`
 	Agent          string                     `json:"agent"`
 	Profile        string                     `json:"profile"`
@@ -359,6 +362,34 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		if err := sess.Interrupt(); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "set_mode":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if m.ModeID == "" {
+			c.commandError(m, errors.New("modeId is required"))
+			return
+		}
+		if err := sess.SetMode(context.Background(), m.ModeID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "set_config_option":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if m.ConfigID == "" || m.Value == nil {
+			c.commandError(m, errors.New("configId and value are required"))
+			return
+		}
+		if err := sess.SetConfigOption(context.Background(), m.ConfigID, m.Value); err != nil {
 			c.commandError(m, err)
 			return
 		}

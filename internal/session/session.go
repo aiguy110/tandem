@@ -227,6 +227,34 @@ func (s *Session) Interrupt() error {
 	return nil
 }
 
+// SetMode and SetConfigOption expose ACP's live session configuration without
+// making those structured-only operations part of every adapter implementation.
+func (s *Session) SetMode(ctx context.Context, modeID string) error {
+	s.mu.RLock()
+	a := s.adapter
+	s.mu.RUnlock()
+	configurable, ok := a.(interface {
+		SetMode(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("agent does not support session modes")
+	}
+	return configurable.SetMode(ctx, modeID)
+}
+
+func (s *Session) SetConfigOption(ctx context.Context, configID string, value any) error {
+	s.mu.RLock()
+	a := s.adapter
+	s.mu.RUnlock()
+	configurable, ok := a.(interface {
+		SetConfigOption(context.Context, string, any) error
+	})
+	if !ok {
+		return errors.New("agent does not support session config options")
+	}
+	return configurable.SetConfigOption(ctx, configID, value)
+}
+
 // InterruptAndWait requests ACP cancellation and gives the active prompt a
 // bounded window to resolve before its process is replaced during handoff.
 func (s *Session) InterruptAndWait(ctx context.Context) error {

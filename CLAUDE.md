@@ -10,23 +10,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-./start-dev-server.sh          # builds the UI, installs daemon deps, starts the daemon at 127.0.0.1:7717
-./redeploy.sh                  # rebuild + restart the running app (calls: systemctl --user restart tandem.service)
+./start-dev-server.sh          # builds UI + native Go daemon, starts at 127.0.0.1:7717
+./redeploy.sh                  # requests a deferred rebuild/restart of tandem.service
 ```
 
-The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh` itself — so a restart always rebuilds first. `redeploy.sh` is meant to be run from inside the app (e.g. its own terminal pane) after the app has edited its own code, so it can redeploy itself. Logs: `journalctl --user -u tandem -f`.
+The production entrypoint is the native Go daemon (`cmd/tandem` + `internal/`). The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh`; a restart rebuilds the React UI, embeds it in the Go binary, and starts that binary. `daemon/` is the temporary TypeScript rollback implementation plus compatibility harness, not the production daemon. Logs: `journalctl --user -u tandem -f`.
 
 Manual equivalent:
 
 ```bash
-# UI (daemon serves the compiled dist)
+# Native daemon and UI
+go test ./...                       # primary native test suite
+./scripts/stage-go-ui.sh            # typecheck/build UI and stage embedded assets
+go build -o tandem ./cmd/tandem
+./tandem daemon
+
+# UI development
 cd ui && npm install && npm run build   # tsc --noEmit && vite build
 cd ui && npm run typecheck              # tsc --noEmit only
 cd ui && npm run dev                    # vite dev server
 
-# Daemon (compiles better-sqlite3 native module)
+# Cross-runtime compatibility / rollback harness
 cd daemon && npm install
-TANDEM_UI_DIR=../ui/dist npm run daemon # start the daemon
+TANDEM_GO_DAEMON_CMD='["../tandem","daemon"]' npm run derisk:matrix
+TANDEM_UI_DIR=../ui/dist npm run daemon # start rollback TypeScript daemon
 
 # Daemon tests — de-risk suites, each against a throwaway TANDEM_HOME
 cd daemon && npm test                   # = derisk:all, runs all suites below in sequence
@@ -50,7 +57,7 @@ npm run acp:live           # drive the real @agentclientprotocol/claude-agent-ac
 npm run pty-smoke          # exercise the pty adapter (needs node-pty)
 ```
 
-There is no single-test runner — each `derisk:*` script is a standalone, self-contained scenario (`daemon/src/derisk*.ts`); run the one relevant to the area you're changing.
+For Go changes, run the relevant package tests (or `go test ./...`). Each `derisk:*` script is a standalone black-box compatibility scenario; use the relevant suite when a change crosses process or runtime boundaries.
 
 ### Config (env)
 
@@ -60,7 +67,8 @@ There is no single-test runner — each `derisk:*` script is a standalone, self-
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_UI_DIR` | — | Static UI dist to serve (else a placeholder page) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
-| `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches, regardless of `SpawnSpec.agent` (tests point it at the mock) |
+| `TANDEM_NODE_CMD` | `node` | Node launcher for external ACP and browser adapters |
+| `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches (primarily compatibility tests) |
 | `TANDEM_ACP_CMD_CLAUDE` / `_CODEX` / `_PI` | bundled `claude-agent-acp` / `codex-acp` / `pi-acp` | Per-agent launch override, selected by `SpawnSpec.agent` |
 | `TANDEM_RESUME_CMD_CLAUDE` / `_CODEX` / `_PI` | agent-specific CLI command | JSON array or command template for Terminal handoff; `{sessionId}` is substituted |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
@@ -96,22 +104,20 @@ Self-hosted Daemon
 **Design invariants** (see `docs/decisions.md` for full rationale):
 
 1. **The daemon owns all state.** Everything the browser shows must be reconstructable from daemon state on reconnect — transcripts, terminal scrollback, browser frames all replay from the event log.
-2. **Every agent is an `AgentAdapter`** implementing one interface (`daemon/src/types.ts`). Structured-first via ACP where available; raw pty is the fallback and the user's escape-hatch shell.
+2. **Every agent is an `AgentAdapter`** implementing the interface in `internal/agentadapter/adapter.go`. Structured-first via ACP where available; raw pty is the fallback and the user's escape-hatch shell.
 3. **One CDP browser, two clients, one control token.** Agent (via Playwright/CDP) and human (via a live view) are peers on the same browser session; a control-owner token arbitrates who is driving.
 4. **Workspace isolation by default** — a git worktree (or existing dir) per agent so parallel agents don't clobber each other.
 
-### Daemon (`daemon/src/`)
+### Native daemon (`cmd/`, `internal/`)
 
-- `registry.ts` — multi-agent registry: owns `AgentSession`s keyed by agentId, auto-names them (`web-1`, `api-2`, …), implements `SpawnSpec`, and restores agents on daemon restart (`restoreAll`; a single failed restore marks that agent `error` without crashing the daemon).
-- `workspace.ts` — git worktree lifecycle: provisions `tandem/<agent>` branches under `$TANDEM_HOME/worktrees/<repo>/<agent>/`, blocks dirty closes unless `force`, keeps the branch after close, recreates a missing worktree dir from its branch on restore, and does repo discovery for the spawn palette.
-- `db.ts` / `eventLog.ts` — SQLite persistence (`better-sqlite3`, WAL) at `$TANDEM_HOME/tandem.db`: `agents` + `events` tables; the event log writes through to SQLite while keeping an in-memory ring buffer for hot replay.
-- `server.ts` — the WS protocol (see `docs/ws-protocol.md`): `subscribe`/`unsubscribe` (per-agent channels + `sinceSeq`), `prompt`, `input`, `resize`, `permission_response`, `interrupt`, `spawn_agent`, `close_agent`, `list_dirs`. Multiple concurrent clients multiplex multi-agent subscriptions on one socket. Also owns bearer-token auth (`?token=`, else WS closes `4401`) and static UI serving.
-- `acpAdapter.ts` — the ACP agent adapter; the daemon acts as the full ACP client (`fs/*`, `terminal/*`), advertising and servicing those capabilities itself.
-- `workspaceFs.ts` — the fs sandbox choke point for `fs/read_text_file` / `fs/write_text_file`: paths must resolve (realpath) inside the agent's workspace cwd; escapes are rejected with JSON-RPC `-32602`, no disk touched.
-- `terminalHost.ts` — daemon-owned terminal execution for `terminal/create·output·wait_for_exit·kill·release`; prefers `node-pty`, degrades to `child_process` pipes. Dual buffer: the ACP-visible view honors `outputByteLimit` (truncate-from-start), while the daemon keeps a larger independent scrollback that persists past `terminal/release` and replays as `terminal_output` events.
-- `ptyAdapter.ts` — raw pty adapter (daemon owns the pty master directly, no ACP).
-- `browser/` — the shared-browser subsystem: `driver.ts` (`BrowserDriver` seam: `LocalChromiumDriver` real/tested, `SteelDriver` specced/untested), `broker.ts` (lazy per-agent CDP provisioning, gated CDP proxy enforcing the control-owner token), `sharedBrowser.ts` (daemon's own screencast/input CDP connection), `controlMcp.mjs` (Tandem-control MCP exposing `browser_request_takeover`), `mcpWiring.ts` (registers Playwright MCP + Tandem-control MCP at `session/new`).
-- `deriskAuth.ts` / `deriskWorkspace.ts` / `deriskServices.ts` / `deriskBrowser.ts` / `deriskMulti.ts` / `deriskRestart.ts` / `deriskIntegration.ts` / `deriskResume.ts` / `deriskHandoff.ts` / `derisk.ts` — the ten standalone de-risk suites (see Commands above); each is the primary regression test for its named subsystem, run against a throwaway `TANDEM_HOME`. `deriskSteel.ts` is an eleventh, opt-in suite (needs a self-hosted Steel; not in `npm test`).
+- `internal/registry/` + `internal/session/` — agent lifecycle, restore, handoff, and durable session state.
+- `internal/wsserver/` + `internal/httpserver/` — browser protocol, auth, subscriptions, and static UI serving.
+- `internal/acpadapter/` + `internal/ptyadapter/` — structured ACP and raw terminal adapters.
+- `internal/store/` + `internal/eventlog/` — SQLite persistence and replay.
+- `internal/workspace/` + `internal/workspacefs/` — isolated worktrees and ACP filesystem sandboxing.
+- `internal/terminalhost/` + `internal/browser/` — daemon-owned terminals and shared browser control.
+
+The TypeScript files under `daemon/src/` remain the rollback baseline and black-box test drivers. New production behavior must be implemented and tested in Go, with parity coverage added where appropriate.
 
 ### UI (`ui/src/`)
 

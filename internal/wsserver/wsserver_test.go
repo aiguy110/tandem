@@ -74,13 +74,18 @@ func (b *testBackend) Close(_ context.Context, id string, _, _ bool) (bool, erro
 }
 
 type testAdapter struct {
-	events             chan eventlog.Event
-	done               chan struct{}
-	mu                 sync.Mutex
-	prompts            [][]agentadapter.PromptBlock
-	inputs             [][]byte
-	cols, rows         uint16
-	permissions        [][2]string
+	events        chan eventlog.Event
+	done          chan struct{}
+	mu            sync.Mutex
+	prompts       [][]agentadapter.PromptBlock
+	inputs        [][]byte
+	cols, rows    uint16
+	permissions   [][2]string
+	modes         []string
+	configOptions []struct {
+		id    string
+		value any
+	}
 	interrupts, closes int
 }
 
@@ -112,6 +117,21 @@ func (a *testAdapter) RespondPermission(req, option string) error {
 	return nil
 }
 func (a *testAdapter) Interrupt() error { a.mu.Lock(); a.interrupts++; a.mu.Unlock(); return nil }
+func (a *testAdapter) SetMode(_ context.Context, mode string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.modes = append(a.modes, mode)
+	return nil
+}
+func (a *testAdapter) SetConfigOption(_ context.Context, id string, value any) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.configOptions = append(a.configOptions, struct {
+		id    string
+		value any
+	}{id, value})
+	return nil
+}
 func (a *testAdapter) Close(context.Context) error {
 	a.mu.Lock()
 	a.closes++
@@ -221,6 +241,9 @@ func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
 		{"t": "resize", "agentId": "a", "cols": 120, "rows": 40, "corrId": "resize"},
 		{"t": "permission_response", "agentId": "a", "reqId": "r1", "optionId": "allow", "corrId": "permission"},
 		{"t": "interrupt", "agentId": "a", "corrId": "interrupt"},
+		{"t": "set_mode", "agentId": "a", "modeId": "full-access", "corrId": "mode"},
+		{"t": "set_config_option", "agentId": "a", "configId": "model", "value": "gpt-5", "corrId": "model"},
+		{"t": "set_config_option", "agentId": "a", "configId": "reasoning", "value": true, "corrId": "reasoning"},
 		{"t": "spawn_agent", "spec": map[string]any{}, "corrId": "spawn"},
 	}
 	for _, command := range commands {
@@ -243,7 +266,7 @@ func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
 		a.mu.Lock()
 		ready := len(a.prompts) == 1
 		if ready {
-			if a.prompts[0][0].Text != "hello" || string(a.inputs[0]) != "hi" || a.cols != 120 || a.rows != 40 || a.permissions[0] != [2]string{"r1", "allow"} || a.interrupts != 1 {
+			if a.prompts[0][0].Text != "hello" || string(a.inputs[0]) != "hi" || a.cols != 120 || a.rows != 40 || a.permissions[0] != [2]string{"r1", "allow"} || a.interrupts != 1 || len(a.modes) != 1 || a.modes[0] != "full-access" || len(a.configOptions) != 2 || a.configOptions[0].id != "model" || a.configOptions[0].value != "gpt-5" || a.configOptions[1].value != true {
 				t.Fatalf("adapter calls: %#v %#v %dx%d %#v interrupts=%d", a.prompts, a.inputs, a.cols, a.rows, a.permissions, a.interrupts)
 			}
 		}
