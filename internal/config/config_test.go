@@ -63,6 +63,9 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	if c.Browser.ChromiumExecutable != "/fixtures/bin/chromium" {
 		t.Fatalf("explicit chromium executable missing: %+v", c.Browser)
 	}
+	if c.Browser.NodeRuntime != "/fixtures/bin/node" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/daemon/node_modules/@playwright/mcp/cli.js" {
+		t.Fatalf("browser MCP tool runtime missing: %+v", c.Browser)
+	}
 	if c.DBPath != filepath.Join(c.Home, "tandem.db") || c.TokenPath != filepath.Join(c.Home, "token") {
 		t.Fatalf("home derivation incorrect: %+v", c)
 	}

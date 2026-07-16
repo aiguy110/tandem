@@ -217,7 +217,11 @@ Chrome closes the socket otherwise.)
 
 ### Attention (implemented)
 
-The Tandem-control MCP (stdio, spawned by the agent) exposes `browser_request_takeover(reason)`.
+The Tandem-control MCP (`tandem mcp-control`, over stdio) exposes
+`browser_request_takeover(reason)`. Tandem supplies both this declaration and the external
+`@playwright/mcp` declaration in ACP `session/new`; the ACP agent owns and cleans up both
+MCP subprocesses. The configured `TANDEM_NODE_CMD` runtime launches Playwright MCP rather
+than deriving Node from the Tandem executable.
 It POSTs to the daemon's internal HTTP surface (bearer-token authed); the daemon emits
 `{kind:'takeover_request', reqId, reason}` + `status: blocked`, and the tool call blocks until
 the human **releases** the wheel, then returns and the agent resumes (`working`). The UI shows

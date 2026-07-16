@@ -53,7 +53,11 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	var mcpServers []acpadapter.MCPServer
 	if f.MCPServers != nil {
 		for _, server := range f.MCPServers(req.AgentID) {
-			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Command: server.Command, Args: server.Args, Env: mcpEnv(server.Env)})
+			env := make([]acp.EnvVariable, len(server.Env))
+			for i, variable := range server.Env {
+				env[i] = acp.EnvVariable{Name: variable.Name, Value: variable.Value}
+			}
+			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Command: server.Command, Args: server.Args, Env: env})
 		}
 	}
 	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{AgentID: req.AgentID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(launch.ACP.Env), Stderr: os.Stderr}})
@@ -65,14 +69,6 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	wrapped := &acpAdapter{Adapter: a, fs: fs, host: host, appender: proxy, events: make(chan eventlog.Event, 256)}
 	go wrapped.forwardEvents()
 	return wrapped, nil
-}
-
-func mcpEnv(m map[string]string) []acp.EnvVariable {
-	out := make([]acp.EnvVariable, 0, len(m))
-	for k, v := range m {
-		out = append(out, acp.EnvVariable{Name: k, Value: v})
-	}
-	return out
 }
 
 func envList(m map[string]string) []string {

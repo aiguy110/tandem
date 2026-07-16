@@ -26,6 +26,7 @@ type BrokerConfig struct {
 	Host                          string
 	MaxPayloadBytes, MaxHeldBytes int64
 	HTTPClient                    *http.Client
+	OnRelease                     func(agentID string)
 }
 type heldFrame struct {
 	kind int
@@ -486,6 +487,9 @@ func (b *Broker) Release(id string) error {
 	}
 	a.owner = ControlAgent
 	a.mu.Unlock()
+	if b.cfg.OnRelease != nil {
+		b.cfg.OnRelease(id)
+	}
 	return nil
 }
 func (b *Broker) Teardown(ctx context.Context, id string) error {

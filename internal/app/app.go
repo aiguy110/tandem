@@ -2,11 +2,14 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/aiguy110/tandem/internal/buildinfo"
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/aiguy110/tandem/internal/controlmcp"
 	"github.com/aiguy110/tandem/internal/daemon"
 )
 
@@ -14,6 +17,18 @@ const usage = "usage: tandem <version|daemon|debug config>"
 
 // Run executes the requested Tandem subcommand and returns its process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
+	// mcp-control is deliberately omitted from usage: ACP agents spawn this
+	// internal stdio MCP subprocess from Tandem's session/new declaration.
+	if len(args) == 1 && args[0] == "mcp-control" {
+		err := controlmcp.Run(context.Background(), os.Stdin, stdout, controlmcp.Config{
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), AgentID: os.Getenv("TANDEM_AGENT_ID"),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "run mcp-control: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 2 && args[0] == "debug" && args[1] == "config" {
 		resolved, err := config.Load()
 		if err != nil {

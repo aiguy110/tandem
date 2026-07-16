@@ -220,7 +220,9 @@ func (a *Adapter) load(ctx context.Context, sessionID string) error {
 		Modes         json.RawMessage   `json:"modes"`
 		ConfigOptions []json.RawMessage `json:"configOptions"`
 	}
-	if err := a.tr.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers}, &raw); err != nil {
+	// MCP declarations are registered only when creating a session. On resume,
+	// the ACP agent restores the MCP subprocess lifecycle it already owns.
+	if err := a.tr.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": a.cwd(), "mcpServers": []MCPServer{}}, &raw); err != nil {
 		return fmt.Errorf("acp session/load: %w", err)
 	}
 	a.mu.Lock()
