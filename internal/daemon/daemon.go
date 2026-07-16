@@ -123,16 +123,20 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			return lookupErr == nil && agent != nil
 		},
 	})
-	fallback := http.Handler(httpHandler)
-	if takeovers != nil {
-		fallback = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/internal/browser/takeover" {
+	deferred := newDeferredShutdown(ctx, token, agents)
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/shutdown-after-turns":
+			deferred.ServeHTTP(w, r)
+			return
+		case "/internal/browser/takeover":
+			if takeovers != nil {
 				takeovers.ServeHTTP(w, r)
 				return
 			}
-			httpHandler.ServeHTTP(w, r)
-		})
-	}
+		}
+		httpHandler.ServeHTTP(w, r)
+	})
 	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -151,17 +155,18 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return err
-		}
-		err := <-serveErr
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
+	case <-deferred.ready:
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	err = <-serveErr
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func pushAgentEvent(agents *registry.Registry, id string, value any) {
