@@ -47,6 +47,7 @@ type agentBrowser struct {
 	wsRoutes          map[string]string
 	owner             ControlOwner
 	links             map[*proxyLink]struct{}
+	shared            *SharedBrowser
 }
 type Broker struct {
 	driver   Driver
@@ -144,6 +145,8 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 		a.provisioned = true
 		a.cdpURL = result.CDPURL
 		a.browserWS = ws
+		// This client dials the real browser WebSocket, not the gated proxy.
+		a.shared = NewSharedBrowser(ws)
 	}
 	a.provisioning = nil
 	close(wait)
@@ -152,6 +155,46 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 		_ = b.driver.Teardown(context.Background(), id)
 	}
 	return err
+}
+
+// SharedBrowser returns the daemon-owned direct CDP connection for the human
+// browser pane. Provisioning remains lazy until this or the agent proxy is used.
+func (b *Broker) SharedBrowser(ctx context.Context, id string) (*SharedBrowser, error) {
+	if err := b.EnsureProvisioned(ctx, id); err != nil {
+		return nil, err
+	}
+	a := b.record(id)
+	a.mu.Lock()
+	shared := a.shared
+	a.mu.Unlock()
+	if shared == nil {
+		return nil, errors.New("shared browser unavailable")
+	}
+	if err := shared.Connect(ctx); err != nil {
+		return nil, err
+	}
+	return shared, nil
+}
+
+// DevNavigate is the low-level development-only navigation hook. Its caller is
+// responsible for enforcing the development-mode gate.
+func (b *Broker) DevNavigate(ctx context.Context, id, targetURL string) error {
+	shared, err := b.SharedBrowser(ctx, id)
+	if err != nil {
+		return err
+	}
+	return shared.Navigate(ctx, targetURL)
+}
+
+func (b *Broker) DispatchUserInput(ctx context.Context, id string, event BrowserInputEvent) error {
+	if b.Owner(id) != ControlUser {
+		return nil
+	}
+	shared, err := b.SharedBrowser(ctx, id)
+	if err != nil {
+		return err
+	}
+	return shared.Dispatch(ctx, event)
 }
 func (b *Broker) resolveBrowserWS(ctx context.Context, cdp string) (string, error) {
 	if strings.HasPrefix(cdp, "ws://") || strings.HasPrefix(cdp, "wss://") {
@@ -452,12 +495,17 @@ func (b *Broker) Teardown(ctx context.Context, id string) error {
 	b.mu.Unlock()
 	if a != nil {
 		a.mu.Lock()
+		shared := a.shared
+		a.shared = nil
 		links := make([]*proxyLink, 0, len(a.links))
 		for l := range a.links {
 			links = append(links, l)
 		}
 		a.links = make(map[*proxyLink]struct{})
 		a.mu.Unlock()
+		if shared != nil {
+			_ = shared.Close()
+		}
 		for _, l := range links {
 			_ = l.agent.Close()
 			_ = l.upstream.Close()

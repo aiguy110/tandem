@@ -46,11 +46,12 @@ type rawCDP struct {
 	server   *httptest.Server
 	wsURL    string
 	received chan string
+	direct   chan string
 	event    chan string
 }
 
 func newRawCDP(t *testing.T) *rawCDP {
-	r := &rawCDP{received: make(chan string, 20), event: make(chan string, 20)}
+	r := &rawCDP{received: make(chan string, 20), direct: make(chan string, 20), event: make(chan string, 20)}
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	mux := http.NewServeMux()
 	r.server = httptest.NewServer(mux)
@@ -87,6 +88,7 @@ func newRawCDP(t *testing.T) *rawCDP {
 		done := make(chan struct{})
 		var once sync.Once
 		var writes sync.Mutex
+		directConn := false
 		go func() {
 			for {
 				select {
@@ -108,6 +110,31 @@ func newRawCDP(t *testing.T) *rawCDP {
 				once.Do(func() { close(done) })
 				return
 			}
+			var command cdpTestCommand
+			_ = json.Unmarshal(data, &command)
+			if command.Method == "Target.getTargets" {
+				directConn = true
+			}
+			if directConn && command.Method != "" {
+				result := map[string]any{}
+				switch command.Method {
+				case "Target.getTargets":
+					result["targetInfos"] = []map[string]any{{"targetId": "page", "type": "page", "url": "about:blank"}}
+				case "Target.attachToTarget":
+					result["sessionId"] = "direct-session"
+				default:
+					r.direct <- string(data)
+				}
+				response, _ := json.Marshal(map[string]any{"id": command.ID, "result": result})
+				writes.Lock()
+				err = c.WriteMessage(kind, response)
+				writes.Unlock()
+				if err != nil {
+					once.Do(func() { close(done) })
+					return
+				}
+				continue
+			}
 			r.received <- string(data)
 			writes.Lock()
 			err = c.WriteMessage(kind, []byte(`{"ack":`+string(data)+`}`))
@@ -119,6 +146,52 @@ func newRawCDP(t *testing.T) *rawCDP {
 		}
 	})
 	return r
+}
+
+func TestBrokerDirectHumanInputContinuesWhileAgentCommandHeld(t *testing.T) {
+	raw := newRawCDP(t)
+	defer raw.close()
+	d := &fakeDriver{cdp: raw.server.URL, provisions: map[string]int{}, teardowns: map[string]int{}}
+	b := NewBroker(d, BrokerConfig{})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop(context.Background())
+	agent, _ := dialEndpoint(t, b.EndpointFor("shared"))
+	defer agent.Close()
+	waitFor(t, "agent proxy registration", func() bool { return b.ActiveConnections("shared") == 1 })
+	b.Grab("shared")
+	if err := agent.WriteMessage(websocket.TextMessage, []byte(`{"id":99,"method":"Agent.held"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DispatchUserInput(context.Background(), "shared", BrowserInputEvent{Kind: "wheel", X: 10, Y: 20, DeltaY: -30}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case data := <-raw.direct:
+		var command cdpTestCommand
+		if json.Unmarshal([]byte(data), &command) != nil || command.Method != "Input.dispatchMouseEvent" || command.Params["type"] != "mouseWheel" {
+			t.Fatalf("direct input=%s", data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct user input was blocked by agent gate")
+	}
+	select {
+	case data := <-raw.received:
+		t.Fatalf("agent command escaped hard pause: %s", data)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := b.Release("shared"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case data := <-raw.received:
+		if data != `{"id":99,"method":"Agent.held"}` {
+			t.Fatalf("released command=%s", data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent command did not release")
+	}
 }
 func (r *rawCDP) close() { r.server.Close() }
 func dialEndpoint(t *testing.T, endpoint string) (*websocket.Conn, string) {
