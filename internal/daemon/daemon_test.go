@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/gorilla/websocket"
 )
 
 func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
@@ -51,6 +52,14 @@ func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 	if mode := fileMode(t, cfg.TokenPath); mode.Perm() != 0o600 {
 		t.Fatalf("token mode=%o, want 600", mode.Perm())
 	}
+	token, err := os.ReadFile(cfg.TokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://127.0.0.1:%d/?token=%s", port, token), nil)
+	if err != nil {
+		t.Fatalf("dial daemon websocket: %v", err)
+	}
 
 	cancel()
 	select {
@@ -60,6 +69,10 @@ func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not stop")
+	}
+	ws.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := ws.ReadMessage(); err == nil {
+		t.Fatal("websocket remained open after daemon shutdown")
 	}
 }
 

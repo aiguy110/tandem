@@ -16,7 +16,9 @@ import (
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/wsserver"
 )
 
 // Run loads runtime configuration and serves until SIGINT or SIGTERM.
@@ -46,6 +48,18 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	agents, err := registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore})
+	if err != nil {
+		return err
+	}
+	if err := agents.RestoreAll(ctx); err != nil {
+		return fmt.Errorf("restore agents: %w", err)
+	}
+	defer func() {
+		disposeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = agents.DisposeAll(disposeCtx)
+	}()
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -57,19 +71,21 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		displayHost = "127.0.0.1"
 	}
 	bootstrapURL := "http://" + net.JoinHostPort(displayHost, strconv.Itoa(port)) + "/#t=" + token
-	handler := httpserver.New(httpserver.Options{
+	httpHandler := httpserver.New(httpserver.Options{
 		Token: token, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
 		AgentExists: func(id string) bool {
 			agent, lookupErr := db.Agent(id)
 			return lookupErr == nil && agent != nil
 		},
 	})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: httpHandler})
+	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
 	fmt.Fprintf(stdout, "tandem daemon · http on %s:%d · home %s\n", cfg.Host, port, cfg.Home)
-	fmt.Fprintln(stdout, "websocket: unavailable during native migration phase 14")
+	fmt.Fprintln(stdout, "websocket: authenticated subscriptions and replay enabled")
 	fmt.Fprintf(stdout, "bootstrap: %s\n", bootstrapURL)
 	fmt.Fprintf(stdout, "TANDEM_READY port=%d token=%s\n", port, token)
 

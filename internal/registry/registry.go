@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,51 @@ type Registry struct {
 	cwds      map[string]string
 	known     map[string]bool
 	counter   int
+}
+
+type SummaryWorkspace struct {
+	Kind        workspace.Kind    `json:"kind"`
+	Repo        string            `json:"repo"`
+	RepoPath    string            `json:"repoPath"`
+	Branch      string            `json:"branch"`
+	CWD         string            `json:"cwd"`
+	GitState    string            `json:"gitState,omitempty"`
+	Ahead       int               `json:"ahead"`
+	Behind      int               `json:"behind"`
+	TargetRef   string            `json:"targetRef,omitempty"`
+	TargetKind  workspace.RefKind `json:"targetKind,omitempty"`
+	StartCommit string            `json:"startCommit,omitempty"`
+}
+
+type Summary struct {
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Agent            string           `json:"agent,omitempty"`
+	Workspace        SummaryWorkspace `json:"workspace"`
+	Status           session.Status   `json:"status"`
+	PendingApprovals int              `json:"pendingApprovals"`
+	ControlMode      string           `json:"controlMode"`
+}
+
+type CatalogAgent struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	HasACP      bool   `json:"hasAcp"`
+	HasTerminal bool   `json:"hasTerminal"`
+	CanResume   bool   `json:"canResume"`
+}
+type CatalogProfile struct {
+	ID           string   `json:"id"`
+	Agent        string   `json:"agent"`
+	Name         string   `json:"name"`
+	ACPArgs      []string `json:"acpArgs"`
+	TerminalArgs []string `json:"terminalArgs"`
+}
+type Catalog struct {
+	DefaultAgent   string           `json:"defaultAgent"`
+	DefaultProfile string           `json:"defaultProfile,omitempty"`
+	Agents         []CatalogAgent   `json:"agents"`
+	Profiles       []CatalogProfile `json:"profiles"`
 }
 type Options struct {
 	Store        *store.Store
@@ -93,6 +139,75 @@ func (r *Registry) List() []*session.Session {
 		out = append(out, s)
 	}
 	return out
+}
+
+func (r *Registry) Summaries(ctx context.Context) []Summary {
+	r.mu.RLock()
+	type item struct {
+		s   *session.Session
+		cwd string
+	}
+	items := make([]item, 0, len(r.sessions))
+	for id, s := range r.sessions {
+		items = append(items, item{s, r.cwds[id]})
+	}
+	r.mu.RUnlock()
+	out := make([]Summary, 0, len(items))
+	for _, item := range items {
+		s, cwd, ws := item.s, item.cwd, item.s.Spec.Workspace
+		state, _ := r.workspace.GitState(ctx, cwd, ws)
+		repoPath, repo, branch := ws.Repo, filepath.Base(ws.Repo), ws.Branch
+		if ws.Kind == workspace.KindExisting {
+			repoPath, repo, branch = ws.CWD, filepath.Base(ws.CWD), ""
+		}
+		agent := s.Spec.Agent
+		if agent == "" {
+			agent = r.config.ACP.Default
+		}
+		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: "transcript"}
+		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
+		if ws.Integration != nil {
+			summary.Workspace.TargetKind = ws.Integration.Kind
+			if summary.Workspace.TargetRef == "" {
+				summary.Workspace.TargetRef = ws.Integration.Ref
+			}
+		}
+		if ws.Source != nil {
+			summary.Workspace.StartCommit = ws.Source.Commit
+		}
+		out = append(out, summary)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
+	r.mu.RLock()
+	repos := make(map[string]bool, len(r.sessions))
+	for _, s := range r.sessions {
+		p := s.Spec.Workspace.Repo
+		if s.Spec.Workspace.Kind == workspace.KindExisting {
+			p = s.Spec.Workspace.CWD
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			repos[abs] = true
+		}
+	}
+	r.mu.RUnlock()
+	return workspace.ListRepos(ctx, r.config.ProjectRoots, r.config.DirScanDepth, func(p string) bool { abs, _ := filepath.Abs(p); return repos[abs] })
+}
+
+func (r *Registry) AgentCatalog() Catalog {
+	c := Catalog{DefaultAgent: r.config.ACP.Default, DefaultProfile: r.config.DefaultProfile, Agents: make([]CatalogAgent, 0, len(r.config.Agents)), Profiles: make([]CatalogProfile, 0, len(r.config.Profiles))}
+	for id, a := range r.config.Agents {
+		c.Agents = append(c.Agents, CatalogAgent{ID: id, Name: a.Name, HasACP: a.ACP != nil, HasTerminal: a.Terminal != nil, CanResume: a.Terminal != nil && len(a.Terminal.Args) > 0})
+	}
+	for id, p := range r.config.Profiles {
+		c.Profiles = append(c.Profiles, CatalogProfile{ID: id, Agent: p.Agent, Name: p.Name, ACPArgs: append([]string{}, p.ACPArgs...), TerminalArgs: append([]string{}, p.TerminalArgs...)})
+	}
+	sort.Slice(c.Agents, func(i, j int) bool { return c.Agents[i].ID < c.Agents[j].ID })
+	sort.Slice(c.Profiles, func(i, j int) bool { return c.Profiles[i].ID < c.Profiles[j].ID })
+	return c
 }
 func (r *Registry) ActiveTurnCount() int {
 	n := 0
