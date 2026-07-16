@@ -28,7 +28,7 @@ type MCPServer struct {
 	Name    string            `json:"name"`
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
-	Env     []acp.EnvVariable `json:"env,omitempty"`
+	Env     []acp.EnvVariable `json:"env"`
 }
 
 type AdapterConfig struct {
