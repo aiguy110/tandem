@@ -45,6 +45,10 @@ func (p *PTY) PID() int                               { return p.proc.PID() }
 func (p *PTY) Done() <-chan struct{}                  { return p.proc.Done() }
 func (p *PTY) Wait(ctx context.Context) (Exit, error) { return p.proc.Wait(ctx) }
 
+// Kill immediately kills the child session. It does not close the master, so
+// callers may drain output produced immediately before the process stopped.
+func (p *PTY) Kill() error { return p.proc.Kill() }
+
 // Dispose stops the child session and closes the PTY master. It is idempotent.
 func (p *PTY) Dispose(ctx context.Context) error {
 	p.closeOnce.Do(func() {

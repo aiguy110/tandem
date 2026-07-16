@@ -49,6 +49,7 @@ func decodeExit(err error, state *os.ProcessState) Exit {
 	exit.Code = state.ExitCode()
 	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		exit.Signal = status.Signal().String()
+		exit.SignalNumber = int(status.Signal())
 	}
 	return exit
 }

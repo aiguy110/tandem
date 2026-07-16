@@ -34,9 +34,10 @@ const defaultShutdownTimeout = 2 * time.Second
 
 // Exit records the observable child exit disposition.
 type Exit struct {
-	Code   int
-	Signal string
-	Err    error
+	Code         int
+	Signal       string
+	SignalNumber int
+	Err          error
 }
 
 // Process owns one child and the process group created for it.
