@@ -664,6 +664,10 @@ external.
 
 **Out of scope:** Automatic publication on every commit and production cutover.
 
+**Implementation note:** The initial workflow publishes Linux amd64 and arm64 only. macOS
+remains unadvertised until native runners exercise real PTY and Chromium integration tests
+on both architectures, as required above.
+
 ## Phase 23 - Cut the development and production entrypoints over to Go
 
 **Goal:** Make the Go daemon the default while retaining an immediate rollback path.
