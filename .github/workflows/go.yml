@@ -72,20 +72,15 @@ jobs:
         run: go build -o "${RUNNER_TEMP}/tandem-go" ./cmd/tandem
       - name: Run Node deep de-risk suite
         working-directory: daemon
-        run: npm test
+        run: npm test && npm run derisk:browser-internal
+      - name: Run every standard de-risk suite against native Go
+        working-directory: daemon
+        env:
+          TANDEM_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
+        run: npm run derisk:all
       - name: Compare public behavior and cross-runtime restore
         working-directory: daemon
         env:
           TANDEM_NODE_DAEMON_CMD: '["./node_modules/.bin/tsx","src/index.ts"]'
           TANDEM_GO_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
         run: npm run derisk:parity
-      - name: Run process restart suite against both implementations
-        working-directory: daemon
-        run: |
-          TANDEM_DAEMON_CMD='["./node_modules/.bin/tsx","src/index.ts"]' TANDEM_TEST_PORT=17725 npx tsx src/deriskRestart.ts
-          TANDEM_DAEMON_CMD='["${{ runner.temp }}/tandem-go","daemon"]' TANDEM_TEST_PORT=17726 npx tsx src/deriskRestart.ts
-      - name: Run process workspace suite against both implementations
-        working-directory: daemon
-        run: |
-          TANDEM_DAEMON_CMD='["./node_modules/.bin/tsx","src/index.ts"]' TANDEM_TEST_PORT=17729 npx tsx src/deriskWorkspace.ts
-          TANDEM_DAEMON_CMD='["${{ runner.temp }}/tandem-go","daemon"]' TANDEM_TEST_PORT=17730 npx tsx src/deriskWorkspace.ts

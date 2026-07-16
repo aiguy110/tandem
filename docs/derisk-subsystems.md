@@ -13,6 +13,7 @@ primarily protects during the Go migration. Cross-cutting coverage is noted expl
 | `derisk:workspace` | workspace manager | refs, feature lineage, worktrees, discovery, collision and restore |
 | `derisk:services` | ACP client services | contained filesystem, daemon terminals, buffering and cancellation |
 | `derisk:browser` | browser broker | local CDP, screencast, control pause/queue, input and takeover MCP |
+| `derisk:browser-internal` | browser broker (Node depth) | private CDP proxy gate, exact browser process laziness and teardown |
 | `derisk:integration` | cross-subsystem integration | discover/spawn/prompt/approval/reconnect/dirty teardown slice |
 | `derisk:resume` | session catalog and registry | live, closed, and external resume paths |
 | `derisk:handoff` | adapter lifecycle | ACP-to-terminal transfer and automatic ACP reload |
@@ -24,9 +25,10 @@ primarily protects during the Go migration. Cross-cutting coverage is noted expl
 `derisk:all` owns no subsystem; it is the required sequential composition of every
 non-opt-in suite above. `derisk:steel` stays opt-in because it requires an external service.
 
-The process-level launchers take `TANDEM_DAEMON_CMD` as a JSON command array. The CI parity
-gate builds the native daemon, keeps the deeper Node white-box suite, then drives Node and Go
-as opaque child processes with separate homes and ports. `derisk:parity` compares only stable
+Every standard process-level launcher takes `TANDEM_DAEMON_CMD` as a JSON command array,
+defaulting to the Node daemon for local use. CI builds the native daemon and runs the complete
+`derisk:all` composition once per implementation. The private broker/CDP assertions stay in
+the additional Node-only `derisk:browser-internal` depth test. `derisk:parity` compares only stable
 observable facts (event kinds and protocol results), not IDs, PIDs, timestamps, ports, or
 temporary paths. It also starts each runtime on the other's database to cover both forward
 migration and rollback, and fails if child process groups, ports, worktrees, homes, or project
