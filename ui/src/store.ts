@@ -43,7 +43,7 @@ export interface Takeover {
 }
 
 // Chat = the agent conversation (ACP transcript or the agent's resumable CLI,
-// toggled by the in-pane ACP/CLI switch). Shell = the user's escape-hatch shell
+// toggled by the selected Chat tab's ACP/CLI switch). Shell = the user's escape-hatch shell
 // in the agent's worktree (the Terminal tab).
 export type PaneId = 'chat' | 'shell' | 'diff' | 'browser';
 export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
