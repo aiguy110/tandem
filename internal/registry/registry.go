@@ -698,13 +698,44 @@ func (r *Registry) RestoreAll(ctx context.Context) error {
 			if rec.ACPSessionID != nil {
 				resume = *rec.ACPSessionID
 			}
-			_, err = r.start(ctx, rec, spec, resume)
+			// Some ACP agents do not persist a session/new result until the
+			// first prompt. Loading that ID after a daemon restart fails and
+			// leaves the durable Tandem agent visible but not live. An
+			// unprompted agent has no conversation to recover, so start a new
+			// ACP session in the same durable agent/workspace instead.
+			if resume != "" {
+				var prompted bool
+				prompted, err = hasUserMessage(r.store, rec.ID)
+				if err == nil && !prompted {
+					resume = ""
+				}
+			}
+			if err == nil {
+				_, err = r.start(ctx, rec, spec, resume)
+			}
 		}
 		if err != nil {
 			_ = r.store.SetStatus(rec.ID, "error")
 		}
 	}
 	return nil
+}
+
+func hasUserMessage(db *store.Store, agentID string) (bool, error) {
+	log, err := eventlog.New(agentID, db, 1)
+	if err != nil {
+		return false, err
+	}
+	history, err := log.FullHistory()
+	if err != nil {
+		return false, err
+	}
+	for _, event := range history {
+		if event.Event.Kind == "user_message" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ResumeCatalog unions durable Tandem rows with ACP-discovered external
