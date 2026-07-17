@@ -27,7 +27,8 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
   float to the top. Click = focus. Always visible.
 - **Center — Focus.** The selected agent, with pane tabs:
   - **Chat** (default) — structured ACP transcript or the agent's resumable CLI, selected
-    with an ACP/CLI switch and guarded confirmations around active-process interruption.
+    whose selected tab becomes an ACP/CLI switch, with guarded confirmations around
+    active-process interruption.
   - **Terminal** — the user's independent default shell in the agent worktree, lazily
     started and preserved across pane switches and reconnects.
   - **Diff** — the workspace's uncommitted diff, reviewable/stageable.

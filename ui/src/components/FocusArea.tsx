@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useStore, PANES } from '../store';
 import type { PaneId } from '../store';
 import { ChatPane } from './panes/ChatPane';
@@ -12,6 +13,17 @@ export function FocusArea() {
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
   const pane = useStore((s) => s.pane);
   const setPane = useStore((s) => s.setPane);
+  const enterTerminal = useStore((s) => s.enterTerminal);
+  const leaveTerminal = useStore((s) => s.leaveTerminal);
+  const [confirm, setConfirm] = useState<null | 'to-cli-busy' | 'to-acp'>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+
+  // These were previously local to the mounted ChatPane. Keep the same reset
+  // behavior now that the switch lives in the persistent focus header.
+  useEffect(() => {
+    setConfirm(null);
+    setHandoffError(null);
+  }, [focusedId, pane]);
 
   if (!agent) {
     return (
@@ -23,6 +35,20 @@ export function FocusArea() {
       </div>
     );
   }
+
+  const goCli = () => {
+    setHandoffError(null);
+    if (agent.status === 'working' || agent.status === 'blocked') {
+      setConfirm('to-cli-busy');
+      return;
+    }
+    void enterTerminal(agent.id, false).then((r) => r.error && setHandoffError(r.error));
+  };
+
+  const goAcp = () => {
+    setHandoffError(null);
+    setConfirm('to-acp');
+  };
 
   return (
     <div className="focus">
@@ -40,6 +66,37 @@ export function FocusArea() {
             // The Browser tab is enabled only once a browser exists for the agent
             // (docs/browser.md: the pane appears/enables when browser_state active).
             const disabled = p === 'browser' && !agent.browserActive;
+            if (p === 'chat' && pane === 'chat' && agent.canHandoff) {
+              const mode = agent.controlMode;
+              return (
+                <div
+                  key={p}
+                  className="seg chat-tab-switch"
+                  role="tablist"
+                  aria-label="Chat interface"
+                  title={handoffError || 'Chat interface · 1'}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={mode === 'transcript'}
+                    className={`seg-btn${mode === 'transcript' ? ' active' : ''}`}
+                    disabled={mode === 'switching'}
+                    onClick={() => mode === 'terminal' && goAcp()}
+                  >
+                    ACP
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={mode === 'terminal'}
+                    className={`seg-btn${mode === 'terminal' ? ' active' : ''}`}
+                    disabled={mode === 'switching'}
+                    onClick={() => mode === 'transcript' && goCli()}
+                  >
+                    CLI
+                  </button>
+                </div>
+              );
+            }
             return (
               <button
                 key={p}
@@ -53,9 +110,29 @@ export function FocusArea() {
             );
           })}
         </div>
+        {agent.controlMode === 'switching' && pane === 'chat' && (
+          <span className="chat-switch-note">switching…</span>
+        )}
+        {handoffError && pane === 'chat' && (
+          <span className="chat-switch-note err">{handoffError}</span>
+        )}
       </div>
       {/* key on focusedId so panes remount per agent (fresh terminal, scroll) */}
-      {pane === 'chat' && <ChatPane key={focusedId} />}
+      {pane === 'chat' && (
+        <ChatPane
+          key={focusedId}
+          confirm={confirm}
+          onCancelConfirm={() => setConfirm(null)}
+          onConfirmCli={() => {
+            setConfirm(null);
+            void enterTerminal(agent.id, true).then((r) => r.error && setHandoffError(r.error));
+          }}
+          onConfirmAcp={() => {
+            setConfirm(null);
+            void leaveTerminal(agent.id).then((r) => r.error && setHandoffError(r.error));
+          }}
+        />
+      )}
       {pane === 'shell' && <ShellPane key={focusedId} />}
       {pane === 'diff' && <DiffPane />}
       {pane === 'browser' && <BrowserPane />}

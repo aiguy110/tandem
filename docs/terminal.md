@@ -1,7 +1,7 @@
 # Chat CLI and Terminal shell
 
 The **Chat** tab owns the agent interface: structured ACP transcript by default, or the
-agent's resumable CLI selected with the in-pane ACP/CLI switch. The separate **Terminal**
+agent's resumable CLI selected with the ACP/CLI switch in the selected Chat tab. The separate **Terminal**
 tab is the user's default shell in the agent worktree. Both PTYs render through the same
 `TerminalRenderer` abstraction, but their streams and lifecycles are independent.
 
