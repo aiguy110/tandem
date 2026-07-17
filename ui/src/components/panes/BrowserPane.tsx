@@ -174,7 +174,16 @@ export function BrowserPane() {
   // input event: resetting the field there desyncs the keyboard's own edit
   // buffer, which then swallows the next deleteContentBackward.
   const SENTINEL = ' ';
-  const lastBkspRef = useRef(0);
+  // When a real Backspace keydown fires, it emits immediately and opens this
+  // guard window. The keyboard's paired `input` echo (deleteContentBackward)
+  // then lands anywhere from a few ms to ~100ms later — on some IMEs well past
+  // where a fixed symmetric dedup would have reopened — and must be swallowed so
+  // the press deletes exactly one char. The guard is one-directional: it only
+  // suppresses the input echo after a keydown, never a keydown itself, so it can
+  // be generous without dropping genuine key-repeats (each repeat is its own
+  // keydown). Keyboards that skip keydown never open it, so their input events
+  // emit normally.
+  const bkspGuardRef = useRef(0);
   const resetKbd = () => {
     const el = kbdRef.current;
     if (!el) return;
@@ -184,14 +193,6 @@ export function BrowserPane() {
   const focusKeyboard = () => {
     resetKbd();
     kbdRef.current?.focus();
-  };
-  // Emit one Backspace, collapsing the near-simultaneous keydown + input pair
-  // (they land <10ms apart; real key-repeat is far slower) so it deletes once.
-  const emitBackspace = () => {
-    const now = Date.now();
-    if (now - lastBkspRef.current < 30) return;
-    lastBkspRef.current = now;
-    emitKey('Backspace', 'Backspace');
   };
   const onKbdInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
     if (userOwns) {
@@ -208,7 +209,9 @@ export function BrowserPane() {
           break;
         case 'deleteContentBackward':
         case 'deleteWordBackward':
-          emitBackspace();
+          // Skip the echo of a Backspace keydown we already emitted; only a
+          // keydown-less keyboard reaches the emit below.
+          if (Date.now() - bkspGuardRef.current >= 150) emitKey('Backspace', 'Backspace');
           break;
         case 'deleteContentForward':
           emitKey('Delete', 'Delete');
@@ -223,12 +226,14 @@ export function BrowserPane() {
   // inside the input handler desyncs the keyboard's edit buffer and swallows a
   // subsequent deleteContentBackward. We do NOT preventDefault Backspace, so
   // the field still deletes the sentinel and the input-event fallback can fire
-  // on keyboards that skip keydown; emitBackspace dedups the pair.
+  // on keyboards that skip keydown; the bkspGuard window suppresses the paired
+  // input echo so the press deletes exactly once.
   const onKbdKeyDown = (e: React.KeyboardEvent) => {
     if (!userOwns) return;
     const k = e.key;
     if (k === 'Backspace') {
-      emitBackspace();
+      bkspGuardRef.current = Date.now();
+      emitKey('Backspace', 'Backspace');
       return;
     }
     if (k.length === 1 || k === 'Enter' || k === 'Unidentified' || k === 'Process') return;
