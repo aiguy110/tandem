@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -32,6 +36,10 @@ func (f fakeAssets) Get(agentID, assetID string) (assets.Stored, error) {
 		return assets.Stored{}, assets.ErrNotFound
 	}
 	return f.stored, nil
+}
+
+func (f fakeAssets) Put(string, []byte, string) (assets.Stored, error) {
+	return assets.Stored{}, errors.New("unexpected asset write")
 }
 
 func mockPath(t *testing.T) string {
@@ -104,6 +112,67 @@ func startServiceMock(t *testing.T) (*Adapter, string, *terminalhost.Host, *even
 		cfg.Terminals = host
 	})
 	return a, workspace, host, log
+}
+
+func TestNormalizeToolImagesIntoDurableAssets(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "tandem.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assetStore, err := assets.Open(filepath.Join(root, "assets"), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pngData bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	if err := png.Encode(&pngData, img); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{cfg: AdapterConfig{AgentID: "api-1", Cwd: root, Assets: assetStore}}
+
+	inline, _ := json.Marshal([]any{map[string]any{"type": "content", "content": map[string]any{
+		"type": "image", "data": base64.StdEncoding.EncodeToString(pngData.Bytes()), "mimeType": "image/png",
+	}}})
+	normalized, ok := a.normalizeToolContent(inline, "")
+	if !ok {
+		t.Fatal("inline image content was dropped")
+	}
+	encoded, _ := json.Marshal(normalized)
+	if bytes.Contains(encoded, []byte(`"data"`)) || !bytes.Contains(encoded, []byte(`"assetId"`)) {
+		t.Fatalf("normalized inline content = %s", encoded)
+	}
+
+	file := filepath.Join(root, "shot.png")
+	if err := os.WriteFile(file, pngData.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resource, _ := json.Marshal([]any{map[string]any{"type": "content", "content": map[string]any{
+		"type": "resource_link", "uri": file, "name": "shot.png",
+	}}})
+	normalized, ok = a.normalizeToolContent(resource, "")
+	if !ok {
+		t.Fatal("resource image content was dropped")
+	}
+	encoded, _ = json.Marshal(normalized)
+	if bytes.Contains(encoded, []byte(`resource_link`)) || !bytes.Contains(encoded, []byte(`"name":"shot.png"`)) {
+		t.Fatalf("normalized resource content = %s", encoded)
+	}
+
+	normalized, ok = a.normalizeToolContent(nil, "shot.png")
+	if !ok {
+		t.Fatal("Playwright filename image was dropped")
+	}
+	encoded, _ = json.Marshal(normalized)
+	if !bytes.Contains(encoded, []byte(`"assetId"`)) {
+		t.Fatalf("normalized filename content = %s", encoded)
+	}
+	rawInput := json.RawMessage(`{"arguments":{"filename":"shot.png","type":"png"},"server":"playwright"}`)
+	if got := playwrightScreenshotFile("mcp.playwright.browser_take_screenshot", rawInput); got != "shot.png" {
+		t.Fatalf("Playwright screenshot filename = %q", got)
+	}
 }
 
 func eventMap(t *testing.T, event eventlog.Event) map[string]any {

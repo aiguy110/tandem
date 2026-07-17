@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -18,10 +22,11 @@ import (
 	"github.com/aiguy110/tandem/internal/workspacefs"
 )
 
-// AssetResolver is the narrow asset-store surface needed to turn durable image
-// references into ACP's inline base64 prompt blocks.
-type AssetResolver interface {
+// AssetStore is the narrow asset-store surface needed to resolve prompt images
+// and capture image-bearing tool results before they enter the event log.
+type AssetStore interface {
 	Get(agentID, assetID string) (assets.Stored, error)
+	Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error)
 }
 
 type MCPServer struct {
@@ -38,7 +43,7 @@ type AdapterConfig struct {
 	ResumeSessionID string
 	CaptureReplay   bool
 	MCPServers      []MCPServer
-	Assets          AssetResolver
+	Assets          AssetStore
 	WorkspaceFS     *workspacefs.FS
 	Terminals       *terminalhost.Host
 	Logger          *log.Logger
@@ -111,6 +116,7 @@ type Adapter struct {
 	replaying   bool
 	permissions map[string]pendingPermission
 	liveTools   map[string]struct{}
+	toolFiles   map[string]string
 	serviceCtx  context.Context
 	serviceStop context.CancelFunc
 	serviceWG   sync.WaitGroup
@@ -138,7 +144,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 	serviceCtx, serviceStop := context.WithCancel(childCtx)
-	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), serviceCtx: serviceCtx, serviceStop: serviceStop}
+	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop}
 	a.promptGate = make(chan struct{}, 1)
 	a.promptGate <- struct{}{}
 	a.replayBarrier = make(chan chan struct{})
@@ -847,15 +853,22 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			return err
 		}
 		status := toolStatus(rawString(u["status"]))
+		fileCandidate := playwrightScreenshotFile(title, u["rawInput"])
 		a.mu.Lock()
+		if fileCandidate != "" {
+			a.toolFiles[id] = fileCandidate
+		}
 		if status == "pending" || status == "running" {
 			a.liveTools[id] = struct{}{}
 		} else {
 			delete(a.liveTools, id)
+			delete(a.toolFiles, id)
 		}
 		a.mu.Unlock()
 		ev := map[string]any{"kind": "tool_call", "id": id, "title": title, "status": status}
-		copyJSONField(ev, "content", u["content"])
+		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
+			ev["content"] = content
+		}
 		copyJSONField(ev, "rawInput", u["rawInput"])
 		a.push(ev)
 	case "tool_call_update":
@@ -864,16 +877,21 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			return err
 		}
 		ev := map[string]any{"kind": "tool_call_update", "id": id}
+		status := ""
 		if statusWire := rawString(u["status"]); statusWire != "" {
-			status := toolStatus(statusWire)
+			status = toolStatus(statusWire)
 			ev["status"] = status
-			if status != "pending" && status != "running" {
-				a.mu.Lock()
-				delete(a.liveTools, id)
-				a.mu.Unlock()
-			}
 		}
-		copyJSONField(ev, "content", u["content"])
+		a.mu.Lock()
+		fileCandidate := a.toolFiles[id]
+		if status != "" && status != "pending" && status != "running" {
+			delete(a.liveTools, id)
+			delete(a.toolFiles, id)
+		}
+		a.mu.Unlock()
+		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
+			ev["content"] = content
+		}
 		a.push(ev)
 	case "plan", "plan_update":
 		var entries []struct {
@@ -958,6 +976,126 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		a.diagnostic(&OptionalUpdateError{Variant: header.Variant})
 	}
 	return nil
+}
+
+func finalToolFile(status, candidate string) string {
+	if status == "done" && candidate != "" {
+		return candidate
+	}
+	return ""
+}
+
+func playwrightScreenshotFile(title string, raw json.RawMessage) string {
+	if !strings.Contains(title, "browser_take_screenshot") || len(raw) == 0 {
+		return ""
+	}
+	var input map[string]any
+	if json.Unmarshal(raw, &input) != nil {
+		return ""
+	}
+	if arguments, ok := input["arguments"].(map[string]any); ok {
+		input = arguments
+	}
+	filename, _ := input["filename"].(string)
+	return filename
+}
+
+// normalizeToolContent moves image bytes out of durable event JSON and into
+// Tandem's content-addressed asset store. Unknown ACP blocks are retained so a
+// newer agent cannot lose data merely because this client cannot render it yet.
+func (a *Adapter) normalizeToolContent(raw json.RawMessage, extraFile string) (any, bool) {
+	if len(raw) == 0 && extraFile == "" {
+		return nil, false
+	}
+	var blocks []any
+	if len(raw) > 0 && json.Unmarshal(raw, &blocks) != nil {
+		var value any
+		if json.Unmarshal(raw, &value) == nil {
+			return value, true
+		}
+		return nil, false
+	}
+	captured := false
+	for _, value := range blocks {
+		block, ok := value.(map[string]any)
+		if !ok || block["type"] != "content" {
+			continue
+		}
+		content, ok := block["content"].(map[string]any)
+		if !ok {
+			continue
+		}
+		var stored assets.Stored
+		var err error
+		switch content["type"] {
+		case "image":
+			data, _ := content["data"].(string)
+			mime, _ := content["mimeType"].(string)
+			if data == "" || len(data) > base64.StdEncoding.EncodedLen(assets.MaxAssetBytes) {
+				block["content"] = map[string]any{"type": "text", "text": "Image unavailable: invalid or oversized image data"}
+				continue
+			}
+			var decoded []byte
+			decoded, err = base64.StdEncoding.DecodeString(data)
+			if err == nil && a.cfg.Assets != nil {
+				stored, err = a.cfg.Assets.Put(a.cfg.AgentID, decoded, mime)
+			}
+		case "resource_link":
+			uri, _ := content["uri"].(string)
+			stored, err = a.captureToolFile(uri)
+		default:
+			continue
+		}
+		if err != nil || stored.AssetID == "" {
+			if content["type"] == "image" {
+				block["content"] = map[string]any{"type": "text", "text": "Image unavailable: tool image could not be stored"}
+			}
+			continue
+		}
+		name, _ := content["name"].(string)
+		block["content"] = toolImageAsset(stored, name)
+		captured = true
+	}
+	if extraFile != "" && !captured {
+		if stored, err := a.captureToolFile(extraFile); err == nil {
+			blocks = append(blocks, map[string]any{"type": "content", "content": toolImageAsset(stored, filepath.Base(extraFile))})
+		}
+	}
+	return blocks, true
+}
+
+func toolImageAsset(stored assets.Stored, name string) map[string]any {
+	result := map[string]any{"type": "image", "assetId": stored.AssetID, "mimeType": stored.MIMEType}
+	if name != "" {
+		result["name"] = name
+	}
+	return result
+}
+
+func (a *Adapter) captureToolFile(raw string) (assets.Stored, error) {
+	if raw == "" || a.cfg.Assets == nil {
+		return assets.Stored{}, assets.ErrNotFound
+	}
+	path := raw
+	if parsed, err := url.Parse(raw); err == nil && parsed.Scheme != "" {
+		if parsed.Scheme != "file" || parsed.Host != "" && parsed.Host != "localhost" {
+			return assets.Stored{}, assets.ErrNotFound
+		}
+		path = parsed.Path
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(a.cfg.Cwd, path)
+	}
+	file, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return assets.Stored{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, assets.MaxAssetBytes+1))
+	if err != nil {
+		return assets.Stored{}, err
+	}
+	return a.cfg.Assets.Put(a.cfg.AgentID, data, "")
 }
 
 func (a *Adapter) updateCurrentMode(mode string) {

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
-import type { Approval, PromptBlock, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import type { Approval, ImageAssetRef, PromptBlock, SlashCommand, ToolStatus, WireEvent } from '../../wire';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
@@ -318,20 +318,39 @@ function TranscriptImage({ block }: { block: Extract<PromptBlock, { type: 'image
 // `{ type: 'content', content: { type: 'text', text } }`, some are
 // `{ type: 'diff', path, oldText, newText }`. Flatten to plain text for
 // display rather than dumping the raw JSON envelope.
-function formatToolContent(content: unknown): string | null {
-  if (content == null) return null;
-  if (typeof content === 'string') return content || null;
+type ToolImage =
+  | ({ type: 'image' } & ImageAssetRef)
+  | { type: 'image'; data: string; mimeType: string; name?: string };
+
+function parseToolContent(content: unknown): { text: string | null; images: ToolImage[] } {
+  if (content == null) return { text: null, images: [] };
+  if (typeof content === 'string') return { text: content || null, images: [] };
   if (Array.isArray(content)) {
+    const images: ToolImage[] = [];
     const parts = content
       .map((block: any) => {
         if (block?.type === 'content' && block.content?.type === 'text') return block.content.text ?? '';
+        if (block?.type === 'content' && block.content?.type === 'image' && block.content.assetId && block.content.mimeType) {
+          images.push({ type: 'image', assetId: block.content.assetId, mimeType: block.content.mimeType, name: block.content.name });
+          return null;
+        }
+        // Inline data only exists in transcripts written before tool images
+        // were asset-backed. Render it for replay compatibility; new events
+        // are normalized by the daemon before persistence.
+        if (block?.type === 'content' && block.content?.type === 'image' && block.content.data && block.content.mimeType) {
+          images.push({ type: 'image', data: block.content.data, mimeType: block.content.mimeType, name: block.content.name });
+          return null;
+        }
+        // Older events may still contain uncaptured local resource links. Keep
+        // them legible even though browsers cannot load local paths directly.
+        if (block?.type === 'content' && block.content?.type === 'resource_link') return block.content.name ?? block.content.uri ?? null;
         if (block?.type === 'diff') return `--- ${block.path}\n${block.newText ?? ''}`;
         return null;
       })
       .filter((s): s is string => !!s);
-    return parts.length ? parts.join('\n') : null;
+    return { text: parts.length ? parts.join('\n') : null, images };
   }
-  return JSON.stringify(content, null, 2);
+  return { text: JSON.stringify(content, null, 2), images: [] };
 }
 
 // rawInput is the ACP tool_call's arguments (e.g. { path, content } for a
@@ -350,9 +369,12 @@ function formatArgs(rawInput: unknown): string | null {
 
 function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   const [open, setOpen] = useState(false);
-  const body = formatToolContent(item.content);
+  const { text: body, images } = parseToolContent(item.content);
   const args = formatArgs(item.rawInput);
-  const hasBody = body != null || args != null;
+  const hasBody = body != null || args != null || images.length > 0;
+  useEffect(() => {
+    if (images.length > 0) setOpen(true);
+  }, [images.length]);
   return (
     <div className="card">
       <div className="card-head" onClick={() => hasBody && setOpen((o) => !o)}>
@@ -369,10 +391,16 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
             </div>
           )}
           {body != null && <div className="tool-output">{body}</div>}
+          {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
         </div>
       )}
     </div>
   );
+}
+
+function ToolResultImage({ image }: { image: ToolImage }) {
+  if ('assetId' in image) return <TranscriptImage block={image} />;
+  return <img className="transcript-image" src={`data:${image.mimeType};base64,${image.data}`} alt={image.name ?? 'Tool result'} />;
 }
 
 // Model + Permission Mode pickers (ACP session-modes / session-config-options,
