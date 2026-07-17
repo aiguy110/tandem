@@ -72,6 +72,11 @@ ghostty-web 0.4 may recycle a freed WASM terminal handle with old screen cells i
 new renderer clears its viewport and scrollback before its selected hub replays, preventing
 one PTY's old cells from appearing in another PTY's view.
 
+Its canvas renderer can also miss the final cursor-only update in a shell's normal
+`BS, space, BS` erase echo after scrollback replay. The renderer adapter forces a canvas
+redraw for output chunks containing BS, keeping the painted cursor and cells aligned with
+Ghostty's already-correct VT buffer.
+
 ## Spike
 
 [`spike/terminal/`](../spike/terminal/) — a Vite app that renders a live shell via

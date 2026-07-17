@@ -46,14 +46,31 @@ interface XtermLike {
   dispose(): void;
   loadAddon(addon: unknown): void;
 }
+interface GhosttyLike extends XtermLike {
+  wasmTerm?: unknown;
+  renderer?: {
+    render(buffer: unknown, forceAll?: boolean, viewportY?: number, scrollbackProvider?: unknown): void;
+  };
+  viewportY: number;
+}
 interface FitLike {
   fit(): void;
 }
 
 class Adapter implements TerminalRenderer {
-  constructor(private term: XtermLike, private fitAddon: FitLike) {}
+  constructor(
+    private term: XtermLike,
+    private fitAddon: FitLike,
+    private forceRedraw?: () => void,
+  ) {}
   write(bytes: Uint8Array): void {
     this.term.write(bytes);
+    // ghostty-web 0.4's canvas can miss the final cursor-only update in the
+    // usual shell erase echo (BS, space, BS), especially after scrollback has
+    // been replayed. Its VT buffer is correct, but the old character and cursor
+    // remain painted until some later output dirties the row. Redraw only for
+    // chunks containing BS; xterm.js does not need this compatibility path.
+    if (bytes.includes(0x08)) this.forceRedraw?.();
   }
   onData(cb: (data: string) => void): void {
     this.term.onData(cb);
@@ -93,7 +110,7 @@ export async function createRenderer(el: HTMLElement, engine: EngineName): Promi
     try {
       const g = await import('ghostty-web');
       await g.init();
-      const term = new g.Terminal({ fontSize: 12, cursorBlink: true, theme: THEME } as never) as unknown as XtermLike;
+      const term = new g.Terminal({ fontSize: 12, cursorBlink: true, theme: THEME } as never) as unknown as GhosttyLike;
       const fit = new g.FitAddon() as unknown as FitLike;
       term.loadAddon(fit);
       term.open(el);
@@ -104,7 +121,12 @@ export async function createRenderer(el: HTMLElement, engine: EngineName): Promi
       // selected hub replays its own bytes into this new renderer.
       term.write('\x1b[3J\x1b[2J\x1b[H');
       (fit as FitLike).fit();
-      return { renderer: new Adapter(term, fit), engine: 'ghostty' };
+      const forceRedraw = () => {
+        if (term.renderer && term.wasmTerm) {
+          term.renderer.render(term.wasmTerm, true, term.viewportY, term);
+        }
+      };
+      return { renderer: new Adapter(term, fit, forceRedraw), engine: 'ghostty' };
     } catch (e) {
       console.warn('[terminal] ghostty-web failed, falling back to xterm.js:', e);
     }
