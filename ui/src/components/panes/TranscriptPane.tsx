@@ -25,6 +25,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const items: Item[] = [];
   const tools = new Map<string, Extract<Item, { kind: 'tool' }>>();
   const terms = new Map<string, Extract<Item, { kind: 'terminal' }>>();
+  let plan: Extract<Item, { kind: 'plan' }> | undefined;
   const pendingIds = new Set(pending.map((p) => p.reqId));
 
   for (const { seq, event: ev } of events) {
@@ -75,7 +76,10 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         break;
       }
       case 'plan':
-        items.push({ kind: 'plan', key: `p${seq}`, entries: ev.entries });
+        // A plan is current session state, not another point-in-time chat
+        // message. Keep one stable item and replace its contents on updates.
+        plan ??= { kind: 'plan', key: 'plan', entries: [] };
+        plan.entries = ev.entries;
         break;
       case 'terminal_output': {
         let term = terms.get(ev.termId);
@@ -97,7 +101,11 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
     }
   }
   // Keep only still-pending permission cards inline (answered ones fall away).
-  return items.filter((it) => it.kind !== 'permission' || pendingIds.has(it.reqId));
+  const visible = items.filter((it) => it.kind !== 'permission' || pendingIds.has(it.reqId));
+  // The current task list is always the final transcript section, regardless
+  // of how much agent activity arrived after its first update.
+  if (plan) visible.push(plan);
+  return visible;
 }
 
 export function TranscriptPane() {
@@ -210,16 +218,7 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
     case 'tool':
       return <ToolCard item={item} />;
     case 'plan':
-      return (
-        <ul className="plan card" style={{ padding: '6px 12px' }}>
-          {item.entries.map((e, i) => (
-            <li key={i} className={e.status}>
-              <span className="mark">{e.status === 'done' ? '✓' : e.status === 'in_progress' ? '▸' : '○'}</span>
-              <span className={e.status}>{e.label}</span>
-            </li>
-          ))}
-        </ul>
-      );
+      return <TaskList item={item} />;
     case 'terminal':
       return (
         <div className="mini-term">
@@ -243,6 +242,32 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
   }
+}
+
+function TaskList({ item }: { item: Extract<Item, { kind: 'plan' }> }) {
+  const [expanded, setExpanded] = useState(true);
+  const done = item.entries.filter((entry) => entry.status === 'done').length;
+  return (
+    <details
+      className="task-list card"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="card-head">
+        <span className="task-list-chevron" aria-hidden="true">›</span>
+        <span className="title">Task list</span>
+        <span className="task-list-progress">{done}/{item.entries.length}</span>
+      </summary>
+      <ul className="plan">
+        {item.entries.map((entry, index) => (
+          <li key={index} className={entry.status}>
+            <span className="mark">{entry.status === 'done' ? '✓' : entry.status === 'in_progress' ? '▸' : '○'}</span>
+            <span className={entry.status}>{entry.label}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function assetUrl(agentId: string, assetId: string): string {
