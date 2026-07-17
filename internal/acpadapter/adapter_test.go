@@ -381,6 +381,31 @@ func TestLoadSessionCapturesIDAndSuppressesReplay(t *testing.T) {
 	}
 }
 
+// Regression: on resume the agent re-streams its whole history as session/update
+// notifications before answering session/load. The transport enqueues all of
+// them before it delivers the response that unblocks StartAdapter, so clearing
+// the replay gate on the load-caller goroutine used to race readLoop draining
+// the tail of that queue — re-logging the agent's last message(s). endReplay now
+// routes the gate drop through readLoop, so the whole replayed burst is
+// suppressed no matter the scheduling.
+func TestResumeReplayBurstIsFullySuppressed(t *testing.T) {
+	a := startMock(t, func(cfg *AdapterConfig) { cfg.ResumeSessionID = "sess_replay" })
+	// StartAdapter has returned, so endReplay has flushed the replay queue under
+	// the gate. Any leaked replay chunk is already on Events(); give a brief
+	// settle for stragglers, then assert none escaped.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-a.Events():
+			if ev.Kind == "message_chunk" && bytes.Contains(ev.Payload, []byte("replayed-chunk")) {
+				t.Fatalf("replayed chunk leaked into the log: %s", ev.Payload)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 func TestUnknownUpdateIsDiagnosticButMalformedRequiredUpdateFails(t *testing.T) {
 	t.Run("unknown optional", func(t *testing.T) {
 		a := startMock(t, nil)

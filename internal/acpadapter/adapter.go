@@ -100,6 +100,9 @@ type Adapter struct {
 	errs       chan error
 	done       chan struct{}
 	promptGate chan struct{}
+	// replayBarrier flushes replayed session/load notifications through readLoop
+	// before the replaying gate is cleared (see endReplay).
+	replayBarrier chan chan struct{}
 
 	mu          sync.RWMutex
 	caps        Capabilities
@@ -138,6 +141,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), serviceCtx: serviceCtx, serviceStop: serviceStop}
 	a.promptGate = make(chan struct{}, 1)
 	a.promptGate <- struct{}{}
+	a.replayBarrier = make(chan chan struct{})
 	go a.readLoop()
 
 	var init struct {
@@ -171,9 +175,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		a.replaying = !cfg.CaptureReplay
 		a.mu.Unlock()
 		err = a.load(ctx, cfg.ResumeSessionID)
-		a.mu.Lock()
-		a.replaying = false
-		a.mu.Unlock()
+		a.endReplay()
 	} else {
 		err = a.newSession(ctx)
 	}
@@ -257,12 +259,44 @@ func (a *Adapter) LoadSession(ctx context.Context, sessionID string, captureRepl
 	a.mu.Lock()
 	a.replaying = !captureReplay
 	a.mu.Unlock()
-	defer func() { a.mu.Lock(); a.replaying = false; a.mu.Unlock() }()
-	if err := a.load(ctx, sessionID); err != nil {
+	err := a.load(ctx, sessionID)
+	// Clear replaying only after readLoop has flushed the replayed history, so
+	// the tail of it cannot be re-logged, and so the resumed session_config
+	// below is emitted with the gate already down.
+	a.endReplay()
+	if err != nil {
 		return err
 	}
 	a.emitConfigIfPresent()
 	return nil
+}
+
+// endReplay drains every session/load replay notification still queued in
+// readLoop and only then lowers the replaying gate. The ACP resume contract
+// re-streams the whole prior conversation as session/update notifications
+// before answering session/load; the transport enqueues all of them before it
+// delivers the response that unblocks load(). Clearing the gate directly here
+// would race readLoop's consumption of that queue and re-log its tail (the
+// agent's last message). Instead we route a barrier through readLoop itself,
+// which flushes the queue under the gate before dropping it.
+func (a *Adapter) endReplay() {
+	done := make(chan struct{})
+	select {
+	case a.replayBarrier <- done:
+		select {
+		case <-done:
+			return
+		case <-a.done:
+		case <-a.ctx.Done():
+		}
+	case <-a.done:
+	case <-a.ctx.Done():
+	}
+	// readLoop has exited (or is exiting); no further notifications will be
+	// processed, so clearing the gate directly is safe.
+	a.mu.Lock()
+	a.replaying = false
+	a.mu.Unlock()
 }
 
 func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, error) {
@@ -470,14 +504,37 @@ func (a *Adapter) readLoop() {
 				notifications = nil
 				continue
 			}
-			if note.Method != "session/update" {
-				a.diagnostic(&OptionalUpdateError{Variant: note.Method})
-				continue
-			}
-			if err := a.handleUpdate(note.Params); err != nil {
+			if err := a.dispatchNote(note); err != nil {
 				a.fail(err)
 				return
 			}
+		case done := <-a.replayBarrier:
+			// Flush every replay notification already queued (the transport
+			// enqueued them all before the session/load response unblocked
+			// endReplay) while the gate is still up, then lower it. A default
+			// case bounds the drain to what is currently buffered so a racing
+			// post-replay live notification is left for the main loop.
+			for draining := true; draining; {
+				select {
+				case note, ok := <-notifications:
+					if !ok {
+						notifications = nil
+						draining = false
+						break
+					}
+					if err := a.dispatchNote(note); err != nil {
+						a.fail(err)
+						close(done)
+						return
+					}
+				default:
+					draining = false
+				}
+			}
+			a.mu.Lock()
+			a.replaying = false
+			a.mu.Unlock()
+			close(done)
 		case err, ok := <-transportErrors:
 			if !ok {
 				transportErrors = nil
@@ -492,6 +549,14 @@ func (a *Adapter) readLoop() {
 	} else if a.ctx.Err() == nil {
 		a.emit(map[string]any{"kind": "status", "status": "idle"})
 	}
+}
+
+func (a *Adapter) dispatchNote(note acp.Notification) error {
+	if note.Method != "session/update" {
+		a.diagnostic(&OptionalUpdateError{Variant: note.Method})
+		return nil
+	}
+	return a.handleUpdate(note.Params)
 }
 
 func (a *Adapter) handleRequest(req acp.Request) {
