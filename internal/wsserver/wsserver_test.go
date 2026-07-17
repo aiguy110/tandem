@@ -394,6 +394,34 @@ func TestBrowserSubscriptionControlAndInput(t *testing.T) {
 	}
 }
 
+// A base subscription (no 'browser' channel, so no screencast) must still get
+// browser_state, so the Browser tab enables the moment the agent provisions a
+// browser — and after a page refresh — without the pane being opened first.
+func TestBrowserStateFlowsOnBaseSubscription(t *testing.T) {
+	_, backend, _, old, _ := setupWS(t, 0)
+	old.Close()
+	broker := browser.NewBroker(inertBrowserDriver{}, browser.BrokerConfig{})
+	server := httptest.NewServer(New(Options{Token: "secret", Registry: backend, Browser: broker}))
+	defer server.Close()
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+	send(t, c, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"transcript", "status"}})
+	if got := recv(t, c); got["t"] != "snapshot" {
+		t.Fatalf("snapshot = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "browser_state" || got["active"] != false || got["controlOwner"] != "agent" {
+		t.Fatalf("base browser state = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "ack" {
+		t.Fatalf("subscribe ack = %#v", got)
+	}
+	// A later state change (grab) reaches the base subscriber even though it never
+	// subscribed to the browser channel.
+	broker.Grab("a")
+	if got := recv(t, c); got["t"] != "browser_state" || got["controlOwner"] != "user" {
+		t.Fatalf("grab state on base sub = %#v", got)
+	}
+}
+
 func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) {
 	db, b, a, _, url := setupWS(t, 4)
 	for i := 0; i < 5; i++ {

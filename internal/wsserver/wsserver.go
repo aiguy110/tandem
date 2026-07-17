@@ -566,7 +566,12 @@ type subscription struct {
 	pending      []eventlog.LoggedEvent
 	active       atomic.Bool
 	unlisten     func()
-	browserOff   func()
+	// browserStateOff is registered for every subscription (even base, no
+	// screencast) so the Browser tab enables the moment the agent provisions a
+	// browser, without waiting for the pane to be opened. browserFrameOff is the
+	// screencast, gated on the 'browser' channel (the focus/bandwidth rule).
+	browserStateOff func()
+	browserFrameOff func()
 }
 
 func (s *subscription) wants(ev eventlog.Event) bool {
@@ -580,11 +585,14 @@ func (s *subscription) stop() {
 			s.unlisten()
 		}
 		s.mu.Lock()
-		browserOff := s.browserOff
-		s.browserOff = nil
+		stateOff, frameOff := s.browserStateOff, s.browserFrameOff
+		s.browserStateOff, s.browserFrameOff = nil, nil
 		s.mu.Unlock()
-		if browserOff != nil {
-			browserOff()
+		if frameOff != nil {
+			frameOff()
+		}
+		if stateOff != nil {
+			stateOff()
 		}
 	}
 }
@@ -665,18 +673,28 @@ func (c *connection) subscribe(m clientMessage) {
 			c.send(eventMessage(sess.ID, le))
 		}
 	}
-	if sub.channels["browser"] && c.server.opts.Browser != nil {
+	if c.server.opts.Browser != nil {
+		// Browser active/owner state flows to every subscription so the Browser
+		// tab enables (and survives a page refresh) as soon as the agent has a
+		// browser, independent of whether this client is viewing the pane.
 		offState := c.server.opts.Browser.OnState(sess.ID, func(state browser.BrowserState) {
 			c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
 		})
 		state := c.server.opts.Browser.State(sess.ID)
 		c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
-		offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
-			c.send(map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
-		})
 		sub.mu.Lock()
-		sub.browserOff = func() { offFrames(); offState() }
+		sub.browserStateOff = offState
 		sub.mu.Unlock()
+		// The screencast itself stays gated on the 'browser' channel (only the
+		// focused, browser-viewing client streams frames).
+		if sub.channels["browser"] {
+			offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
+				c.send(map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
+			})
+			sub.mu.Lock()
+			sub.browserFrameOff = offFrames
+			sub.mu.Unlock()
+		}
 	}
 	c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID}, m.CorrID))
 }
@@ -694,13 +712,15 @@ func (c *connection) unsubscribe(m clientMessage) {
 			}
 		}
 		empty := len(sub.channels) == 0
-		browserOff := sub.browserOff
+		// Dropping the 'browser' channel stops only the screencast; the tab's
+		// active-state feed stays live on the remaining base subscription.
+		frameOff := sub.browserFrameOff
 		if removeBrowser {
-			sub.browserOff = nil
+			sub.browserFrameOff = nil
 		}
 		sub.mu.Unlock()
-		if removeBrowser && browserOff != nil {
-			browserOff()
+		if removeBrowser && frameOff != nil {
+			frameOff()
 		}
 		if empty {
 			sub.stop()
