@@ -147,14 +147,18 @@ export function BrowserPane() {
   };
 
   // Soft keyboard. A <canvas> can't summon a phone's on-screen keyboard, so a
-  // hidden <textarea> stands in: the ⌨ button focuses it, and its input events
-  // are forwarded to the remote page. It always holds a single sentinel char
-  // and resets after every event — an empty field swallows Backspace (there's
-  // nothing to delete), so the sentinel guarantees a `deleteContentBackward`
-  // still fires. Character input, Enter and Backspace arrive as `input` events
-  // (reliable on mobile IMEs, where keydown often reports 229/Unidentified);
-  // navigation keys arrive as keydown.
+  // hidden <textarea> stands in: the ⌨ button focuses it, and its events are
+  // forwarded to the remote page. It always holds a single sentinel char, so
+  // it's never truly empty — iOS fires no event at all on an empty field.
+  //
+  // Printable characters go through onKbdInput: mobile IMEs report them via
+  // keydown as 229/Unidentified, but they arrive cleanly as `input` events.
+  // Backspace/Enter/navigation keys fire a real keydown on both GBoard and iOS,
+  // so they go through onKbdKeyDown. Backspace specifically CANNOT ride the
+  // input event: resetting the field there desyncs the keyboard's own edit
+  // buffer, which then swallows the next deleteContentBackward.
   const SENTINEL = ' ';
+  const lastBkspRef = useRef(0);
   const resetKbd = () => {
     const el = kbdRef.current;
     if (!el) return;
@@ -164,6 +168,14 @@ export function BrowserPane() {
   const focusKeyboard = () => {
     resetKbd();
     kbdRef.current?.focus();
+  };
+  // Emit one Backspace, collapsing the near-simultaneous keydown + input pair
+  // (they land <10ms apart; real key-repeat is far slower) so it deletes once.
+  const emitBackspace = () => {
+    const now = Date.now();
+    if (now - lastBkspRef.current < 30) return;
+    lastBkspRef.current = now;
+    emit({ kind: 'keydown', key: 'Backspace', code: 'Backspace' });
   };
   const onKbdInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
     if (userOwns) {
@@ -180,7 +192,7 @@ export function BrowserPane() {
           break;
         case 'deleteContentBackward':
         case 'deleteWordBackward':
-          emit({ kind: 'keydown', key: 'Backspace', code: 'Backspace' });
+          emitBackspace();
           break;
         case 'deleteContentForward':
           emit({ kind: 'keydown', key: 'Delete', code: 'Delete' });
@@ -189,13 +201,21 @@ export function BrowserPane() {
     }
     resetKbd();
   };
-  // Navigation/control keys don't produce `input` events; forward them here.
-  // Character keys, Enter and Backspace are handled via onKbdInput, so skip
-  // them to avoid double-emitting on hardware keyboards (which fire both).
+  // Backspace, Enter and navigation keys fire a real keydown on mobile (unlike
+  // printable characters, which report 229/Unidentified and go through
+  // onKbdInput). Backspace is driven from here because resetting the field
+  // inside the input handler desyncs the keyboard's edit buffer and swallows a
+  // subsequent deleteContentBackward. We do NOT preventDefault Backspace, so
+  // the field still deletes the sentinel and the input-event fallback can fire
+  // on keyboards that skip keydown; emitBackspace dedups the pair.
   const onKbdKeyDown = (e: React.KeyboardEvent) => {
     if (!userOwns) return;
     const k = e.key;
-    if (k.length === 1 || k === 'Enter' || k === 'Backspace' || k === 'Unidentified' || k === 'Process') return;
+    if (k === 'Backspace') {
+      emitBackspace();
+      return;
+    }
+    if (k.length === 1 || k === 'Enter' || k === 'Unidentified' || k === 'Process') return;
     e.preventDefault();
     emit({ kind: 'keydown', key: k, code: e.code });
   };
