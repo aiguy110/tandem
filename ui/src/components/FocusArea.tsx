@@ -62,6 +62,12 @@ export function FocusArea() {
           </span>
         </span>
         <div className="tabs">
+          {agent.controlMode === 'switching' && pane === 'chat' && (
+            <span className="chat-switch-note">switching…</span>
+          )}
+          {handoffError && pane === 'chat' && (
+            <span className="chat-switch-note err">{handoffError}</span>
+          )}
           {PANES.map((p, i) => {
             // The Browser tab is enabled only once a browser exists for the agent
             // (docs/browser.md: the pane appears/enables when browser_state active).
@@ -110,12 +116,6 @@ export function FocusArea() {
             );
           })}
         </div>
-        {agent.controlMode === 'switching' && pane === 'chat' && (
-          <span className="chat-switch-note">switching…</span>
-        )}
-        {handoffError && pane === 'chat' && (
-          <span className="chat-switch-note err">{handoffError}</span>
-        )}
       </div>
       {/* key on focusedId so panes remount per agent (fresh terminal, scroll) */}
       {pane === 'chat' && (
