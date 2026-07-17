@@ -11,6 +11,7 @@ import (
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/controlmcp"
 	"github.com/aiguy110/tandem/internal/daemon"
+	"github.com/aiguy110/tandem/internal/updater"
 )
 
 const usage = "usage: tandem <version|daemon|debug config>"
@@ -53,6 +54,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
 	case "daemon":
+		if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stderr}); err != nil {
+			fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
+		}
 		if err := daemon.Run(stdout); err != nil {
 			fmt.Fprintf(stderr, "run daemon: %v\n", err)
 			return 1

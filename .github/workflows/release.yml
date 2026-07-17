@@ -1,0 +1,75 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build standalone binary
+        env:
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          RELEASE_DIR: ${{ runner.temp }}/release
+        run: scripts/release.sh
+      - name: Prepare release assets
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          asset="tandem_${GOOS}_${GOARCH}"
+          source="${RUNNER_TEMP}/release/tandem_${VERSION}_${GOOS}_${GOARCH}/tandem"
+          cp "$source" "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tandem-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            tandem_${{ matrix.goos }}_${{ matrix.goarch }}
+            tandem_${{ matrix.goos }}_${{ matrix.goarch }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create release and attach binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --generate-notes release-assets/*
