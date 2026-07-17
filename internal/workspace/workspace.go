@@ -289,6 +289,48 @@ type ClosePreview struct {
 	Behind      *int   `json:"behind,omitempty"`
 }
 
+// Diff separates work that still needs committing from commits that have not
+// reached the workspace's integration target. Both fields are unified patches.
+type Diff struct {
+	Uncommitted string `json:"uncommitted"`
+	Committed   string `json:"committed"`
+	TargetRef   string `json:"targetRef,omitempty"`
+}
+
+func (m *Manager) Diff(ctx context.Context, cwd string, ws Workspace) (Diff, error) {
+	uncommitted, err := m.git.runPatch(ctx, cwd, "diff", "--no-ext-diff", "--binary", "HEAD", "--")
+	if err != nil {
+		return Diff{}, err
+	}
+	untracked, err := m.git.Run(ctx, cwd, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return Diff{}, err
+	}
+	for _, path := range strings.Split(untracked, "\n") {
+		if path == "" {
+			continue
+		}
+		patch, patchErr := m.git.runPatch(ctx, cwd, "diff", "--no-index", "--binary", "--", "/dev/null", path)
+		if patchErr != nil {
+			return Diff{}, patchErr
+		}
+		if uncommitted != "" && patch != "" {
+			uncommitted += "\n"
+		}
+		uncommitted += patch
+	}
+	result := Diff{Uncommitted: uncommitted}
+	if ws.Kind != KindWorktree {
+		return result, nil
+	}
+	result.TargetRef, err = m.targetRef(ctx, ws)
+	if err != nil {
+		return Diff{}, err
+	}
+	result.Committed, err = m.git.runPatch(ctx, cwd, "diff", "--no-ext-diff", "--binary", result.TargetRef+"...HEAD", "--")
+	return result, err
+}
+
 func (m *Manager) ClosePreview(ctx context.Context, cwd string, ws Workspace) (ClosePreview, error) {
 	uncommitted, err := m.git.Run(ctx, cwd, "status", "--short")
 	if err != nil {
@@ -310,6 +352,31 @@ func (m *Manager) ClosePreview(ctx context.Context, cwd string, ws Workspace) (C
 	p.Ahead, p.Behind = &a, &b
 	p.Unmerged, err = m.git.Run(ctx, cwd, "log", "--oneline", p.TargetRef+"..HEAD")
 	return p, err
+}
+
+// runPatch preserves meaningful leading spaces on context lines. It also
+// accepts the exit code git diff --no-index uses when differences are found.
+func (g GitRunner) runPatch(ctx context.Context, cwd string, args ...string) (string, error) {
+	bin := g.Path
+	if bin == "" {
+		bin = "git"
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Dir = cwd
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		err = nil
+	}
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("git %s (cwd=%s) failed: %s", strings.Join(args, " "), cwd, detail)
+	}
+	return strings.TrimRight(stdout.String(), "\r\n"), nil
 }
 
 func (m *Manager) targetRef(ctx context.Context, ws Workspace) (string, error) {
