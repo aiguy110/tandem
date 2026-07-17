@@ -292,6 +292,45 @@ func TestBrokerRawCDPColdPauseReleaseAndCleanup(t *testing.T) {
 		t.Fatal("driver not torn down")
 	}
 }
+
+// Detach drops the daemon-local hold but must NOT end the underlying session
+// (so a Steel session survives a restart); Teardown must release it.
+func TestBrokerDetachKeepsSessionTeardownReleases(t *testing.T) {
+	raw := newRawCDP(t)
+	defer raw.close()
+	d := &fakeDriver{cdp: raw.server.URL, provisions: map[string]int{}, teardowns: map[string]int{}}
+	b := NewBroker(d, BrokerConfig{})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop(context.Background())
+	if err := b.EnsureProvisioned(context.Background(), "keep/me"); err != nil {
+		t.Fatal(err)
+	}
+	if !b.State("keep/me").Active {
+		t.Fatal("expected active after provision")
+	}
+	b.Detach("keep/me")
+	if d.teardowns["keep/me"] != 0 {
+		t.Fatal("Detach released the underlying session")
+	}
+	// Detach removed the in-memory record, so State goes inactive locally, but the
+	// driver session is untouched and re-provision does not create a second one
+	// via the teardown counter.
+	if b.State("keep/me").Active {
+		t.Fatal("expected inactive record after detach")
+	}
+	if err := b.EnsureProvisioned(context.Background(), "keep/me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Teardown(context.Background(), "keep/me"); err != nil {
+		t.Fatal(err)
+	}
+	if d.teardowns["keep/me"] != 1 {
+		t.Fatalf("Teardown did not release session: teardowns=%d", d.teardowns["keep/me"])
+	}
+}
+
 func urlHost(raw string) string { u, _ := url.Parse(raw); return u.Host }
 
 func TestBrokerIndependentAgentsAndConcurrentColdStart(t *testing.T) {

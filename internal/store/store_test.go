@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agents", "assets", "events"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agents", "assets", "browser_sessions", "events"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -193,6 +193,55 @@ func TestAssetAssociationsAndDeleteAgent(t *testing.T) {
 	}
 	if got, err := s.AgentAsset("api-2", asset.ID); err != nil || got == nil {
 		t.Fatalf("shared physical asset removed: %#v %v", got, err)
+	}
+}
+
+func TestBrowserSessionPersistence(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveBrowserSession("a-1", "sess-1", "prof-1", "ws://host/1"); err != nil {
+		t.Fatal(err)
+	}
+	// Re-saving the same agent updates in place (single row, PRIMARY KEY).
+	if err := s.SaveBrowserSession("a-1", "sess-2", "prof-2", "ws://host/2"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListBrowserSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != (BrowserSession{AgentID: "a-1", SessionID: "sess-2", ProfileID: "prof-2", CDPURL: "ws://host/2"}) {
+		t.Fatalf("sessions = %#v", got)
+	}
+	// Deleting the agent cascades to its browser session.
+	if err := s.SaveBrowserSession("a-2", "sess-3", "", ""); err != nil {
+		// a-2 has no agents row; the session table has no FK, so this still saves.
+		t.Fatal(err)
+	}
+	if err := s.DeleteBrowserSession("a-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.ListBrowserSessions()
+	if len(got) != 1 || got[0].AgentID != "a-2" {
+		t.Fatalf("after delete = %#v", got)
+	}
+}
+
+func TestDeleteAgentRemovesBrowserSession(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveBrowserSession("a-1", "sess-1", "prof-1", "ws://host/1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent("a-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ListBrowserSessions(); len(got) != 0 {
+		t.Fatalf("browser session survived agent delete: %#v", got)
 	}
 }
 

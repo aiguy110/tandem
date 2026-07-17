@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS agent_assets (
         createdAt INTEGER NOT NULL,
         PRIMARY KEY (agentId, assetId),
         FOREIGN KEY (assetId) REFERENCES assets(id)
+      );
+CREATE TABLE IF NOT EXISTS browser_sessions (
+        agentId   TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        profileId TEXT NOT NULL DEFAULT '',
+        cdpUrl    TEXT NOT NULL DEFAULT '',
+        updatedAt INTEGER NOT NULL
       );`
 
 // Store serializes access through one connection. This makes connection-local
@@ -80,6 +87,15 @@ type Asset struct {
 	ID       string
 	MIMEType string
 	Size     int64
+}
+
+// BrowserSession is a durable handle to an externalized (Steel) browser session
+// so it can be re-attached after a daemon restart instead of being orphaned.
+type BrowserSession struct {
+	AgentID   string
+	SessionID string
+	ProfileID string
+	CDPURL    string
 }
 
 // Open initializes or additively migrates a Node-compatible database.
@@ -160,12 +176,49 @@ func (s *Store) DeleteAgent(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM agents WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// SaveBrowserSession records (or updates) an agent's externalized browser
+// session so it survives a daemon restart. The signature is primitive-typed so
+// the browser package's SessionStore interface is satisfied structurally.
+func (s *Store) SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error {
+	_, err := s.db.Exec(`INSERT INTO browser_sessions (agentId, sessionId, profileId, cdpUrl, updatedAt)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(agentId) DO UPDATE SET sessionId=excluded.sessionId, profileId=excluded.profileId, cdpUrl=excluded.cdpUrl, updatedAt=excluded.updatedAt`,
+		agentID, sessionID, profileID, cdpURL, s.now().UnixMilli())
+	return err
+}
+
+// DeleteBrowserSession forgets an agent's persisted browser session (session
+// ended, or re-attach failed because it was already gone).
+func (s *Store) DeleteBrowserSession(agentID string) error {
+	_, err := s.db.Exec("DELETE FROM browser_sessions WHERE agentId = ?", agentID)
+	return err
+}
+
+// ListBrowserSessions returns every persisted browser session, for re-attach on
+// daemon startup.
+func (s *Store) ListBrowserSessions() ([]BrowserSession, error) {
+	rows, err := s.db.Query("SELECT agentId, sessionId, profileId, cdpUrl FROM browser_sessions")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]BrowserSession, 0)
+	for rows.Next() {
+		var b BrowserSession
+		if err := rows.Scan(&b.AgentID, &b.SessionID, &b.ProfileID, &b.CDPURL); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Agent(id string) (*Agent, error) {

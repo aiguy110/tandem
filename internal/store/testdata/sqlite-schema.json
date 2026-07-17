@@ -26,6 +26,12 @@
     },
     {
       "type": "index",
+      "name": "sqlite_autoindex_browser_sessions_1",
+      "tableName": "browser_sessions",
+      "sql": null
+    },
+    {
+      "type": "index",
       "name": "sqlite_autoindex_events_1",
       "tableName": "events",
       "sql": null
@@ -47,6 +53,12 @@
       "name": "assets",
       "tableName": "assets",
       "sql": "CREATE TABLE assets (\n        id        TEXT PRIMARY KEY,\n        mimeType  TEXT NOT NULL,\n        size      INTEGER NOT NULL,\n        createdAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "browser_sessions",
+      "tableName": "browser_sessions",
+      "sql": "CREATE TABLE browser_sessions (\n        agentId   TEXT PRIMARY KEY,\n        sessionId TEXT NOT NULL,\n        profileId TEXT NOT NULL DEFAULT '',\n        cdpUrl    TEXT NOT NULL DEFAULT '',\n        updatedAt INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",

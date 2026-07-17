@@ -612,29 +612,46 @@ func (b *Broker) Release(id string) error {
 	b.emitState(id)
 	return nil
 }
-func (b *Broker) Teardown(ctx context.Context, id string) error {
+
+// detach drops the daemon's local hold on an agent's browser — the direct CDP
+// connection and any agent proxy links — and removes the in-memory record,
+// without ending the underlying browser. For an externalized (Steel) session
+// this leaves the session alive on the server so a later Detach-then-restart can
+// re-attach to it.
+func (b *Broker) detach(id string) {
 	b.mu.Lock()
 	a := b.agents[id]
 	delete(b.agents, id)
 	b.mu.Unlock()
-	if a != nil {
-		a.mu.Lock()
-		shared := a.shared
-		a.shared = nil
-		links := make([]*proxyLink, 0, len(a.links))
-		for l := range a.links {
-			links = append(links, l)
-		}
-		a.links = make(map[*proxyLink]struct{})
-		a.mu.Unlock()
-		if shared != nil {
-			_ = shared.Close()
-		}
-		for _, l := range links {
-			_ = l.agent.Close()
-			_ = l.upstream.Close()
-		}
+	if a == nil {
+		return
 	}
+	a.mu.Lock()
+	shared := a.shared
+	a.shared = nil
+	links := make([]*proxyLink, 0, len(a.links))
+	for l := range a.links {
+		links = append(links, l)
+	}
+	a.links = make(map[*proxyLink]struct{})
+	a.mu.Unlock()
+	if shared != nil {
+		_ = shared.Close()
+	}
+	for _, l := range links {
+		_ = l.agent.Close()
+		_ = l.upstream.Close()
+	}
+}
+
+// Detach releases only the daemon-local resources, keeping the underlying
+// session alive. Used on daemon shutdown so a redeploy can re-attach.
+func (b *Broker) Detach(id string) { b.detach(id) }
+
+// Teardown ends the session for good: detaches locally, then tells the driver to
+// destroy (release) the underlying browser. Used when an agent is closed.
+func (b *Broker) Teardown(ctx context.Context, id string) error {
+	b.detach(id)
 	return b.driver.Teardown(ctx, id)
 }
 func (b *Broker) Stop(ctx context.Context) error {
@@ -644,8 +661,9 @@ func (b *Broker) Stop(ctx context.Context) error {
 		ids = append(ids, id)
 	}
 	b.mu.Unlock()
+	// Shutdown must not destroy sessions — detach so a restart can re-attach.
 	for _, id := range ids {
-		_ = b.Teardown(ctx, id)
+		b.detach(id)
 	}
 	if b.server != nil {
 		return b.server.Shutdown(ctx)

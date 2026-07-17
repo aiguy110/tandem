@@ -70,7 +70,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	var broker *browser.Broker
 	var takeovers *browser.Takeovers
 	var factory agentadapter.Factory
-	driver, driverErr := browser.NewDriver(browser.DriverConfig{Driver: cfg.Browser.Driver, UserDataRoot: cfg.Browser.UserDataRoot, ChromiumExecutable: cfg.Browser.ChromiumExecutable, SteelBaseURL: cfg.Browser.SteelBaseURL, SteelAPIKey: cfg.Browser.SteelAPIKey, SteelSessionOptions: cfg.Browser.SteelSessionOptions})
+	driver, driverErr := browser.NewDriver(browser.DriverConfig{Driver: cfg.Browser.Driver, UserDataRoot: cfg.Browser.UserDataRoot, ChromiumExecutable: cfg.Browser.ChromiumExecutable, SteelBaseURL: cfg.Browser.SteelBaseURL, SteelAPIKey: cfg.Browser.SteelAPIKey, SteelSessionOptions: cfg.Browser.SteelSessionOptions, SessionStore: db})
 	if driverErr != nil {
 		return driverErr
 	}
@@ -111,6 +111,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	if err := agents.RestoreAll(ctx); err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	reattachBrowsers(ctx, db, driver, broker, agents, stdout)
 	defer func() {
 		disposeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -200,6 +201,38 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		return nil
 	}
 	return err
+}
+
+// reattachBrowsers re-connects to externalized (Steel) browser sessions that
+// outlived a daemon restart, so their agents' Browser tabs light up with the
+// live page instead of showing "no browser yet". A session the Steel server has
+// since reclaimed fails to re-provision and is forgotten (its row removed); a
+// row whose agent no longer exists is dropped too.
+func reattachBrowsers(ctx context.Context, db *store.Store, driver browser.Driver, broker *browser.Broker, agents *registry.Registry, stdout io.Writer) {
+	adopter, ok := driver.(*browser.SteelDriver)
+	if !ok || broker == nil {
+		return
+	}
+	sessions, err := db.ListBrowserSessions()
+	if err != nil {
+		fmt.Fprintf(stdout, "browser re-attach: list sessions: %v\n", err)
+		return
+	}
+	for _, ps := range sessions {
+		if agents.Get(ps.AgentID) == nil {
+			_ = db.DeleteBrowserSession(ps.AgentID)
+			continue
+		}
+		adopter.Adopt(ps.AgentID, ps.SessionID, ps.ProfileID, ps.CDPURL)
+		attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := broker.EnsureProvisioned(attachCtx, ps.AgentID)
+		cancel()
+		if err != nil {
+			// EnsureProvisioned already tore the dead session down (which forgets
+			// the persisted row); just note it.
+			fmt.Fprintf(stdout, "browser re-attach failed for %s: %v\n", ps.AgentID, err)
+		}
+	}
 }
 
 func pushAgentEvent(agents *registry.Registry, id string, value any) {
