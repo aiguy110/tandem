@@ -91,6 +91,15 @@ export function BrowserPane() {
   const toPage = (e: React.MouseEvent): { x: number; y: number } | null => clientToPage(e.clientX, e.clientY);
 
   const emit = (event: BrowserInputWire) => browserInput(agentId, event);
+  // Chromium's built-in editing/navigation commands (delete-backward, caret
+  // movement, etc.) key off the CDP event's windowsVirtualKeyCode, not just
+  // `key`/`code` — a synthetic Backspace with no VK code reaches the page's
+  // JS `keydown` listener but doesn't trigger the native character deletion.
+  const VK_CODES: Record<string, number> = {
+    Backspace: 8, Tab: 9, Enter: 13, Escape: 27, Delete: 46,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34,
+  };
+  const emitKey = (key: string, code: string) => emit({ kind: 'keydown', key, code, keyCode: VK_CODES[key] });
 
   const onMouse = (kind: BrowserInputWire['kind']) => (e: React.MouseEvent) => {
     if (!userOwns) return;
@@ -111,7 +120,7 @@ export function BrowserPane() {
     if (!userOwns) return;
     e.preventDefault();
     if (e.key.length === 1) emit({ kind: 'text', text: e.key });
-    else emit({ kind: 'keydown', key: e.key, code: e.code });
+    else emitKey(e.key, e.code);
   };
 
   // Touch → mouse/wheel mapping. A single finger that stays roughly put is a
@@ -175,7 +184,7 @@ export function BrowserPane() {
     const now = Date.now();
     if (now - lastBkspRef.current < 30) return;
     lastBkspRef.current = now;
-    emit({ kind: 'keydown', key: 'Backspace', code: 'Backspace' });
+    emitKey('Backspace', 'Backspace');
   };
   const onKbdInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
     if (userOwns) {
@@ -188,14 +197,14 @@ export function BrowserPane() {
           break;
         case 'insertLineBreak':
         case 'insertParagraph':
-          emit({ kind: 'keydown', key: 'Enter', code: 'Enter' });
+          emitKey('Enter', 'Enter');
           break;
         case 'deleteContentBackward':
         case 'deleteWordBackward':
           emitBackspace();
           break;
         case 'deleteContentForward':
-          emit({ kind: 'keydown', key: 'Delete', code: 'Delete' });
+          emitKey('Delete', 'Delete');
           break;
       }
     }
@@ -217,7 +226,7 @@ export function BrowserPane() {
     }
     if (k.length === 1 || k === 'Enter' || k === 'Unidentified' || k === 'Process') return;
     e.preventDefault();
-    emit({ kind: 'keydown', key: k, code: e.code });
+    emitKey(k, e.code);
   };
 
   return (
