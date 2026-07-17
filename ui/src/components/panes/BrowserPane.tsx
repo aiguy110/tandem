@@ -118,7 +118,14 @@ export function BrowserPane() {
   };
   const onKey = (e: React.KeyboardEvent) => {
     if (!userOwns) return;
+    // We own the wheel, so this keystroke is meant for the remote page, not the
+    // app. stopPropagation keeps it from bubbling to the window-level global key
+    // handler — otherwise bare keys bound there fire too (e.g. Backspace =
+    // agent.close would tear down the session mid-type). preventDefault alone
+    // doesn't stop propagation. The mobile soft-keyboard path rides a real
+    // <textarea>, which useGlobalKeys already treats as text-input scope.
     e.preventDefault();
+    e.stopPropagation();
     if (e.key.length === 1) emit({ kind: 'text', text: e.key });
     else emitKey(e.key, e.code);
   };
