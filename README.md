@@ -105,7 +105,8 @@ Self-hosted Daemon  ────────────────────
 1. **The daemon owns all state.** Everything the browser shows is reconstructable from
    daemon state on reconnect (transcripts, terminal scrollback, browser frames).
 2. **Every agent is an `AgentAdapter`** implementing one interface. Structured-first
-   (ACP) where available; raw pty as the fallback and the user's escape-hatch shell.
+   (ACP) where available; raw pty as the fallback. The daemon separately owns the user's
+   independent worktree shell.
 3. **One CDP browser, two clients, one control token.** Agent and human are peers on the
    same browser session; the token arbitrates who is driving.
 4. **Workspace isolation by default** — a git worktree (or dir) per agent so parallel

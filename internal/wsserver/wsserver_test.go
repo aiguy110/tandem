@@ -330,10 +330,11 @@ func TestSnapshotReplayChannelsMultipleClientsAndUnsubscribe(t *testing.T) {
 	a.events <- event("one")
 	a.events <- status()
 	waitHead(t, b.Get("a"), 2)
+	b.Get("a").SetControlMode("terminal")
 	one, two := dial(t, url), dial(t, url)
 	send(t, one, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"transcript"}, "corrId": "s"})
 	snap := recv(t, one)
-	if snap["t"] != "snapshot" || snap["seq"] != float64(2) || len(snap["transcript"].([]any)) != 1 {
+	if snap["t"] != "snapshot" || snap["seq"] != float64(3) || snap["controlMode"] != "terminal" || len(snap["transcript"].([]any)) != 2 {
 		t.Fatalf("snapshot %#v", snap)
 	}
 	if recv(t, one)["t"] != "ack" {
@@ -344,19 +345,61 @@ func TestSnapshotReplayChannelsMultipleClientsAndUnsubscribe(t *testing.T) {
 	if replayed["t"] != "event" || replayed["seq"] != float64(2) {
 		t.Fatalf("replay %#v", replayed)
 	}
+	if control := recv(t, two); control["t"] != "event" || control["seq"] != float64(3) {
+		t.Fatalf("control replay %#v", control)
+	}
 	recv(t, two)
 	a.events <- event("live")
-	waitHead(t, b.Get("a"), 3)
-	if recv(t, one)["seq"] != float64(3) || recv(t, two)["seq"] != float64(3) {
+	waitHead(t, b.Get("a"), 4)
+	if recv(t, one)["seq"] != float64(4) || recv(t, two)["seq"] != float64(4) {
 		t.Fatal("live fanout")
 	}
 	send(t, one, map[string]any{"t": "unsubscribe", "agentId": "a", "channels": []string{"transcript"}})
 	recv(t, one)
 	a.events <- event("gone")
-	waitHead(t, b.Get("a"), 4)
+	waitHead(t, b.Get("a"), 5)
 	one.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if err := one.ReadJSON(&map[string]any{}); err == nil {
 		t.Fatal("event after unsubscribe")
+	}
+}
+
+func TestPTYChannelKeepsAgentCLIAndUserShellEventsTagged(t *testing.T) {
+	_, b, a, _, url := setupWS(t, 0)
+	a.events <- eventlog.RawPTY([]byte("agent-cli"))
+	a.events <- eventlog.ShellPTY([]byte("user-shell"))
+	a.events <- eventlog.ShellExit("exited (code 0)")
+	a.events <- event("transcript")
+	waitHead(t, b.Get("a"), 4)
+
+	pty := dial(t, url)
+	send(t, pty, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"pty"}})
+	snap := recv(t, pty)
+	events := snap["transcript"].([]any)
+	if snap["t"] != "snapshot" || len(events) != 3 {
+		t.Fatalf("pty snapshot %#v", snap)
+	}
+	want := []string{"raw_pty", "shell_pty", "shell_exit"}
+	for i, entry := range events {
+		event := entry.(map[string]any)["event"].(map[string]any)
+		if event["kind"] != want[i] {
+			t.Fatalf("event %d = %#v, want kind %s", i, event, want[i])
+		}
+	}
+	if recv(t, pty)["t"] != "ack" {
+		t.Fatal("missing pty subscribe ack")
+	}
+
+	transcript := dial(t, url)
+	send(t, transcript, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"transcript"}})
+	transcriptSnap := recv(t, transcript)
+	transcriptEvents := transcriptSnap["transcript"].([]any)
+	if len(transcriptEvents) != 1 {
+		t.Fatalf("transcript snapshot %#v", transcriptSnap)
+	}
+	event := transcriptEvents[0].(map[string]any)["event"].(map[string]any)
+	if event["kind"] != "message_chunk" {
+		t.Fatalf("transcript event %#v", event)
 	}
 }
 

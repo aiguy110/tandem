@@ -97,6 +97,12 @@ export async function createRenderer(el: HTMLElement, engine: EngineName): Promi
       const fit = new g.FitAddon() as unknown as FitLike;
       term.loadAddon(fit);
       term.open(el);
+      // ghostty-web 0.4 can recycle a freed WASM terminal handle with its old
+      // screen cells intact. When React swaps the agent CLI for the independent
+      // worktree shell, that makes correctly separated raw_pty bytes appear in
+      // the shell renderer. Clear both the viewport and scrollback before the
+      // selected hub replays its own bytes into this new renderer.
+      term.write('\x1b[3J\x1b[2J\x1b[H');
       (fit as FitLike).fit();
       return { renderer: new Adapter(term, fit), engine: 'ghostty' };
     } catch (e) {

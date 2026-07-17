@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { WsClient, resolveToken, type ConnState } from './ws/client';
 import { ptyHub } from './terminal/ptyHub';
+import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
 import type {
   AgentStatus,
@@ -41,8 +42,11 @@ export interface Takeover {
   reason: string;
 }
 
-export type PaneId = 'transcript' | 'terminal' | 'diff' | 'browser';
-export const PANES: PaneId[] = ['transcript', 'terminal', 'diff', 'browser'];
+// Chat = the agent conversation (ACP transcript or the agent's resumable CLI,
+// toggled by the in-pane ACP/CLI switch). Shell = the user's escape-hatch shell
+// in the agent's worktree (the Terminal tab).
+export type PaneId = 'chat' | 'shell' | 'diff' | 'browser';
+export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
 
 export interface AgentView {
   id: string;
@@ -65,7 +69,11 @@ export interface AgentView {
   events: { seq: number; event: WireEvent }[]; // transcript/terminals channel, seq-ordered
   lastSeq: number;
   pendingApprovals: Approval[];
-  hasPty: boolean; // any raw_pty seen → the Terminal pane has live content
+  hasPty: boolean; // any raw_pty seen → the agent CLI view has live content
+  // User escape-hatch shell (Terminal tab). shellExited flips true when the
+  // shell process ends (shell_exit) so the pane can offer a restart.
+  shellExited: boolean;
+  shellExitMessage: string | null;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
   // holds the wheel, plus any pending agent-initiated takeover requests.
   browserActive: boolean;
@@ -82,6 +90,9 @@ export interface AgentView {
   // null until the adapter reports ACP prompt capabilities.
   imagePromptSupport: boolean | null;
   controlMode: 'transcript' | 'switching' | 'terminal';
+  // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
+  adapter: 'acp' | 'pty';
+  canHandoff: boolean;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume';
@@ -134,6 +145,9 @@ interface StoreState {
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
   leaveTerminal: (agentId: string) => Promise<AckResult>;
+  // User escape-hatch shell (Terminal tab).
+  openShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
+  restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string, profile?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
@@ -318,6 +332,7 @@ export const useStore = create<StoreState>((set, get) => {
           return { agents, order, focusedId };
         });
         ptyHub.clear(msg.agentId);
+        shellHub.clear(msg.agentId);
         browserHub.clear(msg.agentId);
         writeStoredUsage(msg.agentId, null);
         return;
@@ -326,9 +341,21 @@ export const useStore = create<StoreState>((set, get) => {
         set((st) => {
           const agents = { ...st.agents };
           const prev = agents[msg.agentId] ?? shell(msg.agentId);
-          const transcript = msg.transcript.filter((e) => e.event.kind !== 'raw_pty');
-          // Feed any pty frames in the snapshot into the terminal hub (rehydrate).
-          for (const e of msg.transcript) if (e.event.kind === 'raw_pty') ptyHub.push(msg.agentId, e.event.dataB64);
+          // raw_pty (agent CLI) and shell_pty/shell_exit (user Terminal shell)
+          // are byte/lifecycle streams routed to their hubs, not the transcript.
+          const transcript = msg.transcript.filter(
+            (e) => e.event.kind !== 'raw_pty' && e.event.kind !== 'shell_pty' && e.event.kind !== 'shell_exit',
+          );
+          // Feed any pty frames in the snapshot into the terminal hubs (rehydrate).
+          for (const e of msg.transcript) {
+            if (e.event.kind === 'raw_pty') ptyHub.push(msg.agentId, e.event.dataB64);
+            else if (e.event.kind === 'shell_pty') shellHub.push(msg.agentId, e.event.dataB64);
+          }
+          // The shell is exited iff its last lifecycle event is shell_exit (a
+          // restart appends fresh shell_pty after it).
+          const lastShell = [...msg.transcript].reverse().find((e) => e.event.kind === 'shell_pty' || e.event.kind === 'shell_exit');
+          const shellExited = !!lastShell && lastShell.event.kind === 'shell_exit';
+          const shellExitMessage = shellExited && lastShell.event.kind === 'shell_exit' ? lastShell.event.message : null;
           // session_config/available_commands aren't top-level snapshot fields
           // (unlike status/pendingApprovals) — fold the latest one out of the
           // replayed transcript, mirroring the live 'event' path's applyEventToView.
@@ -352,6 +379,8 @@ export const useStore = create<StoreState>((set, get) => {
                 ? lastPromptCapabilities.event.image
                 : prev.imagePromptSupport,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
+            shellExited,
+            shellExitMessage,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return { agents, order, focusedId: st.focusedId ?? msg.agentId };
@@ -366,6 +395,26 @@ export const useStore = create<StoreState>((set, get) => {
             const a = st.agents[agentId];
             if (!a || (a.hasPty && seq <= a.lastSeq)) return st;
             return { agents: { ...st.agents, [agentId]: { ...a, hasPty: true, lastSeq: Math.max(a.lastSeq, seq) } } };
+          });
+          return;
+        }
+        if (event.kind === 'shell_pty') {
+          shellHub.push(agentId, event.dataB64);
+          set((st) => {
+            const a = st.agents[agentId];
+            if (!a) return st;
+            // Live output implies a running shell; clear any stale exited flag.
+            if (!a.shellExited && seq <= a.lastSeq) return st;
+            return { agents: { ...st.agents, [agentId]: { ...a, shellExited: false, shellExitMessage: null, lastSeq: Math.max(a.lastSeq, seq) } } };
+          });
+          return;
+        }
+        if (event.kind === 'shell_exit') {
+          const message = event.message;
+          set((st) => {
+            const a = st.agents[agentId];
+            if (!a) return st;
+            return { agents: { ...st.agents, [agentId]: { ...a, shellExited: true, shellExitMessage: message, lastSeq: Math.max(a.lastSeq, seq) } } };
           });
           return;
         }
@@ -403,7 +452,7 @@ export const useStore = create<StoreState>((set, get) => {
     agents: {},
     order: [],
     focusedId: null,
-    pane: 'transcript',
+    pane: 'chat',
     modal: 'none',
     inspectorOpen: false,
     dirs: [],
@@ -466,7 +515,7 @@ export const useStore = create<StoreState>((set, get) => {
         pendingAcks.set(corrId, (r) => {
           if (r.agentId && !r.error) {
             get().refreshAgents();
-            set({ focusedId: r.agentId, modal: 'none', pane: 'transcript' });
+            set({ focusedId: r.agentId, modal: 'none', pane: 'chat' });
           }
           resolve(r);
         });
@@ -490,13 +539,33 @@ export const useStore = create<StoreState>((set, get) => {
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'leave_terminal', agentId, corrId });
       }),
+    openShell: (agentId, cols, rows) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'shell_open', agentId, cols, rows, corrId });
+      }),
+    restartShell: (agentId, cols, rows) => {
+      // Clear the exited flag + prior scrollback so the fresh shell starts clean.
+      shellHub.reset(agentId);
+      set((st) => {
+        const a = st.agents[agentId];
+        if (!a) return st;
+        return { agents: { ...st.agents, [agentId]: { ...a, shellExited: false, shellExitMessage: null } } };
+      });
+      return new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'shell_open', agentId, cols, rows, corrId });
+      });
+    },
     spawn: (spec) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
           if (r.agentId && !r.error) {
             get().refreshAgents();
-            set({ focusedId: r.agentId, modal: 'none', pane: 'transcript' });
+            set({ focusedId: r.agentId, modal: 'none', pane: 'chat' });
           }
           resolve(r);
         });
@@ -604,6 +673,8 @@ function shell(id: string): AgentView {
     lastSeq: 0,
     pendingApprovals: [],
     hasPty: false,
+    shellExited: false,
+    shellExitMessage: null,
     browserActive: false,
     browserOwner: 'agent',
     takeovers: [],
@@ -612,12 +683,14 @@ function shell(id: string): AgentView {
     commands: [],
     imagePromptSupport: null,
     controlMode: 'transcript',
+    adapter: 'acp',
+    canHandoff: false,
   };
 }
 
 function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, workspace: s.workspace, status: s.status, controlMode: s.controlMode };
+  return { ...base, name: s.name, agent: s.agent, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

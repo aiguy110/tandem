@@ -66,8 +66,14 @@ export type AgentEvent =
   | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
   | { kind: 'control_state'; mode: ControlMode };
 
-// On the wire raw_pty bytes are base64; everything else is a plain AgentEvent.
-export type WireEvent = AgentEvent | { kind: 'raw_pty'; dataB64: string };
+// On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
+// AgentEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
+// tab), kept separate from the agent's raw_pty stream.
+export type WireEvent =
+  | AgentEvent
+  | { kind: 'raw_pty'; dataB64: string }
+  | { kind: 'shell_pty'; dataB64: string }
+  | { kind: 'shell_exit'; message: string };
 
 export interface Approval {
   reqId: string;
@@ -128,6 +134,10 @@ export interface AgentSummary {
   status: AgentStatus;
   pendingApprovals: number;
   controlMode: ControlMode;
+  // Stable adapter kind (does not change across an ACP↔CLI handoff) and whether
+  // the Chat tab should offer the ACP/CLI switch for this agent.
+  adapter: 'acp' | 'pty';
+  canHandoff: boolean;
 }
 
 // A resumable coding-agent session for the Resume picker — either a session
@@ -240,7 +250,11 @@ export type ClientMsg =
   | { t: 'list_sessions'; corrId?: string }
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
-  | { t: 'leave_terminal'; agentId: string; corrId?: string };
+  | { t: 'leave_terminal'; agentId: string; corrId?: string }
+  | { t: 'shell_open'; agentId: string; cols: number; rows: number; corrId?: string }
+  | { t: 'shell_input'; agentId: string; bytesB64: string; corrId?: string }
+  | { t: 'shell_resize'; agentId: string; cols: number; rows: number; corrId?: string }
+  | { t: 'shell_close'; agentId: string; corrId?: string };
 
 export interface BrowserInputWire {
   kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';

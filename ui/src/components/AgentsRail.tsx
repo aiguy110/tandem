@@ -39,7 +39,7 @@ export function AgentsRail() {
   const promptForCommitMerge = (id: string) => {
     setConfirmation(null);
     focus(id);
-    setPane('transcript');
+    setPane('chat');
     const target = agents[id]?.workspace.targetRef;
     setDraft(id, target
       ? `please commit your changes and prepare them to merge into ${target.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}`

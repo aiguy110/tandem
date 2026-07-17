@@ -70,6 +70,11 @@ type Summary struct {
 	Status           session.Status   `json:"status"`
 	PendingApprovals int              `json:"pendingApprovals"`
 	ControlMode      string           `json:"controlMode"`
+	// Adapter is the agent's stable adapter kind ("acp" or "pty"); it does not
+	// change across an ACP↔CLI handoff. CanHandoff is true when the agent
+	// supports swapping to its resumable CLI (the Chat tab's ACP/CLI switch).
+	Adapter    string `json:"adapter"`
+	CanHandoff bool   `json:"canHandoff"`
 }
 
 type CatalogAgent struct {
@@ -210,7 +215,7 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 		if agent == "" {
 			agent = r.config.ACP.Default
 		}
-		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode()}
+		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode(), Adapter: s.Spec.Adapter, CanHandoff: canHandoff(s.Spec)}
 		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
 		if ws.Integration != nil {
 			summary.Workspace.TargetKind = ws.Integration.Kind
@@ -283,6 +288,19 @@ func (r *Registry) ListGitRefs(ctx context.Context, repo string) ([]workspace.Gi
 		}
 	}
 	return refs, nil
+}
+
+// OpenUserShell lazily spawns the user's escape-hatch shell (Terminal tab) in
+// the agent's worktree. It runs independently of the agent adapter, so it is
+// unaffected by ACP↔CLI handoffs.
+func (r *Registry) OpenUserShell(id string, cols, rows uint16) error {
+	r.mu.RLock()
+	s, cwd := r.sessions[id], r.cwds[id]
+	r.mu.RUnlock()
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	return s.OpenUserShell(cwd, cols, rows)
 }
 
 func (r *Registry) ClosePreview(ctx context.Context, id string) (*workspace.ClosePreview, error) {
@@ -895,6 +913,16 @@ func cloneSpec(spec agentadapter.Spec) agentadapter.Spec {
 	var out agentadapter.Spec
 	_ = json.Unmarshal(b, &out)
 	return out
+}
+
+// canHandoff reports whether an agent can swap to its resumable CLI. It mirrors
+// the preconditions enforced in EnterTerminal so the UI only offers the switch
+// when it will succeed.
+func canHandoff(spec agentadapter.Spec) bool {
+	return spec.Adapter == "acp" &&
+		spec.ResolvedLaunch != nil &&
+		spec.ResolvedLaunch.Terminal != nil &&
+		len(spec.ResolvedLaunch.Terminal.ResumeArgs) > 0
 }
 
 func (r *Registry) EnterTerminal(ctx context.Context, id string, interrupt bool) error {

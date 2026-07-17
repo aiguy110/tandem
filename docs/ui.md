@@ -11,7 +11,7 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
 │ Conductor bar:  [+ Agent] [Assign…]   ⌘K palette   ◐   │
 ├──────────┬───────────────────────────────┬────────────┤
 │ Agents   │  FOCUS: <agent name>          │ Approvals  │
-│ ──────   │  [Transcript][Term][Diff][Web]│ ────────   │
+│ ──────   │  [Chat][Terminal][Diff][Web]  │ ────────   │
 │ ● web-1  │                               │ ⚠ web-1    │
 │ ● api-2  │   (selected pane)             │  run `rm…` │
 │ ○ docs-3 │                               │  [✓] [✗]   │
@@ -26,8 +26,10 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
   (`idle · working · ⚠ blocked · error`), name, and workspace. `⚠ blocked` and `error`
   float to the top. Click = focus. Always visible.
 - **Center — Focus.** The selected agent, with pane tabs:
-  - **Transcript** (default) — the structured event stream, cleanly rendered.
-  - **Terminal** — xterm.js on the pty. The "drop to terminal" escape hatch.
+  - **Chat** (default) — structured ACP transcript or the agent's resumable CLI, selected
+    with an ACP/CLI switch and guarded confirmations around active-process interruption.
+  - **Terminal** — the user's independent default shell in the agent worktree, lazily
+    started and preserved across pane switches and reconnects.
   - **Diff** — the workspace's uncommitted diff, reviewable/stageable.
   - **Browser** — the shared Steel screencast + a visible **control-owner indicator** and a
     "grab/release wheel" button (grabbing pauses the agent). Shown only when a browser is
@@ -57,7 +59,8 @@ interface AgentView {
   workspace: { repo: string; branch: string; dirty: boolean };
   status: AgentStatus;
   transcript: AgentEvent[];   // structured events, appended
-  terminalBuffer: RingBuffer; // pty scrollback for xterm.js
+  cliBuffer: RingBuffer;      // agent CLI raw_pty scrollback
+  shellBuffer: RingBuffer;    // user shell shell_pty scrollback
   browser?: { sessionId: string; controlOwner: 'agent' | 'user' };
   pendingApprovals: Approval[];
 }
@@ -80,16 +83,18 @@ docked-rails layout (D6), a zustand store that is a pure projection of daemon me
 durable token-auth WS client with backoff reconnect + `sinceSeq` replay (D15), the transcript
 renderer (merged prose/markdown, dimmed thoughts, collapsed tool cards with status chips,
 plans, per-terminal mini-terminals, inline permission cards, error banners), the always-on
-global approvals rail, the Terminal pane (`ghostty-web` default via WASM, `@xterm/xterm`
-fallback — D12), the dir-first quick-spawn palette (D9), and the scope-aware rebindable
+global approvals rail, the Chat ACP/CLI switch and independent Terminal shell
+(`ghostty-web` default via WASM, `@xterm/xterm` fallback — D12), the dir-first quick-spawn
+palette (D9), and the scope-aware rebindable
 command palette + keymap (D10). See [`ui/README.md`](../ui/README.md).
 
 Small deviations from the sketch above, all driven by what the wire actually carries:
 
 - **`AgentView.transcript`** is stored as the raw seq-tagged `WireEvent[]`; the rendered
   message/tool/plan/terminal items are derived per render (the store stays a thin projection).
-- **`terminalBuffer`** lives outside the reactive store (a non-reactive `ptyHub` fan-out) so a
-  stream of pty bytes never re-renders React; the Terminal pane rehydrates from it on focus.
+- **PTY buffers** live outside the reactive store: `ptyHub` holds the agent CLI and
+  `shellHub` holds the user's Terminal shell, so byte streams never trigger React renders
+  and cannot mix during replay.
 - The rail needs each agent's **name + workspace**, which no `snapshot` carries, so the client
   discovers agents via a new **`list_agents`** message (see `ws-protocol.md`) on every
   (re)connect — this is what makes the rail correct after a daemon restart.

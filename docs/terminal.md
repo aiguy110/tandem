@@ -1,8 +1,9 @@
-# Terminal pane
+# Chat CLI and Terminal shell
 
-Renders raw pty streams (the `PtyAdapter` / the user's escape-hatch shell) and ACP
-client-owned terminal output. Built against the **xterm.js API** behind a thin
-`TerminalRenderer` interface so the emulator engine is swappable.
+The **Chat** tab owns the agent interface: structured ACP transcript by default, or the
+agent's resumable CLI selected with the in-pane ACP/CLI switch. The separate **Terminal**
+tab is the user's default shell in the agent worktree. Both PTYs render through the same
+`TerminalRenderer` abstraction, but their streams and lifecycles are independent.
 
 ## Engine: ghostty-web (default), xterm.js (fallback)
 
@@ -31,23 +32,22 @@ interface TerminalRenderer {
 
 ## Data flow
 
-- **Output:** daemon `pty` channel (base64 `raw_pty` frames) → `write()`.
-- **Input:** `onData` → `{ t: 'input', bytesB64 }`.
-- **Resize:** fit-to-container → `{ t: 'resize', cols, rows }` → `PtyAdapter.resize()` →
-  the Go daemon's native Unix PTY backend.
-- **Reconnect:** replay the daemon's buffered `raw_pty` bytes into `write()` — no serialize
-  addon needed; reuses the durability spine.
+- **Agent CLI output:** base64 `raw_pty` events → `ptyHub` → Chat CLI renderer.
+- **Agent CLI input/resize:** `input` / `resize` → the active `PtyAdapter`.
+- **User shell output:** base64 `shell_pty` events → `shellHub` → Terminal renderer;
+  `shell_exit` drives the explicit restart overlay.
+- **User shell input/resize:** `shell_input` / `shell_resize`; `shell_open` lazily starts
+  `$SHELL` in the worktree and is idempotent while it is running.
+- **Reconnect:** both streams replay from the daemon event log into their distinct hubs.
 
 ## ACP ↔ CLI handoff
 
-Opening Terminal is initially view-only: a shroud requires the user to confirm **Take
-control** before an idle ACP agent swaps to its resumable CLI. The handoff preserves the
-Tandem agent id, workspace, ACP session id, and monotonic event log. For a mid-turn agent
-the Terminal pane instead requires the stronger **Interrupt & take over** confirmation:
+The ACP/CLI switch lives in Chat. An idle ACP agent can switch directly to its resumable
+CLI; a mid-turn agent requires the stronger **Interrupt & take over** confirmation:
 the daemon sends `session/cancel`, waits up to four seconds for the prompt to settle, disposes
-ACP, and launches the CLI with its session id. Transcript is shrouded while the CLI owns the
-session. Normal CLI exit—or **return to Transcript now**—disposes the PTY and reloads the same
-session through ACP automatically.
+ACP, and launches the CLI with its session id. Switching back requires confirmation before
+killing the live CLI. Normal CLI exit disposes the PTY and reloads the same session through
+ACP automatically. The Terminal shell continues independently throughout either handoff.
 
 CLI templates come from each agent's `terminal.resumeArgs` entry in `config.yml.example`
 or the `$TANDEM_HOME/config.yml` overlay. They can also be overridden with the legacy
@@ -60,11 +60,17 @@ Browsers cap WebGL contexts (~16 per page). Only the **focused** terminal render
 background terminals pause and rehydrate from the daemon buffer on focus. Applies to both
 engines.
 
-## Two content kinds, one renderer
+## Independent PTYs
 
-1. **Raw pty** (`PtyAdapter` / user shell) — full VT emulation.
-2. **ACP `terminal_output`** (client-owned tool terminals) — same renderer, one instance
-   per terminal.
+1. **Agent PTY** — a native `PtyAdapter` agent or an ACP agent's resumable CLI; durable
+   event kind `raw_pty`.
+2. **User shell PTY** — lazily spawned per session in the worktree; durable event kinds
+   `shell_pty` and `shell_exit`.
+3. **ACP `terminal_output`** — client-owned tool terminals rendered inside the transcript.
+
+ghostty-web 0.4 may recycle a freed WASM terminal handle with old screen cells intact. A
+new renderer clears its viewport and scrollback before its selected hub replays, preventing
+one PTY's old cells from appearing in another PTY's view.
 
 ## Spike
 

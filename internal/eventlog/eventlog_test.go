@@ -59,8 +59,12 @@ func TestEncodingAndAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Seq != 1 || second.Seq != 2 || first.TS != 1700000010000 || log.Head() != 2 {
-		t.Fatalf("first=%#v second=%#v head=%d", first, second, log.Head())
+	third, err := log.Append(ShellPTY([]byte("shell\x00")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Seq != 1 || second.Seq != 2 || third.Seq != 3 || first.TS != 1700000010000 || log.Head() != 3 {
+		t.Fatalf("first=%#v second=%#v third=%#v head=%d", first, second, third, log.Head())
 	}
 	history, err := log.FullHistory()
 	if err != nil {
@@ -72,6 +76,13 @@ func TestEncodingAndAppend(t *testing.T) {
 	}
 	if _, err := ParseNormalized([]byte(`{"kind":"raw_pty","dataB64":"%%%"}`)); err == nil {
 		t.Fatal("invalid base64 accepted")
+	}
+	shellNormalized, _ := history[2].Event.NormalizedJSON()
+	if string(shellNormalized) != `{"kind":"shell_pty","dataB64":"c2hlbGwA"}` || !reflect.DeepEqual(history[2].Event.Data, []byte("shell\x00")) {
+		t.Fatalf("shell event JSON=%s data=%v", shellNormalized, history[2].Event.Data)
+	}
+	if _, err := ParseNormalized([]byte(`{"kind":"shell_pty","dataB64":"%%%"}`)); err == nil {
+		t.Fatal("invalid shell base64 accepted")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	proc "github.com/aiguy110/tandem/internal/process"
 )
 
 type Status string
@@ -41,6 +42,15 @@ type Session struct {
 	disposeOnce  sync.Once
 	disposeErr   error
 	done         chan struct{}
+
+	// User escape-hatch shell (docs/terminal.md: the Terminal tab). Independent
+	// of the agent adapter, so it survives ACP↔CLI control swaps and runs
+	// concurrently with the agent. Lazily spawned on first OpenUserShell.
+	shellMu      sync.Mutex
+	shell        *proc.PTY
+	shellCancel  context.CancelFunc
+	shellDone    chan struct{}
+	shellRunning bool
 }
 
 func New(id, name string, spec agentadapter.Spec, adapter agentadapter.Adapter, log *eventlog.Log) (*Session, error) {
@@ -325,6 +335,7 @@ func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
 }
 func (s *Session) Dispose(ctx context.Context) error {
 	s.disposeOnce.Do(func() {
+		s.CloseUserShell()
 		s.mu.Lock()
 		s.adapterEpoch++
 		a := s.adapter

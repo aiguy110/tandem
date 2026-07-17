@@ -73,8 +73,8 @@ Agents are reached through a normalized `AgentAdapter` interface with two implem
 - **`AcpAdapter`** — speaks Zed's **Agent Client Protocol** (JSON-RPC 2.0 over the agent
   subprocess's stdio). The daemon is the ACP *client*. This is the primary path for Claude
   Code (via `claude-code-acp`), Gemini CLI, and anything ACP-speaking.
-- **`PtyAdapter`** — a raw pty child (native Unix PTY). Used for TUI-only agents and for the
-  user's escape-hatch shell. No structured events.
+- **`PtyAdapter`** — a raw pty child (native Unix PTY). Used for TUI-only agents and ACP→CLI
+  handoff. The session owns a separate user worktree shell outside the agent adapter.
 
 ### Why ACP fits
 
@@ -151,7 +151,8 @@ for the suite-by-suite breakdown and recorded deviations.
    `AcpAdapter`, `PtyAdapter` fallback), expose its normalized event stream + scrollback over
    the WS with reconnect/replay, persisted to SQLite and restored on restart.
    *Survive-the-dropped-pipe thesis proven (`derisk`, `derisk:restart`).*
-2. **UI spine.** ✓ **Built.** `ui/` — left rail + focus with Transcript + Terminal panes,
+2. **UI spine.** ✓ **Built.** `ui/` — left rail + focus with Chat (ACP/CLI) + independent
+   worktree Terminal panes,
    durable WS client, quick-spawn + command palettes, rebindable keymap.
 3. **Approvals.** ✓ **Built + validated.** `session/request_permission` →
    `permission_request` events → the always-on right-rail queue → response over the WS.

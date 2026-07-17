@@ -70,6 +70,11 @@ performs graceful cancellation first. `control_state` events and the authoritati
 `AgentSummary.controlMode` / `snapshot.controlMode` expose `transcript | switching | terminal`
 to every client. CLI exit automatically performs `leave_terminal` daemon-side.
 
+`shell_open`, `shell_input`, `shell_resize`, and `shell_close` drive the independent user
+shell shown in the Terminal tab. `shell_open` lazily starts `$SHELL` in the agent worktree
+and only resizes when it is already running. Output and exit are durable `shell_pty` and
+`shell_exit` events, separate from the agent CLI's `raw_pty` stream.
+
 ### `spawn_agent` / `close_agent` (Phase 2: real workspaces)
 
 `spawn_agent`'s `workspace.kind:'worktree'` provisions a real `git worktree` (by default a
@@ -184,7 +189,11 @@ type ClientMsg =
   | { t: 'list_sessions' }                                              // resumable-session catalog
   | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean }
-  | { t: 'leave_terminal'; agentId: string };
+  | { t: 'leave_terminal'; agentId: string }
+  | { t: 'shell_open'; agentId: string; cols: number; rows: number }
+  | { t: 'shell_input'; agentId: string; bytesB64: string }
+  | { t: 'shell_resize'; agentId: string; cols: number; rows: number }
+  | { t: 'shell_close'; agentId: string };
 
 type PromptBlock =
   | { type: 'text'; text: string }
@@ -210,13 +219,14 @@ type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
 // NOTE (Phase 1 deviation): `snapshot.transcript` carries `{ seq, event }[]`, not bare
 // AgentEvent[], so a reconnecting client can checkpoint per event. `terminals` / `browser`
 // snapshot fields and the dedicated `pty_frame`/`browser_frame` binary frames are Phase 2/3;
-// raw_pty currently rides inside a normal `event` as `{ kind:'raw_pty', dataB64 }` (base64 in
-// JSON — a future binary-framing optimization). `ack` gained `agentId`/`error`; `agent_closed`
-// is emitted to every subscriber when an agent is torn down.
+// raw_pty and shell_pty currently ride inside normal `event` messages with `dataB64`
+// (base64 in JSON — a future binary-framing optimization). `ack` gained
+// `agentId`/`error`; `agent_closed` is emitted to every subscriber when an agent is torn down.
 type ServerMsg =
   | { t: 'snapshot'; agentId: string; seq: number;                     // reconstruct on reconnect
                      transcript: { seq: number; event: WireEvent }[];
-                     status: AgentStatus; pendingApprovals: Approval[] }
+                     status: AgentStatus; controlMode: ControlMode;
+                     pendingApprovals: Approval[] }
   | { t: 'event';    agentId: string; seq: number; event: WireEvent }  // live tail (monotonic)
   | { t: 'ack';      corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
@@ -231,7 +241,10 @@ type ServerMsg =
   | { t: 'browser_state'; agentId: string; active: boolean;             // lifecycle + wheel
       controlOwner: 'agent'|'user' };
 
-// WireEvent = AgentEvent, except raw_pty's bytes become { kind:'raw_pty', dataB64: string }.
+// WireEvent = AgentEvent plus:
+//   { kind:'raw_pty', dataB64: string }   // agent CLI / native PTY agent
+//   { kind:'shell_pty', dataB64: string } // independent user worktree shell
+//   { kind:'shell_exit', message: string }
 ```
 
 Legacy `text` prompts normalize to one text block. Block order is preserved into
@@ -274,7 +287,8 @@ concrete payoff of the "daemon owns all state" invariant.
   permission requests). Kept always-on for subscribed agents.
 - **`status`** — kept always-on even for *unfocused* agents so the left rail and approvals
   queue stay live.
-- **`pty`** — binary `raw_pty` frames for xterm.js (TUI-only agents, user shell).
+- **`pty`** — base64 `raw_pty` events for TUI/CLI agents plus distinct `shell_pty` and
+  `shell_exit` events for the user's worktree shell.
 - **`terminals`** — client-owned terminal output for structured agents.
 - **`browser`** (Phase 5, implemented) — `browser_frame` CDP screencast frames (JSON+base64;
   binary framing is a future optimization, same as raw_pty) and `browser_state`

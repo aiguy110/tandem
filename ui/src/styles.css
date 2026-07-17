@@ -428,6 +428,20 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .term-host { flex: 1; min-height: 0; position: relative; background: #0c1216; }
 .term-mount { position: absolute; inset: 0; padding: 6px 8px; }
 .term-note { padding: 3px 10px; font-size: var(--fs-xs); color: var(--text-faint); border-top: 1px solid var(--border); font-family: var(--font-mono); background: var(--surface); }
+
+/* Chat pane: the ACP/CLI switch header + the conversation body. */
+.chat-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.chat-switch { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.chat-switch-label { font-size: var(--fs-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.chat-switch-note { font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono); }
+.chat-switch-note.err { color: var(--danger, #e0533d); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.seg-btn { padding: 3px 14px; font-size: var(--fs-sm); color: var(--text-dim); background: transparent; border: none; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.seg-btn.active { color: var(--agent); background: var(--agent-soft); }
+.seg-btn:disabled { opacity: .5; cursor: default; }
 .link-btn { border: 0; padding: 0; color: var(--accent); background: transparent; font: inherit; cursor: pointer; text-decoration: underline; }
 .handoff-shroud { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: blur(3px); }
 .handoff-card { width: min(500px, 100%); padding: 22px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 18px 50px rgba(0,0,0,.3); }
