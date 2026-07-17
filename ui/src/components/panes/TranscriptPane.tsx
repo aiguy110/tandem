@@ -799,6 +799,12 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           onClick={(e) => updateCaret(e.currentTarget)}
           onKeyUp={(e) => updateCaret(e.currentTarget)}
           onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setDismissed(true);
+            e.currentTarget.blur();
+            return;
+          }
           if (showPopup) {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
@@ -815,19 +821,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               applyCommand(matches[sel]);
               return;
             }
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              setDismissed(true);
-              return;
-            }
           }
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             void send();
-          }
-          if (e.key === 'Escape' && working) {
-            e.preventDefault();
-            interrupt(agentId);
           }
           }}
           rows={1}

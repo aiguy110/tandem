@@ -25,6 +25,31 @@ export function useGlobalKeys(): void {
       // Modals manage their own keys (Escape/Enter/arrows). Don't double-fire.
       if (scope === 'modal-open') return;
 
+      // When nothing interactive owns focus, Tab returns to the active ACP
+      // prompt. Native pty and CLI chat views intentionally keep their normal
+      // terminal-focused behavior.
+      const target = e.target as HTMLElement | null;
+      if (
+        e.key === 'Tab'
+        && !hasModifier(e)
+        && (target === document.body || target === document.documentElement)
+        && st.pane === 'chat'
+        && st.focusedId
+      ) {
+        const agent = st.agents[st.focusedId];
+        if (agent?.adapter !== 'pty' && agent.controlMode === 'transcript') {
+          const prompt = document.querySelector<HTMLTextAreaElement>(
+            `[data-prompt-agent="${CSS.escape(st.focusedId)}"]`,
+          );
+          if (prompt) {
+            e.preventDefault();
+            prompt.focus();
+            prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+            return;
+          }
+        }
+      }
+
       // In a text field only modifier chords (e.g. ⌘K) may fire — bare keys type.
       if (scope === 'text-input' && !hasModifier(e)) return;
 
