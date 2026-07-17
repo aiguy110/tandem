@@ -442,6 +442,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .term-host { flex: 1; min-height: 0; position: relative; background: #0c1216; }
 .term-mount { position: absolute; inset: 0; padding: 6px 8px; }
 .term-note { padding: 3px 10px; font-size: var(--fs-xs); color: var(--text-faint); border-top: 1px solid var(--border); font-family: var(--font-mono); background: var(--surface); }
+/* A real field is necessary to invoke iOS/Android's soft keyboard; WASM
+   terminal canvases cannot do that themselves. Keep it on-screen but invisible
+   so mobile browsers permit focus, and expose its focus through the button. */
+.term-kbd-catcher { position: absolute; bottom: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; margin: 0; opacity: 0; resize: none; overflow: hidden; caret-color: transparent; pointer-events: none; }
+.term-kbd-btn { display: none; position: absolute; z-index: 2; right: 12px; top: 10px; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
+@media (hover: none) and (pointer: coarse) {
+  .term-kbd-btn { display: block; }
+}
 
 /* Chat pane and the ACP/CLI switch that replaces its selected nav tab. */
 .chat-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
