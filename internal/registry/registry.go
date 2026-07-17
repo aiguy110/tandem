@@ -317,6 +317,18 @@ func (r *Registry) ClosePreview(ctx context.Context, id string) (*workspace.Clos
 	return &preview, nil
 }
 
+func (r *Registry) Diff(ctx context.Context, id string) (*workspace.Diff, error) {
+	s := r.Get(id)
+	if s == nil {
+		return nil, fmt.Errorf("no such agent: %s", id)
+	}
+	r.mu.RLock()
+	cwd := r.cwds[id]
+	r.mu.RUnlock()
+	diff, err := r.workspace.Diff(ctx, cwd, s.Spec.Workspace)
+	return &diff, err
+}
+
 func (r *Registry) AgentCatalog() Catalog {
 	c := Catalog{DefaultAgent: r.config.ACP.Default, DefaultProfile: r.config.DefaultProfile, Agents: make([]CatalogAgent, 0, len(r.config.Agents)), Profiles: make([]CatalogProfile, 0, len(r.config.Profiles))}
 	for id, a := range r.config.Agents {

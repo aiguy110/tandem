@@ -29,6 +29,7 @@ import type {
   SpawnOptions,
   PromptBlock,
   WireEvent,
+  WorkspaceDiff,
 } from './wire';
 
 // The focus/bandwidth rule (docs/browser.md): only the focused, browser-viewing
@@ -158,6 +159,7 @@ interface StoreState {
   setMode: (agentId: string, modeId: string) => void;
   setConfigOption: (agentId: string, configId: string, value: string | boolean) => void;
   getClosePreview: (agentId: string) => Promise<ClosePreview>;
+  getDiff: (agentId: string) => Promise<WorkspaceDiff>;
   closeAgent: (agentId: string, force?: boolean, deleteWorktree?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
   nav: (dir: 1 | -1) => void;
@@ -175,6 +177,7 @@ const pendingAcks = new Map<string, (r: AckResult) => void>();
 const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
 const pendingGitRefs = new Map<string, { resolve: (refs: GitRefInfo[]) => void; reject: (error: Error) => void }>();
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
+const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -298,6 +301,15 @@ export const useStore = create<StoreState>((set, get) => {
           pendingClosePreviews.delete(msg.corrId);
           if (msg.error || !msg.preview) pending.reject(new Error(msg.error || 'close preview unavailable'));
           else pending.resolve(msg.preview);
+        }
+        return;
+      }
+      case 'diff': {
+        const pending = msg.corrId ? pendingDiffs.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingDiffs.delete(msg.corrId);
+          if (msg.error || !msg.diff) pending.reject(new Error(msg.error || 'diff unavailable'));
+          else pending.resolve(msg.diff);
         }
         return;
       }
@@ -613,6 +625,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingClosePreviews.set(corrId, { resolve, reject });
         client.send({ t: 'get_close_preview', agentId, corrId });
+      }),
+    getDiff: (agentId) =>
+      new Promise<WorkspaceDiff>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingDiffs.set(corrId, { resolve, reject });
+        client.send({ t: 'get_diff', agentId, corrId });
       }),
     closeAgent: (agentId, force, deleteWorktree) =>
       new Promise<AckResult>((resolve) => {

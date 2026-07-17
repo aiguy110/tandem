@@ -54,6 +54,9 @@ func (*testBackend) ClosePreview(context.Context, string) (*workspace.ClosePrevi
 	ahead, behind := 1, 0
 	return &workspace.ClosePreview{Kind: workspace.KindWorktree, Uncommitted: "?? dirty", Unmerged: "abc work", TargetRef: "refs/heads/main", Ahead: &ahead, Behind: &behind}, nil
 }
+func (*testBackend) Diff(context.Context, string) (*workspace.Diff, error) {
+	return &workspace.Diff{Uncommitted: "diff --git a/a b/a", Committed: "diff --git a/b b/b", TargetRef: "refs/heads/main"}, nil
+}
 func (*testBackend) AgentCatalog() registry.Catalog {
 	return registry.Catalog{DefaultAgent: "codex", Agents: []registry.CatalogAgent{}}
 }
@@ -230,7 +233,7 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		t.Fatalf("close=%v", err)
 	}
 	c := dial(t, url)
-	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_agent_catalog", "corrId": "3"}, {"t": "list_git_refs", "repo": "/repo", "corrId": "4"}, {"t": "get_close_preview", "agentId": "a", "corrId": "5"}} {
+	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_agent_catalog", "corrId": "3"}, {"t": "list_git_refs", "repo": "/repo", "corrId": "4"}, {"t": "get_close_preview", "agentId": "a", "corrId": "5"}, {"t": "get_diff", "agentId": "a", "corrId": "6"}} {
 		send(t, c, req)
 		got := recv(t, c)
 		if got["corrId"] != req["corrId"] {
@@ -241,6 +244,9 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		}
 		if req["t"] == "get_close_preview" && (got["t"] != "close_preview" || got["preview"] == nil) {
 			t.Fatalf("preview %#v", got)
+		}
+		if req["t"] == "get_diff" && (got["t"] != "diff" || got["diff"] == nil) {
+			t.Fatalf("diff %#v", got)
 		}
 	}
 	server.CloseClientConnections()

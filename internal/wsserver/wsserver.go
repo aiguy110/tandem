@@ -31,6 +31,7 @@ type Backend interface {
 	ListDirs(context.Context) ([]workspace.RepoInfo, error)
 	ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error)
 	ClosePreview(context.Context, string) (*workspace.ClosePreview, error)
+	Diff(context.Context, string) (*workspace.Diff, error)
 	AgentCatalog() registry.Catalog
 	SetMode(context.Context, string, string) error
 	SetConfigOption(context.Context, string, string, any) error
@@ -474,6 +475,13 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "close_preview", "preview": preview}, m.CorrID))
+	case "get_diff":
+		diff, err := c.server.opts.Registry.Diff(context.Background(), m.AgentID)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "diff", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "diff", "diff": diff}, m.CorrID))
 	case "close_agent":
 		deleteWorktree := true
 		if m.DeleteWorktree != nil {

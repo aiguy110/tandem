@@ -1,0 +1,84 @@
+export type DiffLineKind = 'add' | 'remove' | 'hunk' | 'meta' | 'context';
+
+export interface DiffLine {
+  text: string;
+  kind: DiffLineKind;
+  oldLine?: number;
+  newLine?: number;
+}
+
+export interface DiffFile {
+  key: string;
+  label: string;
+  lines: DiffLine[];
+}
+
+const hunkPattern = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+// Kept independent of the workspace pane so ACP edit blocks can feed the same
+// unified patches (or synthesized patches) into this renderer.
+export function parseUnifiedDiff(patch: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let file: DiffFile | undefined;
+  let oldLine: number | undefined;
+  let newLine: number | undefined;
+
+  for (const text of patch.split('\n')) {
+    if (text.startsWith('diff --git ')) {
+      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(text);
+      file = { key: `${files.length}:${match?.[2] ?? text}`, label: match?.[2] ?? text, lines: [] };
+      files.push(file);
+    }
+    if (!file) {
+      file = { key: '0:diff', label: 'Changes', lines: [] };
+      files.push(file);
+    }
+
+    const hunk = hunkPattern.exec(text);
+    let kind: DiffLineKind = 'meta';
+    let lineOld: number | undefined;
+    let lineNew: number | undefined;
+    if (hunk) {
+      kind = 'hunk';
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+    } else if (text.startsWith('+') && !text.startsWith('+++')) {
+      kind = 'add';
+      lineNew = newLine;
+      newLine = (newLine ?? 0) + 1;
+    } else if (text.startsWith('-') && !text.startsWith('---')) {
+      kind = 'remove';
+      lineOld = oldLine;
+      oldLine = (oldLine ?? 0) + 1;
+    } else if (text.startsWith(' ')) {
+      kind = 'context';
+      lineOld = oldLine;
+      lineNew = newLine;
+      oldLine = (oldLine ?? 0) + 1;
+      newLine = (newLine ?? 0) + 1;
+    }
+    file.lines.push({ text, kind, oldLine: lineOld, newLine: lineNew });
+  }
+  return files;
+}
+
+export function UnifiedDiff({ patch }: { patch: string }) {
+  return (
+    <div className="unified-diff">
+      {parseUnifiedDiff(patch).map((file) => (
+        <section className="diff-file" key={file.key}>
+          <header>{file.label}</header>
+          <div className="diff-code">
+            {file.lines.map((line, index) => (
+              <div className={`diff-line ${line.kind}`} key={index}>
+                <span className="diff-num">{line.oldLine ?? ''}</span>
+                <span className="diff-num">{line.newLine ?? ''}</span>
+                <span className="diff-text">{line.text || ' '}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}

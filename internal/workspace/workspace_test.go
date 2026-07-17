@@ -131,6 +131,39 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	}
 }
 
+func TestDiffSeparatesUncommittedAndCommittedChanges(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
+	provisioned, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "diff-agent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, filepath.Join(provisioned.CWD, "committed.txt"), "committed\n")
+	git(t, provisioned.CWD, "add", "committed.txt")
+	git(t, provisioned.CWD, "commit", "-q", "-m", "committed change")
+	write(t, filepath.Join(provisioned.CWD, "README.md"), "changed\n")
+	write(t, filepath.Join(provisioned.CWD, "untracked.txt"), "new\n")
+
+	got, err := m.Diff(ctx, provisioned.CWD, provisioned.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Uncommitted, "README.md") || !strings.Contains(got.Uncommitted, "untracked.txt") {
+		t.Fatalf("uncommitted patch missing changes:\n%s", got.Uncommitted)
+	}
+	if strings.Contains(got.Uncommitted, "committed.txt") {
+		t.Fatalf("committed file leaked into uncommitted patch:\n%s", got.Uncommitted)
+	}
+	if !strings.Contains(got.Committed, "committed.txt") || strings.Contains(got.Committed, "untracked.txt") {
+		t.Fatalf("committed patch incorrect:\n%s", got.Committed)
+	}
+	if got.TargetRef != "refs/heads/main" {
+		t.Fatalf("target ref=%q", got.TargetRef)
+	}
+}
+
 func TestFeatureAwareProvisionDiscoveryAndState(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
