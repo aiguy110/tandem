@@ -445,6 +445,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .wheel-btn:hover:not(:disabled) { border-color: var(--human); color: var(--human); }
 .wheel-btn:disabled { opacity: .4; cursor: not-allowed; }
 .wheel-btn.hot { background: var(--human-soft); border-color: var(--human); color: var(--human); margin-left: 0; }
+/* Groups with the wheel button on the right; its auto-margin eats the free
+   space so the wheel button (also auto) sits flush beside it. */
+.kbd-btn { margin-left: auto; }
 .wheel-btn kbd { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; margin-left: 4px; }
 .takeover-banner { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--warn-soft); border-bottom: 1px solid var(--warn); color: var(--text); font-size: var(--fs-sm); }
 .takeover-banner b { color: var(--warn); }
@@ -453,6 +456,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    remote page instead of letting them pan/scroll the Tandem UI. */
 .browser-canvas-wrap.live { cursor: crosshair; box-shadow: inset 0 0 0 2px var(--human); touch-action: none; }
 .browser-canvas { display: block; width: 100%; height: 100%; }
+/* Invisible field that captures the mobile soft keyboard. Kept on-screen (not
+   display:none) so iOS/Android will actually open the keyboard on focus, but
+   sized to a point and click-through so it never intercepts canvas gestures. */
+.browser-kbd-catcher { position: absolute; bottom: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; margin: 0; opacity: 0; resize: none; overflow: hidden; caret-color: transparent; pointer-events: none; }
 .tab.disabled { opacity: .4; }
 .tab.attn { color: var(--warn); border-color: var(--warn); }
 .appr.takeover { border-color: var(--warn); background: var(--warn-soft); }

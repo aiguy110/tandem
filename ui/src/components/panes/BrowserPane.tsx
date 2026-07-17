@@ -27,6 +27,8 @@ export function BrowserPane() {
   // In-flight single-finger touch: start point/time for tap vs. drag-scroll,
   // last point for incremental scroll deltas, and whether it became a scroll.
   const touchRef = useRef<{ sx: number; sy: number; lx: number; ly: number; t: number; scrolling: boolean } | null>(null);
+  // Hidden field that drives the mobile soft keyboard (see onKbdInput).
+  const kbdRef = useRef<HTMLTextAreaElement>(null);
   const userOwns = owner === 'user';
 
   // Opt this agent's browser channel in for the pane's lifetime (focus rule).
@@ -144,10 +146,69 @@ export function BrowserPane() {
     emit({ kind: 'click', x: p.x, y: p.y, buttons: 0 });
   };
 
+  // Soft keyboard. A <canvas> can't summon a phone's on-screen keyboard, so a
+  // hidden <textarea> stands in: the ⌨ button focuses it, and its input events
+  // are forwarded to the remote page. It always holds a single sentinel char
+  // and resets after every event — an empty field swallows Backspace (there's
+  // nothing to delete), so the sentinel guarantees a `deleteContentBackward`
+  // still fires. Character input, Enter and Backspace arrive as `input` events
+  // (reliable on mobile IMEs, where keydown often reports 229/Unidentified);
+  // navigation keys arrive as keydown.
+  const SENTINEL = ' ';
+  const resetKbd = () => {
+    const el = kbdRef.current;
+    if (!el) return;
+    el.value = SENTINEL;
+    el.setSelectionRange(SENTINEL.length, SENTINEL.length);
+  };
+  const focusKeyboard = () => {
+    resetKbd();
+    kbdRef.current?.focus();
+  };
+  const onKbdInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    if (userOwns) {
+      const ne = e.nativeEvent as InputEvent;
+      switch (ne.inputType) {
+        case 'insertText':
+        case 'insertReplacementText':
+        case 'insertCompositionText':
+          if (ne.data) emit({ kind: 'text', text: ne.data });
+          break;
+        case 'insertLineBreak':
+        case 'insertParagraph':
+          emit({ kind: 'keydown', key: 'Enter', code: 'Enter' });
+          break;
+        case 'deleteContentBackward':
+        case 'deleteWordBackward':
+          emit({ kind: 'keydown', key: 'Backspace', code: 'Backspace' });
+          break;
+        case 'deleteContentForward':
+          emit({ kind: 'keydown', key: 'Delete', code: 'Delete' });
+          break;
+      }
+    }
+    resetKbd();
+  };
+  // Navigation/control keys don't produce `input` events; forward them here.
+  // Character keys, Enter and Backspace are handled via onKbdInput, so skip
+  // them to avoid double-emitting on hardware keyboards (which fire both).
+  const onKbdKeyDown = (e: React.KeyboardEvent) => {
+    if (!userOwns) return;
+    const k = e.key;
+    if (k.length === 1 || k === 'Enter' || k === 'Backspace' || k === 'Unidentified' || k === 'Process') return;
+    e.preventDefault();
+    emit({ kind: 'keydown', key: k, code: e.code });
+  };
+
   return (
     <div className="pane browser-pane">
       <div className="browser-bar">
         <span className={`owner-badge ${owner}`}>{owner === 'user' ? '🖐 you hold the wheel' : '🤖 agent driving'}</span>
+        {active && userOwns && (
+          <button className="wheel-btn kbd-btn" onClick={focusKeyboard} title="Show keyboard to type into the page">
+            ⌨ Keyboard
+          </button>
+        )}
         <button className="wheel-btn" disabled={!active} onClick={() => toggleWheel(agentId)}>
           {owner === 'user' ? 'Release the wheel' : 'Take the wheel'} <kbd>w</kbd>
         </button>
@@ -188,6 +249,19 @@ export function BrowserPane() {
           onTouchEnd={onTouchEnd}
         >
           <canvas ref={canvasRef} className="browser-canvas" />
+          <textarea
+            ref={kbdRef}
+            className="browser-kbd-catcher"
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-hidden="true"
+            tabIndex={-1}
+            defaultValue={SENTINEL}
+            onInput={onKbdInput}
+            onKeyDown={onKbdKeyDown}
+          />
         </div>
       )}
     </div>
