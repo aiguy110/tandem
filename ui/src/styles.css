@@ -191,7 +191,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .focus-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .focus-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .focus-title .sub { color: var(--text-dim); font-weight: 400; font-family: var(--font-mono); font-size: var(--fs-xs); margin-left: 8px; }
-.tabs { display: flex; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.tabs { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
 .tab {
   padding: 5px 11px; border-radius: var(--r-sm); font-size: var(--fs-sm);
   color: var(--text-dim); background: transparent; border: 1px solid transparent;
