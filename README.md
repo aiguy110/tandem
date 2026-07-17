@@ -9,6 +9,18 @@ The name *Tandem* captures the product's soul: **human and agent driving togethe
 most visibly in the shared, jointly-controlled browser, but throughout the whole
 experience.
 
+## Install
+
+Linux standalone releases can be installed with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/aiguy110/tandem/master/scripts/install.sh | sh
+```
+
+The installer verifies the release checksum, installs `tandem` at `~/.local/bin/tandem`,
+and adds that directory to `.bashrc` or `.zshrc` when needed. It prints the required
+`source ~/.bashrc` or `source ~/.zshrc` command after making that change.
+
 ## What it is
 
 - **Orchestrate multiple agents** from one browser UI, each in its own isolated workspace.
