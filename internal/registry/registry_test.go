@@ -23,6 +23,7 @@ type fakeFactory struct {
 	mu       sync.Mutex
 	fail     map[string]bool
 	adapters map[string]*regAdapter
+	requests map[string]agentadapter.StartRequest
 }
 
 func (f *fakeFactory) Start(_ context.Context, r agentadapter.StartRequest) (agentadapter.Adapter, error) {
@@ -34,7 +35,11 @@ func (f *fakeFactory) Start(_ context.Context, r agentadapter.StartRequest) (age
 	if f.adapters == nil {
 		f.adapters = map[string]*regAdapter{}
 	}
+	if f.requests == nil {
+		f.requests = map[string]agentadapter.StartRequest{}
+	}
 	f.adapters[r.AgentID] = a
+	f.requests[r.AgentID] = r
 	f.mu.Unlock()
 	return a, nil
 }
@@ -179,6 +184,63 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	closed, _ := db.Agent("web-1")
 	if closed.ClosedAt == nil {
 		t.Fatal("close transition not persisted")
+	}
+}
+
+func TestRestoreUnpromptedAgentStartsFreshACPSession(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.DisposeAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	f2 := &fakeFactory{}
+	r2, err := New(Options{Store: db, Config: cfg, Factory: f2, RingCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.DisposeAll(context.Background())
+	if err = r2.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r2.Get(s.ID) == nil {
+		t.Fatal("unprompted agent was not restored")
+	}
+	if got := f2.requests[s.ID].ResumeSessionID; got != "" {
+		t.Fatalf("unprompted agent resumed ACP session %q, want a fresh session", got)
+	}
+}
+
+func TestRestorePromptedAgentResumesACPSession(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.adapters[s.ID].gate <- struct{}{}
+	if _, err = s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.DisposeAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	f2 := &fakeFactory{}
+	r2, err := New(Options{Store: db, Config: cfg, Factory: f2, RingCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.DisposeAll(context.Background())
+	if err = r2.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f2.requests[s.ID].ResumeSessionID; got != "session-"+s.ID {
+		t.Fatalf("prompted agent resumed ACP session %q", got)
 	}
 }
 
