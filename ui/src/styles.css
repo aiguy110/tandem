@@ -253,6 +253,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .chip.error { color: var(--err); background: var(--err-soft); }
 .chip.cancelled { color: var(--text-faint); background: var(--surface-3); }
 
+.task-list.card {
+  margin: 0 -16px -14px;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
 .task-list > summary { list-style: none; }
 .task-list > summary::-webkit-details-marker { display: none; }
 .task-list-chevron { color: var(--text-faint); transition: transform .12s ease; }
