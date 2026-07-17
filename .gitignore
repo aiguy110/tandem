@@ -33,3 +33,6 @@ pnpm-debug.log*
 *.pid
 *.sock
 .tandem/
+
+# Playwright MCP scratch output
+.playwright-mcp/
