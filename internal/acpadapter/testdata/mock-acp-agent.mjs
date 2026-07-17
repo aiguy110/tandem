@@ -131,6 +131,15 @@ function handle(msg) {
   if (msg.method === 'session/load') {
     if (msg.params?.sessionId) sessionId = msg.params.sessionId;
     process.stderr.write(`MOCK_LOADSESSION ${sessionId}\n`);
+    // Resume contract: re-stream the whole prior conversation as session/update
+    // notifications BEFORE answering session/load. A session id asking for a
+    // replay burst emits many trailing chunks so the client's replay-suppression
+    // gate is exercised against a queue it cannot have fully drained yet.
+    if (String(sessionId).includes('replay')) {
+      for (let i = 0; i < 200; i++) {
+        note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `replayed-chunk-${i} ` } });
+      }
+    }
     send({ jsonrpc: '2.0', id: msg.id, result: { loaded: true, sessionId } });
     return;
   }
