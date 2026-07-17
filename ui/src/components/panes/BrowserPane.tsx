@@ -24,6 +24,9 @@ export function BrowserPane() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Last painted image rect + device size, for canvas→page coordinate mapping.
   const rectRef = useRef({ x: 0, y: 0, w: 1, h: 1, dw: 1280, dh: 800 });
+  // In-flight single-finger touch: start point/time for tap vs. drag-scroll,
+  // last point for incremental scroll deltas, and whether it became a scroll.
+  const touchRef = useRef<{ sx: number; sy: number; lx: number; ly: number; t: number; scrolling: boolean } | null>(null);
   const userOwns = owner === 'user';
 
   // Opt this agent's browser channel in for the pane's lifetime (focus rule).
@@ -71,17 +74,19 @@ export function BrowserPane() {
     // the effect must re-run when it appears to attach the frame subscription.
   }, [agentId, active]);
 
-  // Map a pointer event on the canvas to device (page) coordinates.
-  const toPage = (e: React.MouseEvent): { x: number; y: number } | null => {
+  // Map a client (clientX/clientY) point on the canvas to device (page) coords.
+  const clientToPage = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const r = canvas.getBoundingClientRect();
     const { x, y, w, h, dw, dh } = rectRef.current;
-    const cx = e.clientX - r.left - x;
-    const cy = e.clientY - r.top - y;
+    const cx = clientX - r.left - x;
+    const cy = clientY - r.top - y;
     if (cx < 0 || cy < 0 || cx > w || cy > h) return null;
     return { x: Math.round((cx / w) * dw), y: Math.round((cy / h) * dh) };
   };
+  // Map a pointer event on the canvas to device (page) coordinates.
+  const toPage = (e: React.MouseEvent): { x: number; y: number } | null => clientToPage(e.clientX, e.clientY);
 
   const emit = (event: BrowserInputWire) => browserInput(agentId, event);
 
@@ -105,6 +110,38 @@ export function BrowserPane() {
     e.preventDefault();
     if (e.key.length === 1) emit({ kind: 'text', text: e.key });
     else emit({ kind: 'keydown', key: e.key, code: e.code });
+  };
+
+  // Touch → mouse/wheel mapping. A single finger that stays roughly put is a
+  // tap (→ click); one that moves is a drag-scroll (→ wheel deltas, natural:
+  // finger up scrolls the page down). Multi-touch is ignored (pinch is a
+  // follow-up needing a dedicated CDP touch path).
+  const TAP_SLOP = 8; // px of movement before a touch counts as a scroll
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (!userOwns || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    touchRef.current = { sx: t.clientX, sy: t.clientY, lx: t.clientX, ly: t.clientY, t: Date.now(), scrolling: false };
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const st = touchRef.current;
+    if (!userOwns || !st || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (!st.scrolling && Math.hypot(t.clientX - st.sx, t.clientY - st.sy) < TAP_SLOP) return;
+    st.scrolling = true;
+    const p = clientToPage(t.clientX, t.clientY) ?? clientToPage(st.lx, st.ly);
+    if (p) emit({ kind: 'wheel', x: p.x, y: p.y, deltaX: st.lx - t.clientX, deltaY: st.ly - t.clientY });
+    st.lx = t.clientX;
+    st.ly = t.clientY;
+  };
+  const onTouchEnd = () => {
+    const st = touchRef.current;
+    touchRef.current = null;
+    if (!userOwns || !st || st.scrolling) return;
+    const p = clientToPage(st.sx, st.sy);
+    if (!p) return;
+    emit({ kind: 'mousedown', x: p.x, y: p.y, buttons: 1 });
+    emit({ kind: 'mouseup', x: p.x, y: p.y, buttons: 0 });
+    emit({ kind: 'click', x: p.x, y: p.y, buttons: 0 });
   };
 
   return (
@@ -146,6 +183,9 @@ export function BrowserPane() {
           onMouseMove={onMouse('mousemove')}
           onClick={onMouse('click')}
           onWheel={onWheel}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
         >
           <canvas ref={canvasRef} className="browser-canvas" />
         </div>
