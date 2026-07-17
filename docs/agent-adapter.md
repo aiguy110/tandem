@@ -21,7 +21,7 @@ type AgentEvent =
   | { kind: 'permission_request'; reqId: string; toolCallId: string; options: PermOption[] }
   | { kind: 'status';         status: 'idle'|'working'|'blocked'|'error' }
   | { kind: 'error';          message: string }
-  | { kind: 'raw_pty';        data: Uint8Array };                    // pty adapter / user shell only
+  | { kind: 'raw_pty';        data: Uint8Array };                    // pty adapter / agent CLI
 ```
 
 ## The interface
@@ -88,9 +88,11 @@ is the ACP client.
 - **`session/load`** → `loadSession()` when the agent advertises the `loadSession`
   capability.
 
-### PtyAdapter (fallback + user shell)
+### PtyAdapter (fallback + agent CLI)
 
-A raw pty child via `node-pty`. Used for TUI-only agents and the user's escape-hatch shell.
+A raw pty child via the native Unix PTY backend. Used for TUI-only agents and ACP→CLI
+handoff. The independent Terminal-tab user shell belongs to `Session`, not an agent adapter,
+and emits `shell_pty` / `shell_exit` events.
 
 - Events are only `{ kind: 'raw_pty', data }`.
 - `status` is `'working'` heuristically or unknown; no structured `tool_call`s, no

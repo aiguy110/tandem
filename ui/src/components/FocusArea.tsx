@@ -1,11 +1,11 @@
 import { useStore, PANES } from '../store';
 import type { PaneId } from '../store';
-import { TranscriptPane } from './panes/TranscriptPane';
-import { TerminalPane } from './panes/TerminalPane';
+import { ChatPane } from './panes/ChatPane';
+import { ShellPane } from './panes/ShellPane';
 import { DiffPane } from './panes/DiffPane';
 import { BrowserPane } from './panes/BrowserPane';
 
-const LABEL: Record<PaneId, string> = { transcript: 'Transcript', terminal: 'Terminal', diff: 'Diff', browser: 'Browser' };
+const LABEL: Record<PaneId, string> = { chat: 'Chat', shell: 'Terminal', diff: 'Diff', browser: 'Browser' };
 
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
@@ -55,8 +55,8 @@ export function FocusArea() {
         </div>
       </div>
       {/* key on focusedId so panes remount per agent (fresh terminal, scroll) */}
-      {pane === 'transcript' && <TranscriptPane key={focusedId} />}
-      {pane === 'terminal' && <TerminalPane key={focusedId} />}
+      {pane === 'chat' && <ChatPane key={focusedId} />}
+      {pane === 'shell' && <ShellPane key={focusedId} />}
       {pane === 'diff' && <DiffPane />}
       {pane === 'browser' && <BrowserPane />}
     </div>

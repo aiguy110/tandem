@@ -304,6 +304,59 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.server.broadcastAgents()
 		c.commandAck(m, m.AgentID)
+	case "shell_open":
+		backend, ok := c.server.opts.Registry.(interface {
+			OpenUserShell(string, uint16, uint16) error
+		})
+		if !ok {
+			c.commandError(m, errors.New("user shell is unsupported"))
+			return
+		}
+		if m.Cols < 0 || m.Cols > 65535 || m.Rows < 0 || m.Rows > 65535 {
+			c.commandError(m, errors.New("invalid terminal size"))
+			return
+		}
+		if err := backend.OpenUserShell(m.AgentID, uint16(m.Cols), uint16(m.Rows)); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, m.AgentID)
+	case "shell_input":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		data, err := base64.StdEncoding.DecodeString(m.BytesB64)
+		if err != nil {
+			c.commandError(m, errors.New("invalid base64 input"))
+			return
+		}
+		if err := sess.UserShellInput(data); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "shell_resize":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if m.Cols < 1 || m.Cols > 65535 || m.Rows < 1 || m.Rows > 65535 {
+			c.commandError(m, errors.New("invalid terminal size"))
+			return
+		}
+		if err := sess.UserShellResize(uint16(m.Cols), uint16(m.Rows)); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
+	case "shell_close":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		sess.CloseUserShell()
+		c.commandAck(m, sess.ID)
 	case "prompt":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -546,7 +599,7 @@ func makeChannels(in []string) map[string]bool {
 }
 func channelOf(kind string) string {
 	switch kind {
-	case "raw_pty":
+	case "raw_pty", "shell_pty", "shell_exit":
 		return "pty"
 	case "terminal_output":
 		return "terminals"
@@ -655,7 +708,7 @@ func (c *connection) subscribe(m clientMessage) {
 				transcript = append(transcript, map[string]any{"seq": le.Seq, "event": wireEvent(le.Event)})
 			}
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": "transcript", "pendingApprovals": sess.PendingApprovals()})
+		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals()})
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {

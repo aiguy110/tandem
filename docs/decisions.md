@@ -82,7 +82,7 @@ spatial canvas is more work and can get messy; can be added later as a second le
 
 ## D7 — Shared browser in UI: pane inside focus mode
 
-**Choice:** The browser is one tab of the focused agent, alongside Transcript / Terminal /
+**Choice:** The browser is one tab of the focused agent, alongside Chat / Terminal /
 Diff.
 
 **Why:** Keeps everything about an agent in one place and keeps v1 tight. Detachable /
@@ -146,7 +146,8 @@ compatibility makes the choice reversible (≈one-line swap) and keeps a proven 
 interface keeps the emulator out of the rest of the UI.
 
 **Constraints:** only the focused terminal renders live (WebGL context limits); reconnect
-replays buffered `raw_pty` bytes; resize propagates via a `resize` WS message. See
+replays the distinct `raw_pty` and `shell_pty` buffers; resize propagates via the matching
+agent-PTY or user-shell WS message. See
 [`terminal.md`](terminal.md).
 
 ## D13 — Shared browser: per-agent Steel, Playwright MCP, Tandem-mediated token

@@ -47,6 +47,13 @@ func ParseNormalized(data []byte) (Event, error) {
 		}
 		return RawPTY(decoded), nil
 	}
+	if header.Kind == "shell_pty" {
+		decoded, err := base64.StdEncoding.DecodeString(header.DataB64)
+		if err != nil {
+			return Event{}, fmt.Errorf("decode shell_pty dataB64: %w", err)
+		}
+		return ShellPTY(decoded), nil
+	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, data); err != nil {
 		return Event{}, fmt.Errorf("compact event: %w", err)
@@ -58,6 +65,23 @@ func RawPTY(data []byte) Event {
 	return Event{Kind: "raw_pty", Data: bytes.Clone(data)}
 }
 
+// ShellPTY carries bytes from the user's escape-hatch shell (docs/terminal.md:
+// the Terminal tab). It is a binary stream like raw_pty but tagged distinctly so
+// it never mixes into the agent transcript / agent-CLI pty view.
+func ShellPTY(data []byte) Event {
+	return Event{Kind: "shell_pty", Data: bytes.Clone(data)}
+}
+
+// ShellExit records that the user shell process exited so the UI can offer a
+// restart. message is a short human string (e.g. "exited (code 0)").
+func ShellExit(message string) Event {
+	payload, _ := json.Marshal(struct {
+		Kind    string `json:"kind"`
+		Message string `json:"message"`
+	}{"shell_exit", message})
+	return Event{Kind: "shell_exit", Payload: payload}
+}
+
 // NormalizedJSON returns the JSON representation shared by SQLite and the
 // browser wire protocol.
 func (e Event) NormalizedJSON() ([]byte, error) {
@@ -66,6 +90,12 @@ func (e Event) NormalizedJSON() ([]byte, error) {
 			Kind    string `json:"kind"`
 			DataB64 string `json:"dataB64"`
 		}{"raw_pty", base64.StdEncoding.EncodeToString(e.Data)})
+	}
+	if e.Kind == "shell_pty" {
+		return json.Marshal(struct {
+			Kind    string `json:"kind"`
+			DataB64 string `json:"dataB64"`
+		}{"shell_pty", base64.StdEncoding.EncodeToString(e.Data)})
 	}
 	if e.Kind == "" || !json.Valid(e.Payload) {
 		return nil, errors.New("event has invalid normalized JSON")

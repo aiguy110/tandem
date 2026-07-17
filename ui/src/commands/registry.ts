@@ -12,10 +12,10 @@ export interface Command {
   enabled?: () => boolean;
 }
 
-const paneCmd = (pane: PaneId, n: number): Command => ({
+const paneCmd = (pane: PaneId, n: number, label: string): Command => ({
   id: `pane.${pane}`,
-  title: `Pane: ${pane[0].toUpperCase()}${pane.slice(1)}`,
-  subtitle: `Switch focus to the ${pane} pane (${n})`,
+  title: `Pane: ${label}`,
+  subtitle: `Switch focus to the ${label} pane (${n})`,
   run: () => useStore.getState().setPane(pane),
   enabled: () => !!useStore.getState().focusedId,
 });
@@ -82,10 +82,10 @@ export function buildCommands(): Command[] {
     { id: 'nav.goToAgent', title: 'Go to agent…', subtitle: 'Jump to an agent by name', run: () => s().setModal('command') },
     { id: 'nav.next', title: 'Next agent', subtitle: 'Move down the agent rail', run: () => s().nav(1) },
     { id: 'nav.prev', title: 'Previous agent', subtitle: 'Move up the agent rail', run: () => s().nav(-1) },
-    paneCmd('transcript', 1),
-    paneCmd('terminal', 2),
-    paneCmd('diff', 3),
-    paneCmd('browser', 4),
+    paneCmd('chat', 1, 'Chat'),
+    paneCmd('shell', 2, 'Terminal'),
+    paneCmd('diff', 3, 'Diff'),
+    paneCmd('browser', 4, 'Browser'),
     {
       id: 'approvals.approveFocused',
       title: 'Approve top request',

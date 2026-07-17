@@ -143,7 +143,7 @@ Illustrative default map (all rebindable):
 | `⌘K` | `palette.open` | Command palette |
 | `g a` | `nav.goToAgent` | Jump to agent by name |
 | `j` / `k` | `nav.next` / `nav.prev` | Move through the agent rail |
-| `1`–`4` | `pane.transcript/terminal/diff/browser` | Switch focus pane |
+| `1`–`4` | `pane.chat/shell/diff/browser` | Switch Chat / Terminal / Diff / Browser |
 | `a` / `d` | `approvals.approveFocused` / `denyFocused` | Act on the top approval |
 | `w` | `browser.grabWheel` | Grab / release the shared-browser wheel |
 | `⌫` | `agent.close` | Close the focused agent (teardown below) |
