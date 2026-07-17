@@ -77,6 +77,11 @@ Its canvas renderer can also miss the final cursor-only update in a shell's norm
 redraw for output chunks containing BS, keeping the painted cursor and cells aligned with
 Ghostty's already-correct VT buffer.
 
+User shells are launched with `TERM=xterm-256color` when the daemon environment does not
+provide a terminal identity (as is typical under systemd). Without it, interactive shells
+such as zsh cannot obtain cursor-left/erase capabilities from terminfo: their line editor
+deletes the character internally but may paint only a trailing space.
+
 ## Spike
 
 [`spike/terminal/`](../spike/terminal/) — a Vite app that renders a live shell via

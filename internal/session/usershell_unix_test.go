@@ -11,6 +11,27 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 )
 
+func TestUserShellEnvDefaultsMissingOrEmptyTerm(t *testing.T) {
+	t.Setenv("TERM", "")
+	if got := envValue(userShellEnv(), "TERM"); got != "xterm-256color" {
+		t.Fatalf("TERM = %q, want xterm-256color", got)
+	}
+
+	t.Setenv("TERM", "vt100")
+	if got := envValue(userShellEnv(), "TERM"); got != "vt100" {
+		t.Fatalf("explicit TERM = %q, want vt100", got)
+	}
+}
+
+func envValue(env []string, key string) string {
+	for _, entry := range env {
+		if k, value, ok := strings.Cut(entry, "="); ok && k == key {
+			return value
+		}
+	}
+	return ""
+}
+
 // TestUserShellEchoAndExit drives the escape-hatch shell end to end: it opens a
 // shell, types a command, and confirms the output arrives as shell_pty events
 // and a shell_exit is recorded when the shell ends.

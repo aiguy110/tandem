@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -41,7 +42,7 @@ func (s *Session) OpenUserShell(cwd string, cols, rows uint16) error {
 	pty, err := proc.StartPTY(ctx, proc.Spec{
 		Argv: []string{defaultUserShell()},
 		Dir:  cwd,
-		Env:  os.Environ(),
+		Env:  userShellEnv(),
 	}, proc.Size{Rows: rows, Cols: cols}, proc.Options{ShutdownTimeout: userShellShutdownTimeout})
 	if err != nil {
 		cancel()
@@ -175,4 +176,25 @@ func defaultUserShell() string {
 		return shell
 	}
 	return "/bin/sh"
+}
+
+// userShellEnv supplies the terminal identity interactive shells use to load
+// cursor movement and erase capabilities from terminfo. systemd user services
+// commonly have no TERM, and zsh then erases a character by printing only a
+// space: its line editor updates correctly, but a remote terminal cannot move
+// its cursor back because no cursor-left capability was negotiated.
+func userShellEnv() []string {
+	env := os.Environ()
+	for i, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key != "TERM" {
+			continue
+		}
+		if value != "" {
+			return env
+		}
+		env[i] = "TERM=xterm-256color"
+		return env
+	}
+	return append(env, "TERM=xterm-256color")
 }
