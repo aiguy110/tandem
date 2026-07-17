@@ -60,6 +60,78 @@ func TestSteelDriverLifecycle(t *testing.T) {
 	}
 }
 
+type fakeSessionStore struct {
+	saved   map[string][3]string // agentID -> {sessionID, profileID, cdpURL}
+	deleted []string
+}
+
+func (f *fakeSessionStore) SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error {
+	if f.saved == nil {
+		f.saved = map[string][3]string{}
+	}
+	f.saved[agentID] = [3]string{sessionID, profileID, cdpURL}
+	return nil
+}
+func (f *fakeSessionStore) DeleteBrowserSession(agentID string) error {
+	f.deleted = append(f.deleted, agentID)
+	return nil
+}
+
+func TestSteelDriverPersistsAndAdopts(t *testing.T) {
+	t.Parallel()
+	creates := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sessions":
+			creates++
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "session-9", "websocketUrl": "ws://0.0.0.0:3000/devtools/browser/9", "profileId": "profile-9"})
+		case "/v1/sessions/session-9/release":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	fs := &fakeSessionStore{}
+	d, err := NewSteelDriver(SteelConfig{BaseURL: server.URL, Store: fs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Provisioning persists the session handle.
+	if _, err := d.Provision(context.Background(), "agent/x"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := fs.saved["agent/x"]
+	if !ok || got[0] != "session-9" || got[1] != "profile-9" || got[2] != "ws://127.0.0.1:3000/devtools/browser/9" {
+		t.Fatalf("saved = %#v", fs.saved)
+	}
+	// Teardown forgets it.
+	if err := d.Teardown(context.Background(), "agent/x"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.deleted) != 1 || fs.deleted[0] != "agent/x" {
+		t.Fatalf("deleted = %v", fs.deleted)
+	}
+
+	// A fresh driver that adopts a persisted handle re-attaches without creating
+	// a new Steel session.
+	d2, err := NewSteelDriver(SteelConfig{BaseURL: server.URL, Store: fs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.Adopt("agent/x", "session-9", "profile-9", "ws://127.0.0.1:3000/devtools/browser/9")
+	res, err := d2.Provision(context.Background(), "agent/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CDPURL != "ws://127.0.0.1:3000/devtools/browser/9" {
+		t.Fatalf("adopted CDP URL = %q", res.CDPURL)
+	}
+	if creates != 1 {
+		t.Fatalf("adopt created a new session: creates=%d", creates)
+	}
+}
+
 func TestDiscoverChromiumConfigured(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "my-chrome")

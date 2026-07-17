@@ -36,6 +36,9 @@ type DriverConfig struct {
 	SteelAPIKey         string
 	SteelSessionOptions map[string]any
 	HTTPClient          *http.Client
+	// SessionStore, when set, persists Steel sessions for re-attach across a
+	// daemon restart. Ignored by the local driver (its Chromium dies with us).
+	SessionStore SessionStore
 }
 
 func NewDriver(cfg DriverConfig) (Driver, error) {
@@ -43,7 +46,7 @@ func NewDriver(cfg DriverConfig) (Driver, error) {
 	case "", "local":
 		return NewLocalDriver(LocalConfig{UserDataRoot: cfg.UserDataRoot, Executable: cfg.ChromiumExecutable}), nil
 	case "steel":
-		return NewSteelDriver(SteelConfig{BaseURL: cfg.SteelBaseURL, APIKey: cfg.SteelAPIKey, SessionOptions: cfg.SteelSessionOptions, Client: cfg.HTTPClient})
+		return NewSteelDriver(SteelConfig{BaseURL: cfg.SteelBaseURL, APIKey: cfg.SteelAPIKey, SessionOptions: cfg.SteelSessionOptions, Client: cfg.HTTPClient, Store: cfg.SessionStore})
 	default:
 		return nil, fmt.Errorf("unknown browser driver %q", cfg.Driver)
 	}
@@ -182,10 +185,21 @@ func (d *LocalDriver) Teardown(_ context.Context, id string) error {
 	return os.RemoveAll(h.profile)
 }
 
+// SessionStore persists externalized (Steel) browser sessions so they can be
+// re-attached after a daemon restart. It is satisfied structurally by
+// *store.Store, so the browser package does not import store.
+type SessionStore interface {
+	SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error
+	DeleteBrowserSession(agentID string) error
+}
+
 type SteelConfig struct {
 	BaseURL, APIKey string
 	SessionOptions  map[string]any
 	Client          *http.Client
+	// Store, when set, durably records each provisioned session so a restart can
+	// re-attach to it rather than orphaning it on the Steel server.
+	Store SessionStore
 }
 type steelSession struct{ id, cdpURL string }
 type SteelDriver struct {
@@ -273,7 +287,22 @@ func (d *SteelDriver) Provision(ctx context.Context, id string) (ProvisionResult
 	if out.ProfileID != "" {
 		d.profiles[id] = out.ProfileID
 	}
+	if d.cfg.Store != nil {
+		_ = d.cfg.Store.SaveBrowserSession(id, out.ID, out.ProfileID, raw)
+	}
 	return ProvisionResult{CDPURL: raw}, nil
+}
+
+// Adopt seeds an agent's session/profile handles from persisted state so the
+// next Provision re-attaches to the existing Steel session (preserving its
+// pages) instead of creating a fresh one.
+func (d *SteelDriver) Adopt(agentID, sessionID, profileID, cdpURL string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sessions[agentID] = steelSession{id: sessionID, cdpURL: cdpURL}
+	if profileID != "" {
+		d.profiles[agentID] = profileID
+	}
 }
 func normalizeSteelURL(raw, base string) string {
 	u, err := url.Parse(raw)
@@ -299,6 +328,11 @@ func (d *SteelDriver) Teardown(ctx context.Context, id string) error {
 	s, ok := d.sessions[id]
 	delete(d.sessions, id)
 	d.mu.Unlock()
+	// The session is ending for good (agent closed, or re-attach found it gone),
+	// so drop the persisted handle whether or not we still hold it in memory.
+	if d.cfg.Store != nil {
+		_ = d.cfg.Store.DeleteBrowserSession(id)
+	}
 	if !ok {
 		return nil
 	}

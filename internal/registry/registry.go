@@ -1030,7 +1030,9 @@ func (r *Registry) DisposeAll(ctx context.Context) error {
 	var errs []error
 	for _, s := range r.List() {
 		if r.browser != nil {
-			_ = r.browser.Teardown(ctx, s.ID)
+			// Daemon shutdown: detach without ending the browser so an
+			// externalized (Steel) session survives for re-attach on restart.
+			r.browser.Detach(s.ID)
 		}
 		if err := disposeSession(ctx, s); err != nil {
 			errs = append(errs, err)
