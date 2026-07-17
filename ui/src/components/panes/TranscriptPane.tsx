@@ -102,8 +102,8 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   }
   // Keep only still-pending permission cards inline (answered ones fall away).
   const visible = items.filter((it) => it.kind !== 'permission' || pendingIds.has(it.reqId));
-  // The current task list is always the final transcript section, regardless
-  // of how much agent activity arrived after its first update.
+  // The current task list is session state rather than transcript history.
+  // Append it here so callers can split it into the pane's fixed bottom slot.
   if (plan) visible.push(plan);
   return visible;
 }
@@ -122,6 +122,8 @@ export function TranscriptPane() {
   const [atBottom, setAtBottom] = useState(true);
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
+  const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
+  const transcriptItems = items.filter((item) => item.kind !== 'plan');
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -158,17 +160,20 @@ export function TranscriptPane() {
   return (
     <div className="pane">
       <div className="transcript-wrap">
-        <div className="transcript" ref={scrollRef} onScroll={onScroll}>
-          {items.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
-          {items.map((it) => (
-            <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
-          ))}
+        <div className="transcript-history">
+          <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+            {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
+            {transcriptItems.map((it) => (
+              <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
+            ))}
+          </div>
+          {!atBottom && (
+            <button className="scroll-latest" onClick={scrollToBottom} title="Scroll to latest">
+              ↓ Latest
+            </button>
+          )}
         </div>
-        {!atBottom && (
-          <button className="scroll-latest" onClick={scrollToBottom} title="Scroll to latest">
-            ↓ Latest
-          </button>
-        )}
+        {taskList && <TaskList item={taskList} />}
       </div>
       <PromptBar agentId={agent.id} working={agent.status === 'working'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
