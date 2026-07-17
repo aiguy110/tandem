@@ -245,11 +245,12 @@ export function SpawnPalette() {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
 
-  const doSpawn = async (dir: RepoInfo, forceWorktree = false) => {
+  const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
     setBusy(true);
     setError(null);
     const spawnAdapter = advanced ? adapter : (selectedProfile?.hasAcp ? 'acp' : 'pty');
-    const mode = forceWorktree ? 'create' : workspaceMode;
+    const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : workspaceMode;
+    const cwd = existingCwd ?? dir.path;
     const workSource = mode === 'attach' ? selectedAttachRef : selectedGitRef;
     const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
     const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
@@ -261,7 +262,7 @@ export function SpawnPalette() {
         ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
       workspace: mode === 'existing'
-        ? { kind: 'existing', cwd: dir.path }
+        ? { kind: 'existing', cwd }
         : {
             kind: 'worktree',
             repo: dir.path,
@@ -292,7 +293,7 @@ export function SpawnPalette() {
     setBusy(false);
     if (r.error) {
       const code = r.error.split(':')[0];
-      setError({ code, msg: r.error, dir });
+      setError({ code, msg: r.error, dir: existingCwd ? { ...dir, path: existingCwd } : dir });
     } else if (r.agentId) {
       recordRecentDir(dir.path);
       focus(r.agentId);
@@ -464,7 +465,20 @@ export function SpawnPalette() {
                   {workspaceMode === 'create' ? <>Starting at <b>{selectedGitRef.displayName}</b> @ <code>{selectedGitRef.commit.slice(0, 8)}</code></> : <>Attaching <b>{selectedAttachRef?.displayName ?? '—'}</b>; merge target <b>{selectedGitRef.displayName}</b></>}
                 </div>
                 {workspaceMode === 'create' && <div>Agent branch <code>{agentBranch || proposedBranch(selectedGitRef, name)}</code></div>}
-                {selectedAttachRef?.checkedOutAt && workspaceMode === 'attach' && <div className="modal-err">This branch is already checked out at {selectedAttachRef.checkedOutAt}.</div>}
+                {selectedAttachRef?.checkedOutAt && workspaceMode === 'attach' && (
+                  <div className="modal-err">
+                    <div>This branch is already checked out at {selectedAttachRef.checkedOutAt}.</div>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ marginTop: 8 }}
+                      disabled={busy}
+                      onClick={() => void doSpawn(selectedDir, false, selectedAttachRef.checkedOutAt)}
+                    >
+                      Use this checked-out worktree
+                    </button>
+                  </div>
+                )}
                 {selectedGitRef.checkedOutAt === selectedDir?.path && selectedDir?.dirty && workspaceMode === 'create' && (
                   <div className="branch-warning">Uncommitted changes in the existing checkout are not included; the agent starts from the committed revision above.</div>
                 )}
