@@ -264,6 +264,23 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 	}
 }
 
+func TestPromptCancellationRestoresIdleStatus(t *testing.T) {
+	a := startMock(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Prompt(ctx, []PromptBlock{{Type: "text", Text: "DERISK_CANCEL"}})
+		done <- err
+	}()
+
+	waitEvent(t, a, "status", func(e map[string]any) bool { return e["status"] == "working" })
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("cancelled prompt returned no error")
+	}
+	waitEvent(t, a, "status", func(e map[string]any) bool { return e["status"] == "idle" })
+}
+
 func TestLiveClientServicesRoundTripEscapeAndTerminalLifecycle(t *testing.T) {
 	a, workspace, host, durable := startServiceMock(t)
 	stop, err := a.Prompt(context.Background(), []PromptBlock{{Type: "text", Text: "DERISK_SERVICES"}})

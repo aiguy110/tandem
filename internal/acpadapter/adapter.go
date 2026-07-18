@@ -327,13 +327,16 @@ func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, err
 		return "", err
 	}
 	a.emit(map[string]any{"kind": "status", "status": "working"})
+	// Always balance the working transition. Transport failures and cancelled
+	// prompt contexts return before a normal ACP response, but the adapter
+	// process can remain healthy and accept another turn.
+	defer a.emit(map[string]any{"kind": "status", "status": "idle"})
 	var response struct {
 		StopReason string `json:"stopReason"`
 	}
 	if err := a.tr.Call(ctx, "session/prompt", map[string]any{"sessionId": a.SessionID(), "prompt": wire}, &response); err != nil {
 		return "", fmt.Errorf("acp session/prompt: %w", err)
 	}
-	a.emit(map[string]any{"kind": "status", "status": "idle"})
 	if response.StopReason == "" {
 		return "end_turn", nil
 	}
