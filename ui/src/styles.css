@@ -491,8 +491,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    so mobile browsers permit focus, and expose its focus through the button. */
 .term-kbd-catcher { position: absolute; bottom: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; margin: 0; opacity: 0; resize: none; overflow: hidden; caret-color: transparent; pointer-events: none; }
 .term-kbd-btn { display: none; position: absolute; z-index: 2; right: 12px; top: 10px; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
+.term-extra-keys { display: none; position: absolute; z-index: 3; right: 0; bottom: 0; left: 0; height: calc(44px + env(safe-area-inset-bottom)); align-items: flex-start; gap: 5px; padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); overflow-x: auto; overflow-y: hidden; background: var(--surface); border-top: 1px solid var(--border-strong); scrollbar-width: none; overscroll-behavior-x: contain; }
+.term-extra-keys::-webkit-scrollbar { display: none; }
+.term-extra-keys button { flex: 0 0 auto; min-width: 40px; height: 32px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: 600 var(--fs-sm) var(--font-mono); touch-action: manipulation; }
+.term-extra-keys button.active { border-color: var(--agent); background: var(--agent-soft); color: var(--agent); }
 @media (hover: none) and (pointer: coarse) {
   .term-kbd-btn { display: block; }
+  .term-extra-keys { display: flex; }
+  .term-mount.mobile-kbd-open .term-renderer { bottom: calc(44px + env(safe-area-inset-bottom)); }
 }
 
 /* Chat pane and the ACP/CLI switch that replaces its selected nav tab. */
