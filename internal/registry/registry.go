@@ -84,7 +84,7 @@ type CatalogAgent struct {
 	HasTerminal bool   `json:"hasTerminal"`
 	CanResume   bool   `json:"canResume"`
 }
-type CatalogProfile struct {
+type CatalogHarness struct {
 	ID           string   `json:"id"`
 	Agent        string   `json:"agent"`
 	Name         string   `json:"name"`
@@ -93,9 +93,9 @@ type CatalogProfile struct {
 }
 type Catalog struct {
 	DefaultAgent   string           `json:"defaultAgent"`
-	DefaultProfile string           `json:"defaultProfile,omitempty"`
+	DefaultHarness string           `json:"defaultHarness,omitempty"`
 	Agents         []CatalogAgent   `json:"agents"`
-	Profiles       []CatalogProfile `json:"profiles"`
+	Harnesses      []CatalogHarness `json:"harnesses"`
 }
 type SpawnOptions struct {
 	Modes         json.RawMessage   `json:"modes"`
@@ -330,23 +330,23 @@ func (r *Registry) Diff(ctx context.Context, id string) (*workspace.Diff, error)
 }
 
 func (r *Registry) AgentCatalog() Catalog {
-	c := Catalog{DefaultAgent: r.config.ACP.Default, DefaultProfile: r.config.DefaultProfile, Agents: make([]CatalogAgent, 0, len(r.config.Agents)), Profiles: make([]CatalogProfile, 0, len(r.config.Profiles))}
+	c := Catalog{DefaultAgent: r.config.ACP.Default, DefaultHarness: r.config.DefaultHarness, Agents: make([]CatalogAgent, 0, len(r.config.Agents)), Harnesses: make([]CatalogHarness, 0, len(r.config.Harnesses))}
 	for id, a := range r.config.Agents {
 		c.Agents = append(c.Agents, CatalogAgent{ID: id, Name: a.Name, HasACP: a.ACP != nil, HasTerminal: a.Terminal != nil, CanResume: a.Terminal != nil && len(a.Terminal.Args) > 0})
 	}
-	for id, p := range r.config.Profiles {
-		c.Profiles = append(c.Profiles, CatalogProfile{ID: id, Agent: p.Agent, Name: p.Name, ACPArgs: append([]string{}, p.ACPArgs...), TerminalArgs: append([]string{}, p.TerminalArgs...)})
+	for id, h := range r.config.Harnesses {
+		c.Harnesses = append(c.Harnesses, CatalogHarness{ID: id, Agent: h.Agent, Name: h.Name, ACPArgs: append([]string{}, h.ACPArgs...), TerminalArgs: append([]string{}, h.TerminalArgs...)})
 	}
 	sort.Slice(c.Agents, func(i, j int) bool { return c.Agents[i].ID < c.Agents[j].ID })
-	sort.Slice(c.Profiles, func(i, j int) bool { return c.Profiles[i].ID < c.Profiles[j].ID })
+	sort.Slice(c.Harnesses, func(i, j int) bool { return c.Harnesses[i].ID < c.Harnesses[j].ID })
 	return c
 }
 
 // SpawnOptions probes an ACP session without registering an agent or
 // provisioning a workspace. It mirrors the advanced spawn palette's Node
 // behavior and always tears the probe process down.
-func (r *Registry) SpawnOptions(ctx context.Context, agent, profile string, acpArgs []string, cwd string) (SpawnOptions, error) {
-	spec, err := r.resolve(agentadapter.Spec{Adapter: "acp", Agent: agent, Profile: profile, ACPArgs: acpArgs, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
+func (r *Registry) SpawnOptions(ctx context.Context, agent, harness string, acpArgs []string, cwd string) (SpawnOptions, error) {
+	spec, err := r.resolve(agentadapter.Spec{Adapter: "acp", Agent: agent, Harness: harness, ACPArgs: acpArgs, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
 	if err != nil {
 		return SpawnOptions{}, err
 	}
@@ -419,17 +419,17 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	if spec.ResolvedLaunch != nil {
 		return spec, nil
 	}
-	profileID := spec.Profile
-	if profileID == "" && spec.Agent == "" {
-		profileID = r.config.DefaultProfile
+	harnessID := spec.Harness
+	if harnessID == "" && spec.Agent == "" {
+		harnessID = r.config.DefaultHarness
 	}
-	p, hasProfile := r.config.Profiles[profileID]
-	if profileID != "" && !hasProfile {
-		return spec, fmt.Errorf("unknown profile: %s", profileID)
+	h, hasHarness := r.config.Harnesses[harnessID]
+	if harnessID != "" && !hasHarness {
+		return spec, fmt.Errorf("unknown harness: %s", harnessID)
 	}
 	agent := spec.Agent
-	if agent == "" && hasProfile {
-		agent = p.Agent
+	if agent == "" && hasHarness {
+		agent = h.Agent
 	}
 	if agent == "" {
 		agent = r.config.ACP.Default
@@ -438,8 +438,8 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	if !ok {
 		return spec, fmt.Errorf("unknown agent: %s", agent)
 	}
-	if hasProfile && p.Agent != agent {
-		return spec, fmt.Errorf("profile %s belongs to agent %s", profileID, p.Agent)
+	if hasHarness && h.Agent != agent {
+		return spec, fmt.Errorf("harness %s belongs to agent %s", harnessID, h.Agent)
 	}
 	resolved := &agentadapter.ResolvedLaunch{Agent: agent}
 	launch := def.ACP
@@ -447,10 +447,10 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 		launch = r.config.ACP.Override
 	}
 	if launch != nil {
-		resolved.ACP = &agentadapter.Launch{Cmd: launch.Cmd, Args: append(append(append([]string{}, launch.Args...), p.ACPArgs...), spec.ACPArgs...), Env: launch.Env}
+		resolved.ACP = &agentadapter.Launch{Cmd: launch.Cmd, Args: append(append(append([]string{}, launch.Args...), h.ACPArgs...), spec.ACPArgs...), Env: launch.Env}
 	}
 	if def.Terminal != nil {
-		resolved.Terminal = &agentadapter.TerminalLaunch{Cmd: def.Terminal.Cmd, StartArgs: append(append(append([]string{}, def.Terminal.StartArgs...), p.TerminalArgs...), spec.TerminalArgs...), ResumeArgs: append(append(append([]string{}, def.Terminal.Args...), p.TerminalArgs...), spec.TerminalArgs...), Env: def.Terminal.Env}
+		resolved.Terminal = &agentadapter.TerminalLaunch{Cmd: def.Terminal.Cmd, StartArgs: append(append(append([]string{}, def.Terminal.StartArgs...), h.TerminalArgs...), spec.TerminalArgs...), ResumeArgs: append(append(append([]string{}, def.Terminal.Args...), h.TerminalArgs...), spec.TerminalArgs...), Env: def.Terminal.Env}
 	}
 	if spec.Adapter == "acp" && resolved.ACP == nil {
 		return spec, fmt.Errorf("agent %s has no ACP launch configured", agent)
@@ -458,7 +458,7 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	if spec.Adapter == "pty" && resolved.Terminal == nil {
 		return spec, fmt.Errorf("agent %s has no terminal launch configured", agent)
 	}
-	spec.Agent, spec.Profile, spec.ResolvedLaunch = agent, profileID, resolved
+	spec.Agent, spec.Harness, spec.ResolvedLaunch = agent, harnessID, resolved
 	return spec, nil
 }
 

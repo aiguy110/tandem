@@ -123,7 +123,7 @@ type clientMessage struct {
 	Value          any                        `json:"value"`
 	Spec           agentadapter.Spec          `json:"spec"`
 	Agent          string                     `json:"agent"`
-	Profile        string                     `json:"profile"`
+	Harness        string                     `json:"harness"`
 	ACPArgs        []string                   `json:"acpArgs"`
 	CWD            string                     `json:"cwd"`
 	Repo           string                     `json:"repo"`
@@ -458,7 +458,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sess.ID)
 	case "get_spawn_options":
-		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Profile, m.ACPArgs, m.CWD)
+		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
 		if err != nil {
 			c.send(withCorr(map[string]any{"t": "spawn_options", "error": err.Error()}, m.CorrID))
 			return

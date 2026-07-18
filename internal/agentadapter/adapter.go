@@ -67,7 +67,7 @@ type ResolvedLaunch struct {
 type Spec struct {
 	Adapter        string              `json:"adapter"`
 	Agent          string              `json:"agent,omitempty"`
-	Profile        string              `json:"profile,omitempty"`
+	Harness        string              `json:"harness,omitempty"`
 	ACPArgs        []string            `json:"acpArgs,omitempty"`
 	TerminalArgs   []string            `json:"terminalArgs,omitempty"`
 	Workspace      workspace.Workspace `json:"workspace"`

@@ -57,13 +57,13 @@
         }
       }
     },
-    "profiles": {}
+    "harnesses": {}
   },
   "overlay": {
     "version": 1,
     "defaults": {
       "agent": "custom",
-      "profile": "custom-fast"
+      "harness": "custom-fast"
     },
     "agents": {
       "custom": {
@@ -79,7 +79,7 @@
         }
       }
     },
-    "profiles": {
+    "harnesses": {
       "custom-fast": {
         "agent": "custom",
         "name": "Custom Fast",

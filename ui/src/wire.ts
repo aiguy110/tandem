@@ -182,7 +182,7 @@ export type Workspace =
 export interface SpawnSpec {
   adapter: 'acp' | 'pty';
   agent?: string; // configured agent definition; applies to both ACP and direct Terminal launches
-  profile?: string; // configured profile id; agent remains populated for older daemons
+  harness?: string; // configured harness id (agent launch variant); agent remains populated for older daemons
   terminalArgs?: string[]; // argv entries appended to a configured direct-terminal launch
   workspace: Workspace;
   name?: string;
@@ -198,7 +198,7 @@ export interface AgentCatalogEntry {
   hasTerminal: boolean;
   canResume: boolean;
 }
-export interface AgentProfileEntry {
+export interface AgentHarnessEntry {
   id: string;
   agent: string;
   name: string;
@@ -207,9 +207,9 @@ export interface AgentProfileEntry {
 }
 export interface AgentCatalog {
   defaultAgent: string;
-  defaultProfile?: string;
+  defaultHarness?: string;
   agents: AgentCatalogEntry[];
-  profiles: AgentProfileEntry[];
+  harnesses: AgentHarnessEntry[];
 }
 
 export interface SpawnOptions {
@@ -242,7 +242,7 @@ export type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
-  | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'get_diff'; agentId: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }

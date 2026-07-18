@@ -37,4 +37,4 @@ agents:
       startArgs: []
       resumeArgs: [--session, "{sessionId}"]
 
-profiles: {}
+harnesses: {}

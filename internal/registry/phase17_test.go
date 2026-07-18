@@ -99,7 +99,7 @@ func phaseSetup(t *testing.T, factory *phaseFactory, launch config.Launch) (*Reg
 		t.Fatal(err)
 	}
 	terminal := &config.ResumeLaunch{Cmd: "/absolute/mock-resume", Args: []string{"{sessionId}"}}
-	cfg := config.Config{Home: home, WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake", Agents: map[string]config.Launch{"fake": launch}}, Agents: map[string]config.Agent{"fake": {ACP: &launch, Terminal: terminal}}, Profiles: map[string]config.Profile{}}
+	cfg := config.Config{Home: home, WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake", Agents: map[string]config.Launch{"fake": launch}}, Agents: map[string]config.Agent{"fake": {ACP: &launch, Terminal: terminal}}, Harnesses: map[string]config.Harness{}}
 	r, err := New(Options{Store: db, Config: cfg, Factory: factory})
 	if err != nil {
 		t.Fatal(err)

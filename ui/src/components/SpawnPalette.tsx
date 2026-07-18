@@ -8,10 +8,10 @@ const RECENT_DIRS_MAX = 3;
 const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
 const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
-const FALLBACK_PROFILES = [
-  { id: 'agent:claude', name: 'Claude', agent: 'claude', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
-  { id: 'agent:codex', name: 'Codex', agent: 'codex', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
-  { id: 'agent:pi', name: 'Pi', agent: 'pi', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+const FALLBACK_HARNESSES = [
+  { id: 'agent:claude', name: 'Claude', agent: 'claude', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:codex', name: 'Codex', agent: 'codex', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:pi', name: 'Pi', agent: 'pi', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
 ];
 
 type SavedSettings = { model?: string; effort?: string; permission?: string };
@@ -105,22 +105,22 @@ export function SpawnPalette() {
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
   const agentCatalog = useStore((s) => s.agentCatalog);
-  const profiles = useMemo(() => {
-    if (!agentCatalog) return FALLBACK_PROFILES;
+  const harnesses = useMemo(() => {
+    if (!agentCatalog) return FALLBACK_HARNESSES;
     const agentsById = new Map(agentCatalog.agents.map((entry) => [entry.id, entry]));
-    const configured = agentCatalog.profiles.map((profile) => {
-      const definition = agentsById.get(profile.agent);
+    const configured = agentCatalog.harnesses.map((harness) => {
+      const definition = agentsById.get(harness.agent);
       return {
-        id: `profile:${profile.id}`,
-        profile: profile.id,
-        name: profile.name,
-        agent: profile.agent,
+        id: `harness:${harness.id}`,
+        harness: harness.id,
+        name: harness.name,
+        agent: harness.agent,
         hasAcp: definition?.hasAcp ?? false,
         hasTerminal: definition?.hasTerminal ?? false,
       };
     });
     const implicit = agentCatalog.agents
-      .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, profile: undefined as string | undefined }));
+      .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, harness: undefined as string | undefined }));
     return [...configured, ...implicit];
   }, [agentCatalog]);
 
@@ -162,27 +162,27 @@ export function SpawnPalette() {
   }, [query, dirs]);
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
-  const selectedProfile = profiles.find((profile) => profile.id === agent) ?? profiles[0];
+  const selectedHarness = harnesses.find((harness) => harness.id === agent) ?? harnesses[0];
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
-  const agentSlug = selectedProfile?.agent ?? agent.replace(/^agent:/, '');
+  const agentSlug = selectedHarness?.agent ?? agent.replace(/^agent:/, '');
   useEffect(() => {
     if (!selectedDir) return;
     const saved = loadProjectAgent(selectedDir.path);
-    const catalogDefault = agentCatalog?.defaultProfile
-      ? `profile:${agentCatalog.defaultProfile}`
+    const catalogDefault = agentCatalog?.defaultHarness
+      ? `harness:${agentCatalog.defaultHarness}`
       : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
     const matched = saved
-      ? profiles.find((profile) => profile.id === saved)
-        ?? profiles.find((profile) => !profile.profile && profile.agent === saved)
-        ?? profiles.find((profile) => profile.profile === saved)
+      ? harnesses.find((harness) => harness.id === saved)
+        ?? harnesses.find((harness) => !harness.harness && harness.agent === saved)
+        ?? harnesses.find((harness) => harness.harness === saved)
       : undefined;
-    setAgent(matched?.id ?? profiles.find((profile) => profile.id === catalogDefault)?.id ?? profiles[0]?.id ?? 'agent:claude');
-  }, [selectedDir?.path, profiles, agentCatalog]);
+    setAgent(matched?.id ?? harnesses.find((harness) => harness.id === catalogDefault)?.id ?? harnesses[0]?.id ?? 'agent:claude');
+  }, [selectedDir?.path, harnesses, agentCatalog]);
   useEffect(() => {
-    if (adapter === 'acp' && selectedProfile && !selectedProfile.hasAcp && selectedProfile.hasTerminal) setAdapter('pty');
-    if (adapter === 'pty' && selectedProfile && !selectedProfile.hasTerminal && selectedProfile.hasAcp) setAdapter('acp');
-  }, [agent, adapter, selectedProfile]);
+    if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
+    if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
+  }, [agent, adapter, selectedHarness]);
   useEffect(() => {
     if (!selectedDir || adapter !== 'acp') return;
     const saved = loadSpawnSettings(agent, selectedDir.path);
@@ -199,7 +199,7 @@ export function SpawnPalette() {
     let cancelled = false;
     setOptionsBusy(true);
     setOptionsError('');
-    void getSpawnOptions(agentSlug, selectedDir.path, selectedProfile?.profile).then((options) => {
+    void getSpawnOptions(agentSlug, selectedDir.path, selectedHarness?.harness).then((options) => {
       if (cancelled) return;
       setSpawnOptions(options);
       const saved = loadSpawnSettings(agent, selectedDir.path);
@@ -216,7 +216,7 @@ export function SpawnPalette() {
       }
     }).finally(() => { if (!cancelled) setOptionsBusy(false); });
     return () => { cancelled = true; };
-  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedProfile?.profile, getSpawnOptions]);
+  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedHarness?.harness, getSpawnOptions]);
   useEffect(() => {
     if (!advanced || !selectedDir) {
       setGitRefs([]);
@@ -248,7 +248,7 @@ export function SpawnPalette() {
   const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
     setBusy(true);
     setError(null);
-    const spawnAdapter = advanced ? adapter : (selectedProfile?.hasAcp ? 'acp' : 'pty');
+    const spawnAdapter = advanced ? adapter : (selectedHarness?.hasAcp ? 'acp' : 'pty');
     const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : workspaceMode;
     const cwd = existingCwd ?? dir.path;
     const workSource = mode === 'attach' ? selectedAttachRef : selectedGitRef;
@@ -257,7 +257,7 @@ export function SpawnPalette() {
     const spec: SpawnSpec = {
       adapter: spawnAdapter,
       agent: agentSlug,
-      profile: selectedProfile?.profile,
+      harness: selectedHarness?.harness,
       terminalArgs: spawnAdapter === 'pty'
         ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
@@ -373,18 +373,18 @@ export function SpawnPalette() {
             <label>
               Connection
               <select value={adapter} onChange={(e) => setAdapter(e.target.value as 'acp' | 'pty')}>
-                <option value="acp" disabled={!selectedProfile?.hasAcp}>Transcript (ACP)</option>
-                <option value="pty" disabled={!selectedProfile?.hasTerminal}>Direct Terminal</option>
+                <option value="acp" disabled={!selectedHarness?.hasAcp}>Transcript (ACP)</option>
+                <option value="pty" disabled={!selectedHarness?.hasTerminal}>Direct Terminal</option>
               </select>
             </label>
             <label>
-              Profile
-              <select value={selectedProfile?.id ?? ''} onChange={(e) => {
+              Harness
+              <select value={selectedHarness?.id ?? ''} onChange={(e) => {
                 const next = e.target.value;
                 setAgent(next);
                 if (selectedDir) saveProjectAgent(selectedDir.path, next);
               }}>
-                {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                {harnesses.map((harness) => <option key={harness.id} value={harness.id}>{harness.name}</option>)}
               </select>
             </label>
             {adapter === 'acp' && (

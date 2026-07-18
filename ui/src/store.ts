@@ -150,7 +150,7 @@ interface StoreState {
   openShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
-  getSpawnOptions: (agent: string, cwd: string, profile?: string) => Promise<SpawnOptions>;
+  getSpawnOptions: (agent: string, cwd: string, harness?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
@@ -583,11 +583,11 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
-    getSpawnOptions: (agent, cwd, profile) =>
+    getSpawnOptions: (agent, cwd, harness) =>
       new Promise<SpawnOptions>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSpawnOptions.set(corrId, { resolve, reject });
-        client.send({ t: 'get_spawn_options', agent, profile, cwd, corrId });
+        client.send({ t: 'get_spawn_options', agent, harness, cwd, corrId });
       }),
     listGitRefs: (repo) =>
       new Promise<GitRefInfo[]>((resolve, reject) => {

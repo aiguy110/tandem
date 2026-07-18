@@ -13,9 +13,9 @@ import (
 
 type catalogGolden struct {
 	DefaultAgent   string             `json:"defaultAgent"`
-	DefaultProfile string             `json:"defaultProfile,omitempty"`
+	DefaultHarness string             `json:"defaultHarness,omitempty"`
 	Agents         map[string]Agent   `json:"agents"`
-	Profiles       map[string]Profile `json:"profiles"`
+	Harnesses      map[string]Harness `json:"harnesses"`
 }
 
 func options(t *testing.T, env map[string]string) Options {
@@ -74,7 +74,7 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 func TestOverlayExpansionProfilesAndPartialAgentMerge(t *testing.T) {
 	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
 	config := `
-defaults: {agent: custom, profile: custom-fast}
+defaults: {agent: custom, harness: custom-fast}
 agents:
   claude:
     name: Renamed Claude
@@ -84,7 +84,7 @@ agents:
       command: "{node}"
       args: ["{runtimeRoot}/mock.mjs", "{tandemRoot}"]
       env: {HOME_PATH: "{home}"}
-profiles:
+harnesses:
   custom-fast:
     agent: custom
     name: Custom Fast
@@ -98,8 +98,8 @@ profiles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ACP.Default != "custom" || c.DefaultProfile != "custom-fast" {
-		t.Fatalf("defaults = %q/%q", c.ACP.Default, c.DefaultProfile)
+	if c.ACP.Default != "custom" || c.DefaultHarness != "custom-fast" {
+		t.Fatalf("defaults = %q/%q", c.ACP.Default, c.DefaultHarness)
 	}
 	if c.Agents["claude"].ACP == nil || c.Agents["claude"].Terminal == nil || c.Agents["claude"].Name != "Renamed Claude" {
 		t.Fatalf("partial overlay did not inherit: %+v", c.Agents["claude"])
@@ -108,8 +108,8 @@ profiles:
 	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/runtime/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
 		t.Fatalf("placeholders not expanded: %+v", custom)
 	}
-	if !reflect.DeepEqual(c.Profiles["custom-fast"].ACPArgs, []string{"--fast"}) {
-		t.Fatalf("profile not loaded: %+v", c.Profiles)
+	if !reflect.DeepEqual(c.Harnesses["custom-fast"].ACPArgs, []string{"--fast"}) {
+		t.Fatalf("harness not loaded: %+v", c.Harnesses)
 	}
 }
 
@@ -119,8 +119,8 @@ func TestInvalidConfiguration(t *testing.T) {
 		{"missing command", "agents:\n  broken:\n    acp:\n      args: []\n", "agents.broken.acp.command must be a non-empty string"},
 		{"bad argument list", "agents:\n  broken:\n    terminal:\n      command: node\n      startArgs: nope\n", "agents.broken.terminal.startArgs must be an array of strings"},
 		{"bad environment", "agents:\n  broken:\n    acp:\n      command: node\n      env: {COUNT: 3}\n", "agents.broken.acp.env must be a mapping of string values"},
-		{"unknown profile agent", "profiles:\n  bad: {agent: missing}\n", "profiles.bad references unknown agent: missing"},
-		{"unknown default profile", "defaults: {profile: absent}\n", "defaults.profile references unknown profile: absent"},
+		{"unknown harness agent", "harnesses:\n  bad: {agent: missing}\n", "harnesses.bad references unknown agent: missing"},
+		{"unknown default harness", "defaults: {harness: absent}\n", "defaults.harness references unknown harness: absent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -243,7 +243,7 @@ func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
 	custom := c.Agents["custom"]
 	custom.ACP.Env["FIXTURE_HOME"] = "{home}"
 	c.Agents["custom"] = custom
-	actual, err := json.MarshalIndent(catalogGolden{c.ACP.Default, c.DefaultProfile, c.Agents, c.Profiles}, "", "  ")
+	actual, err := json.MarshalIndent(catalogGolden{c.ACP.Default, c.DefaultHarness, c.Agents, c.Harnesses}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
