@@ -71,9 +71,14 @@ export function BrowserPane() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Last painted image rect + device size, for canvas→page coordinate mapping.
   const rectRef = useRef({ x: 0, y: 0, w: 1, h: 1, dw: 1280, dh: 800 });
-  // In-flight single-finger touch: start point/time for tap vs. drag-scroll,
-  // last point for incremental scroll deltas, and whether it became a scroll.
-  const touchRef = useRef<{ sx: number; sy: number; lx: number; ly: number; t: number; scrolling: boolean } | null>(null);
+  // Local viewer zoom is intentionally independent of the remote page. It
+  // magnifies and pans the screencast without sending a pinch gesture to CDP.
+  const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
+  const redrawRef = useRef<(() => void) | null>(null);
+  type TouchState =
+    | { kind: 'single'; sx: number; sy: number; lx: number; ly: number; scrolling: boolean }
+    | { kind: 'pinch'; distance: number; scale: number; contentX: number; contentY: number };
+  const touchRef = useRef<TouchState | null>(null);
   // Hidden field that drives the mobile soft keyboard (see onKbdInput).
   const kbdRef = useRef<HTMLTextAreaElement>(null);
   const userOwns = owner === 'user';
@@ -91,32 +96,55 @@ export function BrowserPane() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     let disposed = false;
+    let image: HTMLImageElement | null = null;
+    let frame: Frame | null = null;
+
+    const redraw = () => {
+      if (disposed || !image || !frame) return;
+      const parent = canvas.parentElement!;
+      const cw = parent.clientWidth;
+      const ch = parent.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      const dw = frame.meta.deviceWidth || image.width;
+      const dh = frame.meta.deviceHeight || image.height;
+      const fit = Math.min(cw / dw, ch / dh);
+      const baseW = dw * fit;
+      const baseH = dh * fit;
+      const baseX = (cw - baseW) / 2;
+      const baseY = (ch - baseH) / 2;
+      const view = viewRef.current;
+      const x = baseX + view.tx;
+      const y = baseY + view.ty;
+      const w = baseW * view.scale;
+      const h = baseH * view.scale;
+      rectRef.current = { x, y, w, h, dw, dh };
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#0b0f14';
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.drawImage(image, x, y, w, h);
+    };
+    redrawRef.current = redraw;
 
     const paint = (f: Frame) => {
       const img = new Image();
       img.onload = () => {
         if (disposed) return;
-        const parent = canvas.parentElement!;
-        const cw = (canvas.width = parent.clientWidth);
-        const ch = (canvas.height = parent.clientHeight);
-        const dw = f.meta.deviceWidth || img.width;
-        const dh = f.meta.deviceHeight || img.height;
-        const scale = Math.min(cw / dw, ch / dh);
-        const w = dw * scale;
-        const h = dh * scale;
-        const x = (cw - w) / 2;
-        const y = (ch - h) / 2;
-        rectRef.current = { x, y, w, h, dw, dh };
-        ctx.fillStyle = '#0b0f14';
-        ctx.fillRect(0, 0, cw, ch);
-        ctx.drawImage(img, x, y, w, h);
+        image = img;
+        frame = f;
+        redraw();
       };
       img.src = 'data:image/jpeg;base64,' + f.dataB64;
     };
 
+    const observer = new ResizeObserver(redraw);
+    observer.observe(canvas.parentElement!);
     const unsub = browserHub.subscribe(agentId, paint);
     return () => {
       disposed = true;
+      redrawRef.current = null;
+      observer.disconnect();
       unsub();
     };
     // `active` is a dep: the <canvas> only exists once the browser is active, so
@@ -177,19 +205,49 @@ export function BrowserPane() {
     else emitKey(e.key, e.code);
   };
 
-  // Touch → mouse/wheel mapping. A single finger that stays roughly put is a
-  // tap (→ click); one that moves is a drag-scroll (→ wheel deltas, natural:
-  // finger up scrolls the page down). Multi-touch is ignored (pinch is a
-  // follow-up needing a dedicated CDP touch path).
+  // One finger taps or scrolls the remote page. Two fingers zoom and pan only
+  // this local viewer; input coordinates are mapped back through that view.
   const TAP_SLOP = 8; // px of movement before a touch counts as a scroll
   const onTouchStart = (e: React.TouchEvent) => {
-    if (!userOwns || e.touches.length !== 1) return;
-    const t = e.touches[0];
-    touchRef.current = { sx: t.clientX, sy: t.clientY, lx: t.clientX, ly: t.clientY, t: Date.now(), scrolling: false };
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const mx = (a.clientX + b.clientX) / 2;
+      const my = (a.clientY + b.clientY) / 2;
+      const canvasRect = canvasRef.current!.getBoundingClientRect();
+      const { x, y } = rectRef.current;
+      const view = viewRef.current;
+      touchRef.current = {
+        kind: 'pinch', distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), scale: view.scale,
+        contentX: (mx - canvasRect.left - x) / view.scale,
+        contentY: (my - canvasRect.top - y) / view.scale,
+      };
+    } else if (userOwns && e.touches.length === 1) {
+      const t = e.touches[0];
+      touchRef.current = { kind: 'single', sx: t.clientX, sy: t.clientY, lx: t.clientX, ly: t.clientY, scrolling: false };
+    }
   };
   const onTouchMove = (e: React.TouchEvent) => {
     const st = touchRef.current;
-    if (!userOwns || !st || e.touches.length !== 1) return;
+    if (!st) return;
+    if (st.kind === 'pinch' && e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const scale = Math.max(1, Math.min(4, st.scale * distance / Math.max(st.distance, 1)));
+      const mx = (a.clientX + b.clientX) / 2;
+      const my = (a.clientY + b.clientY) / 2;
+      const canvasRect = canvasRef.current!.getBoundingClientRect();
+      const current = rectRef.current;
+      const baseX = current.x - viewRef.current.tx;
+      const baseY = current.y - viewRef.current.ty;
+      viewRef.current = scale === 1 ? { scale: 1, tx: 0, ty: 0 } : {
+        scale,
+        tx: mx - canvasRect.left - baseX - st.contentX * scale,
+        ty: my - canvasRect.top - baseY - st.contentY * scale,
+      };
+      redrawRef.current?.();
+      return;
+    }
+    if (!userOwns || st.kind !== 'single' || e.touches.length !== 1) return;
     const t = e.touches[0];
     if (!st.scrolling && Math.hypot(t.clientX - st.sx, t.clientY - st.sy) < TAP_SLOP) return;
     st.scrolling = true;
@@ -198,10 +256,17 @@ export function BrowserPane() {
     st.lx = t.clientX;
     st.ly = t.clientY;
   };
-  const onTouchEnd = () => {
+  const onTouchEnd = (e: React.TouchEvent) => {
     const st = touchRef.current;
     touchRef.current = null;
-    if (!userOwns || !st || st.scrolling) return;
+    if (!userOwns || !st || st.kind === 'pinch') {
+      if (userOwns && e.touches.length === 1) {
+        const t = e.touches[0];
+        touchRef.current = { kind: 'single', sx: t.clientX, sy: t.clientY, lx: t.clientX, ly: t.clientY, scrolling: true };
+      }
+      return;
+    }
+    if (st.scrolling) return;
     const p = clientToPage(st.sx, st.sy);
     if (!p) return;
     emit({ kind: 'mousedown', x: p.x, y: p.y, buttons: 1 });
@@ -373,6 +438,7 @@ export function BrowserPane() {
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
+          onTouchCancel={() => { touchRef.current = null; }}
         >
           <canvas ref={canvasRef} className="browser-canvas" />
           <textarea

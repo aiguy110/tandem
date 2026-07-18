@@ -193,7 +193,7 @@ func (s *SharedBrowser) StartScreencast(ctx context.Context, callback func(Scree
 
 func (s *SharedBrowser) startRemoteCast(ctx context.Context, conn *websocket.Conn, session string) error {
 	err := s.callOn(ctx, conn, session, "Page.startScreencast", map[string]any{
-		"format": "jpeg", "quality": 70, "maxWidth": 1280, "maxHeight": 800, "everyNthFrame": 1,
+		"format": "jpeg", "quality": 90, "maxWidth": 1280, "maxHeight": 800, "everyNthFrame": 1,
 	}, nil)
 	if err == nil {
 		s.mu.Lock()

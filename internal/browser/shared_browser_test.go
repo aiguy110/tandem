@@ -165,6 +165,10 @@ func TestSharedBrowserCreatesTargetScreencastsAndDoesNotLeakListeners(t *testing
 	if fake.created != 1 {
 		t.Fatalf("created targets=%d", fake.created)
 	}
+	start := fake.commandsFor("Page.startScreencast")[0]
+	if start.Params["quality"] != float64(90) {
+		t.Fatalf("screencast quality=%v", start.Params["quality"])
+	}
 	fake.sendEvent("Page.screencastFrame", map[string]any{
 		"data": "jpeg-one", "sessionId": 41,
 		"metadata": map[string]any{"deviceWidth": 1280, "deviceHeight": 800, "offsetTop": 5, "timestamp": 1.25},
