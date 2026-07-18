@@ -56,7 +56,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   const focusKeyboard = () => {
     pendingBackspaceInputs.current = 0;
     resetKeyboard();
-    kbdRef.current?.focus();
+    kbdRef.current?.focus({ preventScroll: true });
   };
   const send = (data: string) => cbs.current.onData(data);
   const clearModifiers = () => setModifiers(new Set());
@@ -138,6 +138,19 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     const el = rendererRef.current;
     if (!el) return;
 
+    // Both terminal engines install their own hidden textarea. On touch
+    // devices, tapping the canvas focuses that field directly, bypassing our
+    // mobile IME handling and accessory-bar state. Redirect that focus while
+    // it is still part of the user's tap gesture so the soft keyboard opens
+    // through the same path as the explicit Keyboard button.
+    const onRendererFocusIn = (event: FocusEvent) => {
+      if (
+        event.target instanceof HTMLTextAreaElement
+        && window.matchMedia('(hover: none) and (pointer: coarse)').matches
+      ) focusKeyboard();
+    };
+    el.addEventListener('focusin', onRendererFocusIn);
+
     (async () => {
       const created = await createRenderer(el, selectedEngine());
       if (disposed) {
@@ -169,6 +182,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
 
     return () => {
       disposed = true;
+      el.removeEventListener('focusin', onRendererFocusIn);
       ro?.disconnect();
       unsub?.();
       renderer?.dispose();
