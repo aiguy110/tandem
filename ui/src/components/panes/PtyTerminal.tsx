@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createRenderer, selectedEngine, type EngineName, type TerminalRenderer } from '../../terminal/TerminalRenderer';
 
 // A reusable terminal view (docs/terminal.md): mounts the TerminalRenderer
@@ -16,9 +16,26 @@ interface Props {
   onFirstData?: () => void;
 }
 
+type MobileModifier = 'ctrl' | 'alt';
+
+const MOBILE_KEYS = [
+  { label: 'Esc', data: '\x1b' },
+  { label: 'Tab', data: '\t' },
+  { label: '/', data: '/', printable: true },
+  { label: '~', data: '~', printable: true },
+  { label: '-', data: '-', printable: true },
+  { label: '|', data: '|', printable: true },
+  { label: '←', data: '\x1b[D' },
+  { label: '↑', data: '\x1b[A' },
+  { label: '↓', data: '\x1b[B' },
+  { label: '→', data: '\x1b[C' },
+] as const;
+
 export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData }: Props) {
   const rendererRef = useRef<HTMLDivElement>(null);
   const kbdRef = useRef<HTMLTextAreaElement>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [modifiers, setModifiers] = useState<Set<MobileModifier>>(() => new Set());
   // Keep the latest callbacks without re-running the mount effect.
   const cbs = useRef({ subscribe, onData, onResize, onEngine, onFirstData });
   cbs.current = { subscribe, onData, onResize, onEngine, onFirstData };
@@ -42,6 +59,30 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     kbdRef.current?.focus();
   };
   const send = (data: string) => cbs.current.onData(data);
+  const clearModifiers = () => setModifiers(new Set());
+  const sendWithModifiers = (data: string, printable = false) => {
+    let output = data;
+    if (printable && modifiers.has('ctrl') && output.length > 0) {
+      const code = output.charCodeAt(0);
+      let control: string | null = null;
+      if (code === 32 || (code >= 64 && code <= 95)) control = String.fromCharCode(code & 0x1f);
+      else if (code >= 97 && code <= 122) control = String.fromCharCode(code - 96);
+      else if (output[0] === '?') control = '\x7f';
+      if (control !== null) output = control + output.slice(1);
+    }
+    if (modifiers.has('alt')) output = '\x1b' + output;
+    if (modifiers.size > 0) clearModifiers();
+    send(output);
+  };
+  const toggleModifier = (modifier: MobileModifier) => {
+    setModifiers((current) => {
+      const next = new Set(current);
+      if (next.has(modifier)) next.delete(modifier);
+      else next.add(modifier);
+      return next;
+    });
+    kbdRef.current?.focus();
+  };
   const onKeyboardInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
     const input = e.nativeEvent as InputEvent;
     switch (input.inputType) {
@@ -49,21 +90,21 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       case 'insertReplacementText':
       case 'insertCompositionText':
         pendingBackspaceInputs.current = 0;
-        if (input.data) send(input.data);
+        if (input.data) sendWithModifiers(input.data, true);
         break;
       case 'insertLineBreak':
       case 'insertParagraph':
         pendingBackspaceInputs.current = 0;
-        send('\r');
+        sendWithModifiers('\r');
         break;
       case 'deleteContentBackward':
       case 'deleteWordBackward':
         if (pendingBackspaceInputs.current > 0) pendingBackspaceInputs.current -= 1;
-        else send('\x7f');
+        else sendWithModifiers('\x7f');
         break;
       case 'deleteContentForward':
         pendingBackspaceInputs.current = 0;
-        send('\x1b[3~');
+        sendWithModifiers('\x1b[3~');
         break;
     }
     resetKeyboard();
@@ -78,14 +119,14 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       // Let the textarea delete its sentinel. Its subsequent input event is
       // paired and suppressed, while keyboards that omit keydown still work.
       pendingBackspaceInputs.current += 1;
-      send('\x7f');
+      sendWithModifiers('\x7f');
       return;
     }
     if (e.key.length === 1 || e.key === 'Unidentified' || e.key === 'Process') return;
     const data = keys[e.key];
     if (!data) return;
     e.preventDefault();
-    send(data);
+    sendWithModifiers(data);
   };
 
   useEffect(() => {
@@ -135,7 +176,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   }, []);
 
   return (
-    <div className="term-mount">
+    <div className={`term-mount${keyboardOpen ? ' mobile-kbd-open' : ''}`}>
       {/* ghostty-web makes its mount contenteditable and cancels beforeinput.
           Keep the mobile textarea outside that subtree or phone IME edits are
           canceled before onInput can forward them to the PTY. */}
@@ -143,6 +184,40 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       <button type="button" className="term-kbd-btn" onClick={focusKeyboard} title="Show keyboard to type in the terminal">
         ⌨ Keyboard
       </button>
+      {keyboardOpen && (
+        <div className="term-extra-keys" role="toolbar" aria-label="Terminal special keys">
+          <button
+            type="button"
+            className={modifiers.has('ctrl') ? 'active' : ''}
+            aria-pressed={modifiers.has('ctrl')}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleModifier('ctrl')}
+          >Ctrl</button>
+          <button
+            type="button"
+            className={modifiers.has('alt') ? 'active' : ''}
+            aria-pressed={modifiers.has('alt')}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleModifier('alt')}
+          >Alt</button>
+          {MOBILE_KEYS.map((key) => (
+            <button
+              type="button"
+              key={key.label}
+              aria-label={key.label === '←' ? 'Left arrow' : key.label === '→' ? 'Right arrow' : key.label === '↑' ? 'Up arrow' : key.label === '↓' ? 'Down arrow' : key.label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => sendWithModifiers(key.data, 'printable' in key && key.printable)}
+            >{key.label}</button>
+          ))}
+          <button
+            type="button"
+            aria-label="Hide keyboard"
+            title="Hide keyboard"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => kbdRef.current?.blur()}
+          >⌄</button>
+        </div>
+      )}
       <textarea
         ref={kbdRef}
         className="term-kbd-catcher"
@@ -153,6 +228,8 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
         aria-hidden="true"
         tabIndex={-1}
         defaultValue={SENTINEL}
+        onFocus={() => setKeyboardOpen(true)}
+        onBlur={() => { setKeyboardOpen(false); clearModifiers(); }}
         onInput={onKeyboardInput}
         onKeyDown={onKeyboardKeyDown}
       />
