@@ -88,13 +88,33 @@ type LocalDriver struct {
 	cfg     LocalConfig
 	mu      sync.Mutex
 	handles map[string]*localHandle
+	seeds   map[string]string // agentID -> snapshot dir to copy in before first launch
 }
 
 func NewLocalDriver(cfg LocalConfig) *LocalDriver {
 	if cfg.LaunchTimeout == 0 {
 		cfg.LaunchTimeout = 20 * time.Second
 	}
-	return &LocalDriver{cfg: cfg, handles: make(map[string]*localHandle)}
+	return &LocalDriver{cfg: cfg, handles: make(map[string]*localHandle), seeds: make(map[string]string)}
+}
+
+// ProfileDir is the on-disk user-data-dir Chromium uses for an agent, whether or
+// not it is currently provisioned. It is the source for snapshot capture.
+func (d *LocalDriver) ProfileDir(id string) string {
+	return filepath.Join(d.cfg.UserDataRoot, id)
+}
+
+// SeedProfile records a snapshot directory to copy into an agent's user-data-dir
+// the first time its browser is provisioned. A later call before provisioning
+// overrides an earlier one; passing "" clears the seed.
+func (d *LocalDriver) SeedProfile(id, srcDir string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if srcDir == "" {
+		delete(d.seeds, id)
+		return
+	}
+	d.seeds[id] = srcDir
 }
 func (*LocalDriver) Kind() string { return "local" }
 func (d *LocalDriver) IsProvisioned(id string) bool {
@@ -130,6 +150,15 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 	profile := filepath.Join(d.cfg.UserDataRoot, id)
 	if err := os.MkdirAll(profile, 0o700); err != nil {
 		return ProvisionResult{}, err
+	}
+	// Seed from a captured snapshot on first launch (empty profile dir only, so a
+	// re-provision after a crash never clobbers accumulated state).
+	if seed := d.seeds[id]; seed != "" {
+		if entries, _ := os.ReadDir(profile); len(entries) == 0 {
+			if err := copyTree(seed, profile); err != nil {
+				return ProvisionResult{}, fmt.Errorf("seed browser snapshot: %w", err)
+			}
+		}
 	}
 	args := []string{"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
 		fmt.Sprintf("--remote-debugging-port=%d", port), "--user-data-dir=" + profile,
@@ -304,6 +333,26 @@ func (d *SteelDriver) Adopt(agentID, sessionID, profileID, cdpURL string) {
 		d.profiles[agentID] = profileID
 	}
 }
+// ProfileID returns the Steel-side persisted profile id for an agent, if any.
+// It is the reference recorded when capturing a snapshot on the Steel driver.
+func (d *SteelDriver) ProfileID(id string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.profiles[id]
+}
+
+// SeedProfile makes the agent's next session start from an existing Steel
+// profile id (the snapshot ref), rather than a fresh profile.
+func (d *SteelDriver) SeedProfile(id, profileID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if profileID == "" {
+		delete(d.profiles, id)
+		return
+	}
+	d.profiles[id] = profileID
+}
+
 func normalizeSteelURL(raw, base string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
