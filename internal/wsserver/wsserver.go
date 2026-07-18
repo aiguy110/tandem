@@ -18,6 +18,7 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
+	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/workspace"
 	"github.com/gorilla/websocket"
 )
@@ -35,6 +36,12 @@ type Backend interface {
 	AgentCatalog() registry.Catalog
 	SetMode(context.Context, string, string) error
 	SetConfigOption(context.Context, string, string, any) error
+	CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error)
+	ListSnapshots() ([]store.BrowserSnapshot, error)
+	DeleteSnapshot(string) error
+	ListProfiles(string) ([]store.Profile, []string, error)
+	RenameProfile(string, string) error
+	DeleteProfile(string) error
 }
 
 type Options struct {
@@ -123,7 +130,7 @@ type clientMessage struct {
 	Value          any                        `json:"value"`
 	Spec           agentadapter.Spec          `json:"spec"`
 	Agent          string                     `json:"agent"`
-	Profile        string                     `json:"profile"`
+	Harness        string                     `json:"harness"`
 	ACPArgs        []string                   `json:"acpArgs"`
 	CWD            string                     `json:"cwd"`
 	Repo           string                     `json:"repo"`
@@ -133,6 +140,9 @@ type clientMessage struct {
 	InterruptFirst bool                       `json:"interrupt"`
 	Action         string                     `json:"action"`
 	Event          browser.BrowserInputEvent  `json:"event"`
+	Name           string                     `json:"name"`
+	ID             string                     `json:"id"`
+	Project        string                     `json:"project"`
 }
 
 type connection struct {
@@ -458,12 +468,55 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sess.ID)
 	case "get_spawn_options":
-		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Profile, m.ACPArgs, m.CWD)
+		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
 		if err != nil {
 			c.send(withCorr(map[string]any{"t": "spawn_options", "error": err.Error()}, m.CorrID))
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
+	case "capture_snapshot":
+		snap, err := c.server.opts.Registry.CaptureSnapshot(context.Background(), m.AgentID, m.Name)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "snapshots", "error": err.Error()}, m.CorrID))
+			return
+		}
+		snaps, _ := c.server.opts.Registry.ListSnapshots()
+		c.send(withCorr(map[string]any{"t": "snapshots", "captured": snap, "snapshots": snaps}, m.CorrID))
+	case "list_snapshots":
+		snaps, err := c.server.opts.Registry.ListSnapshots()
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "snapshots", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "snapshots", "snapshots": snaps}, m.CorrID))
+	case "delete_snapshot":
+		if err := c.server.opts.Registry.DeleteSnapshot(m.ID); err != nil {
+			c.send(withCorr(map[string]any{"t": "snapshots", "error": err.Error()}, m.CorrID))
+			return
+		}
+		snaps, _ := c.server.opts.Registry.ListSnapshots()
+		c.send(withCorr(map[string]any{"t": "snapshots", "snapshots": snaps}, m.CorrID))
+	case "list_profiles":
+		profiles, recent, err := c.server.opts.Registry.ListProfiles(m.Project)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+	case "rename_profile":
+		if err := c.server.opts.Registry.RenameProfile(m.ID, m.Name); err != nil {
+			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
+			return
+		}
+		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
+		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+	case "delete_profile":
+		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
+			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
+			return
+		}
+		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
+		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
 	case "get_close_preview":
 		preview, err := c.server.opts.Registry.ClosePreview(context.Background(), m.AgentID)
 		if err != nil {

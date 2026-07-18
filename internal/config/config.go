@@ -37,7 +37,10 @@ type Agent struct {
 	Terminal *ResumeLaunch `json:"terminal,omitempty"`
 }
 
-type Profile struct {
+// Harness is a named launch variant of an agent (extra ACP/terminal args). It is
+// the config-file "how to launch" concept; distinct from a Profile, which is the
+// daemon-owned, user-facing bundle of harness + model/effort/permissions + snapshot.
+type Harness struct {
 	Agent        string   `json:"agent"`
 	Name         string   `json:"name"`
 	ACPArgs      []string `json:"acpArgs"`
@@ -53,6 +56,7 @@ type ACPConfig struct {
 type BrowserConfig struct {
 	Driver              string         `json:"driver"`
 	UserDataRoot        string         `json:"userDataRoot"`
+	SnapshotRoot        string         `json:"snapshotRoot"`
 	ChromiumExecutable  string         `json:"chromiumExecutable,omitempty"`
 	SteelBaseURL        string         `json:"steelBaseUrl,omitempty"`
 	SteelAPIKey         string         `json:"steelApiKey,omitempty"`
@@ -76,8 +80,8 @@ type Config struct {
 	ACP            ACPConfig               `json:"acp"`
 	ResumeCLI      map[string]ResumeLaunch `json:"resumeCli"`
 	Agents         map[string]Agent        `json:"agents"`
-	Profiles       map[string]Profile      `json:"profiles"`
-	DefaultProfile string                  `json:"defaultProfile,omitempty"`
+	Harnesses      map[string]Harness      `json:"harnesses"`
+	DefaultHarness string                  `json:"defaultHarness,omitempty"`
 	Browser        BrowserConfig           `json:"browser"`
 }
 
@@ -171,21 +175,21 @@ func LoadWithOptions(o Options) (Config, error) {
 		Host: value(env, "TANDEM_BIND", "127.0.0.1"), Port: port, UIDir: env["TANDEM_UI_DIR"],
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
-		ResumeCLI: resume, Agents: cat.agents, Profiles: cat.profiles, DefaultProfile: cat.defaultProfile,
-		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
+		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
+		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 	}, nil
 }
 
 type fileConfig struct {
-	Defaults map[string]any `yaml:"defaults"`
-	Agents   map[string]any `yaml:"agents"`
-	Profiles map[string]any `yaml:"profiles"`
+	Defaults  map[string]any `yaml:"defaults"`
+	Agents    map[string]any `yaml:"agents"`
+	Harnesses map[string]any `yaml:"harnesses"`
 }
 
 type catalog struct {
 	agents                       map[string]Agent
-	profiles                     map[string]Profile
-	defaultAgent, defaultProfile string
+	harnesses                    map[string]Harness
+	defaultAgent, defaultHarness string
 }
 
 func loadCatalog(o Options, home string) (catalog, error) {
@@ -240,32 +244,32 @@ func loadCatalog(o Options, home string) (catalog, error) {
 		}
 		agents[id] = definition
 	}
-	profilesRaw := cloneMap(shipped.Profiles)
-	for k, v := range user.Profiles {
-		profilesRaw[k] = v
+	harnessesRaw := cloneMap(shipped.Harnesses)
+	for k, v := range user.Harnesses {
+		harnessesRaw[k] = v
 	}
-	profiles := make(map[string]Profile)
-	for id, raw := range profilesRaw {
+	harnesses := make(map[string]Harness)
+	for id, raw := range harnessesRaw {
 		m, ok := stringAnyMap(raw)
 		if !ok {
-			return catalog{}, fmt.Errorf("profiles.%s must be a mapping", id)
+			return catalog{}, fmt.Errorf("harnesses.%s must be a mapping", id)
 		}
 		agent, ok := m["agent"].(string)
 		if !ok || agent == "" {
-			return catalog{}, fmt.Errorf("profiles.%s.agent must be a non-empty string", id)
+			return catalog{}, fmt.Errorf("harnesses.%s.agent must be a non-empty string", id)
 		}
 		if _, ok := agents[agent]; !ok {
-			return catalog{}, fmt.Errorf("profiles.%s references unknown agent: %s", id, agent)
+			return catalog{}, fmt.Errorf("harnesses.%s references unknown agent: %s", id, agent)
 		}
-		acpArgs, e := stringArray(m["acpArgs"], "profiles."+id+".acpArgs")
+		acpArgs, e := stringArray(m["acpArgs"], "harnesses."+id+".acpArgs")
 		if e != nil {
 			return catalog{}, e
 		}
-		terminalArgs, e := stringArray(m["terminalArgs"], "profiles."+id+".terminalArgs")
+		terminalArgs, e := stringArray(m["terminalArgs"], "harnesses."+id+".terminalArgs")
 		if e != nil {
 			return catalog{}, e
 		}
-		profiles[id] = Profile{Agent: agent, Name: stringValue(m["name"], id), ACPArgs: acpArgs, TerminalArgs: terminalArgs}
+		harnesses[id] = Harness{Agent: agent, Name: stringValue(m["name"], id), ACPArgs: acpArgs, TerminalArgs: terminalArgs}
 	}
 	defaultAgent := defaultValue(user.Defaults, shipped.Defaults, "agent")
 	if defaultAgent == "" {
@@ -274,13 +278,13 @@ func loadCatalog(o Options, home string) (catalog, error) {
 	if _, ok := agents[defaultAgent]; !ok {
 		return catalog{}, fmt.Errorf("defaults.agent references unknown agent: %s", defaultAgent)
 	}
-	defaultProfile := defaultValue(user.Defaults, shipped.Defaults, "profile")
-	if defaultProfile != "" {
-		if _, ok := profiles[defaultProfile]; !ok {
-			return catalog{}, fmt.Errorf("defaults.profile references unknown profile: %s", defaultProfile)
+	defaultHarness := defaultValue(user.Defaults, shipped.Defaults, "harness")
+	if defaultHarness != "" {
+		if _, ok := harnesses[defaultHarness]; !ok {
+			return catalog{}, fmt.Errorf("defaults.harness references unknown harness: %s", defaultHarness)
 		}
 	}
-	return catalog{agents, profiles, defaultAgent, defaultProfile}, nil
+	return catalog{agents, harnesses, defaultAgent, defaultHarness}, nil
 }
 
 func parseFile(data []byte, name string) (fileConfig, error) {
@@ -307,11 +311,19 @@ func parseFile(data []byte, name string) (fileConfig, error) {
 			return f, fmt.Errorf("invalid %s: agents must be a mapping", name)
 		}
 	}
-	if v, exists := m["profiles"]; exists {
+	// Accept "harnesses" (current) and fall back to the legacy "profiles" key so
+	// pre-rename user config.yml files keep working.
+	harnessKey := "harnesses"
+	if _, exists := m["harnesses"]; !exists {
+		if _, legacy := m["profiles"]; legacy {
+			harnessKey = "profiles"
+		}
+	}
+	if v, exists := m[harnessKey]; exists {
 		var yes bool
-		f.Profiles, yes = stringAnyMap(v)
+		f.Harnesses, yes = stringAnyMap(v)
 		if !yes {
-			return f, fmt.Errorf("invalid %s: profiles must be a mapping", name)
+			return f, fmt.Errorf("invalid %s: %s must be a mapping", name, harnessKey)
 		}
 	}
 	return f, nil

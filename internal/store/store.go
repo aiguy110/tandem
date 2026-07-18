@@ -54,6 +54,32 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
         profileId TEXT NOT NULL DEFAULT '',
         cdpUrl    TEXT NOT NULL DEFAULT '',
         updatedAt INTEGER NOT NULL
+      );
+CREATE TABLE IF NOT EXISTS browser_snapshots (
+        id        TEXT PRIMARY KEY,
+        name      TEXT NOT NULL,
+        kind      TEXT NOT NULL,
+        ref       TEXT NOT NULL DEFAULT '',
+        createdAt INTEGER NOT NULL
+      );
+CREATE TABLE IF NOT EXISTS profiles (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        autoNamed  INTEGER NOT NULL DEFAULT 1,
+        agent      TEXT NOT NULL DEFAULT '',
+        harness    TEXT NOT NULL DEFAULT '',
+        model      TEXT NOT NULL DEFAULT '',
+        effort     TEXT NOT NULL DEFAULT '',
+        permission TEXT NOT NULL DEFAULT '',
+        snapshotId TEXT NOT NULL DEFAULT '',
+        createdAt  INTEGER NOT NULL,
+        lastUsedAt INTEGER NOT NULL
+      );
+CREATE TABLE IF NOT EXISTS profile_recent (
+        project    TEXT NOT NULL,
+        profileId  TEXT NOT NULL,
+        lastUsedAt INTEGER NOT NULL,
+        PRIMARY KEY (project, profileId)
       );`
 
 // Store serializes access through one connection. This makes connection-local
@@ -96,6 +122,34 @@ type BrowserSession struct {
 	SessionID string
 	ProfileID string
 	CDPURL    string
+}
+
+// BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
+// new agent's browser at spawn. Kind is "local" (ref = on-disk snapshot dir) or
+// "steel" (ref = Steel profileId).
+type BrowserSnapshot struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Ref       string `json:"ref"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// Profile is a daemon-owned, auto-created, renamable bundle of launch settings:
+// a harness plus model/effort/permission and an optional browser snapshot seed.
+// AutoNamed is true while Name is still the generated concatenation of settings.
+type Profile struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AutoNamed  bool   `json:"autoNamed"`
+	Agent      string `json:"agent"`
+	Harness    string `json:"harness"`
+	Model      string `json:"model"`
+	Effort     string `json:"effort"`
+	Permission string `json:"permission"`
+	SnapshotID string `json:"snapshotId"`
+	CreatedAt  int64  `json:"createdAt"`
+	LastUsedAt int64  `json:"lastUsedAt"`
 }
 
 // Open initializes or additively migrates a Node-compatible database.
@@ -219,6 +273,170 @@ func (s *Store) ListBrowserSessions() ([]BrowserSession, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// SaveBrowserSnapshot records (or replaces) a captured browser snapshot.
+func (s *Store) SaveBrowserSnapshot(snap BrowserSnapshot) error {
+	if snap.CreatedAt == 0 {
+		snap.CreatedAt = s.now().UnixMilli()
+	}
+	_, err := s.db.Exec(`INSERT INTO browser_snapshots (id, name, kind, ref, createdAt)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, ref=excluded.ref`,
+		snap.ID, snap.Name, snap.Kind, snap.Ref, snap.CreatedAt)
+	return err
+}
+
+// ListBrowserSnapshots returns every captured snapshot, newest first.
+func (s *Store) ListBrowserSnapshots() ([]BrowserSnapshot, error) {
+	rows, err := s.db.Query("SELECT id, name, kind, ref, createdAt FROM browser_snapshots ORDER BY createdAt DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]BrowserSnapshot, 0)
+	for rows.Next() {
+		var b BrowserSnapshot
+		if err := rows.Scan(&b.ID, &b.Name, &b.Kind, &b.Ref, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// BrowserSnapshot returns one snapshot by id, or (nil, nil) if absent.
+func (s *Store) BrowserSnapshot(id string) (*BrowserSnapshot, error) {
+	var b BrowserSnapshot
+	err := s.db.QueryRow("SELECT id, name, kind, ref, createdAt FROM browser_snapshots WHERE id = ?", id).
+		Scan(&b.ID, &b.Name, &b.Kind, &b.Ref, &b.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// DeleteBrowserSnapshot forgets a snapshot. Profiles referencing it fall back to
+// a fresh browser at spawn (the seed lookup tolerates a missing snapshot).
+func (s *Store) DeleteBrowserSnapshot(id string) error {
+	_, err := s.db.Exec("DELETE FROM browser_snapshots WHERE id = ?", id)
+	return err
+}
+
+// UpsertProfile inserts or replaces a profile by id.
+func (s *Store) UpsertProfile(p Profile) error {
+	now := s.now().UnixMilli()
+	if p.CreatedAt == 0 {
+		p.CreatedAt = now
+	}
+	if p.LastUsedAt == 0 {
+		p.LastUsedAt = now
+	}
+	_, err := s.db.Exec(`INSERT INTO profiles (id, name, autoNamed, agent, harness, model, effort, permission, snapshotId, createdAt, lastUsedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name, autoNamed=excluded.autoNamed, agent=excluded.agent, harness=excluded.harness,
+  model=excluded.model, effort=excluded.effort, permission=excluded.permission, snapshotId=excluded.snapshotId, lastUsedAt=excluded.lastUsedAt`,
+		p.ID, p.Name, boolToInt(p.AutoNamed), p.Agent, p.Harness, p.Model, p.Effort, p.Permission, p.SnapshotID, p.CreatedAt, p.LastUsedAt)
+	return err
+}
+
+// ListProfiles returns every profile, most-recently-used first.
+func (s *Store) ListProfiles() ([]Profile, error) {
+	rows, err := s.db.Query(`SELECT id, name, autoNamed, agent, harness, model, effort, permission, snapshotId, createdAt, lastUsedAt
+FROM profiles ORDER BY lastUsedAt DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Profile, 0)
+	for rows.Next() {
+		p, err := scanProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// FindProfileByTuple returns the profile whose settings exactly match, or
+// (nil, nil) if none — the dedup key for resolve-or-create at spawn.
+func (s *Store) FindProfileByTuple(agent, harness, model, effort, permission, snapshotID string) (*Profile, error) {
+	row := s.db.QueryRow(`SELECT id, name, autoNamed, agent, harness, model, effort, permission, snapshotId, createdAt, lastUsedAt
+FROM profiles WHERE agent=? AND harness=? AND model=? AND effort=? AND permission=? AND snapshotId=? LIMIT 1`,
+		agent, harness, model, effort, permission, snapshotID)
+	p, err := scanProfile(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return p, err
+}
+
+// RenameProfile sets a user-chosen name and clears the auto-named flag.
+func (s *Store) RenameProfile(id, name string) error {
+	_, err := s.db.Exec("UPDATE profiles SET name=?, autoNamed=0 WHERE id=?", name, id)
+	return err
+}
+
+// DeleteProfile removes a profile and its recency records.
+func (s *Store) DeleteProfile(id string) error {
+	if _, err := s.db.Exec("DELETE FROM profile_recent WHERE profileId=?", id); err != nil {
+		return err
+	}
+	_, err := s.db.Exec("DELETE FROM profiles WHERE id=?", id)
+	return err
+}
+
+// TouchProfile bumps a profile's lastUsedAt and records per-project recency.
+func (s *Store) TouchProfile(id, project string) error {
+	now := s.now().UnixMilli()
+	if _, err := s.db.Exec("UPDATE profiles SET lastUsedAt=? WHERE id=?", now, id); err != nil {
+		return err
+	}
+	if project == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`INSERT INTO profile_recent (project, profileId, lastUsedAt) VALUES (?, ?, ?)
+ON CONFLICT(project, profileId) DO UPDATE SET lastUsedAt=excluded.lastUsedAt`, project, id, now)
+	return err
+}
+
+// ProfileRecency returns profile ids used in a project, most recent first.
+func (s *Store) ProfileRecency(project string) ([]string, error) {
+	rows, err := s.db.Query("SELECT profileId FROM profile_recent WHERE project=? ORDER BY lastUsedAt DESC", project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func scanProfile(row interface{ Scan(...any) error }) (*Profile, error) {
+	var p Profile
+	var auto int
+	if err := row.Scan(&p.ID, &p.Name, &auto, &p.Agent, &p.Harness, &p.Model, &p.Effort, &p.Permission, &p.SnapshotID, &p.CreatedAt, &p.LastUsedAt); err != nil {
+		return nil, err
+	}
+	p.AutoNamed = auto != 0
+	return &p, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) Agent(id string) (*Agent, error) {

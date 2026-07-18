@@ -32,8 +32,26 @@
     },
     {
       "type": "index",
+      "name": "sqlite_autoindex_browser_snapshots_1",
+      "tableName": "browser_snapshots",
+      "sql": null
+    },
+    {
+      "type": "index",
       "name": "sqlite_autoindex_events_1",
       "tableName": "events",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_profile_recent_1",
+      "tableName": "profile_recent",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_profiles_1",
+      "tableName": "profiles",
       "sql": null
     },
     {
@@ -62,9 +80,27 @@
     },
     {
       "type": "table",
+      "name": "browser_snapshots",
+      "tableName": "browser_snapshots",
+      "sql": "CREATE TABLE browser_snapshots (\n        id        TEXT PRIMARY KEY,\n        name      TEXT NOT NULL,\n        kind      TEXT NOT NULL,\n        ref       TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
       "name": "events",
       "tableName": "events",
       "sql": "CREATE TABLE events (\n        agentId TEXT NOT NULL,\n        seq     INTEGER NOT NULL,\n        kind    TEXT NOT NULL,\n        payload TEXT NOT NULL,\n        ts      INTEGER NOT NULL,\n        PRIMARY KEY (agentId, seq)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "profile_recent",
+      "tableName": "profile_recent",
+      "sql": "CREATE TABLE profile_recent (\n        project    TEXT NOT NULL,\n        profileId  TEXT NOT NULL,\n        lastUsedAt INTEGER NOT NULL,\n        PRIMARY KEY (project, profileId)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "profiles",
+      "tableName": "profiles",
+      "sql": "CREATE TABLE profiles (\n        id         TEXT PRIMARY KEY,\n        name       TEXT NOT NULL,\n        autoNamed  INTEGER NOT NULL DEFAULT 1,\n        agent      TEXT NOT NULL DEFAULT '',\n        harness    TEXT NOT NULL DEFAULT '',\n        model      TEXT NOT NULL DEFAULT '',\n        effort     TEXT NOT NULL DEFAULT '',\n        permission TEXT NOT NULL DEFAULT '',\n        snapshotId TEXT NOT NULL DEFAULT '',\n        createdAt  INTEGER NOT NULL,\n        lastUsedAt INTEGER NOT NULL\n      )"
     }
   ]
 }

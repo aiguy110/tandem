@@ -101,7 +101,7 @@ func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{Home: home, WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake"}, Agents: map[string]config.Agent{"fake": {ACP: &config.Launch{Cmd: "fake"}, Terminal: &config.ResumeLaunch{Cmd: "fake"}}}, Profiles: map[string]config.Profile{}}
+	cfg := config.Config{Home: home, WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake"}, Agents: map[string]config.Agent{"fake": {ACP: &config.Launch{Cmd: "fake"}, Terminal: &config.ResumeLaunch{Cmd: "fake"}}}, Harnesses: map[string]config.Harness{}}
 	r, err := New(Options{Store: db, Config: cfg, Factory: f, RingCapacity: 2})
 	if err != nil {
 		t.Fatal(err)

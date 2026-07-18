@@ -1,39 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { fuzzyFilter } from '../fuzzy';
-import type { GitRefInfo, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
-const SPAWN_SETTINGS_KEY = 'tandem.spawnSettings.v1';
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
 const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
-const FALLBACK_PROFILES = [
-  { id: 'agent:claude', name: 'Claude', agent: 'claude', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
-  { id: 'agent:codex', name: 'Codex', agent: 'codex', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
-  { id: 'agent:pi', name: 'Pi', agent: 'pi', profile: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+const FALLBACK_HARNESSES = [
+  { id: 'agent:claude', name: 'Claude', agent: 'claude', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:codex', name: 'Codex', agent: 'codex', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:pi', name: 'Pi', agent: 'pi', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
 ];
-
-type SavedSettings = { model?: string; effort?: string; permission?: string };
-
-function settingsKey(agent: string, project: string) {
-  return `${agent}\u0000${project}`;
-}
-
-function loadSpawnSettings(agent: string, project: string): SavedSettings {
-  try {
-    const all = JSON.parse(localStorage.getItem(SPAWN_SETTINGS_KEY) || '{}') as Record<string, SavedSettings>;
-    return all[settingsKey(agent, project)] ?? {};
-  } catch { return {}; }
-}
-
-function saveSpawnSettings(agent: string, project: string, value: SavedSettings) {
-  try {
-    const all = JSON.parse(localStorage.getItem(SPAWN_SETTINGS_KEY) || '{}') as Record<string, SavedSettings>;
-    all[settingsKey(agent, project)] = value;
-    localStorage.setItem(SPAWN_SETTINGS_KEY, JSON.stringify(all));
-  } catch { /* localStorage unavailable */ }
-}
 
 function loadProjectAgent(project: string): string | undefined {
   try {
@@ -101,26 +79,30 @@ export function SpawnPalette() {
   const spawn = useStore((s) => s.spawn);
   const getSpawnOptions = useStore((s) => s.getSpawnOptions);
   const listGitRefs = useStore((s) => s.listGitRefs);
+  const listProfiles = useStore((s) => s.listProfiles);
+  const renameProfileAction = useStore((s) => s.renameProfile);
+  const listSnapshots = useStore((s) => s.listSnapshots);
+  const snapshots = useStore((s) => s.snapshots);
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
   const agentCatalog = useStore((s) => s.agentCatalog);
-  const profiles = useMemo(() => {
-    if (!agentCatalog) return FALLBACK_PROFILES;
+  const harnesses = useMemo(() => {
+    if (!agentCatalog) return FALLBACK_HARNESSES;
     const agentsById = new Map(agentCatalog.agents.map((entry) => [entry.id, entry]));
-    const configured = agentCatalog.profiles.map((profile) => {
-      const definition = agentsById.get(profile.agent);
+    const configured = agentCatalog.harnesses.map((harness) => {
+      const definition = agentsById.get(harness.agent);
       return {
-        id: `profile:${profile.id}`,
-        profile: profile.id,
-        name: profile.name,
-        agent: profile.agent,
+        id: `harness:${harness.id}`,
+        harness: harness.id,
+        name: harness.name,
+        agent: harness.agent,
         hasAcp: definition?.hasAcp ?? false,
         hasTerminal: definition?.hasTerminal ?? false,
       };
     });
     const implicit = agentCatalog.agents
-      .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, profile: undefined as string | undefined }));
+      .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, harness: undefined as string | undefined }));
     return [...configured, ...implicit];
   }, [agentCatalog]);
 
@@ -144,6 +126,11 @@ export function SpawnPalette() {
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [permission, setPermission] = useState('');
+  const [snapshot, setSnapshot] = useState('');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profileRecent, setProfileRecent] = useState<string[]>([]);
+  const [renaming, setRenaming] = useState(false);
+  const [renameText, setRenameText] = useState('');
   const [spawnOptions, setSpawnOptions] = useState<SpawnOptions | null>(null);
   const [optionsBusy, setOptionsBusy] = useState(false);
   const [optionsError, setOptionsError] = useState('');
@@ -162,34 +149,61 @@ export function SpawnPalette() {
   }, [query, dirs]);
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
-  const selectedProfile = profiles.find((profile) => profile.id === agent) ?? profiles[0];
+  const selectedHarness = harnesses.find((harness) => harness.id === agent) ?? harnesses[0];
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
-  const agentSlug = selectedProfile?.agent ?? agent.replace(/^agent:/, '');
+  const agentSlug = selectedHarness?.agent ?? agent.replace(/^agent:/, '');
+  // Apply a saved profile's settings onto the editable fields (harness picked by
+  // its harness id, else by agent). The options-clamp effect prunes any
+  // model/effort/permission the resolved harness doesn't offer.
+  const applyProfile = (p: Profile) => {
+    const entry = (p.harness ? harnesses.find((h) => h.harness === p.harness) : undefined)
+      ?? harnesses.find((h) => !h.harness && h.agent === p.agent)
+      ?? harnesses.find((h) => h.agent === p.agent);
+    if (entry) setAgent(entry.id);
+    setModel(p.model);
+    setEffort(p.effort);
+    setPermission(p.permission);
+    setSnapshot(p.snapshotId);
+    setRenaming(false);
+  };
   useEffect(() => {
     if (!selectedDir) return;
     const saved = loadProjectAgent(selectedDir.path);
-    const catalogDefault = agentCatalog?.defaultProfile
-      ? `profile:${agentCatalog.defaultProfile}`
+    const catalogDefault = agentCatalog?.defaultHarness
+      ? `harness:${agentCatalog.defaultHarness}`
       : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
     const matched = saved
-      ? profiles.find((profile) => profile.id === saved)
-        ?? profiles.find((profile) => !profile.profile && profile.agent === saved)
-        ?? profiles.find((profile) => profile.profile === saved)
+      ? harnesses.find((harness) => harness.id === saved)
+        ?? harnesses.find((harness) => !harness.harness && harness.agent === saved)
+        ?? harnesses.find((harness) => harness.harness === saved)
       : undefined;
-    setAgent(matched?.id ?? profiles.find((profile) => profile.id === catalogDefault)?.id ?? profiles[0]?.id ?? 'agent:claude');
-  }, [selectedDir?.path, profiles, agentCatalog]);
+    setAgent(matched?.id ?? harnesses.find((harness) => harness.id === catalogDefault)?.id ?? harnesses[0]?.id ?? 'agent:claude');
+  }, [selectedDir?.path, harnesses, agentCatalog]);
   useEffect(() => {
-    if (adapter === 'acp' && selectedProfile && !selectedProfile.hasAcp && selectedProfile.hasTerminal) setAdapter('pty');
-    if (adapter === 'pty' && selectedProfile && !selectedProfile.hasTerminal && selectedProfile.hasAcp) setAdapter('acp');
-  }, [agent, adapter, selectedProfile]);
+    if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
+    if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
+  }, [agent, adapter, selectedHarness]);
+  // Load this repo's profiles + captured snapshots when the advanced panel opens,
+  // and auto-apply the latest-used profile once per selected directory.
+  const appliedDirRef = useRef<string>('');
   useEffect(() => {
-    if (!selectedDir || adapter !== 'acp') return;
-    const saved = loadSpawnSettings(agent, selectedDir.path);
-    setModel(saved.model ?? '');
-    setEffort(saved.effort ?? '');
-    setPermission(saved.permission ?? '');
-  }, [agent, adapter, selectedDir?.path]);
+    if (!advanced || !selectedDir) return;
+    let cancelled = false;
+    void listSnapshots().catch(() => {});
+    void listProfiles(selectedDir.path).then(({ profiles: ps, recent }) => {
+      if (cancelled) return;
+      setProfiles(ps);
+      setProfileRecent(recent);
+      if (appliedDirRef.current !== selectedDir.path) {
+        appliedDirRef.current = selectedDir.path;
+        const latest = ps.find((p) => p.id === recent[0]);
+        if (latest) applyProfile(latest);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // applyProfile is stable enough for this effect's purpose; harnesses drive it.
+  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, harnesses]);
   useEffect(() => {
     if (!advanced || adapter !== 'acp' || !selectedDir) {
       setSpawnOptions(null);
@@ -199,16 +213,16 @@ export function SpawnPalette() {
     let cancelled = false;
     setOptionsBusy(true);
     setOptionsError('');
-    void getSpawnOptions(agentSlug, selectedDir.path, selectedProfile?.profile).then((options) => {
+    void getSpawnOptions(agentSlug, selectedDir.path, selectedHarness?.harness).then((options) => {
       if (cancelled) return;
       setSpawnOptions(options);
-      const saved = loadSpawnSettings(agent, selectedDir.path);
+      // Clamp the current selections to what this harness actually offers; the
+      // profile (or user) is the source of truth, options only prune invalids.
       const modelOption = options.configOptions.find((o) => o.category === 'model' && o.type === 'select');
       const effortOption = options.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
-      const valid = (value: string | undefined, values: { value: string }[]) => value && values.some((o) => o.value === value) ? value : '';
-      setModel(valid(saved.model, modelOption?.options ?? []));
-      setEffort(valid(saved.effort, effortOption?.options ?? []));
-      setPermission(saved.permission && options.modes?.availableModes.some((m) => m.id === saved.permission) ? saved.permission : '');
+      setModel((v) => (v && modelOption?.options?.some((o) => o.value === v) ? v : ''));
+      setEffort((v) => (v && effortOption?.options?.some((o) => o.value === v) ? v : ''));
+      setPermission((v) => (v && options.modes?.availableModes.some((m) => m.id === v) ? v : ''));
     }).catch((error: Error) => {
       if (!cancelled) {
         setSpawnOptions(null);
@@ -216,7 +230,7 @@ export function SpawnPalette() {
       }
     }).finally(() => { if (!cancelled) setOptionsBusy(false); });
     return () => { cancelled = true; };
-  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedProfile?.profile, getSpawnOptions]);
+  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedHarness?.harness, getSpawnOptions]);
   useEffect(() => {
     if (!advanced || !selectedDir) {
       setGitRefs([]);
@@ -245,10 +259,29 @@ export function SpawnPalette() {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
 
+  // The profile whose settings exactly match the current selection (if any), and
+  // the auto-name a new profile would get — mirrors the daemon's naming.
+  const currentHarness = selectedHarness?.harness ?? '';
+  const matchedProfile = profiles.find((p) =>
+    p.agent === agentSlug && (p.harness ?? '') === currentHarness &&
+    p.model === model && p.effort === effort && p.permission === permission && (p.snapshotId ?? '') === snapshot);
+  const snapshotLabel = snapshot ? (snapshots.find((s) => s.id === snapshot)?.name ?? 'snapshot') : 'Fresh';
+  const autoName = [selectedHarness?.name ?? agentSlug, model, effort, permission, snapshotLabel]
+    .filter((part) => part).join(' · ');
+  // Profiles offered by default in the picker: this repo's most-recent 3.
+  const recentProfiles = profileRecent.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, 3);
+  const commitRename = async () => {
+    if (!matchedProfile || !renameText.trim()) return;
+    const { profiles: ps, recent } = await renameProfileAction(matchedProfile.id, renameText.trim(), selectedDir?.path);
+    setProfiles(ps);
+    setProfileRecent(recent);
+    setRenaming(false);
+  };
+
   const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
     setBusy(true);
     setError(null);
-    const spawnAdapter = advanced ? adapter : (selectedProfile?.hasAcp ? 'acp' : 'pty');
+    const spawnAdapter = advanced ? adapter : (selectedHarness?.hasAcp ? 'acp' : 'pty');
     const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : workspaceMode;
     const cwd = existingCwd ?? dir.path;
     const workSource = mode === 'attach' ? selectedAttachRef : selectedGitRef;
@@ -257,7 +290,7 @@ export function SpawnPalette() {
     const spec: SpawnSpec = {
       adapter: spawnAdapter,
       agent: agentSlug,
-      profile: selectedProfile?.profile,
+      harness: selectedHarness?.harness,
       terminalArgs: spawnAdapter === 'pty'
         ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
@@ -283,12 +316,17 @@ export function SpawnPalette() {
           ...(effort && effortOption ? { [effortOption.id]: effort } : {}),
         },
       } : undefined,
+      // Profile identity + browser snapshot seed. The daemon resolves-or-creates
+      // the profile from these and records per-repo recency.
+      profile: {
+        ...(spawnAdapter === 'acp'
+          ? { model: model || undefined, effort: effort || undefined, permission: permission || undefined }
+          : {}),
+        snapshot: snapshot || undefined,
+      },
     };
     saveProjectAgent(dir.path, agent);
     if (selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
-    if (spawnAdapter === 'acp') {
-      saveSpawnSettings(agent, dir.path, { model: model || undefined, effort: effort || undefined, permission: permission || undefined });
-    }
     const r = await spawn(spec);
     setBusy(false);
     if (r.error) {
@@ -370,21 +408,44 @@ export function SpawnPalette() {
         </div>
         {advanced && (
           <div className="adv">
+            <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Agent profile</div>
+            <label style={{ gridColumn: '1 / -1' }}>
+              Profile <span className="sub">(latest 3 shown; fuzzy-find for more)</span>
+              <ProfilePicker profiles={profiles} recent={recentProfiles} value={matchedProfile} onPick={applyProfile} />
+              <div className="sub" style={{ marginTop: 4 }}>
+                {matchedProfile ? (
+                  renaming ? (
+                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <input value={renameText} autoFocus onChange={(e) => setRenameText(e.target.value)}
+                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') void commitRename(); if (e.key === 'Escape') setRenaming(false); }} />
+                      <button type="button" className="btn" onClick={() => void commitRename()}>Save</button>
+                      <button type="button" className="btn ghost" onClick={() => setRenaming(false)}>Cancel</button>
+                    </span>
+                  ) : (
+                    <>Using <b>{matchedProfile.name}</b>{' '}
+                      <button type="button" className="btn ghost" onClick={() => { setRenaming(true); setRenameText(matchedProfile.name); }}>Rename</button>
+                    </>
+                  )
+                ) : (
+                  <>New profile will be created: <b>{autoName}</b></>
+                )}
+              </div>
+            </label>
             <label>
               Connection
               <select value={adapter} onChange={(e) => setAdapter(e.target.value as 'acp' | 'pty')}>
-                <option value="acp" disabled={!selectedProfile?.hasAcp}>Transcript (ACP)</option>
-                <option value="pty" disabled={!selectedProfile?.hasTerminal}>Direct Terminal</option>
+                <option value="acp" disabled={!selectedHarness?.hasAcp}>Transcript (ACP)</option>
+                <option value="pty" disabled={!selectedHarness?.hasTerminal}>Direct Terminal</option>
               </select>
             </label>
             <label>
-              Profile
-              <select value={selectedProfile?.id ?? ''} onChange={(e) => {
+              Harness
+              <select value={selectedHarness?.id ?? ''} onChange={(e) => {
                 const next = e.target.value;
                 setAgent(next);
                 if (selectedDir) saveProjectAgent(selectedDir.path, next);
               }}>
-                {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                {harnesses.map((harness) => <option key={harness.id} value={harness.id}>{harness.name}</option>)}
               </select>
             </label>
             {adapter === 'acp' && (
@@ -407,6 +468,14 @@ export function SpawnPalette() {
                 />
               </label>
             )}
+            <label>
+              Browser snapshot <span className="sub">(seed state)</span>
+              <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+                <option value="">Fresh state</option>
+                {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
+            <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Repo settings</div>
             <label>
               Name
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="auto: web-1…" />
@@ -534,6 +603,77 @@ export function SpawnPalette() {
           {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Fuzzy profile picker: shows this repo's latest-used profiles by default, and
+// fuzzy-searches all profiles by name while typing. Picking one applies its
+// settings to the spawn form.
+function ProfilePicker({
+  profiles,
+  recent,
+  value,
+  onPick,
+}: {
+  profiles: Profile[];
+  recent: Profile[];
+  value: Profile | undefined;
+  onPick: (p: Profile) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  const closeTimer = useRef<number>();
+  const results = useMemo(() => {
+    if (!query.trim()) return recent;
+    return fuzzyFilter(query, profiles, (p) => p.name).slice(0, 8);
+  }, [query, profiles, recent]);
+  useEffect(() => setIndex(0), [query]);
+  const choose = (p: Profile) => {
+    onPick(p);
+    setQuery('');
+    setOpen(false);
+  };
+  return (
+    <div className="git-ref-picker">
+      <input
+        value={query}
+        placeholder={value ? value.name : 'Fresh — pick a saved profile…'}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { closeTimer.current = window.setTimeout(() => setOpen(false), 120); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setIndex((i) => Math.min(results.length - 1, i + 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex((i) => Math.max(0, i - 1)); }
+          else if (e.key === 'Enter' && open && results[index]) { e.preventDefault(); choose(results[index]); }
+          else if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); setQuery(''); }
+        }}
+      />
+      {open && (
+        <div className="git-ref-results">
+          {results.length === 0 && <div className="git-ref-empty">{profiles.length === 0 ? 'No saved profiles yet.' : 'No matching profiles.'}</div>}
+          {results.map((p, row) => (
+            <button
+              type="button"
+              key={p.id}
+              className={`git-ref-row${row === index ? ' selected' : ''}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setIndex(row)}
+              onClick={() => { if (closeTimer.current) window.clearTimeout(closeTimer.current); choose(p); }}
+            >
+              <span className="git-ref-main">
+                <strong>{p.name}</strong>
+              </span>
+              <span className="git-ref-meta">
+                {value?.id === p.id && <em>current</em>}
+                {!query.trim() && <span>recent</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

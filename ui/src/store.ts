@@ -14,10 +14,12 @@ import type {
   AgentCatalog,
   Approval,
   BrowserInputWire,
+  BrowserSnapshot,
   Channel,
   ClosePreview,
   ClientMsg,
   GitRefInfo,
+  Profile,
   RepoInfo,
   ResumableSession,
   ResumeCatalog,
@@ -114,6 +116,8 @@ interface StoreState {
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
+  // Captured browser snapshots (seed states), refreshed on demand.
+  snapshots: BrowserSnapshot[];
   // Resume picker: the resumable-session catalog (null until first fetched) and a
   // loading flag while the daemon probes agents for external sessions.
   resumeCatalog: ResumeCatalog | null;
@@ -150,8 +154,15 @@ interface StoreState {
   openShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
-  getSpawnOptions: (agent: string, cwd: string, profile?: string) => Promise<SpawnOptions>;
+  getSpawnOptions: (agent: string, cwd: string, harness?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
+  // Browser snapshots + agent profiles.
+  captureSnapshot: (agentId: string, name: string) => Promise<BrowserSnapshot[]>;
+  listSnapshots: () => Promise<BrowserSnapshot[]>;
+  deleteSnapshot: (id: string) => Promise<BrowserSnapshot[]>;
+  listProfiles: (project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
@@ -178,6 +189,8 @@ const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) =
 const pendingGitRefs = new Map<string, { resolve: (refs: GitRefInfo[]) => void; reject: (error: Error) => void }>();
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
+const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
+const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -291,6 +304,26 @@ export const useStore = create<StoreState>((set, get) => {
           else pending.resolve(msg.options);
         }
         return;
+      }
+      case 'snapshots': {
+        const pending = msg.corrId ? pendingSnapshots.get(msg.corrId) : undefined;
+        const snaps = msg.snapshots ?? [];
+        if (!msg.error && msg.snapshots) set({ snapshots: snaps });
+        if (pending && msg.corrId) {
+          pendingSnapshots.delete(msg.corrId);
+          if (msg.error) pending.reject(new Error(msg.error));
+          else pending.resolve(snaps);
+        }
+        break;
+      }
+      case 'profiles': {
+        const pending = msg.corrId ? pendingProfiles.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingProfiles.delete(msg.corrId);
+          if (msg.error || !msg.profiles) pending.reject(new Error(msg.error ?? 'profiles unavailable'));
+          else pending.resolve({ profiles: msg.profiles, recent: msg.recent ?? [] });
+        }
+        break;
       }
       case 'sessions':
         set({ resumeCatalog: msg.catalog, resumeLoading: false });
@@ -469,6 +502,7 @@ export const useStore = create<StoreState>((set, get) => {
     inspectorOpen: false,
     dirs: [],
     agentCatalog: null,
+    snapshots: [],
     resumeCatalog: null,
     resumeLoading: false,
     drafts: {},
@@ -583,17 +617,53 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
-    getSpawnOptions: (agent, cwd, profile) =>
+    getSpawnOptions: (agent, cwd, harness) =>
       new Promise<SpawnOptions>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSpawnOptions.set(corrId, { resolve, reject });
-        client.send({ t: 'get_spawn_options', agent, profile, cwd, corrId });
+        client.send({ t: 'get_spawn_options', agent, harness, cwd, corrId });
       }),
     listGitRefs: (repo) =>
       new Promise<GitRefInfo[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingGitRefs.set(corrId, { resolve, reject });
         client.send({ t: 'list_git_refs', repo, corrId });
+      }),
+    captureSnapshot: (agentId, name) =>
+      new Promise<BrowserSnapshot[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingSnapshots.set(corrId, { resolve, reject });
+        client.send({ t: 'capture_snapshot', agentId, name, corrId });
+      }),
+    listSnapshots: () =>
+      new Promise<BrowserSnapshot[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingSnapshots.set(corrId, { resolve, reject });
+        client.send({ t: 'list_snapshots', corrId });
+      }),
+    deleteSnapshot: (id) =>
+      new Promise<BrowserSnapshot[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingSnapshots.set(corrId, { resolve, reject });
+        client.send({ t: 'delete_snapshot', id, corrId });
+      }),
+    listProfiles: (project) =>
+      new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingProfiles.set(corrId, { resolve, reject });
+        client.send({ t: 'list_profiles', project, corrId });
+      }),
+    renameProfile: (id, name, project) =>
+      new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingProfiles.set(corrId, { resolve, reject });
+        client.send({ t: 'rename_profile', id, name, project, corrId });
+      }),
+    deleteProfile: (id, project) =>
+      new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingProfiles.set(corrId, { resolve, reject });
+        client.send({ t: 'delete_profile', id, project, corrId });
       }),
     prompt: (agentId, input) =>
       new Promise<AckResult>((resolve) => {

@@ -1,6 +1,6 @@
 {
   "defaultAgent": "custom",
-  "defaultProfile": "custom-fast",
+  "defaultHarness": "custom-fast",
   "agents": {
     "claude": {
       "name": "Claude",
@@ -63,7 +63,7 @@
       }
     }
   },
-  "profiles": {
+  "harnesses": {
     "custom-fast": {
       "agent": "custom",
       "name": "Custom Fast",

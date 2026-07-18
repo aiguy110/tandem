@@ -90,6 +90,15 @@ func (b *testBackend) SetConfigOption(ctx context.Context, id, configID string, 
 	return s.SetConfigOption(ctx, configID, value)
 }
 
+func (b *testBackend) CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error) {
+	return store.BrowserSnapshot{}, nil
+}
+func (b *testBackend) ListSnapshots() ([]store.BrowserSnapshot, error)        { return nil, nil }
+func (b *testBackend) DeleteSnapshot(string) error                            { return nil }
+func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
+func (b *testBackend) RenameProfile(string, string) error                     { return nil }
+func (b *testBackend) DeleteProfile(string) error                             { return nil }
+
 type testAdapter struct {
 	events        chan eventlog.Event
 	done          chan struct{}

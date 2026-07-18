@@ -7,7 +7,7 @@
 // (setBrowserSub) so the daemon streams only the focused, viewing client;
 // unmounting opts back out and the screencast stops.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
 import type { BrowserInputWire } from '../../wire';
@@ -20,6 +20,29 @@ export function BrowserPane() {
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
+  const captureSnapshot = useStore((s) => s.captureSnapshot);
+
+  // Inline "capture snapshot" naming form (opens from the browser bar).
+  const [capturing, setCapturing] = useState(false);
+  const [snapName, setSnapName] = useState('');
+  const [snapBusy, setSnapBusy] = useState(false);
+  const [snapMsg, setSnapMsg] = useState('');
+  const doCapture = async () => {
+    const name = snapName.trim();
+    if (!name || snapBusy) return;
+    setSnapBusy(true);
+    setSnapMsg('');
+    try {
+      await captureSnapshot(agentId, name);
+      setSnapMsg(`Saved “${name}”`);
+      setSnapName('');
+      setCapturing(false);
+    } catch (e) {
+      setSnapMsg((e as Error).message);
+    } finally {
+      setSnapBusy(false);
+    }
+  };
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Last painted image rect + device size, for canvas→page coordinate mapping.
@@ -256,6 +279,31 @@ export function BrowserPane() {
         <button className="wheel-btn" disabled={!active} onClick={() => toggleWheel(agentId)}>
           {owner === 'user' ? 'Release the wheel' : 'Take the wheel'} <kbd>w</kbd>
         </button>
+        {active && !capturing && (
+          <button className="wheel-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save the current browser state as a reusable snapshot">
+            📸 Capture snapshot
+          </button>
+        )}
+        {active && capturing && (
+          <span className="snapshot-capture" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <input
+              autoFocus
+              value={snapName}
+              placeholder="Snapshot name…"
+              onChange={(e) => setSnapName(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') void doCapture();
+                if (e.key === 'Escape') { setCapturing(false); setSnapName(''); }
+              }}
+            />
+            <button className="wheel-btn" disabled={!snapName.trim() || snapBusy} onClick={() => void doCapture()}>
+              {snapBusy ? 'Saving…' : 'Save'}
+            </button>
+            <button className="wheel-btn" onClick={() => { setCapturing(false); setSnapName(''); }}>Cancel</button>
+          </span>
+        )}
+        {snapMsg && <span className="sub" style={{ marginLeft: 6 }}>{snapMsg}</span>}
       </div>
 
       {takeovers.length > 0 && (
