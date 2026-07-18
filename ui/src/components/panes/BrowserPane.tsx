@@ -7,10 +7,26 @@
 // (setBrowserSub) so the daemon streams only the focused, viewing client;
 // unmounting opts back out and the screencast stops.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
 import type { BrowserInputWire } from '../../wire';
+
+type BrowserIconName = 'agent' | 'user' | 'play' | 'restart' | 'keyboard' | 'wheel' | 'save' | 'close';
+
+function BrowserIcon({ name }: { name: BrowserIconName }) {
+  const paths: Record<BrowserIconName, ReactNode> = {
+    agent: <><rect x="4" y="6" width="16" height="13" rx="3" /><path d="M9 2h6M12 2v4M8 12h.01M16 12h.01M8 16h8" /></>,
+    user: <><path d="M7 11V6a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v7c0 5-3 8-8 8h-1c-3 0-5-1-7-4l-2-3a2 2 0 0 1 3-3l3 3" /></>,
+    play: <path d="m8 5 11 7-11 7Z" />,
+    restart: <><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 0-2 5" /></>,
+    keyboard: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M19 10h.01M7 14h10" /></>,
+    wheel: <><rect x="7" y="3" width="10" height="18" rx="5" /><path d="M12 7v3" /></>,
+    save: <><path d="M5 3h12l2 2v16H5Z" /><path d="M8 3v6h8V3M8 21v-7h8v7" /></>,
+    close: <path d="m7 7 10 10M17 7 7 17" />,
+  };
+  return <svg className="browser-action-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
+}
 
 export function BrowserPane() {
   const agentId = useStore((s) => s.focusedId)!;
@@ -294,32 +310,46 @@ export function BrowserPane() {
   return (
     <div className="pane browser-pane">
       <div className="browser-bar">
-        <span className={`owner-badge ${owner}`}>{owner === 'user' ? '🖐 you hold the wheel' : '🤖 agent driving'}</span>
-        <select value={seed} onChange={(e) => setSeed(e.target.value)} title="Browser state for the new session">
-          <option value="">Fresh browser state</option>
-          {snapshots.map((snapshot) => (
-            <option key={snapshot.id} value={snapshot.id}>{snapshot.name}</option>
-          ))}
-        </select>
-        <button className="wheel-btn" disabled={restartBusy} onClick={() => void doRestart()}>
-          {restartBusy ? 'Starting…' : active ? '↻ Restart browser' : '▶ Start browser'}
-        </button>
-        {restartMsg && <span className="sub">{restartMsg}</span>}
-        {active && userOwns && (
-          <button className="wheel-btn kbd-btn" onClick={focusKeyboard} title="Show keyboard to type into the page">
-            ⌨ Keyboard
+        <div className="browser-status-group">
+          <span className={`owner-badge ${owner}`}>
+            <BrowserIcon name={owner === 'user' ? 'user' : 'agent'} />
+            {owner === 'user' ? 'You have control' : 'Agent has control'}
+          </span>
+          {(restartMsg || snapMsg) && <span className="browser-bar-message">{restartMsg || snapMsg}</span>}
+        </div>
+
+        <div className="browser-seed-group">
+          <label htmlFor="browser-state-seed">New session</label>
+          <select id="browser-state-seed" value={seed} onChange={(e) => setSeed(e.target.value)} title="Browser state for the new session">
+            <option value="">Fresh state</option>
+            {snapshots.map((snapshot) => (
+              <option key={snapshot.id} value={snapshot.id}>{snapshot.name}</option>
+            ))}
+          </select>
+          <button className="browser-action-btn" disabled={restartBusy} onClick={() => void doRestart()}>
+            <BrowserIcon name={active ? 'restart' : 'play'} />
+            {restartBusy ? 'Starting…' : active ? 'Restart' : 'Start'}
           </button>
-        )}
-        <button className="wheel-btn" disabled={!active} onClick={() => toggleWheel(agentId)}>
-          {owner === 'user' ? 'Release the wheel' : 'Take the wheel'} <kbd>w</kbd>
-        </button>
-        {active && !capturing && (
-          <button className="wheel-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save the current browser state as a reusable snapshot">
-            📸 Capture snapshot
+        </div>
+
+        <div className="browser-actions">
+          {active && userOwns && (
+            <button className="browser-action-btn icon-only mobile-keyboard-btn" onClick={focusKeyboard} title="Show keyboard" aria-label="Show keyboard">
+              <BrowserIcon name="keyboard" />
+            </button>
+          )}
+          <button className="browser-action-btn" disabled={!active} onClick={() => toggleWheel(agentId)}>
+            <BrowserIcon name="wheel" />
+            {owner === 'user' ? 'Release control' : 'Take control'} <kbd>w</kbd>
           </button>
-        )}
-        {active && capturing && (
-          <span className="snapshot-capture" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          {active && !capturing && (
+            <button className="browser-action-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save the current browser state as a reusable snapshot">
+              <BrowserIcon name="save" />
+              Save snapshot
+            </button>
+          )}
+          {active && capturing && (
+            <span className="snapshot-capture">
             <input
               autoFocus
               value={snapName}
@@ -331,13 +361,15 @@ export function BrowserPane() {
                 if (e.key === 'Escape') { setCapturing(false); setSnapName(''); }
               }}
             />
-            <button className="wheel-btn" disabled={!snapName.trim() || snapBusy} onClick={() => void doCapture()}>
-              {snapBusy ? 'Saving…' : 'Save'}
+            <button className="browser-action-btn primary" disabled={!snapName.trim() || snapBusy} onClick={() => void doCapture()}>
+              <BrowserIcon name="save" /> {snapBusy ? 'Saving…' : 'Save'}
             </button>
-            <button className="wheel-btn" onClick={() => { setCapturing(false); setSnapName(''); }}>Cancel</button>
+            <button className="browser-action-btn icon-only" title="Cancel" aria-label="Cancel snapshot" onClick={() => { setCapturing(false); setSnapName(''); }}>
+              <BrowserIcon name="close" />
+            </button>
           </span>
-        )}
-        {snapMsg && <span className="sub" style={{ marginLeft: 6 }}>{snapMsg}</span>}
+          )}
+        </div>
       </div>
 
       {takeovers.length > 0 && (
