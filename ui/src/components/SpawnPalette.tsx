@@ -129,6 +129,7 @@ export function SpawnPalette() {
   const [snapshot, setSnapshot] = useState('');
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileRecent, setProfileRecent] = useState<string[]>([]);
+  const [profilesByRepo, setProfilesByRepo] = useState<Record<string, { profiles: Profile[]; recent: string[] }>>({});
   const [renaming, setRenaming] = useState(false);
   const [renameText, setRenameText] = useState('');
   const [spawnOptions, setSpawnOptions] = useState<SpawnOptions | null>(null);
@@ -167,6 +168,21 @@ export function SpawnPalette() {
     setSnapshot(p.snapshotId);
     setRenaming(false);
   };
+  const openAdvanced = (dir: RepoInfo, index: number) => {
+    setSel(index);
+    setAdvanced(true);
+    appliedDirRef.current = '';
+    const cached = profilesByRepo[dir.path];
+    if (cached) {
+      setProfiles(cached.profiles);
+      setProfileRecent(cached.recent);
+      const latest = cached.profiles.find((profile) => profile.id === cached.recent[0]);
+      if (latest) {
+        applyProfile(latest);
+        appliedDirRef.current = dir.path;
+      }
+    }
+  };
   useEffect(() => {
     if (!selectedDir) return;
     const saved = loadProjectAgent(selectedDir.path);
@@ -188,6 +204,29 @@ export function SpawnPalette() {
   // and auto-apply the latest-used profile once per selected directory.
   const appliedDirRef = useRef<string>('');
   useEffect(() => {
+    let cancelled = false;
+    const missing = filtered.filter((dir) => !profilesByRepo[dir.path]);
+    if (missing.length === 0) return;
+    void Promise.all(missing.map(async (dir) => {
+      try {
+        const result = await listProfiles(dir.path);
+        return [dir.path, result] as const;
+      } catch {
+        return null;
+      }
+    })).then((results) => {
+      if (cancelled) return;
+      setProfilesByRepo((current) => {
+        const next = { ...current };
+        for (const result of results) {
+          if (result) next[result[0]] = result[1];
+        }
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [filtered, profilesByRepo, listProfiles]);
+  useEffect(() => {
     if (!advanced || !selectedDir) return;
     let cancelled = false;
     void listSnapshots().catch(() => {});
@@ -195,6 +234,7 @@ export function SpawnPalette() {
       if (cancelled) return;
       setProfiles(ps);
       setProfileRecent(recent);
+      setProfilesByRepo((current) => ({ ...current, [selectedDir.path]: { profiles: ps, recent } }));
       if (appliedDirRef.current !== selectedDir.path) {
         appliedDirRef.current = selectedDir.path;
         const latest = ps.find((p) => p.id === recent[0]);
@@ -346,9 +386,12 @@ export function SpawnPalette() {
     }
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      setAdvanced((a) => !a);
+      const dir = filtered[sel];
+      if (advanced && dir && !busy) void doSpawn(dir);
+      else if (dir) openAdvanced(dir, sel);
       return;
     }
+    if (advanced) return;
     if (e.key === 'Tab' && !taskMode) {
       e.preventDefault();
       setTaskMode(true);
@@ -374,40 +417,68 @@ export function SpawnPalette() {
   return (
     <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setModal('none')}>
       <div className="modal" onKeyDown={onKey}>
-        <input
-          className="q"
-          autoFocus
-          placeholder="Spawn in a directory…  (fuzzy; Enter = worktree + focus)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {taskMode && (
-          <input
-            ref={taskRef}
-            className="task"
-            placeholder="Task to dispatch on spawn (Enter to spawn + dispatch)…"
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-          />
-        )}
-        <div className="rows">
-          {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
-          {filtered.map((d, i) => (
-            <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => !advanced && setSel(i)} onClick={() => !busy && doSpawn(d)}>
-              <div>
-                <div className="primary">{d.name}</div>
-                <div className="sub">{d.path}</div>
-              </div>
-              <div className="meta">
-                <span>{d.currentBranch}</span>
-                {d.dirty && <span className="dirty">● dirty</span>}
-                {d.hasLiveAgent && <span className="occupied">◆ occupied</span>}
-              </div>
+        {!advanced && (
+          <>
+            <input
+              className="q"
+              autoFocus
+              placeholder="Spawn in a directory…  (fuzzy; Enter = worktree + focus)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {taskMode && (
+              <input
+                ref={taskRef}
+                className="task"
+                placeholder="Task to dispatch on spawn (Enter to spawn + dispatch)…"
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+              />
+            )}
+            <div className="rows">
+              {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
+              {filtered.map((d, i) => {
+                const repoProfiles = profilesByRepo[d.path];
+                const defaultProfile = repoProfiles?.profiles.find((profile) => profile.id === repoProfiles.recent[0]);
+                return (
+                  <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => !busy && doSpawn(d)}>
+                    <div className="repo-details">
+                      <div className="primary">{d.name}</div>
+                      <div className="sub">{d.path}</div>
+                    </div>
+                    <div className="meta">
+                      <span>{d.currentBranch}</span>
+                      {d.dirty && <span className="dirty">● dirty</span>}
+                      {d.hasLiveAgent && <span className="occupied">◆ occupied</span>}
+                    </div>
+                    <button
+                      className="btn profile-button"
+                      type="button"
+                      title="Open advanced launch settings"
+                      disabled={busy}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openAdvanced(d, i);
+                      }}
+                    >
+                      {defaultProfile?.name ?? 'Default profile'}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          </>
+        )}
         {advanced && (
-          <div className="adv">
+          <>
+            <div className="advanced-repo">
+              <div>
+                <div className="primary">{selectedDir?.name}</div>
+                <div className="sub">{selectedDir?.path}</div>
+              </div>
+              <span>{selectedDir?.currentBranch}</span>
+            </div>
+            <div className="adv">
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Agent profile</div>
             <label style={{ gridColumn: '1 / -1' }}>
               Profile <span className="sub">(latest 3 shown; fuzzy-find for more)</span>
@@ -559,7 +630,8 @@ export function SpawnPalette() {
                 <button type="button" className="btn ghost" onClick={() => setGitRefsRefresh((value) => value + 1)} disabled={gitRefsBusy}>Refresh local refs</button>
               </div>
             )}
-          </div>
+            </div>
+          </>
         )}
         {error && (
           <div className="modal-err">
@@ -581,27 +653,24 @@ export function SpawnPalette() {
             )}
           </div>
         )}
-        <div className="foot">
-          <span>
-            <span className="kbd">↵</span> spawn
-          </span>
-          <span>
-            <span className="kbd">⇥</span> add task
-          </span>
-          <span>
-            <button className="btn" type="button" onClick={() => setAdvanced((a) => !a)} aria-expanded={advanced}>
-              {advanced ? 'Hide advanced' : 'Advanced settings'}
+        {advanced ? (
+          <div className="foot advanced-actions">
+            <button className="btn ghost" type="button" onClick={() => setAdvanced(false)}>Choose other repo</button>
+            <span className="action-spacer" />
+            <button className="btn ghost" type="button" onClick={() => setModal('none')}>Cancel</button>
+            <button className="btn" type="button" disabled={busy || !selectedDir} onClick={() => selectedDir && void doSpawn(selectedDir)}>
+              {busy ? 'Launching…' : 'Launch'}
             </button>
-            <span className="kbd">⌘↵</span>
-          </span>
-          <span>
-            <span className="kbd">↑↓</span> select
-          </span>
-          <span>
-            <span className="kbd">Esc</span> close
-          </span>
-          {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}
-        </div>
+          </div>
+        ) : (
+          <div className="foot">
+            <span><span className="kbd">↵</span> spawn</span>
+            <span><span className="kbd">⇥</span> add task</span>
+            <span><span className="kbd">↑↓</span> select</span>
+            <span><span className="kbd">Esc</span> close</span>
+            {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}
+          </div>
+        )}
       </div>
     </div>
   );
