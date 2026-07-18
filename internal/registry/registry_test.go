@@ -113,6 +113,19 @@ func existing(dir string) agentadapter.Spec {
 	return agentadapter.Spec{Adapter: "acp", Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: dir}}
 }
 
+func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := r.Summaries(context.Background())
+	if len(summaries) != 1 || summaries[0].ID != s.ID || summaries[0].Workspace.GitState != "unknown" {
+		t.Fatalf("summaries=%+v", summaries)
+	}
+}
+
 func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {
 	f := &fakeFactory{}
 	_, db, cfg := setup(t, f)

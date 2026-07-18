@@ -61,7 +61,7 @@ export interface AgentView {
     repoPath: string;
     branch: string;
     cwd: string;
-    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing' | 'unknown';
     ahead?: number;
     behind?: number;
     targetRef?: string;
@@ -197,6 +197,9 @@ let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
 // twice under React StrictMode in dev).
 let hashListenerAttached = false;
+let gitRefreshListenersAttached = false;
+
+const GIT_REFRESH_INTERVAL_MS = 15_000;
 
 function rankAgents(agents: Record<string, AgentView>, order: string[]): string[] {
   // Blocked / error float to the top (docs/ui.md), otherwise insertion order.
@@ -258,6 +261,7 @@ export const useStore = create<StoreState>((set, get) => {
   const apply = (msg: ServerMsg): void => {
     switch (msg.t) {
       case 'agents': {
+        const newlyDiscovered = msg.agents.filter((s) => !get().agents[s.id]).map((s) => s.id);
         set((st) => {
           const agents = { ...st.agents };
           const order = [...st.order];
@@ -277,9 +281,9 @@ export const useStore = create<StoreState>((set, get) => {
           const focusedId = st.focusedId && agents[st.focusedId] ? st.focusedId : order[0] ?? null;
           return { agents, order, focusedId };
         });
-        // Subscribe to every known agent (base channels: keeps rails + transcript
-        // live; the focused Browser pane adds the browser channel separately).
-        for (const s of msg.agents) subscribeAgent(s.id);
+        // The reconnect path already re-subscribes tracked agents. Summary
+        // refreshes only need to subscribe agents discovered for the first time.
+        for (const id of newlyDiscovered) subscribeAgent(id);
         return;
       }
       case 'dirs':
@@ -540,6 +544,17 @@ export const useStore = create<StoreState>((set, get) => {
           const next = resolveToken();
           if (next) client.setToken(next);
         });
+      }
+      if (!gitRefreshListenersAttached) {
+        gitRefreshListenersAttached = true;
+        const refreshVisibleAgents = () => {
+          if (document.visibilityState === 'visible' && get().conn === 'connected') {
+            client.send({ t: 'list_agents' });
+          }
+        };
+        document.addEventListener('visibilitychange', refreshVisibleAgents);
+        window.addEventListener('focus', refreshVisibleAgents);
+        setInterval(refreshVisibleAgents, GIT_REFRESH_INTERVAL_MS);
       }
     },
     submitToken: (t) => client.setToken(t.trim()),

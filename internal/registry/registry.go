@@ -206,7 +206,12 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 	out := make([]Summary, 0, len(items))
 	for _, item := range items {
 		s, cwd, ws := item.s, item.cwd, item.s.Spec.Workspace
-		state, _ := r.workspace.GitState(ctx, cwd, ws)
+		state, err := r.workspace.GitState(ctx, cwd, ws)
+		if err != nil {
+			// Do not let a failed git query leave the client displaying the last
+			// known state as if it were still authoritative.
+			state.Status = "unknown"
+		}
 		repoPath, repo, branch := ws.Repo, filepath.Base(ws.Repo), ws.Branch
 		if ws.Kind == workspace.KindExisting {
 			repoPath, repo, branch = ws.CWD, filepath.Base(ws.CWD), ""
