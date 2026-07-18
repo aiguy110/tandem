@@ -21,6 +21,30 @@ export function BrowserPane() {
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
   const captureSnapshot = useStore((s) => s.captureSnapshot);
+  const snapshots = useStore((s) => s.snapshots);
+  const listSnapshots = useStore((s) => s.listSnapshots);
+  const restartBrowser = useStore((s) => s.restartBrowser);
+  const [seed, setSeed] = useState('');
+  const [restartBusy, setRestartBusy] = useState(false);
+  const [restartMsg, setRestartMsg] = useState('');
+
+  useEffect(() => {
+    void listSnapshots().catch(() => {});
+  }, [listSnapshots]);
+
+  const doRestart = async () => {
+    if (restartBusy) return;
+    setRestartBusy(true);
+    setRestartMsg('');
+    try {
+      const result = await restartBrowser(agentId, seed || undefined);
+      if (result.error) throw new Error(result.error);
+    } catch (e) {
+      setRestartMsg((e as Error).message);
+    } finally {
+      setRestartBusy(false);
+    }
+  };
 
   // Inline "capture snapshot" naming form (opens from the browser bar).
   const [capturing, setCapturing] = useState(false);
@@ -271,6 +295,16 @@ export function BrowserPane() {
     <div className="pane browser-pane">
       <div className="browser-bar">
         <span className={`owner-badge ${owner}`}>{owner === 'user' ? '🖐 you hold the wheel' : '🤖 agent driving'}</span>
+        <select value={seed} onChange={(e) => setSeed(e.target.value)} title="Browser state for the new session">
+          <option value="">Fresh browser state</option>
+          {snapshots.map((snapshot) => (
+            <option key={snapshot.id} value={snapshot.id}>{snapshot.name}</option>
+          ))}
+        </select>
+        <button className="wheel-btn" disabled={restartBusy} onClick={() => void doRestart()}>
+          {restartBusy ? 'Starting…' : active ? '↻ Restart browser' : '▶ Start browser'}
+        </button>
+        {restartMsg && <span className="sub">{restartMsg}</span>}
         {active && userOwns && (
           <button className="wheel-btn kbd-btn" onClick={focusKeyboard} title="Show keyboard to type into the page">
             ⌨ Keyboard

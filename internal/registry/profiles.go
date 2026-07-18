@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,32 @@ func (r *Registry) DeleteSnapshot(id string) error {
 		_ = os.RemoveAll(snap.Ref)
 	}
 	return nil
+}
+
+// RestartBrowser starts a new browser session for an existing agent, optionally
+// seeded from a saved snapshot. An empty snapshotID requests fresh state.
+func (r *Registry) RestartBrowser(ctx context.Context, agentID, snapshotID string) error {
+	if r.Get(agentID) == nil {
+		return fmt.Errorf("no such agent: %s", agentID)
+	}
+	if r.browser == nil {
+		return errors.New("browser subsystem disabled")
+	}
+	var kind, ref string
+	if snapshotID != "" {
+		snap, err := r.store.BrowserSnapshot(snapshotID)
+		if err != nil {
+			return err
+		}
+		if snap == nil {
+			return fmt.Errorf("no such browser snapshot: %s", snapshotID)
+		}
+		if snap.Kind != "" && snap.Kind != r.browser.DriverKind() {
+			return fmt.Errorf("browser snapshot %q is for the %s driver, not %s", snap.Name, snap.Kind, r.browser.DriverKind())
+		}
+		kind, ref = snap.Kind, snap.Ref
+	}
+	return r.browser.Restart(ctx, agentID, kind, ref)
 }
 
 // ListProfiles returns all profiles and, for the given project, the profile ids

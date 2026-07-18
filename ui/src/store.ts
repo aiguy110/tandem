@@ -177,6 +177,7 @@ interface StoreState {
   // Browser pane control (Phase 5).
   setBrowserSub: (agentId: string | null) => void;
   browserControl: (agentId: string, action: 'grab' | 'release') => void;
+  restartBrowser: (agentId: string, snapshotId?: string) => Promise<AckResult>;
   browserInput: (agentId: string, event: BrowserInputWire) => void;
   toggleWheel: (agentId: string) => void;
 }
@@ -735,6 +736,12 @@ export const useStore = create<StoreState>((set, get) => {
       if (agentId && get().agents[agentId]) subscribeAgent(agentId);
     },
     browserControl: (agentId, action) => client.send({ t: 'browser_control', agentId, action }),
+    restartBrowser: (agentId, snapshotId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'restart_browser', agentId, snapshotId, corrId });
+      }),
     browserInput: (agentId, event) => client.send({ t: 'browser_input', agentId, event }),
     toggleWheel: (agentId) => {
       const a = get().agents[agentId];

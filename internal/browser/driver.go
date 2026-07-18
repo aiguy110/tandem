@@ -205,13 +205,13 @@ func (d *LocalDriver) Teardown(_ context.Context, id string) error {
 	h := d.handles[id]
 	delete(d.handles, id)
 	d.mu.Unlock()
-	if h == nil {
-		return nil
-	}
-	if h.cmd.Process != nil {
+	if h != nil && h.cmd.Process != nil {
 		_ = h.cmd.Process.Kill()
 	}
-	return os.RemoveAll(h.profile)
+	// Remove the known profile path even when there is no live handle. An
+	// explicit fresh restart after a daemon/process crash must not silently
+	// inherit the previous Chromium user-data directory.
+	return os.RemoveAll(d.ProfileDir(id))
 }
 
 // SessionStore persists externalized (Steel) browser sessions so they can be
@@ -333,6 +333,7 @@ func (d *SteelDriver) Adopt(agentID, sessionID, profileID, cdpURL string) {
 		d.profiles[agentID] = profileID
 	}
 }
+
 // ProfileID returns the Steel-side persisted profile id for an agent, if any.
 // It is the reference recorded when capturing a snapshot on the Steel driver.
 func (d *SteelDriver) ProfileID(id string) string {
