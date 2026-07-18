@@ -80,6 +80,26 @@ func startMock(t *testing.T, mutate func(*AdapterConfig)) *Adapter {
 	return a
 }
 
+func TestConfiguredMCPServersAreDeclaredForNewAndLoadedSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name, resumeID string
+	}{
+		{name: "new"},
+		{name: "load", resumeID: "sess_external"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := startMock(t, func(cfg *AdapterConfig) {
+				cfg.ResumeSessionID = tc.resumeID
+				cfg.MCPServers = []MCPServer{{Name: "playwright", Command: "/tools/node", Args: []string{"playwright-mcp"}}}
+				cfg.Transport.Env = append(cfg.Transport.Env, "TANDEM_MOCK_EXPECT_MCP=true")
+			})
+			if a.SessionID() == "" {
+				t.Fatal("session was not initialized")
+			}
+		})
+	}
+}
+
 func startServiceMock(t *testing.T) (*Adapter, string, *terminalhost.Host, *eventlog.Log) {
 	t.Helper()
 	workspace := t.TempDir()

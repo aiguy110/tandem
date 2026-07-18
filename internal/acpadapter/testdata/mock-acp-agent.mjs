@@ -118,6 +118,10 @@ function handle(msg) {
     return;
   }
   if (msg.method === 'session/new') {
+    if (process.env.TANDEM_MOCK_EXPECT_MCP === 'true' && msg.params?.mcpServers?.[0]?.name !== 'playwright') {
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'expected playwright MCP server on session/new' } });
+      return;
+    }
     send({ jsonrpc: '2.0', id: msg.id, result: {
       sessionId,
       modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'auto', name: 'Automatic' }] },
@@ -129,6 +133,10 @@ function handle(msg) {
     return;
   }
   if (msg.method === 'session/load') {
+    if (process.env.TANDEM_MOCK_EXPECT_MCP === 'true' && msg.params?.mcpServers?.[0]?.name !== 'playwright') {
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'expected playwright MCP server on session/load' } });
+      return;
+    }
     if (msg.params?.sessionId) sessionId = msg.params.sessionId;
     process.stderr.write(`MOCK_LOADSESSION ${sessionId}\n`);
     // Resume contract: re-stream the whole prior conversation as session/update
