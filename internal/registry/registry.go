@@ -488,6 +488,11 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	if t := spec.ResolvedLaunch.Terminal; t != nil {
 		t.StartArgs = expand(t.StartArgs, id, name, provisioned.CWD, "")
 	}
+	project := spec.Workspace.Repo
+	if project == "" {
+		project = provisioned.CWD
+	}
+	r.applyProfile(id, project, &spec)
 	raw, err := json.Marshal(spec)
 	if err != nil {
 		r.workspace.Rollback(ctx, spec.Workspace, provisioned.CWD, provisioned.CreatedBranch)

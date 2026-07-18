@@ -75,7 +75,22 @@ type Spec struct {
 	Task           string              `json:"task,omitempty"`
 	SessionConfig  json.RawMessage     `json:"sessionConfig,omitempty"`
 	Preset         string              `json:"preset,omitempty"`
+	Profile        *ProfileSpec        `json:"profile,omitempty"`
 	ResolvedLaunch *ResolvedLaunch     `json:"resolvedLaunch,omitempty"`
+}
+
+// ProfileSpec carries the human-facing settings that identify and name a
+// daemon-owned Profile, plus the browser snapshot to seed. Model/Effort/
+// Permission mirror what SessionConfig applies to the ACP session; they are kept
+// here in canonical form for profile identity and auto-naming. Snapshot is a
+// browser snapshot id ("" = fresh browser state). When present, the daemon
+// resolves-or-creates a Profile from these settings at spawn.
+type ProfileSpec struct {
+	ID         string `json:"id,omitempty"` // resolved/created profile id (filled in by the daemon)
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	Permission string `json:"permission,omitempty"`
+	Snapshot   string `json:"snapshot,omitempty"`
 }
 
 type StartRequest struct {
