@@ -407,6 +407,20 @@ export const useStore = create<StoreState>((set, get) => {
           const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
+          // Takeovers are daemon-owned durable events rather than part of the
+          // session snapshot fields. Rebuild the pending set from the complete
+          // transcript so reconnecting cannot erase a prompt while its MCP call
+          // remains blocked.
+          const replayedTakeovers: Takeover[] = [];
+          for (const entry of transcript) {
+            const event = entry.event;
+            if (event.kind === 'takeover_request' && !replayedTakeovers.some((t) => t.reqId === event.reqId)) {
+              replayedTakeovers.push({ reqId: event.reqId, reason: event.reason });
+            } else if (event.kind === 'takeover_resolved') {
+              const index = replayedTakeovers.findIndex((t) => t.reqId === event.reqId);
+              if (index !== -1) replayedTakeovers.splice(index, 1);
+            }
+          }
           agents[msg.agentId] = {
             ...prev,
             status: msg.status,
@@ -423,6 +437,7 @@ export const useStore = create<StoreState>((set, get) => {
               lastPromptCapabilities && lastPromptCapabilities.event.kind === 'prompt_capabilities'
                 ? lastPromptCapabilities.event.image
                 : prev.imagePromptSupport,
+            takeovers: replayedTakeovers,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
@@ -795,6 +810,9 @@ function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now(
   if (event.kind === 'takeover_request') {
     v.status = 'blocked';
     if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason }];
+  }
+  if (event.kind === 'takeover_resolved') {
+    v.takeovers = v.takeovers.filter((t) => t.reqId !== event.reqId);
   }
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;

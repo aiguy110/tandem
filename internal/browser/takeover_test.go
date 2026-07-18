@@ -10,8 +10,11 @@ import (
 
 func TestTakeoverEndpointAuthenticatesAndResolvesOnRelease(t *testing.T) {
 	requested := false
+	resolved := false
 	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(id string) bool { return id == "one" }, OnRequest: func(agentID, reqID, reason string) {
 		requested = agentID == "one" && reqID == "tk_1" && reason == "login"
+	}, OnResolved: func(agentID, reqID string) {
+		resolved = agentID == "one" && reqID == "tk_1"
 	}})
 	post := httptest.NewRequest(http.MethodPost, "/internal/browser/takeover?agentId=one", bytes.NewBufferString(`{"reason":"login"}`))
 	post.Header.Set("Authorization", "Bearer secret")
@@ -39,8 +42,8 @@ func TestTakeoverEndpointAuthenticatesAndResolvesOnRelease(t *testing.T) {
 		t.Fatal("resolved before release")
 	}
 	h.Release("one")
-	if !status() {
-		t.Fatal("not resolved after release")
+	if !status() || !resolved {
+		t.Fatalf("release status=%v callback=%v", status(), resolved)
 	}
 	unauth := httptest.NewRecorder()
 	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/internal/browser/takeover?reqId=tk_1", nil))

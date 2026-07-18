@@ -94,7 +94,13 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_request", "reqId": reqID, "reason": reason})
 			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "blocked"})
 		},
-		OnResolved: func(id, _ string) { pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "working"}) },
+		OnResolved: func(id, reqID string) {
+			// Persist the resolution as well as broadcasting browser_state. A
+			// transcript snapshot must be able to distinguish an old, completed
+			// takeover from one that is still waiting for the human.
+			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_resolved", "reqId": reqID})
+			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "working"})
+		},
 	})
 	if cfg.Browser.MCPEnabled {
 		exe, exeErr := os.Executable()
