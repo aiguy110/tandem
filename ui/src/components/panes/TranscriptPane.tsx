@@ -178,6 +178,26 @@ export function TranscriptPane() {
   );
 }
 
+// renderMarkdown wraps fenced code blocks with a `[data-copy-btn]` button;
+// since that HTML is injected via innerHTML we can't attach a React handler
+// to the button itself, so we delegate from the containing message div.
+function handleCodeCopyClick(e: React.MouseEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement;
+  const btn = target.closest('[data-copy-btn]') as HTMLButtonElement | null;
+  if (!btn) return;
+  const code = btn.parentElement?.querySelector('pre code');
+  const text = code?.textContent ?? '';
+  navigator.clipboard.writeText(text).then(() => {
+    const prevLabel = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    window.setTimeout(() => {
+      btn.textContent = prevLabel;
+      btn.classList.remove('copied');
+    }, 1500);
+  });
+}
+
 function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) => void }) {
   switch (item.kind) {
     case 'user':
@@ -189,7 +209,9 @@ function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) =>
         </div>
       );
     case 'message':
-      return <div className="ev msg" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />;
+      return (
+        <div className="ev msg" onClick={handleCodeCopyClick} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+      );
     case 'thought':
       return (
         <details className="ev thought">
