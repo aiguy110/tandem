@@ -189,6 +189,34 @@ export interface SpawnSpec {
   task?: string;
   sessionConfig?: { modeId?: string; configOptions?: Record<string, string | boolean> };
   preset?: string;
+  // Human-facing profile identity + browser snapshot seed. The daemon resolves
+  // or creates a Profile from these and fills in `id`; snapshot '' = fresh state.
+  profile?: { id?: string; model?: string; effort?: string; permission?: string; snapshot?: string };
+}
+
+// BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
+// new agent's browser at spawn.
+export interface BrowserSnapshot {
+  id: string;
+  name: string;
+  kind: string;
+  ref: string;
+  createdAt: number;
+}
+
+// Profile is a daemon-owned, auto-created, renamable bundle of launch settings.
+export interface Profile {
+  id: string;
+  name: string;
+  autoNamed: boolean;
+  agent: string;
+  harness: string;
+  model: string;
+  effort: string;
+  permission: string;
+  snapshotId: string;
+  createdAt: number;
+  lastUsedAt: number;
 }
 
 export interface AgentCatalogEntry {
@@ -243,6 +271,12 @@ export type ClientMsg =
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
+  | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }
+  | { t: 'list_snapshots'; corrId?: string }
+  | { t: 'delete_snapshot'; id: string; corrId?: string }
+  | { t: 'list_profiles'; project?: string; corrId?: string }
+  | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
+  | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'get_diff'; agentId: string; corrId?: string }
   | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
@@ -287,6 +321,8 @@ export type ServerMsg =
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
+  | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string }
+  | { t: 'profiles'; corrId?: string; profiles?: Profile[]; recent?: string[]; project?: string; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }

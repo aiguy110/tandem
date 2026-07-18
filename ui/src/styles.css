@@ -423,6 +423,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .adv label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); }
 .modal .adv input, .modal .adv select, .modal .adv textarea { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); padding: 6px 8px; font-size: var(--fs-sm); font-family: var(--font-mono); }
 .modal .adv textarea { min-height: 72px; resize: vertical; }
+.modal .adv .adv-section { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); font-weight: 600; padding: 6px 0 2px; border-bottom: 1px solid var(--border); margin-top: 4px; }
+.modal .adv .adv-section:first-child { margin-top: 0; }
 .git-context-preview { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.55; }
 .git-context-preview code { color: var(--text); font-family: var(--font-mono); }
 .branch-warning { margin-top: 5px; color: var(--warn); }
