@@ -483,7 +483,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .token-card .err { color: var(--err); font-size: var(--fs-sm); }
 
 .term-host { flex: 1; min-height: 0; position: relative; background: #0c1216; }
-.term-mount { position: absolute; inset: 0; padding: 6px 8px; }
+.term-mount { position: absolute; inset: 0; }
+.term-renderer { position: absolute; inset: 6px 8px; }
 .term-note { padding: 3px 10px; font-size: var(--fs-xs); color: var(--text-faint); border-top: 1px solid var(--border); font-family: var(--font-mono); background: var(--surface); }
 /* A real field is necessary to invoke iOS/Android's soft keyboard; WASM
    terminal canvases cannot do that themselves. Keep it on-screen but invisible

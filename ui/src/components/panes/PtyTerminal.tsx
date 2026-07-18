@@ -17,7 +17,7 @@ interface Props {
 }
 
 export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData }: Props) {
-  const mountRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<HTMLDivElement>(null);
   const kbdRef = useRef<HTMLTextAreaElement>(null);
   // Keep the latest callbacks without re-running the mount effect.
   const cbs = useRef({ subscribe, onData, onResize, onEngine, onFirstData });
@@ -94,7 +94,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     let disposed = false;
     let ro: ResizeObserver | null = null;
 
-    const el = mountRef.current;
+    const el = rendererRef.current;
     if (!el) return;
 
     (async () => {
@@ -135,7 +135,11 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   }, []);
 
   return (
-    <div className="term-mount" ref={mountRef}>
+    <div className="term-mount">
+      {/* ghostty-web makes its mount contenteditable and cancels beforeinput.
+          Keep the mobile textarea outside that subtree or phone IME edits are
+          canceled before onInput can forward them to the PTY. */}
+      <div className="term-renderer" ref={rendererRef} />
       <button type="button" className="term-kbd-btn" onClick={focusKeyboard} title="Show keyboard to type in the terminal">
         ⌨ Keyboard
       </button>
