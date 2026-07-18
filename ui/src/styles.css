@@ -516,18 +516,40 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 /* ---- browser pane (Phase 5) ---- */
 .browser-pane { background: #0b0f14; }
-.browser-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.owner-badge { font-size: var(--fs-xs); font-weight: 600; padding: 3px 8px; border-radius: var(--r-sm); border: 1px solid var(--border); }
+.browser-bar { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.browser-status-group, .browser-seed-group, .browser-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.browser-status-group { flex: 0 1 auto; }
+.browser-seed-group { padding-left: 10px; border-left: 1px solid var(--border); }
+.browser-seed-group label { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
+.browser-seed-group select { height: 30px; min-width: 120px; max-width: 180px; padding: 0 28px 0 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+.browser-seed-group select:hover, .browser-seed-group select:focus { border-color: var(--border-strong); outline: none; }
+.browser-actions { margin-left: auto; }
+.owner-badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; font-size: var(--fs-xs); font-weight: 600; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--border); white-space: nowrap; }
 .owner-badge.agent { color: var(--agent); background: var(--agent-soft); border-color: var(--agent); }
 .owner-badge.user { color: var(--human); background: var(--human-soft); border-color: var(--human); }
-.wheel-btn { margin-left: auto; font-size: var(--fs-sm); padding: 5px 12px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.browser-action-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font: inherit; font-size: var(--fs-sm); white-space: nowrap; }
+.browser-action-btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-3); color: var(--text); }
+.browser-action-btn:disabled { opacity: .4; cursor: not-allowed; }
+.browser-action-btn.primary { border-color: var(--agent); background: var(--agent-soft); color: var(--agent); }
+.browser-action-btn.icon-only { width: 30px; padding: 0; }
+.browser-action-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.owner-badge .browser-action-icon { width: 14px; height: 14px; }
+.browser-bar-message { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.snapshot-capture { display: inline-flex; align-items: center; gap: 6px; }
+.snapshot-capture input { width: 150px; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+.snapshot-capture input:focus { border-color: var(--agent); outline: none; }
+.mobile-keyboard-btn { display: none; }
+.wheel-btn { font-size: var(--fs-sm); padding: 5px 12px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); cursor: pointer; }
 .wheel-btn:hover:not(:disabled) { border-color: var(--human); color: var(--human); }
 .wheel-btn:disabled { opacity: .4; cursor: not-allowed; }
 .wheel-btn.hot { background: var(--human-soft); border-color: var(--human); color: var(--human); margin-left: 0; }
-/* Groups with the wheel button on the right; its auto-margin eats the free
-   space so the wheel button (also auto) sits flush beside it. */
-.kbd-btn { margin-left: auto; }
-.wheel-btn kbd { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+.browser-action-btn kbd { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+@media (hover: none) and (pointer: coarse) { .mobile-keyboard-btn { display: inline-flex; } }
+@media (max-width: 980px) {
+  .browser-bar { flex-wrap: wrap; }
+  .browser-actions { margin-left: 0; }
+  .browser-bar-message, .browser-seed-group label { display: none; }
+}
 .takeover-banner { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--warn-soft); border-bottom: 1px solid var(--warn); color: var(--text); font-size: var(--fs-sm); }
 .takeover-banner b { color: var(--warn); }
 .browser-canvas-wrap { flex: 1; min-height: 0; position: relative; outline: none; cursor: default; }
