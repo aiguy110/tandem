@@ -158,6 +158,7 @@ function Row({
         merged: `merged into ${target ?? 'target'}`,
         synced: 'clean and synchronized',
         target_missing: 'integration target is missing',
+        unknown: 'git status unavailable',
       }[ws.gitState]
     : undefined;
   return (

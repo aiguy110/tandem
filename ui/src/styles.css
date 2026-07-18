@@ -178,6 +178,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .git-state.ahead, .git-state.behind, .git-state.diverged, .git-state.target_missing { background: var(--warn); }
 .git-state.merged { background: var(--human); }
 .git-state.synced { background: var(--ok); }
+.git-state.unknown { background: var(--text-faint); }
 .status-chip { font-size: var(--fs-xs); padding: 0 6px; border-radius: 4px; text-transform: capitalize; }
 .status-chip.idle { color: var(--ok); background: var(--ok-soft); }
 .status-chip.working { color: var(--working); background: var(--working-soft); }

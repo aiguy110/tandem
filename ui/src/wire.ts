@@ -125,7 +125,7 @@ export interface AgentSummary {
     repoPath: string;
     branch: string;
     cwd: string;
-    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing';
+    gitState?: 'dirty' | 'ahead' | 'behind' | 'diverged' | 'merged' | 'synced' | 'target_missing' | 'unknown';
     ahead?: number;
     behind?: number;
     targetRef?: string;
