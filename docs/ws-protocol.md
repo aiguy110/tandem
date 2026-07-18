@@ -182,6 +182,7 @@ type ClientMsg =
   | { t: 'close_agent'; agentId: string; force?: boolean }             // teardown: keep branch, drop checkout
   | { t: 'merge_back';  agentId: string; mode: 'merge'|'pr' }          // error ack for now (no diff/merge UI yet)
   | { t: 'browser_control'; agentId: string; action: 'grab'|'release' } // Phase 5: flips the control-owner token
+  | { t: 'restart_browser'; agentId: string; snapshotId?: string } // starts/replaces the browser; omitted snapshotId means fresh state
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire }   // Phase 5: user mouse/key/wheel (owner=user only)
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below

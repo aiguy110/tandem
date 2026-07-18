@@ -283,6 +283,7 @@ export type ClientMsg =
   | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
+  | { t: 'restart_browser'; agentId: string; snapshotId?: string; corrId?: string }
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; corrId?: string }
   | { t: 'list_git_refs'; repo: string; corrId?: string }

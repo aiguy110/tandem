@@ -19,6 +19,7 @@ type fakeDriver struct {
 	cdp        string
 	provisions map[string]int
 	teardowns  map[string]int
+	seeds      map[string]string
 }
 
 func (d *fakeDriver) Kind() string   { return "fake" }
@@ -39,6 +40,11 @@ func (d *fakeDriver) IsProvisioned(id string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.provisions[id] > d.teardowns[id]
+}
+func (d *fakeDriver) SeedProfile(id, ref string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.seeds[id] = ref
 }
 func (d *fakeDriver) count(id string) int { d.mu.Lock(); defer d.mu.Unlock(); return d.provisions[id] }
 
@@ -328,6 +334,41 @@ func TestBrokerDetachKeepsSessionTeardownReleases(t *testing.T) {
 	}
 	if d.teardowns["keep/me"] != 1 {
 		t.Fatalf("Teardown did not release session: teardowns=%d", d.teardowns["keep/me"])
+	}
+}
+
+func TestBrokerRestartPreservesListenersAndAppliesSeed(t *testing.T) {
+	raw := newRawCDP(t)
+	defer raw.close()
+	d := &fakeDriver{
+		cdp: raw.server.URL, provisions: map[string]int{},
+		teardowns: map[string]int{}, seeds: map[string]string{},
+	}
+	b := NewBroker(d, BrokerConfig{})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop(context.Background())
+
+	states := make(chan BrowserState, 4)
+	off := b.OnState("restart/me", func(state BrowserState) { states <- state })
+	defer off()
+	if err := b.EnsureProvisioned(context.Background(), "restart/me"); err != nil {
+		t.Fatal(err)
+	}
+	<-states // initial active state
+	if err := b.Restart(context.Background(), "restart/me", "fake", "snapshot-ref"); err != nil {
+		t.Fatal(err)
+	}
+	inactive, active := <-states, <-states
+	if inactive.Active || !active.Active {
+		t.Fatalf("restart states = inactive:%+v active:%+v", inactive, active)
+	}
+	if d.teardowns["restart/me"] != 1 || d.count("restart/me") != 2 {
+		t.Fatalf("teardowns=%d provisions=%d", d.teardowns["restart/me"], d.count("restart/me"))
+	}
+	if d.seeds["restart/me"] != "snapshot-ref" {
+		t.Fatalf("seed = %q", d.seeds["restart/me"])
 	}
 }
 

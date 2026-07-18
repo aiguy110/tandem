@@ -654,6 +654,54 @@ func (b *Broker) Teardown(ctx context.Context, id string) error {
 	b.detach(id)
 	return b.driver.Teardown(ctx, id)
 }
+
+// Restart replaces an agent's underlying browser session while keeping the
+// broker record (and therefore UI state/frame listeners) intact. ref is an
+// optional driver-specific snapshot reference; an empty ref starts fresh.
+func (b *Broker) Restart(ctx context.Context, id, kind, ref string) error {
+	a := b.record(id)
+	a.mu.Lock()
+	if a.provisioning != nil {
+		a.mu.Unlock()
+		return errors.New("browser is still starting")
+	}
+	shared := a.shared
+	a.shared = nil
+	links := make([]*proxyLink, 0, len(a.links))
+	for link := range a.links {
+		links = append(links, link)
+	}
+	a.links = make(map[*proxyLink]struct{})
+	a.wsRoutes = make(map[string]string)
+	a.provisioned = false
+	a.cdpURL = ""
+	a.browserWS = ""
+	a.owner = ControlAgent
+	a.mu.Unlock()
+
+	if shared != nil {
+		_ = shared.Close()
+	}
+	for _, link := range links {
+		_ = link.agent.Close()
+		_ = link.upstream.Close()
+	}
+	b.emitState(id)
+	if err := b.driver.Teardown(ctx, id); err != nil {
+		return err
+	}
+	if seeder, ok := b.driver.(snapshotSeeder); ok {
+		// Always call SeedProfile, including for fresh state, so a prior spawn
+		// seed or Steel profile cannot leak into the replacement browser.
+		if kind == "" || kind == b.driver.Kind() {
+			seeder.SeedProfile(id, ref)
+		} else {
+			seeder.SeedProfile(id, "")
+		}
+	}
+	return b.EnsureProvisioned(ctx, id)
+}
+
 func (b *Broker) Stop(ctx context.Context) error {
 	b.mu.Lock()
 	ids := make([]string, 0, len(b.agents))

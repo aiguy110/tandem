@@ -39,6 +39,7 @@ type Backend interface {
 	CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error)
 	ListSnapshots() ([]store.BrowserSnapshot, error)
 	DeleteSnapshot(string) error
+	RestartBrowser(context.Context, string, string) error
 	ListProfiles(string) ([]store.Profile, []string, error)
 	RenameProfile(string, string) error
 	DeleteProfile(string) error
@@ -142,6 +143,7 @@ type clientMessage struct {
 	Event          browser.BrowserInputEvent  `json:"event"`
 	Name           string                     `json:"name"`
 	ID             string                     `json:"id"`
+	SnapshotID     string                     `json:"snapshotId"`
 	Project        string                     `json:"project"`
 }
 
@@ -569,6 +571,15 @@ func (c *connection) handle(m clientMessage) {
 			}
 		default:
 			c.commandError(m, errors.New("invalid browser control action"))
+			return
+		}
+		c.commandAck(m, m.AgentID)
+	case "restart_browser":
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		if err := c.server.opts.Registry.RestartBrowser(context.Background(), m.AgentID, m.SnapshotID); err != nil {
+			c.commandError(m, err)
 			return
 		}
 		c.commandAck(m, m.AgentID)
