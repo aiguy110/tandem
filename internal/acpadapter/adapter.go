@@ -228,9 +228,10 @@ func (a *Adapter) load(ctx context.Context, sessionID string) error {
 		Modes         json.RawMessage   `json:"modes"`
 		ConfigOptions []json.RawMessage `json:"configOptions"`
 	}
-	// MCP declarations are registered only when creating a session. On resume,
-	// the ACP agent restores the MCP subprocess lifecycle it already owns.
-	if err := a.tr.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": a.cwd(), "mcpServers": []MCPServer{}}, &raw); err != nil {
+	// Re-declare MCP servers on resume. ACP runtimes may recreate their backing
+	// agent process during session/load and cannot reliably recover subprocess
+	// configuration that was supplied only to the original session/new call.
+	if err := a.tr.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers}, &raw); err != nil {
 		return fmt.Errorf("acp session/load: %w", err)
 	}
 	a.mu.Lock()
