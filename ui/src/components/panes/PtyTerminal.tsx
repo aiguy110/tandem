@@ -17,6 +17,14 @@ interface Props {
 }
 
 type MobileModifier = 'ctrl' | 'alt';
+type VirtualKeyboardLike = EventTarget & {
+  boundingRect: DOMRectReadOnly;
+  overlaysContent: boolean;
+};
+
+function virtualKeyboard(): VirtualKeyboardLike | undefined {
+  return (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike }).virtualKeyboard;
+}
 
 const MOBILE_KEYS = [
   { label: 'Esc', data: '\x1b' },
@@ -58,6 +66,10 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   const focusKeyboard = () => {
     pendingBackspaceInputs.current = 0;
     resetKeyboard();
+    // Opt into explicit geometry before focus. This is required for overlay
+    // and split keyboards that do not resize visualViewport.
+    const keyboard = virtualKeyboard();
+    if (keyboard) keyboard.overlaysContent = true;
     kbdRef.current?.focus({ preventScroll: true });
   };
   const send = (data: string) => cbs.current.onData(data);
@@ -131,30 +143,37 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     sendWithModifiers(data);
   };
 
-  // Android Chrome may overlay the keyboard without resizing the layout
-  // viewport. visualViewport still reports the unobscured region, so lift the
-  // bar (and the terminal's fitted bottom edge) by the covered distance.
+  // Prefer Chrome's Virtual Keyboard geometry for overlay/split keyboards.
+  // Fall back to visualViewport for browsers that resize only the visual
+  // viewport. Lift both the bar and terminal fit boundary above whichever
+  // reports the higher obstruction.
   useEffect(() => {
     if (!keyboardOpen) {
       setKeyboardInset(0);
       return;
     }
     const viewport = window.visualViewport;
-    if (!viewport) return;
+    const keyboard = virtualKeyboard();
     const updateInset = () => {
       const terminalBottom = mountRef.current?.getBoundingClientRect().bottom ?? window.innerHeight;
-      const visibleBottom = viewport.offsetTop + viewport.height;
+      const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      const keyboardRect = keyboard?.boundingRect;
+      const keyboardTop = keyboardRect && keyboardRect.height > 0 ? keyboardRect.top : window.innerHeight;
+      const visibleBottom = Math.min(viewportBottom, keyboardTop);
       const covered = terminalBottom - visibleBottom;
       setKeyboardInset(Math.max(0, Math.round(covered)));
     };
     updateInset();
-    viewport.addEventListener('resize', updateInset);
-    viewport.addEventListener('scroll', updateInset);
+    viewport?.addEventListener('resize', updateInset);
+    viewport?.addEventListener('scroll', updateInset);
+    keyboard?.addEventListener('geometrychange', updateInset);
     window.addEventListener('resize', updateInset);
     return () => {
-      viewport.removeEventListener('resize', updateInset);
-      viewport.removeEventListener('scroll', updateInset);
+      viewport?.removeEventListener('resize', updateInset);
+      viewport?.removeEventListener('scroll', updateInset);
+      keyboard?.removeEventListener('geometrychange', updateInset);
       window.removeEventListener('resize', updateInset);
+      if (keyboard) keyboard.overlaysContent = false;
     };
   }, [keyboardOpen]);
 
