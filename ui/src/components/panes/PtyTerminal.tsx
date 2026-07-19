@@ -32,9 +32,11 @@ const MOBILE_KEYS = [
 ] as const;
 
 export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData }: Props) {
+  const mountRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<HTMLDivElement>(null);
   const kbdRef = useRef<HTMLTextAreaElement>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const [modifiers, setModifiers] = useState<Set<MobileModifier>>(() => new Set());
   // Keep the latest callbacks without re-running the mount effect.
   const cbs = useRef({ subscribe, onData, onResize, onEngine, onFirstData });
@@ -129,6 +131,33 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     sendWithModifiers(data);
   };
 
+  // Android Chrome may overlay the keyboard without resizing the layout
+  // viewport. visualViewport still reports the unobscured region, so lift the
+  // bar (and the terminal's fitted bottom edge) by the covered distance.
+  useEffect(() => {
+    if (!keyboardOpen) {
+      setKeyboardInset(0);
+      return;
+    }
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const updateInset = () => {
+      const terminalBottom = mountRef.current?.getBoundingClientRect().bottom ?? window.innerHeight;
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      const covered = terminalBottom - visibleBottom;
+      setKeyboardInset(Math.max(0, Math.round(covered)));
+    };
+    updateInset();
+    viewport.addEventListener('resize', updateInset);
+    viewport.addEventListener('scroll', updateInset);
+    window.addEventListener('resize', updateInset);
+    return () => {
+      viewport.removeEventListener('resize', updateInset);
+      viewport.removeEventListener('scroll', updateInset);
+      window.removeEventListener('resize', updateInset);
+    };
+  }, [keyboardOpen]);
+
   useEffect(() => {
     let renderer: TerminalRenderer | null = null;
     let unsub: (() => void) | null = null;
@@ -190,7 +219,11 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   }, []);
 
   return (
-    <div className={`term-mount${keyboardOpen ? ' mobile-kbd-open' : ''}`}>
+    <div
+      ref={mountRef}
+      className={`term-mount${keyboardOpen ? ' mobile-kbd-open' : ''}`}
+      style={{ '--term-keyboard-inset': `${keyboardInset}px` } as React.CSSProperties}
+    >
       {/* ghostty-web makes its mount contenteditable and cancels beforeinput.
           Keep the mobile textarea outside that subtree or phone IME edits are
           canceled before onInput can forward them to the PTY. */}
