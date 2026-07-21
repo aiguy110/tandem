@@ -172,7 +172,7 @@ export function TranscriptPane() {
         </div>
         {taskList && <TaskList item={taskList} />}
       </div>
-      <PromptBar agentId={agent.id} working={agent.status === 'working'} />
+      <PromptBar agentId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
     </div>
   );
@@ -553,12 +553,16 @@ type DraftAttachment = {
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
   const interrupt = useStore((s) => s.interrupt);
+  const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
+  const clearPromptQueue = useStore((s) => s.clearPromptQueue);
+  const interruptAndClearQueue = useStore((s) => s.interruptAndClearQueue);
   // Draft lives in the store (keyed by agent) so it survives the remounts that a
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[agentId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
   const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
+  const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const aborts = useRef(new Map<string, AbortController>());
@@ -570,6 +574,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
+  const [queuedFlash, setQueuedFlash] = useState(false);
 
   useEffect(() => {
     attachmentRef.current = attachments;
@@ -725,6 +730,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       const result = await prompt(agentId, t);
       setSending(false);
       if (result.error) setAttachmentError(result.error);
+      if (result.disposition === 'queued') {
+        setQueuedFlash(true);
+        window.setTimeout(() => setQueuedFlash(false), 1200);
+      }
       return;
     }
     const blocks: PromptBlock[] = [];
@@ -740,6 +749,18 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     for (const attachment of attachments) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments([]);
     setAttachmentError(null);
+    if (result.disposition === 'queued') {
+      setQueuedFlash(true);
+      window.setTimeout(() => setQueuedFlash(false), 1200);
+    }
+  };
+
+  const canSubmit = !!text.trim() || attachments.length > 0;
+  const uploadsPending = attachments.some((item) => item.status === 'uploading');
+  const previewQueuedPrompt = (blocks: PromptBlock[]) => {
+    const message = blocks.filter((block): block is Extract<PromptBlock, { type: 'text' }> => block.type === 'text').map((block) => block.text).join(' ').trim();
+    const images = blocks.filter((block) => block.type === 'image').length;
+    return message || `${images} image${images === 1 ? '' : 's'}`;
   };
 
   return (
@@ -789,6 +810,27 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         </div>
       )}
       {attachmentError && <div className="prompt-attachment-error">{attachmentError}</div>}
+      {queuedPrompts.length > 0 && (
+        <div className="prompt-queue">
+          <div className="prompt-queue-header">
+            <span>Next up ({queuedPrompts.length})</span>
+            <span className="prompt-queue-actions">
+              {working && <button type="button" onClick={() => void interruptAndClearQueue(agentId)}>Stop &amp; clear</button>}
+              <button type="button" onClick={() => void clearPromptQueue(agentId)}>Clear queue</button>
+            </span>
+          </div>
+          {queuedPrompts.map((queued, index) => {
+            const preview = previewQueuedPrompt(queued.blocks);
+            return (
+              <div className="prompt-queue-row" key={queued.id}>
+                <span className="prompt-queue-position">{index + 1}.</span>
+                <span className="prompt-queue-preview" title={preview}>{preview}</span>
+                <button type="button" onClick={() => void removeQueuedPrompt(agentId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="prompt-main">
         <input
           ref={fileRef}
@@ -805,7 +847,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         <textarea
           ref={textRef}
           data-prompt-agent={agentId}
-          placeholder={`Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
+          placeholder={working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
           value={text}
           onPaste={(e) => {
             const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
@@ -863,13 +905,17 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             <path d="M8 3v10M3 8h10" />
           </svg>
         </button>
-        {working ? (
-          <button className="btn" onClick={() => interrupt(agentId)} title="Interrupt (Esc)">
-            ◼ Esc
-          </button>
-        ) : (
-          <button className="btn primary" onClick={() => void send()} disabled={sending || attachments.some((item) => item.status === 'uploading')}>
-            {sending ? 'Sending…' : 'Send'}
+        <button
+          className="btn primary"
+          onClick={() => void send()}
+          disabled={sending || uploadsPending || !canSubmit}
+          title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+        >
+          {sending ? (working ? 'Queueing…' : 'Sending…') : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+        </button>
+        {working && (
+          <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
+            ■
           </button>
         )}
       </div>

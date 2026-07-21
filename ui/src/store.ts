@@ -30,6 +30,7 @@ import type {
   SpawnSpec,
   SpawnOptions,
   PromptBlock,
+  QueuedPrompt,
   WireEvent,
   WorkspaceDiff,
 } from './wire';
@@ -92,6 +93,8 @@ export interface AgentView {
   commands: SlashCommand[];
   // null until the adapter reports ACP prompt capabilities.
   imagePromptSupport: boolean | null;
+  // Daemon-owned FIFO entries waiting behind the active turn.
+  queuedPrompts: QueuedPrompt[];
   controlMode: 'transcript' | 'switching' | 'terminal';
   // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
   adapter: 'acp' | 'pty';
@@ -103,6 +106,10 @@ export type ModalKind = 'none' | 'spawn' | 'command' | 'resume';
 export interface AckResult {
   agentId?: string;
   error?: string;
+  promptId?: string;
+  disposition?: 'started' | 'queued';
+  position?: number;
+  cleared?: number;
 }
 
 interface StoreState {
@@ -164,6 +171,9 @@ interface StoreState {
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
+  clearPromptQueue: (agentId: string) => Promise<AckResult>;
+  interruptAndClearQueue: (agentId: string) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
   respond: (agentId: string, reqId: string, optionId: string) => void;
@@ -367,7 +377,14 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'ack': {
         if (msg.corrId && pendingAcks.has(msg.corrId)) {
-          pendingAcks.get(msg.corrId)!({ agentId: msg.agentId, error: msg.error });
+          pendingAcks.get(msg.corrId)!({
+            agentId: msg.agentId,
+            error: msg.error,
+            promptId: msg.promptId,
+            disposition: msg.disposition,
+            position: msg.position,
+            cleared: msg.cleared,
+          });
           pendingAcks.delete(msg.corrId);
         }
         return;
@@ -431,6 +448,7 @@ export const useStore = create<StoreState>((set, get) => {
             status: msg.status,
             controlMode: msg.controlMode,
             pendingApprovals: msg.pendingApprovals,
+            queuedPrompts: msg.queuedPrompts,
             events: transcript,
             lastSeq: msg.seq,
             sessionConfig:
@@ -496,6 +514,13 @@ export const useStore = create<StoreState>((set, get) => {
         });
         return;
       }
+      case 'prompt_queue':
+        set((st) => {
+          const agent = st.agents[msg.agentId];
+          if (!agent) return st;
+          return { agents: { ...st.agents, [msg.agentId]: { ...agent, queuedPrompts: msg.queuedPrompts } } };
+        });
+        return;
     }
   };
 
@@ -707,6 +732,24 @@ export const useStore = create<StoreState>((set, get) => {
           ? { t: 'prompt', agentId, text: input, corrId }
           : { t: 'prompt', agentId, blocks: input, corrId });
       }),
+    removeQueuedPrompt: (agentId, promptId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'remove_queued_prompt', agentId, promptId, corrId });
+      }),
+    clearPromptQueue: (agentId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'clear_prompt_queue', agentId, corrId });
+      }),
+    interruptAndClearQueue: (agentId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'interrupt_and_clear_queue', agentId, corrId });
+      }),
     setDraft: (agentId, text) => set((st) => ({ drafts: { ...st.drafts, [agentId]: text } })),
     interrupt: (agentId) => client.send({ t: 'interrupt', agentId }),
     respond: (agentId, reqId, optionId) => {
@@ -807,6 +850,7 @@ function shell(id: string): AgentView {
     usage: readStoredUsage(id),
     commands: [],
     imagePromptSupport: null,
+    queuedPrompts: [],
     controlMode: 'transcript',
     adapter: 'acp',
     canHandoff: false,
@@ -841,6 +885,12 @@ function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now(
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
   if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: receivedAt };
   if (event.kind === 'control_state') v.controlMode = event.mode;
+  if (event.kind === 'prompt_queued' && !v.queuedPrompts.some((prompt) => prompt.id === event.promptId)) {
+    v.queuedPrompts = [...v.queuedPrompts, { id: event.promptId, blocks: event.blocks, queuedAt: event.queuedAt }];
+  }
+  if (event.kind === 'prompt_started' || event.kind === 'prompt_removed') {
+    v.queuedPrompts = v.queuedPrompts.filter((prompt) => prompt.id !== event.promptId);
+  }
 }
 
 // All pending browser takeovers across agents, for the attention rail.

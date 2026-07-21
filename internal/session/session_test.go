@@ -19,6 +19,7 @@ type fakeAdapter struct {
 	gate                  chan struct{}
 	mu                    sync.Mutex
 	inflight, maxInflight int
+	prompts               []string
 	close                 sync.Once
 	image                 bool
 	validateCalls         int
@@ -39,9 +40,14 @@ func (f *fakeAdapter) ValidatePrompt([]agentadapter.PromptBlock) error {
 func (f *fakeAdapter) validationCount() int          { f.mu.Lock(); defer f.mu.Unlock(); return f.validateCalls }
 func (f *fakeAdapter) Events() <-chan eventlog.Event { return f.events }
 func (f *fakeAdapter) Done() <-chan struct{}         { return f.done }
-func (f *fakeAdapter) Prompt(ctx context.Context, _ []agentadapter.PromptBlock) (string, error) {
+func (f *fakeAdapter) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
 	f.mu.Lock()
 	f.inflight++
+	for _, block := range blocks {
+		if block.Type == "text" {
+			f.prompts = append(f.prompts, block.Text)
+		}
+	}
 	if f.inflight > f.maxInflight {
 		f.maxInflight = f.inflight
 	}
@@ -110,11 +116,63 @@ func TestPromptSerializationAndIndependentDurableEvents(t *testing.T) {
 		t.Fatalf("adapter saw %d concurrent prompts", a.maxInflight)
 	}
 	history, err := s.Log.FullHistory()
-	if err != nil || len(history) != 2 {
-		t.Fatalf("history=%d err=%v", len(history), err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if history[0].Seq != 1 || history[1].Seq != 2 {
-		t.Fatalf("sequences: %+v", history)
+	userMessages := 0
+	for _, event := range history {
+		if event.Event.Kind == "user_message" {
+			userMessages++
+		}
+	}
+	if userMessages != 2 {
+		t.Fatalf("user messages=%d history=%+v", userMessages, history)
+	}
+}
+
+func TestExplicitPromptQueueIsFIFOAndRemovable(t *testing.T) {
+	s, a, _ := testSession(t)
+	first, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "first"}})
+	if err != nil || first.Disposition != "started" || first.Position != 0 {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for !s.ActiveTurn() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	second, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "second"}})
+	if err != nil || second.Disposition != "queued" || second.Position != 1 {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	third, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "third"}})
+	if err != nil || third.Disposition != "queued" || third.Position != 2 {
+		t.Fatalf("third=%+v err=%v", third, err)
+	}
+	if queued := s.QueuedPrompts(); len(queued) != 2 || queued[0].ID != second.ID || queued[1].ID != third.ID {
+		t.Fatalf("queue=%+v", queued)
+	}
+	if !s.RemoveQueuedPrompt(second.ID) {
+		t.Fatal("second prompt was not removed")
+	}
+	a.gate <- struct{}{}
+	deadline = time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		startedThird := len(a.prompts) == 2
+		a.mu.Unlock()
+		if startedThird || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.gate <- struct{}{}
+	if result := <-third.done; result.err != nil {
+		t.Fatal(result.err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.prompts) != 2 || a.prompts[0] != "first" || a.prompts[1] != "third" {
+		t.Fatalf("prompt order=%v", a.prompts)
 	}
 }
 

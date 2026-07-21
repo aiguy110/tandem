@@ -125,6 +125,7 @@ type clientMessage struct {
 	Cols           int                        `json:"cols"`
 	Rows           int                        `json:"rows"`
 	ReqID          string                     `json:"reqId"`
+	PromptID       string                     `json:"promptId"`
 	OptionID       string                     `json:"optionId"`
 	ModeID         string                     `json:"modeId"`
 	ConfigID       string                     `json:"configId"`
@@ -379,12 +380,40 @@ func (c *connection) handle(m clientMessage) {
 		if blocks == nil {
 			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
 		}
-		if err := sess.ValidatePrompt(blocks); err != nil {
+		receipt, err := sess.EnqueuePrompt(context.Background(), blocks)
+		if err != nil {
 			c.commandError(m, err)
 			return
 		}
-		go func() { _, _ = sess.Prompt(context.Background(), blocks) }()
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+	case "remove_queued_prompt":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if m.PromptID == "" || !sess.RemoveQueuedPrompt(m.PromptID) {
+			c.commandError(m, errors.New("queued prompt not found"))
+			return
+		}
 		c.commandAck(m, sess.ID)
+	case "clear_prompt_queue":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		count := sess.ClearPromptQueue()
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "cleared": count}, m.CorrID))
+	case "interrupt_and_clear_queue":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		count := sess.ClearPromptQueue()
+		if err := sess.Interrupt(); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "cleared": count}, m.CorrID))
 	case "input":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -780,13 +809,28 @@ func (c *connection) subscribe(m clientMessage) {
 				transcript = append(transcript, map[string]any{"seq": le.Seq, "event": wireEvent(le.Event)})
 			}
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals()})
+		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts()})
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {
 				c.send(eventMessage(sess.ID, le))
 			}
 		}
+	}
+	// Queue events are durable for live replay, but waiting goroutines are not
+	// resumable across a daemon restart. When queue history is in this replay,
+	// end it with the daemon's authoritative current queue before releasing
+	// buffered events.
+	queuedPrompts := sess.QueuedPrompts()
+	queueRelevant := len(queuedPrompts) > 0
+	for _, le := range replay.Events {
+		if le.Event.Kind == "prompt_queued" || le.Event.Kind == "prompt_started" || le.Event.Kind == "prompt_removed" {
+			queueRelevant = true
+			break
+		}
+	}
+	if queueRelevant {
+		c.send(map[string]any{"t": "prompt_queue", "agentId": sess.ID, "queuedPrompts": queuedPrompts})
 	}
 	sub.mu.Lock()
 	pending := append([]eventlog.LoggedEvent{}, sub.pending...)

@@ -3,6 +3,7 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,13 +36,17 @@ type Session struct {
 	approvals    map[string]agentadapter.Approval
 	listeners    map[uint64]func(eventlog.LoggedEvent)
 	nextListener uint64
-	turnMu       sync.Mutex
 	active       int
 	controlMode  string
 	adapterEpoch uint64
 	disposeOnce  sync.Once
 	disposeErr   error
 	done         chan struct{}
+
+	promptMu      sync.Mutex
+	promptQueue   []*queuedPrompt
+	promptCurrent *queuedPrompt
+	promptRunning bool
 
 	// User escape-hatch shell (docs/terminal.md: the Terminal tab). Independent
 	// of the agent adapter, so it survives ACP↔CLI control swaps and runs
@@ -51,6 +56,34 @@ type Session struct {
 	shellCancel  context.CancelFunc
 	shellDone    chan struct{}
 	shellRunning bool
+}
+
+// QueuedPrompt is a prompt waiting for the active ACP turn to finish. The
+// currently-running prompt is deliberately excluded from this view.
+type QueuedPrompt struct {
+	ID       string                     `json:"id"`
+	Blocks   []agentadapter.PromptBlock `json:"blocks"`
+	QueuedAt time.Time                  `json:"queuedAt"`
+}
+
+type queuedPrompt struct {
+	QueuedPrompt
+	ctx  context.Context
+	done chan promptResult
+}
+
+type promptResult struct {
+	stopReason string
+	err        error
+}
+
+// PromptReceipt describes whether an accepted prompt started immediately or
+// was placed behind an active turn.
+type PromptReceipt struct {
+	ID          string
+	Disposition string
+	Position    int
+	done        <-chan promptResult
 }
 
 func New(id, name string, spec agentadapter.Spec, adapter agentadapter.Adapter, log *eventlog.Log) (*Session, error) {
@@ -147,6 +180,16 @@ func (s *Session) Capabilities() agentadapter.Capabilities {
 }
 func (s *Session) ControlMode() string { s.mu.RLock(); defer s.mu.RUnlock(); return s.controlMode }
 func (s *Session) ActiveTurn() bool    { s.mu.RLock(); defer s.mu.RUnlock(); return s.active > 0 }
+func (s *Session) QueuedPrompts() []QueuedPrompt {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	out := make([]QueuedPrompt, len(s.promptQueue))
+	for i, prompt := range s.promptQueue {
+		out[i] = prompt.QueuedPrompt
+		out[i].Blocks = append([]agentadapter.PromptBlock(nil), prompt.Blocks...)
+	}
+	return out
+}
 func (s *Session) PendingApprovals() []agentadapter.Approval {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -189,16 +232,78 @@ func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 }
 
 func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
-	if s.ControlMode() != "transcript" {
-		return "", errors.New("agent session is controlled by the terminal")
-	}
-	if err := s.ValidatePrompt(blocks); err != nil {
+	receipt, err := s.EnqueuePrompt(ctx, blocks)
+	if err != nil {
 		return "", err
 	}
-	// A turn holds this gate through completion: concurrent callers are ordered,
-	// never rejected or allowed to overlap an adapter's session/prompt call.
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
+	select {
+	case result := <-receipt.done:
+		return result.stopReason, result.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// EnqueuePrompt accepts a prompt immediately and executes accepted prompts in
+// FIFO order. ACP still sees exactly one session/prompt request at a time.
+func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (PromptReceipt, error) {
+	if s.ControlMode() != "transcript" {
+		return PromptReceipt{}, errors.New("agent session is controlled by the terminal")
+	}
+	if err := s.ValidatePrompt(blocks); err != nil {
+		return PromptReceipt{}, err
+	}
+	prompt := &queuedPrompt{
+		QueuedPrompt: QueuedPrompt{ID: newPromptID(), Blocks: append([]agentadapter.PromptBlock(nil), blocks...), QueuedAt: time.Now().UTC()},
+		ctx:          ctx,
+		done:         make(chan promptResult, 1),
+	}
+	s.promptMu.Lock()
+	disposition := "queued"
+	position := len(s.promptQueue) + 1
+	startRunner := !s.promptRunning
+	if startRunner {
+		disposition = "started"
+		position = 0
+		s.promptRunning = true
+		s.promptCurrent = prompt
+	} else {
+		s.promptQueue = append(s.promptQueue, prompt)
+	}
+	if disposition == "queued" {
+		s.emitPromptQueueEvent("prompt_queued", prompt.QueuedPrompt, position)
+	}
+	s.promptMu.Unlock()
+	if startRunner {
+		go s.runPromptQueue()
+	}
+	return PromptReceipt{ID: prompt.ID, Disposition: disposition, Position: position, done: prompt.done}, nil
+}
+
+func (s *Session) runPromptQueue() {
+	for {
+		s.promptMu.Lock()
+		prompt := s.promptCurrent
+		s.promptMu.Unlock()
+		s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
+		stopReason, err := s.executePrompt(prompt.ctx, prompt.Blocks)
+		prompt.done <- promptResult{stopReason: stopReason, err: err}
+		close(prompt.done)
+
+		s.promptMu.Lock()
+		if len(s.promptQueue) == 0 {
+			s.promptCurrent = nil
+			s.promptRunning = false
+			s.promptMu.Unlock()
+			return
+		}
+		s.promptCurrent = s.promptQueue[0]
+		s.promptQueue = s.promptQueue[1:]
+		s.promptMu.Unlock()
+	}
+}
+
+func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
 	s.mu.Lock()
 	s.active++
 	s.mu.Unlock()
@@ -212,6 +317,50 @@ func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock)
 	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
 	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
 	return s.adapter.Prompt(ctx, blocks)
+}
+
+// RemoveQueuedPrompt removes a prompt that has not started yet.
+func (s *Session) RemoveQueuedPrompt(id string) bool {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	for i, prompt := range s.promptQueue {
+		if prompt.ID != id {
+			continue
+		}
+		s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
+		prompt.done <- promptResult{err: errors.New("prompt removed from queue")}
+		close(prompt.done)
+		s.emitPromptQueueEvent("prompt_removed", prompt.QueuedPrompt, 0)
+		return true
+	}
+	return false
+}
+
+// ClearPromptQueue removes every prompt that has not started yet.
+func (s *Session) ClearPromptQueue() int {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	prompts := s.promptQueue
+	s.promptQueue = nil
+	for _, prompt := range prompts {
+		prompt.done <- promptResult{err: errors.New("prompt queue cleared")}
+		close(prompt.done)
+		s.emitPromptQueueEvent("prompt_removed", prompt.QueuedPrompt, 0)
+	}
+	return len(prompts)
+}
+
+func (s *Session) emitPromptQueueEvent(kind string, prompt QueuedPrompt, position int) {
+	payload, _ := json.Marshal(map[string]any{"kind": kind, "promptId": prompt.ID, "blocks": prompt.Blocks, "queuedAt": prompt.QueuedAt, "position": position})
+	s.emit(eventlog.Event{Kind: kind, Payload: payload})
+}
+
+func newPromptID() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("prompt-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("prompt-%x", raw[:])
 }
 func (s *Session) SendInput(b []byte) error       { return s.adapter.SendInput(b) }
 func (s *Session) Resize(cols, rows uint16) error { return s.adapter.Resize(cols, rows) }
@@ -274,6 +423,9 @@ func (s *Session) SetPersistedSessionConfig(config json.RawMessage) {
 // InterruptAndWait requests ACP cancellation and gives the active prompt a
 // bounded window to resolve before its process is replaced during handoff.
 func (s *Session) InterruptAndWait(ctx context.Context) error {
+	// A terminal handoff cannot safely carry structured prompts across the ACP
+	// adapter swap. Cancel the current turn and reject anything still waiting.
+	s.ClearPromptQueue()
 	if err := s.Interrupt(); err != nil {
 		return err
 	}
@@ -336,6 +488,7 @@ func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
 func (s *Session) Dispose(ctx context.Context) error {
 	s.disposeOnce.Do(func() {
 		s.CloseUserShell()
+		s.ClearPromptQueue()
 		s.mu.Lock()
 		s.adapterEpoch++
 		a := s.adapter
