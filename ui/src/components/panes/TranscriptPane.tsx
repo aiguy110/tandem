@@ -915,7 +915,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         </button>
         {working && (
           <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
-            ■
+            <span className="stop-btn-icon" aria-hidden="true" />
           </button>
         )}
       </div>
