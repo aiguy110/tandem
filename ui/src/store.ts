@@ -82,6 +82,9 @@ export interface AgentView {
   // holds the wheel, plus any pending agent-initiated takeover requests.
   browserActive: boolean;
   browserOwner: 'agent' | 'user';
+  // True while the user is satisfying an agent-requested takeover. This keeps
+  // the hand-back action visually distinct from an unsolicited manual grab.
+  browserTakeoverHeld: boolean;
   takeovers: Takeover[];
   // Permission-mode + config-option (incl. model selector) state, from the last
   // session_config event. Null until the ACP agent reports it (or for pty agents,
@@ -374,8 +377,15 @@ export const useStore = create<StoreState>((set, get) => {
           // a takeover the user has not acted on. The daemon keeps the tool call
           // pending until release, when takeover_resolved clears it durably.
           const userJustGrabbed = msg.controlOwner === 'user' && a.browserOwner !== 'user';
-          const takeovers = userJustGrabbed ? [] : a.takeovers;
-          return { agents: { ...st.agents, [msg.agentId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, takeovers } } };
+          const takeoverGrab = userJustGrabbed && a.takeovers.length > 0;
+          const takeovers = takeoverGrab ? [] : a.takeovers;
+          const browserTakeoverHeld = msg.controlOwner === 'user' && (a.browserTakeoverHeld || takeoverGrab);
+          return {
+            agents: {
+              ...st.agents,
+              [msg.agentId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, browserTakeoverHeld, takeovers },
+            },
+          };
         });
         return;
       }
@@ -464,7 +474,9 @@ export const useStore = create<StoreState>((set, get) => {
               lastPromptCapabilities && lastPromptCapabilities.event.kind === 'prompt_capabilities'
                 ? lastPromptCapabilities.event.image
                 : prev.imagePromptSupport,
-            takeovers: replayedTakeovers,
+            // Pane-change subscriptions replay the still-pending request while
+            // the user holds the wheel. Keep it acknowledged in that case.
+            takeovers: prev.browserOwner === 'user' && prev.browserTakeoverHeld ? [] : replayedTakeovers,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
@@ -849,6 +861,7 @@ function shell(id: string): AgentView {
     shellExitMessage: null,
     browserActive: false,
     browserOwner: 'agent',
+    browserTakeoverHeld: false,
     takeovers: [],
     sessionConfig: null,
     usage: readStoredUsage(id),

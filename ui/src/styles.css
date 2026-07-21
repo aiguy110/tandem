@@ -554,6 +554,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .browser-action-btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-3); color: var(--text); }
 .browser-action-btn:disabled { opacity: .4; cursor: not-allowed; }
 .browser-action-btn.primary { border-color: var(--agent); background: var(--agent-soft); color: var(--agent); }
+.browser-action-btn.return-control { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+.browser-action-btn.return-control:hover:not(:disabled) { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
 .browser-action-btn.icon-only { width: 30px; padding: 0; }
 .browser-action-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 .owner-badge .browser-action-icon { width: 14px; height: 14px; }

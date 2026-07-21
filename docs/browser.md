@@ -68,8 +68,8 @@ Folds into the same attention/approvals rail as permissions. Two directions:
   continue")`. Tandem (which hosts that MCP) sets the agent's status to
   **`blocked · needs you`**, adds an attention item, and shows a Browser-pane banner
   *"web-1 needs you — log in to continue. [Take the wheel]"*. Taking the wheel dismisses
-  the attention item and banner. When the user completes the step and hands back (release),
-  the agent's blocked tool call **resolves with
+  the attention item and banner, and highlights the browser action as **Return control**.
+  When the user completes the step and returns control, the agent's blocked tool call **resolves with
   the result** and it continues.
 
 ## Lifecycle

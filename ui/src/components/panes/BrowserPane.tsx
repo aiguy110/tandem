@@ -32,6 +32,7 @@ export function BrowserPane() {
   const agentId = useStore((s) => s.focusedId)!;
   const active = useStore((s) => s.agents[agentId]?.browserActive ?? false);
   const owner = useStore((s) => s.agents[agentId]?.browserOwner ?? 'agent');
+  const takeoverHeld = useStore((s) => s.agents[agentId]?.browserTakeoverHeld ?? false);
   const takeovers = useStore((s) => s.agents[agentId]?.takeovers ?? []);
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
@@ -403,9 +404,9 @@ export function BrowserPane() {
               <BrowserIcon name="keyboard" />
             </button>
           )}
-          <button className="browser-action-btn" disabled={!active} onClick={() => toggleWheel(agentId)}>
+          <button className={`browser-action-btn${takeoverHeld ? ' return-control' : ''}`} disabled={!active} onClick={() => toggleWheel(agentId)}>
             <BrowserIcon name="wheel" />
-            {owner === 'user' ? 'Release control' : 'Take control'} <kbd>w</kbd>
+            {owner === 'user' ? (takeoverHeld ? 'Return control' : 'Release control') : 'Take control'} <kbd>w</kbd>
           </button>
           {active && !capturing && (
             <button className="browser-action-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save the current browser state as a reusable snapshot">
