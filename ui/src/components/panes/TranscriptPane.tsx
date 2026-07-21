@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
-import type { Approval, ImageAssetRef, PromptBlock, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import type { Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
@@ -555,7 +555,6 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
-  const interruptAndClearQueue = useStore((s) => s.interruptAndClearQueue);
   // Draft lives in the store (keyed by agent) so it survives the remounts that a
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[agentId] ?? '');
@@ -763,6 +762,35 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     return message || `${images} image${images === 1 ? '' : 's'}`;
   };
 
+  const editQueuedPrompt = async (queued: QueuedPrompt) => {
+    if (text.trim() || attachments.length > 0) {
+      setAttachmentError('Send or clear the current draft before editing a queued prompt.');
+      return;
+    }
+    if (queued.blocks.some((block) => block.type === 'image')) {
+      setAttachmentError('Queued prompts with images cannot be edited yet.');
+      return;
+    }
+    const result = await removeQueuedPrompt(agentId, queued.id);
+    if (result.error) {
+      setAttachmentError(result.error);
+      return;
+    }
+    const draft = queued.blocks
+      .filter((block): block is Extract<PromptBlock, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n\n');
+    setDraft(agentId, draft);
+    setAttachmentError(null);
+    requestAnimationFrame(() => {
+      const el = textRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(draft.length, draft.length);
+      setCaret(draft.length);
+    });
+  };
+
   return (
     <div
       className={`prompt-bar${dragging ? ' dragging' : ''}`}
@@ -815,7 +843,6 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           <div className="prompt-queue-header">
             <span>Next up ({queuedPrompts.length})</span>
             <span className="prompt-queue-actions">
-              {working && <button type="button" onClick={() => void interruptAndClearQueue(agentId)}>Stop &amp; clear</button>}
               <button type="button" onClick={() => void clearPromptQueue(agentId)}>Clear queue</button>
             </span>
           </div>
@@ -825,6 +852,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               <div className="prompt-queue-row" key={queued.id}>
                 <span className="prompt-queue-position">{index + 1}.</span>
                 <span className="prompt-queue-preview" title={preview}>{preview}</span>
+                <button type="button" onClick={() => void editQueuedPrompt(queued)} title="Edit queued prompt" aria-label={`Edit queued prompt ${index + 1}`}>Edit</button>
                 <button type="button" onClick={() => void removeQueuedPrompt(agentId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
               </div>
             );
