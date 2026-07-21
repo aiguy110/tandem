@@ -67,8 +67,9 @@ Folds into the same attention/approvals rail as permissions. Two directions:
 - **Agent-initiated handoff:** the agent calls `browser.request_takeover("log in to
   continue")`. Tandem (which hosts that MCP) sets the agent's status to
   **`blocked · needs you`**, adds an attention item, and shows a Browser-pane banner
-  *"web-1 needs you — log in to continue. [Take the wheel]"*. When the user takes the wheel,
-  completes the step, and hands back (release), the agent's blocked tool call **resolves with
+  *"web-1 needs you — log in to continue. [Take the wheel]"*. Taking the wheel dismisses
+  the attention item and banner. When the user completes the step and hands back (release),
+  the agent's blocked tool call **resolves with
   the result** and it continues.
 
 ## Lifecycle

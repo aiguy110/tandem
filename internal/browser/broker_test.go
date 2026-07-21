@@ -353,10 +353,15 @@ func TestBrokerRestartPreservesListenersAndAppliesSeed(t *testing.T) {
 	states := make(chan BrowserState, 4)
 	off := b.OnState("restart/me", func(state BrowserState) { states <- state })
 	defer off()
+	if initial := <-states; initial.Active {
+		t.Fatalf("initial state = %+v", initial)
+	}
 	if err := b.EnsureProvisioned(context.Background(), "restart/me"); err != nil {
 		t.Fatal(err)
 	}
-	<-states // initial active state
+	if provisioned := <-states; !provisioned.Active {
+		t.Fatalf("provisioned state = %+v", provisioned)
+	}
 	if err := b.Restart(context.Background(), "restart/me", "fake", "snapshot-ref"); err != nil {
 		t.Fatal(err)
 	}
@@ -369,6 +374,46 @@ func TestBrokerRestartPreservesListenersAndAppliesSeed(t *testing.T) {
 	}
 	if d.seeds["restart/me"] != "snapshot-ref" {
 		t.Fatalf("seed = %q", d.seeds["restart/me"])
+	}
+}
+
+func TestBrokerStateSubscriptionOrdersInitialStateBeforeConcurrentChange(t *testing.T) {
+	b := NewBroker(&fakeDriver{provisions: map[string]int{}, teardowns: map[string]int{}}, BrokerConfig{})
+	b.Grab("one")
+
+	initialStarted := make(chan struct{})
+	allowInitial := make(chan struct{})
+	states := make(chan ControlOwner, 2)
+	subscribed := make(chan func())
+	go func() {
+		off := b.OnState("one", func(state BrowserState) {
+			if len(states) == 0 {
+				close(initialStarted)
+				<-allowInitial
+			}
+			states <- state.ControlOwner
+		})
+		subscribed <- off
+	}()
+	<-initialStarted
+
+	released := make(chan struct{})
+	go func() {
+		_ = b.Release("one")
+		close(released)
+	}()
+	select {
+	case <-released:
+		t.Fatal("release notification overtook the initial state")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(allowInitial)
+	off := <-subscribed
+	defer off()
+	<-released
+
+	if initial, changed := <-states, <-states; initial != ControlUser || changed != ControlAgent {
+		t.Fatalf("state order = %q then %q", initial, changed)
 	}
 }
 

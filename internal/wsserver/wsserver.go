@@ -849,8 +849,6 @@ func (c *connection) subscribe(m clientMessage) {
 		offState := c.server.opts.Browser.OnState(sess.ID, func(state browser.BrowserState) {
 			c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
 		})
-		state := c.server.opts.Browser.State(sess.ID)
-		c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
 		sub.mu.Lock()
 		sub.browserStateOff = offState
 		sub.mu.Unlock()

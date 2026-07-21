@@ -51,8 +51,17 @@ type agentBrowser struct {
 	links             map[*proxyLink]struct{}
 	shared            *SharedBrowser
 	nextListener      uint64
-	stateListeners    map[uint64]func(BrowserState)
+	stateListeners    map[uint64]*browserStateListener
 	frameListeners    map[uint64]func(ScreencastFrame)
+}
+
+// browserStateListener serializes the initial state snapshot with later state
+// changes. Without this, a release racing subscription setup could deliver the
+// new agent-owned state first and then overwrite it with a stale user-owned
+// snapshot.
+type browserStateListener struct {
+	mu       sync.Mutex
+	callback func(BrowserState)
 }
 
 type BrowserState struct {
@@ -104,7 +113,7 @@ func (b *Broker) record(id string) *agentBrowser {
 	defer b.mu.Unlock()
 	a := b.agents[id]
 	if a == nil {
-		a = &agentBrowser{owner: ControlAgent, links: make(map[*proxyLink]struct{}), wsRoutes: make(map[string]string), stateListeners: make(map[uint64]func(BrowserState)), frameListeners: make(map[uint64]func(ScreencastFrame))}
+		a = &agentBrowser{owner: ControlAgent, links: make(map[*proxyLink]struct{}), wsRoutes: make(map[string]string), stateListeners: make(map[uint64]*browserStateListener), frameListeners: make(map[uint64]func(ScreencastFrame))}
 		b.agents[id] = a
 	}
 	return a
@@ -123,11 +132,19 @@ func (b *Broker) State(id string) BrowserState {
 
 func (b *Broker) OnState(id string, callback func(BrowserState)) func() {
 	a := b.record(id)
+	listener := &browserStateListener{callback: callback}
+	// Hold the listener lock across registration and initial delivery. Any state
+	// notification that observes this listener waits until the snapshot has been
+	// delivered, preserving ownership-event order for subscribers.
+	listener.mu.Lock()
 	a.mu.Lock()
 	a.nextListener++
 	listenerID := a.nextListener
-	a.stateListeners[listenerID] = callback
+	a.stateListeners[listenerID] = listener
+	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
 	a.mu.Unlock()
+	callback(state)
+	listener.mu.Unlock()
 	return func() {
 		a.mu.Lock()
 		delete(a.stateListeners, listenerID)
@@ -164,13 +181,15 @@ func (b *Broker) emitState(id string) {
 	a := b.record(id)
 	a.mu.Lock()
 	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
-	callbacks := make([]func(BrowserState), 0, len(a.stateListeners))
+	listeners := make([]*browserStateListener, 0, len(a.stateListeners))
 	for _, callback := range a.stateListeners {
-		callbacks = append(callbacks, callback)
+		listeners = append(listeners, callback)
 	}
 	a.mu.Unlock()
-	for _, callback := range callbacks {
-		callback(state)
+	for _, listener := range listeners {
+		listener.mu.Lock()
+		listener.callback(state)
+		listener.mu.Unlock()
 	}
 }
 

@@ -369,8 +369,10 @@ export const useStore = create<StoreState>((set, get) => {
         set((st) => {
           const a = st.agents[msg.agentId];
           if (!a) return st;
-          // Handing the wheel back (owner→agent) clears any pending takeover.
-          const takeovers = msg.controlOwner === 'agent' ? [] : a.takeovers;
+          // Grabbing the wheel acknowledges the attention item immediately;
+          // the daemon still keeps the takeover tool call pending until release.
+          // Release also clears it defensively while takeover_resolved arrives.
+          const takeovers = a.browserOwner !== msg.controlOwner ? [] : a.takeovers;
           return { agents: { ...st.agents, [msg.agentId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, takeovers } } };
         });
         return;
