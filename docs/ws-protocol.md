@@ -309,7 +309,8 @@ concrete payoff of the "daemon owns all state" invariant.
   rule); the daemon stops the cast when the last browser-channel subscriber unsubscribes.
   Subscribing does **not** provision a browser; `active:false` is reported until the agent's
   first browser use. `browser_control` grab/release flips the control-owner token
-  (release also resolves a pending takeover); `browser_input` forwards user input while
+  (grab dismisses its attention card/banner; release resolves the pending takeover);
+  `browser_input` forwards user input while
   owner=user. **`takeover_request` events ride the `transcript` channel** (like
   `permission_request`) so the attention rail sees them even when no Browser pane is open.
   See [`browser.md`](browser.md).
