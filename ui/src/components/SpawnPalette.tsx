@@ -6,6 +6,7 @@ import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
+const HARNESS_DEFAULTS_KEY = 'tandem.harnessDefaults.v1';
 const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
 const FALLBACK_HARNESSES = [
   { id: 'agent:claude', name: 'Claude', agent: 'claude', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
@@ -25,6 +26,35 @@ function saveProjectAgent(project: string, agent: string) {
     const all = JSON.parse(localStorage.getItem(SPAWN_AGENT_KEY) || '{}') as Record<string, string>;
     all[project] = agent;
     localStorage.setItem(SPAWN_AGENT_KEY, JSON.stringify(all));
+  } catch { /* localStorage unavailable */ }
+}
+
+interface HarnessDefaults {
+  model: string;
+  effort: string;
+  permission: string;
+}
+
+const EMPTY_HARNESS_DEFAULTS: HarnessDefaults = { model: '', effort: '', permission: '' };
+
+function loadHarnessDefaults(harness: string): HarnessDefaults | undefined {
+  try {
+    const all = JSON.parse(localStorage.getItem(HARNESS_DEFAULTS_KEY) || '{}') as Record<string, Partial<HarnessDefaults>>;
+    const saved = all[harness];
+    if (!saved) return undefined;
+    return {
+      model: typeof saved?.model === 'string' ? saved.model : '',
+      effort: typeof saved?.effort === 'string' ? saved.effort : '',
+      permission: typeof saved?.permission === 'string' ? saved.permission : '',
+    };
+  } catch { return undefined; }
+}
+
+function saveHarnessDefaults(harness: string, defaults: HarnessDefaults) {
+  try {
+    const all = JSON.parse(localStorage.getItem(HARNESS_DEFAULTS_KEY) || '{}') as Record<string, HarnessDefaults>;
+    all[harness] = defaults;
+    localStorage.setItem(HARNESS_DEFAULTS_KEY, JSON.stringify(all));
   } catch { /* localStorage unavailable */ }
 }
 
@@ -154,6 +184,25 @@ export function SpawnPalette() {
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
   const agentSlug = selectedHarness?.agent ?? agent.replace(/^agent:/, '');
+  const harnessForProject = (project: string) => {
+    const saved = loadProjectAgent(project);
+    const catalogDefault = agentCatalog?.defaultHarness
+      ? `harness:${agentCatalog.defaultHarness}`
+      : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
+    return (saved
+      ? harnesses.find((harness) => harness.id === saved)
+        ?? harnesses.find((harness) => !harness.harness && harness.agent === saved)
+        ?? harnesses.find((harness) => harness.harness === saved)
+      : undefined)
+      ?? harnesses.find((harness) => harness.id === catalogDefault)
+      ?? harnesses[0];
+  };
+  const applyHarnessDefaults = (harness: string) => {
+    const defaults = loadHarnessDefaults(harness) ?? EMPTY_HARNESS_DEFAULTS;
+    setModel(defaults.model);
+    setEffort(defaults.effort);
+    setPermission(defaults.permission);
+  };
   // Apply a saved profile's settings onto the editable fields (harness picked by
   // its harness id, else by agent). The options-clamp effect prunes any
   // model/effort/permission the resolved harness doesn't offer.
@@ -185,16 +234,10 @@ export function SpawnPalette() {
   };
   useEffect(() => {
     if (!selectedDir) return;
-    const saved = loadProjectAgent(selectedDir.path);
-    const catalogDefault = agentCatalog?.defaultHarness
-      ? `harness:${agentCatalog.defaultHarness}`
-      : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
-    const matched = saved
-      ? harnesses.find((harness) => harness.id === saved)
-        ?? harnesses.find((harness) => !harness.harness && harness.agent === saved)
-        ?? harnesses.find((harness) => harness.harness === saved)
-      : undefined;
-    setAgent(matched?.id ?? harnesses.find((harness) => harness.id === catalogDefault)?.id ?? harnesses[0]?.id ?? 'agent:claude');
+    const matched = harnessForProject(selectedDir.path);
+    const next = matched?.id ?? 'agent:claude';
+    setAgent(next);
+    applyHarnessDefaults(next);
   }, [selectedDir?.path, harnesses, agentCatalog]);
   useEffect(() => {
     if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
@@ -253,6 +296,7 @@ export function SpawnPalette() {
     let cancelled = false;
     setOptionsBusy(true);
     setOptionsError('');
+    setSpawnOptions(null);
     void getSpawnOptions(agentSlug, selectedDir.path, selectedHarness?.harness).then((options) => {
       if (cancelled) return;
       setSpawnOptions(options);
@@ -321,18 +365,55 @@ export function SpawnPalette() {
   const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
     setBusy(true);
     setError(null);
-    const spawnAdapter = advanced ? adapter : (selectedHarness?.hasAcp ? 'acp' : 'pty');
-    const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : workspaceMode;
+    const spawnHarness = advanced ? selectedHarness : harnessForProject(dir.path);
+    const spawnAgent = spawnHarness?.agent ?? agentSlug;
+    const spawnHarnessID = spawnHarness?.harness;
+    let defaults = advanced ? { model, effort, permission } : loadHarnessDefaults(spawnHarness?.id ?? agent);
+    if (!defaults) {
+      // Migrate installations that predate harness-scoped defaults from the
+      // globally most-recent profile for this harness. listProfiles is globally
+      // ordered; its separate `recent` list is the project-specific ordering.
+      try {
+        const { profiles: allProfiles } = await listProfiles(dir.path);
+        const latest = allProfiles.find((profile) =>
+          profile.agent === spawnAgent && profile.harness === (spawnHarnessID ?? ''));
+        defaults = latest
+          ? { model: latest.model, effort: latest.effort, permission: latest.permission }
+          : EMPTY_HARNESS_DEFAULTS;
+      } catch {
+        defaults = EMPTY_HARNESS_DEFAULTS;
+      }
+      if (spawnHarness) saveHarnessDefaults(spawnHarness.id, defaults);
+    }
+    const spawnAdapter = advanced ? adapter : (spawnHarness?.hasAcp ? 'acp' : 'pty');
+    const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : advanced ? workspaceMode : 'create';
     const cwd = existingCwd ?? dir.path;
-    const workSource = mode === 'attach' ? selectedAttachRef : selectedGitRef;
-    const modelOption = spawnOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
-    const effortOption = spawnOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
+    const workSource = advanced ? (mode === 'attach' ? selectedAttachRef : selectedGitRef) : undefined;
+    let effectiveOptions = advanced ? spawnOptions : null;
+    if (spawnAdapter === 'acp' && !effectiveOptions) {
+      try {
+        effectiveOptions = await getSpawnOptions(spawnAgent, dir.path, spawnHarnessID);
+      } catch (cause) {
+        setBusy(false);
+        setError({ code: 'spawn_options', msg: cause instanceof Error ? cause.message : String(cause), dir });
+        return;
+      }
+    }
+    const modelOption = effectiveOptions?.configOptions.find((o) => o.category === 'model' && o.type === 'select');
+    const effortOption = effectiveOptions?.configOptions.find((o) => o.category === 'thought_level' && o.type === 'select');
+    const resolvedDefaults = spawnAdapter === 'acp' ? {
+      model: defaults.model && modelOption?.options?.some((option) => option.value === defaults.model) ? defaults.model : '',
+      effort: defaults.effort && effortOption?.options?.some((option) => option.value === defaults.effort) ? defaults.effort : '',
+      permission: defaults.permission && effectiveOptions?.modes?.availableModes.some((mode) => mode.id === defaults.permission)
+        ? defaults.permission : '',
+    } : EMPTY_HARNESS_DEFAULTS;
+    const spawnSnapshot = advanced ? snapshot : '';
     const spec: SpawnSpec = {
       adapter: spawnAdapter,
-      agent: agentSlug,
-      harness: selectedHarness?.harness,
+      agent: spawnAgent,
+      harness: spawnHarnessID,
       terminalArgs: spawnAdapter === 'pty'
-        ? terminalArgsText.split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
+        ? (advanced ? terminalArgsText : '').split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
       workspace: mode === 'existing'
         ? { kind: 'existing', cwd }
@@ -342,31 +423,36 @@ export function SpawnPalette() {
             branchMode: mode,
             branch: mode === 'attach' ? selectedAttachRef?.displayName : agentBranch || undefined,
             source: workSource ? { ref: workSource.ref, commit: workSource.commit } : undefined,
-            integration: selectedGitRef ? {
+            integration: advanced && selectedGitRef ? {
               kind: selectedGitRef.kind === 'local-branch' || selectedGitRef.kind === 'remote-branch' ? selectedGitRef.kind : 'detached',
               ref: selectedGitRef.ref,
             } : undefined,
           },
-      name: name || undefined,
+      name: advanced ? name || undefined : undefined,
       task: task.trim() || undefined,
       sessionConfig: spawnAdapter === 'acp' ? {
-        modeId: permission || undefined,
+        modeId: resolvedDefaults.permission || undefined,
         configOptions: {
-          ...(model && modelOption ? { [modelOption.id]: model } : {}),
-          ...(effort && effortOption ? { [effortOption.id]: effort } : {}),
+          ...(resolvedDefaults.model && modelOption ? { [modelOption.id]: resolvedDefaults.model } : {}),
+          ...(resolvedDefaults.effort && effortOption ? { [effortOption.id]: resolvedDefaults.effort } : {}),
         },
       } : undefined,
       // Profile identity + browser snapshot seed. The daemon resolves-or-creates
       // the profile from these and records per-repo recency.
       profile: {
         ...(spawnAdapter === 'acp'
-          ? { model: model || undefined, effort: effort || undefined, permission: permission || undefined }
+          ? {
+              model: resolvedDefaults.model || undefined,
+              effort: resolvedDefaults.effort || undefined,
+              permission: resolvedDefaults.permission || undefined,
+            }
           : {}),
-        snapshot: snapshot || undefined,
+        snapshot: spawnSnapshot || undefined,
       },
     };
-    saveProjectAgent(dir.path, agent);
-    if (selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
+    saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
+    if (advanced && spawnAdapter === 'acp' && spawnHarness) saveHarnessDefaults(spawnHarness.id, defaults);
+    if (advanced && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
     const r = await spawn(spec);
     setBusy(false);
     if (r.error) {
@@ -439,7 +525,12 @@ export function SpawnPalette() {
               {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
               {filtered.map((d, i) => {
                 const repoProfiles = profilesByRepo[d.path];
-                const defaultProfile = repoProfiles?.profiles.find((profile) => profile.id === repoProfiles.recent[0]);
+                const rowHarness = harnessForProject(d.path);
+                const defaults = loadHarnessDefaults(rowHarness?.id ?? '') ?? EMPTY_HARNESS_DEFAULTS;
+                const defaultProfile = repoProfiles?.profiles.find((profile) =>
+                  profile.agent === rowHarness?.agent && profile.harness === (rowHarness?.harness ?? '')
+                  && profile.model === defaults.model && profile.effort === defaults.effort
+                  && profile.permission === defaults.permission && !profile.snapshotId);
                 return (
                   <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => !busy && doSpawn(d)}>
                     <div className="repo-details">
@@ -461,7 +552,7 @@ export function SpawnPalette() {
                         openAdvanced(d, i);
                       }}
                     >
-                      {defaultProfile?.name ?? 'Default profile'}
+                      {defaultProfile?.name ?? `${rowHarness?.name ?? 'Agent'} defaults`}
                     </button>
                   </div>
                 );
@@ -514,6 +605,7 @@ export function SpawnPalette() {
               <select value={selectedHarness?.id ?? ''} onChange={(e) => {
                 const next = e.target.value;
                 setAgent(next);
+                applyHarnessDefaults(next);
                 if (selectedDir) saveProjectAgent(selectedDir.path, next);
               }}>
                 {harnesses.map((harness) => <option key={harness.id} value={harness.id}>{harness.name}</option>)}
@@ -658,7 +750,7 @@ export function SpawnPalette() {
             <button className="btn ghost" type="button" onClick={() => setAdvanced(false)}>Choose other repo</button>
             <span className="action-spacer" />
             <button className="btn ghost" type="button" onClick={() => setModal('none')}>Cancel</button>
-            <button className="btn" type="button" disabled={busy || !selectedDir} onClick={() => selectedDir && void doSpawn(selectedDir)}>
+            <button className="btn" type="button" disabled={busy || optionsBusy || !selectedDir} onClick={() => selectedDir && void doSpawn(selectedDir)}>
               {busy ? 'Launching…' : 'Launch'}
             </button>
           </div>
