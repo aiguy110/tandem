@@ -369,10 +369,12 @@ export const useStore = create<StoreState>((set, get) => {
         set((st) => {
           const a = st.agents[msg.agentId];
           if (!a) return st;
-          // Grabbing the wheel acknowledges the attention item immediately;
-          // the daemon still keeps the takeover tool call pending until release.
-          // Release also clears it defensively while takeover_resolved arrives.
-          const takeovers = a.browserOwner !== msg.controlOwner ? [] : a.takeovers;
+          // Only an actual grab acknowledges the attention item. Re-subscribing
+          // while changing panes can refresh agent ownership and must not dismiss
+          // a takeover the user has not acted on. The daemon keeps the tool call
+          // pending until release, when takeover_resolved clears it durably.
+          const userJustGrabbed = msg.controlOwner === 'user' && a.browserOwner !== 'user';
+          const takeovers = userJustGrabbed ? [] : a.takeovers;
           return { agents: { ...st.agents, [msg.agentId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, takeovers } } };
         });
         return;
