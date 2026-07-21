@@ -114,15 +114,24 @@ type testAdapter struct {
 		value any
 	}
 	interrupts, closes int
+	promptGate         chan struct{}
 }
 
 func (a *testAdapter) Capabilities() agentadapter.Capabilities { return agentadapter.Capabilities{} }
 func (a *testAdapter) Events() <-chan eventlog.Event           { return a.events }
 func (a *testAdapter) Done() <-chan struct{}                   { return a.done }
-func (a *testAdapter) Prompt(_ context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+func (a *testAdapter) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
 	a.mu.Lock()
 	a.prompts = append(a.prompts, blocks)
+	gate := a.promptGate
 	a.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-gate:
+		}
+	}
 	return "", nil
 }
 func (a *testAdapter) SendInput(v []byte) error {
@@ -316,6 +325,57 @@ func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
 	if a.closes != 0 {
 		t.Fatalf("disconnect disposed adapter %d times", a.closes)
 	}
+}
+
+func TestPromptQueueAcknowledgementSnapshotAndRemoval(t *testing.T) {
+	_, b, a, _, url := setupWS(t, 0)
+	a.promptGate = make(chan struct{}, 1)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "prompt", "agentId": "a", "text": "first", "corrId": "first"})
+	first := recv(t, c)
+	if first["disposition"] != "started" || first["position"] != float64(0) || first["promptId"] == nil {
+		t.Fatalf("first ack=%#v", first)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		started := len(a.prompts) == 1
+		a.mu.Unlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first prompt did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	send(t, c, map[string]any{"t": "prompt", "agentId": "a", "text": "second", "corrId": "second"})
+	second := recv(t, c)
+	if second["disposition"] != "queued" || second["position"] != float64(1) {
+		t.Fatalf("second ack=%#v", second)
+	}
+	promptID, _ := second["promptId"].(string)
+	send(t, c, map[string]any{"t": "subscribe", "agentId": "a", "corrId": "sub"})
+	snapshot := recv(t, c)
+	queued, _ := snapshot["queuedPrompts"].([]any)
+	if snapshot["t"] != "snapshot" || len(queued) != 1 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if state := recv(t, c); state["t"] != "prompt_queue" || len(state["queuedPrompts"].([]any)) != 1 {
+		t.Fatalf("queue state=%#v", state)
+	}
+	recv(t, c) // subscribe ack
+	send(t, c, map[string]any{"t": "remove_queued_prompt", "agentId": "a", "promptId": promptID, "corrId": "remove"})
+	for {
+		message := recv(t, c)
+		if message["t"] == "ack" && message["corrId"] == "remove" {
+			break
+		}
+	}
+	if len(b.Get("a").QueuedPrompts()) != 0 {
+		t.Fatal("queued prompt remained after removal")
+	}
+	a.promptGate <- struct{}{}
 }
 
 func TestCloseBroadcastsSubscribersAndErrorsAreStructured(t *testing.T) {

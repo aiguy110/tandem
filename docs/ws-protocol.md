@@ -171,6 +171,9 @@ type ClientMsg =
   | { t: 'subscribe';   agentId: string; channels?: Channel[]; sinceSeq?: number } // channels omitted = all
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[] }
   | { t: 'prompt';      agentId: string; text?: string; blocks?: PromptBlock[] }
+  | { t: 'remove_queued_prompt'; agentId: string; promptId: string }
+  | { t: 'clear_prompt_queue'; agentId: string }
+  | { t: 'interrupt_and_clear_queue'; agentId: string }
   | { t: 'input';       agentId: string; bytesB64: string }            // → adapter.sendInput
   | { t: 'resize';      agentId: string; cols: number; rows: number }  // → adapter.resize (pty)
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string }
@@ -254,6 +257,14 @@ to ACP's inline `{type:'image', mimeType, data:<base64>}` block. The ACP
 `promptCapabilities.image` value is persisted as a
 `{kind:'prompt_capabilities', image:boolean}` event. An image prompt is rejected
 before logging a user message or starting a turn when that capability is false.
+
+Prompts submitted during an active turn enter a daemon-owned FIFO rather than
+overlapping ACP `session/prompt` calls. The prompt acknowledgement includes a
+`promptId`, `disposition: 'started'|'queued'`, and a one-based queue `position`.
+Queue changes are durable `prompt_queued`, `prompt_started`, and `prompt_removed`
+events; snapshots include the authoritative `queuedPrompts` array, and queue-bearing
+replays end with a `prompt_queue` state message. A normal `interrupt` cancels only
+the active turn and preserves the queue.
 
 ## End-to-end mapping of ACP
 

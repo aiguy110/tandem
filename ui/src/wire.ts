@@ -48,6 +48,12 @@ export type PromptBlock =
   | { type: 'text'; text: string }
   | ({ type: 'image' } & ImageAssetRef);
 
+export interface QueuedPrompt {
+  id: string;
+  blocks: PromptBlock[];
+  queuedAt: string;
+}
+
 export type AgentEvent =
   | { kind: 'user_message'; text?: string; blocks?: PromptBlock[] }
   | { kind: 'message_chunk'; text: string }
@@ -65,7 +71,10 @@ export type AgentEvent =
   | { kind: 'available_commands'; commands: SlashCommand[] }
   | { kind: 'prompt_capabilities'; image: boolean }
   | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
-  | { kind: 'control_state'; mode: ControlMode };
+  | { kind: 'control_state'; mode: ControlMode }
+  | { kind: 'prompt_queued'; promptId: string; blocks: PromptBlock[]; queuedAt: string; position: number }
+  | { kind: 'prompt_started'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
+  | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
 // AgentEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
@@ -264,6 +273,9 @@ export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'remove_queued_prompt'; agentId: string; promptId: string; corrId?: string }
+  | { t: 'clear_prompt_queue'; agentId: string; corrId?: string }
+  | { t: 'interrupt_and_clear_queue'; agentId: string; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
   | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }
@@ -314,9 +326,10 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[] }
+  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[] }
+  | { t: 'prompt_queue'; agentId: string; queuedPrompts: QueuedPrompt[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }
-  | { t: 'ack'; corrId?: string; agentId?: string; error?: string }
+  | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued'; position?: number; cleared?: number }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }

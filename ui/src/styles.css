@@ -331,6 +331,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-attachment button { appearance: none; border: 0; background: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; font-size: 16px; }
 .prompt-attachment button:hover { color: var(--text); }
 .prompt-attachment-error { font-size: var(--fs-xs); }
+.prompt-queue { display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.prompt-queue-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-dim); font-size: var(--fs-xs); font-weight: 600; }
+.prompt-queue-actions { display: flex; gap: 10px; }
+.prompt-queue-actions button, .prompt-queue-row button { appearance: none; padding: 0; border: 0; background: none; color: var(--text-faint); font: inherit; cursor: pointer; }
+.prompt-queue-actions button:hover, .prompt-queue-row button:hover { color: var(--text); }
+.prompt-queue-actions button:first-child:not(:last-child):hover { color: var(--err); }
+.prompt-queue-row { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.prompt-queue-position { color: var(--text-faint); font-family: var(--font-mono); }
+.prompt-queue-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-queue-row > button { padding: 0 3px; font-size: 15px; }
+.stop-btn { width: 38px; padding-left: 0; padding-right: 0; color: var(--err); }
+.stop-btn:hover { border-color: var(--err); background: var(--err-soft); }
 .prompt-drop-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 30; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--agent); font-weight: 600; }
 .slash-popup {
   position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
