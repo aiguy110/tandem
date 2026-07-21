@@ -316,6 +316,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-bar { position: relative; display: flex; flex-direction: column; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); }
 .prompt-bar.dragging { box-shadow: inset 0 0 0 2px var(--agent); }
 .prompt-main { display: flex; gap: 8px; align-items: flex-end; }
+.prompt-actions { display: flex; gap: 8px; align-items: flex-end; }
 .attach-btn { width: 38px; padding-left: 0; padding-right: 0; display: inline-flex; align-items: center; justify-content: center; }
 .attach-btn svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .attach-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -361,6 +362,17 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.4;
 }
 .prompt-bar textarea:focus { outline: none; border-color: var(--agent); }
+
+/* Keep the compact composer controls reachable on narrow screens: attachment
+   and stop share the top row, while the primary action sits beneath them. */
+@media (max-width: 600px) {
+  .prompt-actions {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    align-items: end;
+  }
+  .prompt-actions .primary { grid-column: 1 / -1; justify-content: center; }
+}
 
 /* ---- session config bar (model / permission-mode pickers) ---- */
 .session-config-bar {

@@ -921,31 +921,33 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           }}
           rows={1}
         />
-        <button
-          type="button"
-          className="btn attach-btn"
-          disabled={imageSupport !== true}
-          onClick={() => fileRef.current?.click()}
-          title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
-          aria-label="Attach images"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 3v10M3 8h10" />
-          </svg>
-        </button>
-        <button
-          className="btn primary"
-          onClick={() => void send()}
-          disabled={sending || uploadsPending || !canSubmit}
-          title={working ? 'Send after the current turn finishes' : 'Send prompt'}
-        >
-          {sending ? (working ? 'Queueing…' : 'Sending…') : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
-        </button>
-        {working && (
-          <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
-            <span className="stop-btn-icon" aria-hidden="true" />
+        <div className="prompt-actions">
+          <button
+            type="button"
+            className="btn attach-btn"
+            disabled={imageSupport !== true}
+            onClick={() => fileRef.current?.click()}
+            title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
+            aria-label="Attach images"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
           </button>
-        )}
+          {working && (
+            <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
+              <span className="stop-btn-icon" aria-hidden="true" />
+            </button>
+          )}
+          <button
+            className="btn primary"
+            onClick={() => void send()}
+            disabled={sending || uploadsPending || !canSubmit}
+            title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+          >
+            {sending ? (working ? 'Queueing…' : 'Sending…') : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+          </button>
+        </div>
       </div>
       {dragging && <div className="prompt-drop-hint">Drop images to attach</div>}
     </div>
