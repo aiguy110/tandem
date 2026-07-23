@@ -5,6 +5,8 @@ that lets you use the agents you already know (Claude Code, Gemini CLI, …) but
 in a UI-driven, human-as-conductor control surface. Not an IDE, and not necessarily
 coding-focused.
 
+![Tandem mission control interface](docs/assets/screenshots/tandem-mission-control.png)
+
 The name *Tandem* captures the product's soul: **human and agent driving together** —
 most visibly in the shared, jointly-controlled browser, but throughout the whole
 experience.
