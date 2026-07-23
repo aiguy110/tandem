@@ -175,8 +175,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-row .badge { margin-left: auto; }
 .git-state { flex: none; width: 6px; height: 6px; border-radius: 50%; }
 .git-state.dirty { background: var(--err); }
-.git-state.ahead, .git-state.behind, .git-state.diverged, .git-state.target_missing { background: var(--warn); }
-.git-state.merged { background: var(--human); }
+.git-state.ahead, .git-state.diverged, .git-state.target_missing { background: var(--warn); }
+.git-state.behind, .git-state.merged { background: var(--human); }
 .git-state.synced { background: var(--ok); }
 .git-state.unknown { background: var(--text-faint); }
 .status-chip { font-size: var(--fs-xs); padding: 0 6px; border-radius: 4px; text-transform: capitalize; }
