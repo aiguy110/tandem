@@ -15,7 +15,7 @@ type Item =
   | { kind: 'user'; key: string; blocks: PromptBlock[] }
   | { kind: 'message'; key: string; text: string }
   | { kind: 'thought'; key: string; text: string }
-  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown }
+  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
@@ -60,18 +60,26 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           existing.status = ev.status;
           if (ev.content != null) existing.content = ev.content;
           if (ev.rawInput != null) existing.rawInput = ev.rawInput;
+          if (ev.toolKind != null) existing.toolKind = ev.toolKind;
         } else {
-          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput };
+          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput, toolKind: ev.toolKind };
           tools.set(ev.id, item);
           items.push(item);
         }
         break;
       }
       case 'tool_call_update': {
+        // Some agents (Claude) send an initial tool_call before a Bash
+        // command's input has finished streaming, then refine title/rawInput
+        // here once the real command is known — pick those up too, not just
+        // status/content, or the card gets stuck on its placeholder title.
         const t = tools.get(ev.id);
         if (t) {
           if (ev.status) t.status = ev.status;
           if (ev.content != null) t.content = ev.content;
+          if (ev.title) t.title = ev.title;
+          if (ev.rawInput != null) t.rawInput = ev.rawInput;
+          if (ev.toolKind != null) t.toolKind = ev.toolKind;
         }
         break;
       }
@@ -366,11 +374,30 @@ function formatArgs(rawInput: unknown): string | null {
   }
 }
 
+// A shell command run via the 'execute' tool kind carries its command text in
+// rawInput.command (structured) — fall back to the title, which agents that
+// skip rawInput (e.g. pi's generic tool name) or a bare literal title don't
+// give us a struct for.
+function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
+  const input = item.rawInput;
+  if (input && typeof input === 'object' && 'command' in input) {
+    const cmd = (input as { command?: unknown }).command;
+    if (typeof cmd === 'string' && cmd) return cmd;
+  }
+  if (item.title && item.title !== 'Terminal') return item.title;
+  return null;
+}
+
 function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   const [open, setOpen] = useState(false);
   const { text: body, images } = parseToolContent(item.content);
   const args = formatArgs(item.rawInput);
-  const hasBody = body != null || args != null || images.length > 0;
+  const isExecute = item.toolKind === 'execute';
+  const command = isExecute ? terminalCommand(item) : null;
+  // For a plain execute call, the command *is* the args — showing it again as
+  // a raw JSON "Arguments" blob under a terminal prompt line is noise.
+  const showArgs = args != null && !(isExecute && command != null);
+  const hasBody = body != null || showArgs || images.length > 0 || command != null;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
@@ -378,18 +405,32 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
     <div className="card">
       <div className="card-head" onClick={() => hasBody && setOpen((o) => !o)}>
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
-        <span className="title">{item.title}</span>
+        {command != null ? (
+          <span className="title tool-cmd-title">
+            <span className="tool-prompt">$</span> {command}
+          </span>
+        ) : (
+          <span className="title">{item.title}</span>
+        )}
         <span className={`chip ${item.status}`}>{item.status}</span>
       </div>
       {open && hasBody && (
         <div className="card-body">
-          {args != null && (
+          {command != null ? (
+            body != null ? (
+              <pre className="tool-terminal-output">{body}</pre>
+            ) : (
+              <div className="tool-terminal-empty">(no output)</div>
+            )
+          ) : (
+            body != null && <div className="tool-output">{body}</div>
+          )}
+          {showArgs && (
             <div className="tool-args">
               <div className="tool-args-label">Arguments</div>
               <pre>{args}</pre>
             </div>
           )}
-          {body != null && <div className="tool-output">{body}</div>}
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
         </div>
       )}

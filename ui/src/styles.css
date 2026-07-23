@@ -279,6 +279,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tool-args { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
 .tool-args-label { font-family: var(--font-sans, inherit); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-dim)); margin-bottom: 4px; }
 .tool-args pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.tool-cmd-title { color: var(--text); }
+.tool-prompt { color: var(--agent, var(--ok)); font-weight: 700; }
+.tool-terminal-output {
+  margin: 0; padding: 8px 10px; background: #05090c; color: #d6e2ea;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+}
+.tool-terminal-empty { color: var(--text-faint); font-style: italic; }
 .chip { font-size: var(--fs-xs); padding: 1px 7px; border-radius: 4px; text-transform: capitalize; white-space: nowrap; }
 .chip.pending { color: var(--text-dim); background: var(--surface-3); }
 .chip.running { color: var(--working); background: var(--working-soft); }
