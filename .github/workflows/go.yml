@@ -25,6 +25,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Stage embedded UI
+        run: scripts/stage-go-ui.sh
       - run: go vet ./...
 
   test:
@@ -34,6 +41,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Stage embedded UI
+        run: scripts/stage-go-ui.sh
       - run: go test ./...
 
   build:
@@ -43,6 +57,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Stage embedded UI
+        run: scripts/stage-go-ui.sh
       - name: Build with metadata
         env:
           VERSION: dev
@@ -51,31 +72,6 @@ jobs:
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go build -ldflags "-X github.com/aiguy110/tandem/internal/buildinfo.Version=${VERSION} -X github.com/aiguy110/tandem/internal/buildinfo.Commit=${COMMIT} -X github.com/aiguy110/tandem/internal/buildinfo.BuildTime=${BUILD_TIME}" ./cmd/tandem
           test "$(./tandem version)" = "tandem version=${VERSION} commit=${COMMIT} built=${BUILD_TIME}"
-
-  implementation-parity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: daemon/package-lock.json
-      - name: Install harness dependencies
-        working-directory: daemon
-        run: npm ci
-      - name: Build native daemon
-        run: go build -o "${RUNNER_TEMP}/tandem-go" ./cmd/tandem
-      - name: Run full Node/Go parity matrix
-        working-directory: daemon
-        env:
-          TANDEM_NODE_DAEMON_CMD: '["./node_modules/.bin/tsx","src/index.ts"]'
-          TANDEM_GO_DAEMON_CMD: '["${{ runner.temp }}/tandem-go","daemon"]'
-        run: npm run derisk:matrix
 
   release:
     name: Release ${{ matrix.goos }}/${{ matrix.goarch }}

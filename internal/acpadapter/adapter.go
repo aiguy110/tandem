@@ -440,8 +440,10 @@ func (a *Adapter) Interrupt() error {
 	}
 	a.liveTools = make(map[string]struct{})
 	sessionID := a.sessionID
+	// Keep the cancelled context installed until the next Prompt resets it.
+	// Service requests already emitted by the agent can arrive after the
+	// interrupt and must be rejected as part of the interrupted turn.
 	a.serviceStop()
-	a.serviceCtx, a.serviceStop = context.WithCancel(a.ctx)
 	a.mu.Unlock()
 	for _, pending := range permissions {
 		if err := a.tr.Respond(pending.wireID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}); err != nil {
