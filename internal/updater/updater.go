@@ -16,12 +16,23 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-isatty"
 )
 
 const defaultRepository = "aiguy110/tandem"
+
+// updatedEnvVar is set on the environment of the re-exec'd process so the freshly
+// started binary skips the update check (it is already the newest version) and
+// cannot enter an exec loop. A genuine later restart spawns a process without it.
+const updatedEnvVar = "TANDEM_UPDATED"
+
+// ErrRestartRequired reports that the on-disk binary was replaced with a newer
+// version but the in-place restart failed. Callers should exit rather than keep
+// running the now-stale code.
+var ErrRestartRequired = errors.New("tandem: updated the binary but could not restart into it")
 
 // Options supplies the process-specific dependencies used by CheckAtStartup.
 // Zero values select the production defaults.
@@ -36,6 +47,10 @@ type Options struct {
 	HTTPClient     *http.Client
 	Executable     string
 	Interactive    *bool
+	// reexec replaces the current process image with the updated binary. It
+	// defaults to syscall.Exec and is only overridden in tests, which cannot let
+	// the real exec replace the test process.
+	reexec func(argv0 string, argv, envv []string) error
 }
 
 type release struct {
@@ -52,6 +67,11 @@ type asset struct {
 // replaces the current executable when the user accepts. Development builds and an
 // explicitly disabled check do no network I/O.
 func CheckAtStartup(ctx context.Context, opts Options) error {
+	// A process we just re-exec'd into is already the newest binary; skip the
+	// check so it proceeds straight to the daemon and cannot loop.
+	if os.Getenv(updatedEnvVar) != "" {
+		return nil
+	}
 	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return nil
 	}
@@ -105,7 +125,17 @@ func CheckAtStartup(ctx context.Context, opts Options) error {
 	if err := replaceExecutable(ctx, opts, binary.DownloadURL, wantSHA); err != nil {
 		return err
 	}
-	fmt.Fprintf(opts.Log, "tandem: updated %s to %s; this daemon will use it on the next start\n", opts.Executable, latest.TagName)
+
+	// The binary on disk is now the newer version, but this process is still
+	// running the old code. Re-exec in place (same PID, FDs, and terminal) so we
+	// continue as the new version. CheckAtStartup runs before the daemon binds
+	// anything, so there is no state to drain here.
+	fmt.Fprintf(opts.Log, "tandem: updated %s to %s; restarting into the new binary\n", opts.Executable, latest.TagName)
+	env := append(os.Environ(), updatedEnvVar+"="+latest.TagName)
+	if err := opts.reexec(opts.Executable, os.Args, env); err != nil {
+		fmt.Fprintf(opts.Log, "tandem: the binary on disk was updated to %s but the restart failed; refusing to continue on the old version\n", latest.TagName)
+		return fmt.Errorf("%w: %v", ErrRestartRequired, err)
+	}
 	return nil
 }
 
@@ -136,6 +166,9 @@ func setDefaults(opts *Options) {
 		if err == nil {
 			opts.Executable = executable
 		}
+	}
+	if opts.reexec == nil {
+		opts.reexec = syscall.Exec
 	}
 }
 

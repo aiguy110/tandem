@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,9 @@ func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
 	defer stdin.Close()
 	interactive := true
 	var log strings.Builder
+	var reexecArgv0 string
+	var reexecEnv []string
+	reexecCalls := 0
 
 	err = CheckAtStartup(context.Background(), Options{
 		CurrentVersion: "1.0.0",
@@ -95,6 +99,12 @@ func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
 		HTTPClient:     server.Client(),
 		Executable:     target,
 		Interactive:    &interactive,
+		reexec: func(argv0 string, argv, envv []string) error {
+			reexecCalls++
+			reexecArgv0 = argv0
+			reexecEnv = envv
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -109,9 +119,82 @@ func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
 	if got := downloads.Load(); got != 2 {
 		t.Fatalf("download requests = %d, want 2", got)
 	}
-	if !strings.Contains(log.String(), "updated "+target+" to v1.1.0") {
+	if reexecCalls != 1 {
+		t.Fatalf("reexec calls = %d, want 1", reexecCalls)
+	}
+	if reexecArgv0 != target {
+		t.Fatalf("reexec argv0 = %q, want %q", reexecArgv0, target)
+	}
+	if !containsEnv(reexecEnv, updatedEnvVar+"=v1.1.0") {
+		t.Fatalf("reexec env missing %s=v1.1.0: %v", updatedEnvVar, reexecEnv)
+	}
+	if !strings.Contains(log.String(), "restarting into the new binary") {
 		t.Fatalf("log = %q", log.String())
 	}
+}
+
+func TestUpdatedEnvVarSkipsCheck(t *testing.T) {
+	t.Setenv(updatedEnvVar, "v1.1.0")
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("re-exec'd process made an HTTP request")
+		return nil, nil
+	})}
+	if err := CheckAtStartup(context.Background(), Options{CurrentVersion: "v1.0.0", HTTPClient: client}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReexecFailureReportsRestartRequired(t *testing.T) {
+	newBinary := []byte("new binary contents")
+	var downloads atomic.Int32
+	server := releaseServer(t, newBinary, &downloads)
+	defer server.Close()
+
+	target := filepath.Join(t.TempDir(), "tandem")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "answer")
+	if err := os.WriteFile(input, []byte("yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := os.Open(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	interactive := true
+	var log strings.Builder
+
+	err = CheckAtStartup(context.Background(), Options{
+		CurrentVersion: "1.0.0",
+		APIBaseURL:     server.URL,
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		Stdin:          stdin,
+		Log:            &log,
+		HTTPClient:     server.Client(),
+		Executable:     target,
+		Interactive:    &interactive,
+		reexec: func(string, []string, []string) error {
+			return fmt.Errorf("exec denied")
+		},
+	})
+	if !errors.Is(err, ErrRestartRequired) {
+		t.Fatalf("err = %v, want ErrRestartRequired", err)
+	}
+	if !strings.Contains(log.String(), "refusing to continue on the old version") {
+		t.Fatalf("log = %q", log.String())
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDevelopmentBuildSkipsNetwork(t *testing.T) {
