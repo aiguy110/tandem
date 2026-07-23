@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "daemon":
 		if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stderr}); err != nil {
 			fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
+			// The binary was replaced but the restart failed; don't run stale code.
+			if errors.Is(err, updater.ErrRestartRequired) {
+				return 1
+			}
 		}
 		if err := daemon.Run(stdout); err != nil {
 			fmt.Fprintf(stderr, "run daemon: %v\n", err)
