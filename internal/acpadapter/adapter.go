@@ -876,6 +876,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			ev["content"] = content
 		}
 		copyJSONField(ev, "rawInput", u["rawInput"])
+		copyJSONField(ev, "toolKind", u["kind"])
 		a.push(ev)
 	case "tool_call_update":
 		id, err := requiredString(u, "toolCallId")
@@ -888,6 +889,16 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			status = toolStatus(statusWire)
 			ev["status"] = status
 		}
+		// title/rawInput/kind are optional on an update, but agents that stream
+		// tool input incrementally (e.g. Claude refining a Bash command as it
+		// parses) send the real values here, after an initial tool_call whose
+		// input wasn't fully known yet. Forward them so the transcript picks up
+		// the refined command instead of getting stuck on the placeholder.
+		if titleWire := rawString(u["title"]); titleWire != "" {
+			ev["title"] = titleWire
+		}
+		copyJSONField(ev, "rawInput", u["rawInput"])
+		copyJSONField(ev, "toolKind", u["kind"])
 		a.mu.Lock()
 		fileCandidate := a.toolFiles[id]
 		if status != "" && status != "pending" && status != "running" {
