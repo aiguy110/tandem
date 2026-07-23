@@ -172,6 +172,7 @@ interface StoreState {
   deleteSnapshot: (id: string) => Promise<BrowserSnapshot[]>;
   listProfiles: (project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  renameAgent: (agentId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
@@ -730,6 +731,15 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingProfiles.set(corrId, { resolve, reject });
         client.send({ t: 'rename_profile', id, name, project, corrId });
+      }),
+    renameAgent: (agentId, name) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error) get().refreshAgents();
+          resolve(result);
+        });
+        client.send({ t: 'rename_agent', agentId, name, corrId });
       }),
     deleteProfile: (id, project) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {

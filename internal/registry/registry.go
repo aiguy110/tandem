@@ -241,7 +241,7 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 		if agent == "" {
 			agent = r.config.ACP.Default
 		}
-		summary := Summary{ID: s.ID, Name: s.Name, Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode(), Adapter: s.Spec.Adapter, CanHandoff: canHandoff(s.Spec)}
+		summary := Summary{ID: s.ID, Name: s.DisplayName(), Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode(), Adapter: s.Spec.Adapter, CanHandoff: canHandoff(s.Spec)}
 		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
 		if ws.Integration != nil {
 			summary.Workspace.TargetKind = ws.Integration.Kind
@@ -422,6 +422,26 @@ func (r *Registry) nextName(desired string) string {
 	return candidate
 }
 func (r *Registry) releaseKnown(id string) { r.mu.Lock(); delete(r.known, id); r.mu.Unlock() }
+
+func (r *Registry) Rename(agentID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("agent name cannot be empty")
+	}
+	if len([]rune(name)) > 80 {
+		return errors.New("agent name cannot exceed 80 characters")
+	}
+	s := r.Get(agentID)
+	if s == nil {
+		return errors.New("no such agent")
+	}
+	if err := r.store.SetAgentName(agentID, name); err != nil {
+		return err
+	}
+	s.SetDisplayName(name)
+	return nil
+}
+
 func (r *Registry) occupant(dir string) (string, bool) {
 	target, _ := filepath.Abs(dir)
 	r.mu.RLock()
@@ -833,7 +853,7 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 		if spec.Workspace.Kind == workspace.KindWorktree {
 			entry.Branch = spec.Workspace.Branch
 			if entry.Branch == "" {
-				entry.Branch = "tandem/" + rec.Name
+				entry.Branch = "tandem/" + rec.ID
 			}
 		}
 		if live != nil {
@@ -1041,7 +1061,7 @@ func (r *Registry) EnterTerminal(ctx context.Context, id string, interrupt bool)
 	s.SetControlMode("switching")
 	ptySpec := cloneSpec(s.Spec)
 	ptySpec.Adapter = "pty"
-	ptySpec.ResolvedLaunch.Terminal.StartArgs = expand(terminal.ResumeArgs, id, s.Name, rec.CWD, *rec.ACPSessionID)
+	ptySpec.ResolvedLaunch.Terminal.StartArgs = expand(terminal.ResumeArgs, id, s.DisplayName(), rec.CWD, *rec.ACPSessionID)
 	startPTY := func() (agentadapter.Adapter, error) {
 		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: id, CWD: rec.CWD, Spec: ptySpec, Log: s.Log})
 	}

@@ -26,10 +26,11 @@ const (
 )
 
 type Session struct {
-	ID, Name string
-	Spec     agentadapter.Spec
-	Log      *eventlog.Log
-	adapter  agentadapter.Adapter
+	ID      string
+	Name    string
+	Spec    agentadapter.Spec
+	Log     *eventlog.Log
+	adapter agentadapter.Adapter
 
 	mu           sync.RWMutex
 	status       Status
@@ -56,6 +57,18 @@ type Session struct {
 	shellCancel  context.CancelFunc
 	shellDone    chan struct{}
 	shellRunning bool
+}
+
+func (s *Session) DisplayName() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Name
+}
+
+func (s *Session) SetDisplayName(name string) {
+	s.mu.Lock()
+	s.Name = name
+	s.mu.Unlock()
 }
 
 // QueuedPrompt is a prompt waiting for the active ACP turn to finish. The

@@ -164,6 +164,28 @@ func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {
 	r2.DisposeAll(context.Background())
 }
 
+func TestRenameChangesDisplayNameWithoutChangingStableID(t *testing.T) {
+	r, db, _ := setup(t, &fakeFactory{})
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableID := s.ID
+	if err := r.Rename(stableID, "checkout investigation"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.DisplayName(); got != "checkout investigation" {
+		t.Fatalf("display name = %q", got)
+	}
+	if s.ID != stableID || s.Spec.Name != stableID {
+		t.Fatalf("rename changed stable identity: id=%q spec.name=%q", s.ID, s.Spec.Name)
+	}
+	rec, err := db.Agent(stableID)
+	if err != nil || rec == nil || rec.Name != "checkout investigation" {
+		t.Fatalf("persisted agent=%+v err=%v", rec, err)
+	}
+}
+
 func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	f := &fakeFactory{fail: map[string]bool{"api-2": true}}
 	r, db, _ := setup(t, f)

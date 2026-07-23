@@ -43,6 +43,7 @@ type Backend interface {
 	ListProfiles(string) ([]store.Profile, []string, error)
 	RenameProfile(string, string) error
 	DeleteProfile(string) error
+	Rename(string, string) error
 }
 
 type Options struct {
@@ -602,6 +603,13 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+	case "rename_agent":
+		if err := c.server.opts.Registry.Rename(m.AgentID, m.Name); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, m.AgentID)
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))

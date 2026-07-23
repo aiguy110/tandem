@@ -44,7 +44,7 @@ with durable transcript/session history; there is currently no eager GC.
 
 Implemented and de-risked: `subscribe`/`unsubscribe` (per-agent `channels` + `sinceSeq`),
 `prompt`, `input`, `resize`, `permission_response`, `interrupt`, `set_mode`,
-`set_config_option`, `spawn_agent`,
+`set_config_option`, `spawn_agent`, `rename_agent`,
 `close_agent` (now backed by the real WorkspaceManager — see below), `list_dirs` (Phase 2,
 repo discovery for the quick-spawn palette), and — Phase 5 — the browser channel:
 `browser_control` (grab/release, real), `browser_input`, `browser_frame`, `browser_state`
@@ -181,6 +181,7 @@ type ClientMsg =
   | { t: 'set_mode'; agentId: string; modeId: string }                 // ACP session/set_mode
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean }
   | { t: 'spawn_agent'; spec: SpawnSpec }                               // see spawn-and-workspaces.md
+  | { t: 'rename_agent'; agentId: string; name: string }                // display name only; stable id/worktree unchanged
   | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string }
   | { t: 'close_agent'; agentId: string; force?: boolean }             // teardown: keep branch, drop checkout
   | { t: 'merge_back';  agentId: string; mode: 'merge'|'pr' }          // error ack for now (no diff/merge UI yet)
