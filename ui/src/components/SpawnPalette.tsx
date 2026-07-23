@@ -651,7 +651,7 @@ export function SpawnPalette() {
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Repo settings</div>
             <label>
               Name
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="auto: web-1…" />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="auto: einstein-1…" />
             </label>
             <label>
               Git workspace
