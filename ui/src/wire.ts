@@ -289,6 +289,7 @@ export type ClientMsg =
   | { t: 'delete_snapshot'; id: string; corrId?: string }
   | { t: 'list_profiles'; project?: string; corrId?: string }
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
+  | { t: 'rename_agent'; agentId: string; name: string; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'get_diff'; agentId: string; corrId?: string }

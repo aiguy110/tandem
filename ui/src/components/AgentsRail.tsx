@@ -14,6 +14,7 @@ export function AgentsRail() {
   const setDraft = useStore((s) => s.setDraft);
   const getClosePreview = useStore((s) => s.getClosePreview);
   const closeAgent = useStore((s) => s.closeAgent);
+  const renameAgent = useStore((s) => s.renameAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
   const [confirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
@@ -86,6 +87,7 @@ export function AgentsRail() {
             agent={agents[id]}
             active={id === focusedId}
             onClick={() => focus(id)}
+            onRename={(name) => renameAgent(id, name)}
             onDelete={() => void requestDelete(id)}
           />
         ))
@@ -139,13 +141,18 @@ function Row({
   agent,
   active,
   onClick,
+  onRename,
   onDelete,
 }: {
   agent: AgentView;
   active: boolean;
   onClick: () => void;
+  onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(agent.name);
+  const [renameError, setRenameError] = useState('');
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
   const target = ws.targetRef?.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '');
@@ -161,6 +168,20 @@ function Row({
         unknown: 'git status unavailable',
       }[ws.gitState]
     : undefined;
+  const commitRename = async () => {
+    const next = name.trim();
+    if (!next) {
+      setRenameError('Name cannot be empty');
+      return;
+    }
+    const result = await onRename(next);
+    if (result.error) {
+      setRenameError(result.error);
+      return;
+    }
+    setEditing(false);
+    setRenameError('');
+  };
   return (
     <div className={`agent-row${active ? ' active' : ''}`} onClick={onClick}>
       <span className={`dot ${agent.status}`} title={agent.status} />
@@ -168,9 +189,33 @@ function Row({
         <div className="name">
           {agent.status === 'blocked' && '⚠ '}
           {agent.status === 'error' && '⛔ '}
-          {agent.name}
+          {editing ? (
+            <input
+              className="agent-rename-input"
+              value={name}
+              maxLength={80}
+              autoFocus
+              aria-label="Agent name"
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => {
+                setName(agent.name);
+                setRenameError('');
+                setEditing(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void commitRename();
+                if (e.key === 'Escape') {
+                  setName(agent.name);
+                  setRenameError('');
+                  setEditing(false);
+                }
+              }}
+            />
+          ) : agent.name}
           {agent.pendingApprovals.length > 0 && <span className="count hot badge">{agent.pendingApprovals.length}</span>}
         </div>
+        {renameError && <div className="agent-rename-error">{renameError}</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
           <span className="ws-text">
@@ -181,6 +226,19 @@ function Row({
           </span>
         </div>
       </div>
+      <button
+        className="rename-btn"
+        title="Rename agent"
+        aria-label={`Rename ${agent.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setName(agent.name);
+          setRenameError('');
+          setEditing(true);
+        }}
+      >
+        ✎
+      </button>
       <button
         className="delete-btn"
         title="Delete agent"

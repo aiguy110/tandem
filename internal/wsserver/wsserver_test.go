@@ -75,6 +75,7 @@ func (b *testBackend) Close(_ context.Context, id string, _, _ bool) (bool, erro
 	delete(b.sessions, id)
 	return true, nil
 }
+func (*testBackend) Rename(string, string) error { return nil }
 func (b *testBackend) SetMode(ctx context.Context, id, mode string) error {
 	s := b.Get(id)
 	if s == nil {

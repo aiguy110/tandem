@@ -209,6 +209,21 @@ func (s *Store) SetStatus(id, status string) error {
 	return err
 }
 
+func (s *Store) SetAgentName(id, name string) error {
+	result, err := s.db.Exec("UPDATE agents SET name = ? WHERE id = ?", name, id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		return errors.New("no such agent")
+	}
+	return nil
+}
+
 func (s *Store) SetSessionID(id, sessionID string) error {
 	_, err := s.db.Exec("UPDATE agents SET acpSessionId = ? WHERE id = ?", sessionID, id)
 	return err

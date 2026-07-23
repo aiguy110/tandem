@@ -24,7 +24,8 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
 
 - **Left rail — Agents.** The orchestra; one row per agent with a status dot
   (`idle · working · ⚠ blocked · error`), name, and workspace. `⚠ blocked` and `error`
-  float to the top. Click = focus. Always visible.
+  float to the top. Click = focus; the pencil edits the display name without renaming the
+  stable agent id, worktree, or branch. Always visible.
 - **Center — Focus.** The selected agent, with pane tabs:
   - **Chat** (default) — structured ACP transcript or the agent's resumable CLI, selected
     whose selected tab becomes an ACP/CLI switch, with guarded confirmations around
