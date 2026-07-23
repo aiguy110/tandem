@@ -71,6 +71,69 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestSettingsFilePrecedence(t *testing.T) {
+	o := options(t, nil)
+	home := o.Env["TANDEM_HOME"]
+	s := Settings{
+		ProjectRoots:  []string{"/work/a", "/work/b"},
+		Bind:          "0.0.0.0",
+		Port:          9000,
+		BrowserDriver: "steel",
+		Node:          NodeSettings{Mode: "managed", Version: "20.10.0"},
+	}
+	if err := SaveSettings(home, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSettings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, s) {
+		t.Fatalf("round-trip settings = %+v, want %+v", got, s)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Host != "0.0.0.0" || c.Port != 9000 || c.Browser.Driver != "steel" {
+		t.Fatalf("settings not applied: host=%q port=%d driver=%q", c.Host, c.Port, c.Browser.Driver)
+	}
+	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b"}) {
+		t.Fatalf("project roots = %v", c.ProjectRoots)
+	}
+	wantNode, wantNpm := ManagedNodePaths(filepath.Join(home, "node"))
+	if !c.Node.Managed || c.Node.Version != "20.10.0" || c.Node.Command != wantNode || c.Node.Npm != wantNpm {
+		t.Fatalf("managed node not resolved: %+v", c.Node)
+	}
+	if c.Agents["claude"].ACP.Cmd != wantNode {
+		t.Fatalf("managed node not fed into acp {node}: %q", c.Agents["claude"].ACP.Cmd)
+	}
+}
+
+func TestEnvOverridesSettings(t *testing.T) {
+	o := options(t, map[string]string{
+		"TANDEM_PORT": "7000", "TANDEM_BIND": "10.0.0.1",
+		"TANDEM_PROJECT_ROOTS": "/env/root", "TANDEM_NODE_CMD": "/env/bin/node",
+	})
+	home := o.Env["TANDEM_HOME"]
+	if err := SaveSettings(home, Settings{Port: 9000, Bind: "0.0.0.0", ProjectRoots: []string{"/file/root"}, Node: NodeSettings{Mode: "managed"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Port != 7000 || c.Host != "10.0.0.1" {
+		t.Fatalf("env did not override settings: port=%d host=%q", c.Port, c.Host)
+	}
+	if !reflect.DeepEqual(c.ProjectRoots, []string{"/env/root"}) {
+		t.Fatalf("env roots not applied: %v", c.ProjectRoots)
+	}
+	if c.Node.Managed || c.Node.Command != "/env/bin/node" {
+		t.Fatalf("TANDEM_NODE_CMD should force system node: %+v", c.Node)
+	}
+}
+
 func TestOverlayExpansionProfilesAndPartialAgentMerge(t *testing.T) {
 	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
 	config := `
