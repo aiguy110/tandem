@@ -146,7 +146,7 @@ func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.ID != "api-18" || b.ID != "db-19" {
+	if a.ID != "chandrasekhar-18" || b.ID != "bell-19" {
 		t.Fatalf("names %s %s", a.ID, b.ID)
 	}
 	ev := func(text string) eventlog.Event {

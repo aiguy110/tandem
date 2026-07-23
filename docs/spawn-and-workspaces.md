@@ -35,7 +35,7 @@ interface SpawnSpec {
         integration?: { kind: 'local-branch' | 'remote-branch' | 'detached'; ref: string };
         baseRef?: string }                // accepted for legacy clients
     | { kind: 'existing'; cwd: string };  // reuse a dir as-is (non-git, or opt-in)
-  name?: string;                          // auto: web-1, api-2… (renamable)
+  name?: string;                          // auto: einstein-1, curie-2… (renamable)
   task?: string;                          // optional initial prompt, dispatched on spawn
   preset?: string;                        // reserved legacy field
 }
@@ -166,7 +166,7 @@ never clobber each other. It's still just a different host directory.
 - **Source commit:** the selected ref is resolved to an immutable OID at spawn time. Both
   ref and OID are persisted, so later branch movement cannot rewrite the fork point.
 - **Agent branch:** `tandem/<context>/<agent-name>` (for example
-  `tandem/go-backend-migration/web-1`), with an expert override.
+  `tandem/go-backend-migration/einstein-1`), with an expert override.
 - **Branch picker:** Advanced Settings fuzzy-finds local branches, remote branches, and
   tags, including checked-out and upstream-divergence metadata. Refresh is read-only and
   never performs an implicit `git fetch`.

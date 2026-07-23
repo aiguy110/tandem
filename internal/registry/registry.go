@@ -24,7 +24,28 @@ import (
 	"github.com/aiguy110/tandem/internal/workspace"
 )
 
-var nameWords = []string{"web", "api", "db", "cli", "ui", "svc", "job", "net"}
+var nameWords = []string{
+	"einstein",
+	"curie",
+	"newton",
+	"feynman",
+	"maxwell",
+	"faraday",
+	"bohr",
+	"planck",
+	"dirac",
+	"noether",
+	"hawking",
+	"galileo",
+	"tesla",
+	"rutherford",
+	"wu",
+	"meitner",
+	"pauli",
+	"chandrasekhar",
+	"bell",
+	"hubble",
+}
 
 type Registry struct {
 	mu        sync.RWMutex
