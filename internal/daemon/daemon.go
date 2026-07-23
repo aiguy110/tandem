@@ -22,6 +22,7 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/registry"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
@@ -34,6 +35,11 @@ func Run(stdout io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if cfg.ManagedRuntime {
+		if err := runtimeinstall.Ensure(ctx, cfg.RuntimeRoot, stdout); err != nil {
+			return err
+		}
+	}
 	return Serve(ctx, cfg, stdout)
 }
 

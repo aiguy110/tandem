@@ -7,3 +7,12 @@ import _ "embed"
 //
 //go:embed config.yml.example
 var DefaultCatalog []byte
+
+// RuntimePackageJSON and RuntimePackageLock describe the locked Node runtime
+// provisioned by standalone binaries under TANDEM_HOME.
+//
+//go:embed runtime/package.json
+var RuntimePackageJSON []byte
+
+//go:embed runtime/package-lock.json
+var RuntimePackageLock []byte

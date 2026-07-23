@@ -68,6 +68,8 @@ type BrowserConfig struct {
 
 type Config struct {
 	Home           string                  `json:"home"`
+	RuntimeRoot    string                  `json:"runtimeRoot"`
+	ManagedRuntime bool                    `json:"managedRuntime"`
 	DBPath         string                  `json:"dbPath"`
 	TokenPath      string                  `json:"tokenPath"`
 	WorktreesDir   string                  `json:"worktreesDir"`
@@ -103,12 +105,23 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	root := filepath.Dir(exe)
+	managedRuntime := true
 	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
 		if _, statErr := os.Stat(filepath.Join(cwd, "config.yml.example")); statErr == nil {
 			root = cwd
+			managedRuntime = false
 		}
 	}
-	return LoadWithOptions(Options{Env: environ(), HomeDir: home, RuntimeRoot: filepath.Join(root, "runtime"), TandemRoot: root})
+	runtimeRoot := filepath.Join(root, "runtime")
+	if managedRuntime {
+		runtimeRoot = filepath.Join(value(environ(), "TANDEM_HOME", filepath.Join(home, ".tandem")), "runtime")
+	}
+	cfg, err := LoadWithOptions(Options{Env: environ(), HomeDir: home, RuntimeRoot: runtimeRoot, TandemRoot: root})
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ManagedRuntime = managedRuntime
+	return cfg, nil
 }
 
 func environ() map[string]string {
@@ -170,7 +183,8 @@ func LoadWithOptions(o Options) (Config, error) {
 		}
 	}
 	return Config{
-		Home: home, DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
+		Home: home, RuntimeRoot: o.RuntimeRoot,
+		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
 		WorktreesDir: filepath.Join(home, "worktrees"), AssetsDir: filepath.Join(home, "assets"),
 		Host: value(env, "TANDEM_BIND", "127.0.0.1"), Port: port, UIDir: env["TANDEM_UI_DIR"],
 		ProjectRoots: roots, DirScanDepth: depth,

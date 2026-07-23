@@ -21,7 +21,9 @@ curl -fsSL https://raw.githubusercontent.com/aiguy110/tandem/master/scripts/inst
 
 The installer verifies the release checksum, installs `tandem` at `~/.local/bin/tandem`,
 and adds that directory to `.bashrc` or `.zshrc` when needed. It prints the required
-`source ~/.bashrc` or `source ~/.zshrc` command after making that change.
+`source ~/.bashrc` or `source ~/.zshrc` command after making that change. On first daemon
+start, the standalone binary uses `npm ci` to provision its locked ACP and browser runtime
+under `$TANDEM_HOME/runtime` (normally `~/.tandem/runtime`).
 
 ## What it is
 
@@ -35,9 +37,10 @@ and adds that directory to `.bashrc` or `.zshrc` when needed. It prints the requ
 
 ## Quick start
 
-Prerequisites: **Node 22+** for the UI and Node-based agent adapters, **Go 1.24+** for the
-native daemon, and `git` on `PATH`. An authenticated agent CLI is required to drive its
-corresponding real agent.
+Source prerequisites: **Node 22+** for the UI and Node-based agent adapters, **Go 1.24+**
+for the native daemon, and `git` on `PATH`. Standalone releases require Node 22+ with
+`npm`; they provision the Node adapter packages automatically. An authenticated agent CLI
+is required to drive its corresponding real agent.
 
 ```bash
 ./start-dev-server.sh
