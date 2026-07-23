@@ -42,8 +42,8 @@ export function AgentsRail() {
     setPane('chat');
     const target = agents[id]?.workspace.targetRef;
     setDraft(id, target
-      ? `please commit your changes and prepare them to merge into ${target.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}`
-      : 'please commit your changes and prepare them for integration');
+      ? `commit your changes and merge back into ${target.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}`
+      : 'commit your changes and merge back into the integration target branch');
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const textarea = [...document.querySelectorAll<HTMLTextAreaElement>('[data-prompt-agent]')].find((el) => el.dataset.promptAgent === id);
       textarea?.focus();
