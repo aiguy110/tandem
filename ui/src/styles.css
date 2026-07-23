@@ -269,6 +269,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .ev.msg .code-block:hover .code-copy-btn, .ev.msg .code-copy-btn:focus-visible { opacity: 1; }
 .ev.msg .code-copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
 .ev.msg .code-copy-btn.copied { color: var(--ok); border-color: var(--ok); opacity: 1; }
+.ev.msg table { border-collapse: collapse; margin: 0 0 8px; font-size: var(--fs-sm); }
+.ev.msg th, .ev.msg td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+.ev.msg th { background: var(--surface-2); font-weight: 600; }
 .ev.thought { color: var(--text-faint); font-size: var(--fs-sm); font-style: italic; border-left: 2px solid var(--border); padding-left: 10px; }
 .ev.thought summary { cursor: pointer; }
 
