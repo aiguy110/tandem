@@ -6,7 +6,6 @@ import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
-const HARNESS_DEFAULTS_KEY = 'tandem.harnessDefaults.v1';
 const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
 const FALLBACK_HARNESSES = [
   { id: 'agent:claude', name: 'Claude', agent: 'claude', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
@@ -37,25 +36,15 @@ interface HarnessDefaults {
 
 const EMPTY_HARNESS_DEFAULTS: HarnessDefaults = { model: '', effort: '', permission: '' };
 
-function loadHarnessDefaults(harness: string): HarnessDefaults | undefined {
-  try {
-    const all = JSON.parse(localStorage.getItem(HARNESS_DEFAULTS_KEY) || '{}') as Record<string, Partial<HarnessDefaults>>;
-    const saved = all[harness];
-    if (!saved) return undefined;
-    return {
-      model: typeof saved?.model === 'string' ? saved.model : '',
-      effort: typeof saved?.effort === 'string' ? saved.effort : '',
-      permission: typeof saved?.permission === 'string' ? saved.permission : '',
-    };
-  } catch { return undefined; }
-}
-
-function saveHarnessDefaults(harness: string, defaults: HarnessDefaults) {
-  try {
-    const all = JSON.parse(localStorage.getItem(HARNESS_DEFAULTS_KEY) || '{}') as Record<string, HarnessDefaults>;
-    all[harness] = defaults;
-    localStorage.setItem(HARNESS_DEFAULTS_KEY, JSON.stringify(all));
-  } catch { /* localStorage unavailable */ }
+// A harness's model/effort/permission memory is no longer stored client-side:
+// it is derived from the daemon-owned profiles list (globally ordered by
+// lastUsedAt), so the most-recent profile matching a harness is its last-used
+// settings. This keeps the profiles table the single source of truth.
+function profileDefaults(profiles: Profile[], agent: string, harness: string): HarnessDefaults {
+  const latest = profiles.find((p) => p.agent === agent && (p.harness ?? '') === harness);
+  return latest
+    ? { model: latest.model, effort: latest.effort, permission: latest.permission }
+    : EMPTY_HARNESS_DEFAULTS;
 }
 
 function loadRecentDirs(): string[] {
@@ -197,19 +186,25 @@ export function SpawnPalette() {
       ?? harnesses.find((harness) => harness.id === catalogDefault)
       ?? harnesses[0];
   };
-  const applyHarnessDefaults = (harness: string) => {
-    const defaults = loadHarnessDefaults(harness) ?? EMPTY_HARNESS_DEFAULTS;
+  // Recall a harness's last-used model/effort/permission from the daemon-owned
+  // profiles list (see profileDefaults) rather than any client-side store.
+  const applyHarnessDefaults = (harnessId: string) => {
+    const entry = harnesses.find((h) => h.id === harnessId);
+    const defaults = profileDefaults(profiles, entry?.agent ?? harnessId.replace(/^agent:/, ''), entry?.harness ?? '');
     setModel(defaults.model);
     setEffort(defaults.effort);
     setPermission(defaults.permission);
   };
-  // Apply a saved profile's settings onto the editable fields (harness picked by
-  // its harness id, else by agent). The options-clamp effect prunes any
-  // model/effort/permission the resolved harness doesn't offer.
+  // Resolve the harness entry a profile should launch under (its harness id, else
+  // its agent).
+  const harnessForProfile = (p: { agent: string; harness?: string }) =>
+    (p.harness ? harnesses.find((h) => h.harness === p.harness) : undefined)
+    ?? harnesses.find((h) => !h.harness && h.agent === p.agent)
+    ?? harnesses.find((h) => h.agent === p.agent);
+  // Apply a saved profile's settings onto the editable fields. The options-clamp
+  // effect prunes any model/effort/permission the resolved harness doesn't offer.
   const applyProfile = (p: Profile) => {
-    const entry = (p.harness ? harnesses.find((h) => h.harness === p.harness) : undefined)
-      ?? harnesses.find((h) => !h.harness && h.agent === p.agent)
-      ?? harnesses.find((h) => h.agent === p.agent);
+    const entry = harnessForProfile(p);
     if (entry) setAgent(entry.id);
     setModel(p.model);
     setEffort(p.effort);
@@ -232,13 +227,38 @@ export function SpawnPalette() {
       }
     }
   };
+  // Seed the palette for the selected repo from the daemon's per-repo recency
+  // (profile_recent): its most-recent profile is the durable default. Falls back
+  // to the per-project harness hint + that harness's last settings only when the
+  // repo has no recorded profile. Applied once per directory (appliedDirRef) so it
+  // never clobbers edits, and re-runs as profilesByRepo loads in.
   useEffect(() => {
     if (!selectedDir) return;
+    const cached = profilesByRepo[selectedDir.path];
+    if (cached) {
+      setProfiles(cached.profiles);
+      setProfileRecent(cached.recent);
+    }
+    if (appliedDirRef.current === selectedDir.path) return;
+    const latest = cached?.profiles.find((p) => p.id === cached.recent[0]);
+    if (latest) {
+      appliedDirRef.current = selectedDir.path;
+      applyProfile(latest);
+      return;
+    }
     const matched = harnessForProject(selectedDir.path);
-    const next = matched?.id ?? 'agent:claude';
-    setAgent(next);
-    applyHarnessDefaults(next);
-  }, [selectedDir?.path, harnesses, agentCatalog]);
+    setAgent(matched?.id ?? 'agent:claude');
+    // Only lock in the harness-hint fallback once profiles have loaded, so a later
+    // fetch that reveals a recent profile can still take precedence.
+    if (cached) {
+      appliedDirRef.current = selectedDir.path;
+      const defaults = profileDefaults(cached.profiles, matched?.agent ?? '', matched?.harness ?? '');
+      setModel(defaults.model);
+      setEffort(defaults.effort);
+      setPermission(defaults.permission);
+    }
+    // applyProfile/harnessForProject close over current harnesses; profilesByRepo drives re-runs.
+  }, [selectedDir?.path, profilesByRepo, harnesses, agentCatalog]);
   useEffect(() => {
     if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
     if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
@@ -269,24 +289,19 @@ export function SpawnPalette() {
     });
     return () => { cancelled = true; };
   }, [filtered, profilesByRepo, listProfiles]);
+  // On advanced open, refresh this repo's profiles + snapshots so the picker
+  // reflects any newly-created profiles. Feeding profilesByRepo lets the seed
+  // effect above project the fresh list (and apply it if not yet applied).
   useEffect(() => {
     if (!advanced || !selectedDir) return;
     let cancelled = false;
     void listSnapshots().catch(() => {});
     void listProfiles(selectedDir.path).then(({ profiles: ps, recent }) => {
       if (cancelled) return;
-      setProfiles(ps);
-      setProfileRecent(recent);
       setProfilesByRepo((current) => ({ ...current, [selectedDir.path]: { profiles: ps, recent } }));
-      if (appliedDirRef.current !== selectedDir.path) {
-        appliedDirRef.current = selectedDir.path;
-        const latest = ps.find((p) => p.id === recent[0]);
-        if (latest) applyProfile(latest);
-      }
     }).catch(() => {});
     return () => { cancelled = true; };
-    // applyProfile is stable enough for this effect's purpose; harnesses drive it.
-  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, harnesses]);
+  }, [advanced, selectedDir?.path, listProfiles, listSnapshots]);
   useEffect(() => {
     if (!advanced || adapter !== 'acp' || !selectedDir) {
       setSpawnOptions(null);
@@ -365,26 +380,25 @@ export function SpawnPalette() {
   const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
     setBusy(true);
     setError(null);
-    const spawnHarness = advanced ? selectedHarness : harnessForProject(dir.path);
+    let spawnHarness = advanced ? selectedHarness : undefined;
+    let defaults: HarnessDefaults = advanced ? { model, effort, permission } : EMPTY_HARNESS_DEFAULTS;
+    if (!advanced) {
+      // Non-advanced quick-spawn launches this repo's durable default from
+      // profile_recent (harness + settings), falling back to the per-project
+      // harness hint and that harness's most-recent settings. The prefetch effect
+      // usually has the list cached; fetch on a miss (row clicked before prefetch).
+      const data = profilesByRepo[dir.path] ?? await listProfiles(dir.path).catch(() => ({ profiles: [], recent: [] }));
+      const latest = data.profiles.find((p) => p.id === data.recent[0]);
+      if (latest) {
+        spawnHarness = harnessForProfile(latest);
+        defaults = { model: latest.model, effort: latest.effort, permission: latest.permission };
+      } else {
+        spawnHarness = harnessForProject(dir.path);
+        defaults = profileDefaults(data.profiles, spawnHarness?.agent ?? '', spawnHarness?.harness ?? '');
+      }
+    }
     const spawnAgent = spawnHarness?.agent ?? agentSlug;
     const spawnHarnessID = spawnHarness?.harness;
-    let defaults = advanced ? { model, effort, permission } : loadHarnessDefaults(spawnHarness?.id ?? agent);
-    if (!defaults) {
-      // Migrate installations that predate harness-scoped defaults from the
-      // globally most-recent profile for this harness. listProfiles is globally
-      // ordered; its separate `recent` list is the project-specific ordering.
-      try {
-        const { profiles: allProfiles } = await listProfiles(dir.path);
-        const latest = allProfiles.find((profile) =>
-          profile.agent === spawnAgent && profile.harness === (spawnHarnessID ?? ''));
-        defaults = latest
-          ? { model: latest.model, effort: latest.effort, permission: latest.permission }
-          : EMPTY_HARNESS_DEFAULTS;
-      } catch {
-        defaults = EMPTY_HARNESS_DEFAULTS;
-      }
-      if (spawnHarness) saveHarnessDefaults(spawnHarness.id, defaults);
-    }
     const spawnAdapter = advanced ? adapter : (spawnHarness?.hasAcp ? 'acp' : 'pty');
     const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : advanced ? workspaceMode : 'create';
     const cwd = existingCwd ?? dir.path;
@@ -451,7 +465,6 @@ export function SpawnPalette() {
       },
     };
     saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
-    if (advanced && spawnAdapter === 'acp' && spawnHarness) saveHarnessDefaults(spawnHarness.id, defaults);
     if (advanced && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
     const r = await spawn(spec);
     setBusy(false);
@@ -526,11 +539,8 @@ export function SpawnPalette() {
               {filtered.map((d, i) => {
                 const repoProfiles = profilesByRepo[d.path];
                 const rowHarness = harnessForProject(d.path);
-                const defaults = loadHarnessDefaults(rowHarness?.id ?? '') ?? EMPTY_HARNESS_DEFAULTS;
-                const defaultProfile = repoProfiles?.profiles.find((profile) =>
-                  profile.agent === rowHarness?.agent && profile.harness === (rowHarness?.harness ?? '')
-                  && profile.model === defaults.model && profile.effort === defaults.effort
-                  && profile.permission === defaults.permission && !profile.snapshotId);
+                // Quick-spawn launches this repo's most-recent profile (profile_recent).
+                const defaultProfile = repoProfiles?.profiles.find((profile) => profile.id === repoProfiles.recent[0]);
                 return (
                   <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => !busy && doSpawn(d)}>
                     <div className="repo-details">
