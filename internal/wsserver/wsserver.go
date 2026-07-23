@@ -149,17 +149,25 @@ type clientMessage struct {
 }
 
 type connection struct {
-	server    *Handler
-	ws        *websocket.Conn
-	out       chan []byte
-	done      chan struct{}
-	closeOnce sync.Once
-	mu        sync.Mutex
-	subs      map[string]*subscription
+	server       *Handler
+	ws           *websocket.Conn
+	out          chan []byte
+	frameReady   chan string
+	frameMu      sync.Mutex
+	latestFrames map[string][]byte
+	done         chan struct{}
+	closeOnce    sync.Once
+	mu           sync.Mutex
+	subs         map[string]*subscription
 }
 
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
-	return &connection{server: h, ws: ws, out: make(chan []byte, h.opts.WriteQueue), done: make(chan struct{}), subs: map[string]*subscription{}}
+	return &connection{
+		server: h, ws: ws,
+		out:        make(chan []byte, h.opts.WriteQueue),
+		frameReady: make(chan string, 16), latestFrames: make(map[string][]byte),
+		done: make(chan struct{}), subs: map[string]*subscription{},
+	}
 }
 
 func (c *connection) run() {
@@ -182,17 +190,41 @@ func (c *connection) run() {
 
 func (c *connection) writeLoop() {
 	for {
+		// Control/state messages take priority over lossy screencast frames.
 		select {
 		case data := <-c.out:
-			_ = c.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if c.ws.WriteMessage(websocket.TextMessage, data) != nil {
-				c.close()
+			if !c.write(data) {
+				return
+			}
+			continue
+		default:
+		}
+		select {
+		case data := <-c.out:
+			if !c.write(data) {
+				return
+			}
+		case agentID := <-c.frameReady:
+			c.frameMu.Lock()
+			data := c.latestFrames[agentID]
+			delete(c.latestFrames, agentID)
+			c.frameMu.Unlock()
+			if len(data) > 0 && !c.write(data) {
 				return
 			}
 		case <-c.done:
 			return
 		}
 	}
+}
+
+func (c *connection) write(data []byte) bool {
+	_ = c.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if c.ws.WriteMessage(websocket.TextMessage, data) != nil {
+		c.close()
+		return false
+	}
+	return true
 }
 
 func (c *connection) close() {
@@ -220,6 +252,35 @@ func (c *connection) send(value any) bool {
 		return false
 	default:
 		c.close()
+		return false
+	}
+}
+
+// sendFrame retains at most one unsent frame per agent. Screencast frames are
+// snapshots, so delivering stale intermediate frames only increases latency.
+func (c *connection) sendFrame(agentID string, value any) bool {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	c.frameMu.Lock()
+	_, alreadyPending := c.latestFrames[agentID]
+	c.latestFrames[agentID] = data
+	c.frameMu.Unlock()
+	if alreadyPending {
+		return true
+	}
+	select {
+	case c.frameReady <- agentID:
+		return true
+	case <-c.done:
+		return false
+	default:
+		// Only subscribed browser panes enqueue frames, but avoid ever blocking
+		// the CDP reader if that invariant changes.
+		c.frameMu.Lock()
+		delete(c.latestFrames, agentID)
+		c.frameMu.Unlock()
 		return false
 	}
 }
@@ -620,8 +681,18 @@ func (c *connection) handle(m clientMessage) {
 		if _, ok := c.requireSession(m); !ok {
 			return
 		}
-		go func() { _ = c.server.opts.Browser.DispatchUserInput(context.Background(), m.AgentID, m.Event) }()
-		c.commandAck(m, m.AgentID)
+		// Preserve input order. In particular, a release must never overtake a
+		// press or race a synthetic click on separate goroutines.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := c.server.opts.Browser.DispatchUserInput(ctx, m.AgentID, m.Event)
+		cancel()
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		if len(m.CorrID) > 0 && string(m.CorrID) != "null" {
+			c.commandAck(m, m.AgentID)
+		}
 	case "merge_back":
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
@@ -856,7 +927,7 @@ func (c *connection) subscribe(m clientMessage) {
 		// focused, browser-viewing client streams frames).
 		if sub.channels["browser"] {
 			offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
-				c.send(map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
+				c.sendFrame(sess.ID, map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
 			})
 			sub.mu.Lock()
 			sub.browserFrameOff = offFrames

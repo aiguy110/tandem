@@ -322,6 +322,7 @@ export interface BrowserInputWire {
   key?: string;
   code?: string;
   keyCode?: number;
+  autoRepeat?: boolean;
   text?: string;
 }
 

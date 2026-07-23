@@ -541,6 +541,29 @@ func TestBrowserStateFlowsOnBaseSubscription(t *testing.T) {
 	}
 }
 
+func TestSendFrameKeepsOnlyLatestPendingFramePerAgent(t *testing.T) {
+	c := newConnection(New(Options{WriteQueue: 4}), nil)
+	if !c.sendFrame("a", map[string]any{"t": "browser_frame", "dataB64": "old"}) {
+		t.Fatal("first frame was rejected")
+	}
+	if !c.sendFrame("a", map[string]any{"t": "browser_frame", "dataB64": "latest"}) {
+		t.Fatal("replacement frame was rejected")
+	}
+	if got := len(c.frameReady); got != 1 {
+		t.Fatalf("frame notifications=%d, want 1", got)
+	}
+	c.frameMu.Lock()
+	data := append([]byte(nil), c.latestFrames["a"]...)
+	c.frameMu.Unlock()
+	var frame map[string]any
+	if err := json.Unmarshal(data, &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame["dataB64"] != "latest" {
+		t.Fatalf("pending frame=%v", frame)
+	}
+}
+
 func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) {
 	db, b, a, _, url := setupWS(t, 4)
 	for i := 0; i < 5; i++ {

@@ -210,7 +210,7 @@ interface BrowserInputWire {
   kind: 'mousemove'|'mousedown'|'mouseup'|'click'|'wheel'|'keydown'|'keyup'|'text';
   x?: number; y?: number; button?: 'left'|'middle'|'right'; buttons?: number;
   clickCount?: number; deltaX?: number; deltaY?: number;
-  key?: string; code?: string; keyCode?: number; text?: string;
+  key?: string; code?: string; keyCode?: number; autoRepeat?: boolean; text?: string;
 }
 // (+ optional corrId on every variant)
 

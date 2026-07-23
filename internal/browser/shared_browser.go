@@ -36,6 +36,7 @@ type BrowserInputEvent struct {
 	Key        string
 	Code       string
 	KeyCode    int
+	AutoRepeat bool
 	Text       string
 }
 
@@ -71,6 +72,7 @@ type SharedBrowser struct {
 	casting       bool
 	reconnecting  bool
 	frameCallback func(ScreencastFrame)
+	lastFrameSent time.Time
 	writeMu       sync.Mutex
 	connectMu     sync.Mutex
 	closeOnce     sync.Once
@@ -172,6 +174,7 @@ func (s *SharedBrowser) IsConnected() bool {
 func (s *SharedBrowser) StartScreencast(ctx context.Context, callback func(ScreencastFrame)) error {
 	s.mu.Lock()
 	s.frameCallback = callback
+	s.lastFrameSent = time.Time{}
 	s.desiredCast = true
 	already := s.casting
 	s.mu.Unlock()
@@ -193,12 +196,13 @@ func (s *SharedBrowser) StartScreencast(ctx context.Context, callback func(Scree
 
 func (s *SharedBrowser) startRemoteCast(ctx context.Context, conn *websocket.Conn, session string) error {
 	err := s.callOn(ctx, conn, session, "Page.startScreencast", map[string]any{
-		"format": "jpeg", "quality": 90, "maxWidth": 1280, "maxHeight": 800, "everyNthFrame": 1,
+		"format": "jpeg", "quality": 75, "maxWidth": 1280, "maxHeight": 800, "everyNthFrame": 1,
 	}, nil)
 	if err == nil {
 		s.mu.Lock()
 		if s.conn == conn && s.sessionID == session {
 			s.casting = true
+			s.lastFrameSent = time.Time{}
 		}
 		s.mu.Unlock()
 	}
@@ -246,12 +250,12 @@ func (s *SharedBrowser) Dispatch(ctx context.Context, event BrowserInputEvent) e
 		if err := s.sessionCall(ctx, method, press, nil); err != nil {
 			return err
 		}
-		params = map[string]any{"type": "mouseReleased", "x": event.X, "y": event.Y, "button": "left", "buttons": 1, "clickCount": 1}
+		params = map[string]any{"type": "mouseReleased", "x": event.X, "y": event.Y, "button": "left", "buttons": 0, "clickCount": 1}
 	case "wheel":
 		params["type"], params["deltaX"], params["deltaY"] = "mouseWheel", event.DeltaX, event.DeltaY
 	case "keydown":
 		method = "Input.dispatchKeyEvent"
-		params = map[string]any{"type": "keyDown", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode}
+		params = map[string]any{"type": "keyDown", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode, "autoRepeat": event.AutoRepeat}
 		if event.Text != "" {
 			params["text"] = event.Text
 		}
@@ -375,6 +379,12 @@ func (s *SharedBrowser) readLoop(conn *websocket.Conn) {
 			}
 			s.mu.Lock()
 			callback, session := s.frameCallback, s.sessionID
+			now := time.Now()
+			if callback != nil && !s.lastFrameSent.IsZero() && now.Sub(s.lastFrameSent) < time.Second/15 {
+				callback = nil
+			} else if callback != nil {
+				s.lastFrameSent = now
+			}
 			s.mu.Unlock()
 			if callback != nil {
 				callback(ScreencastFrame{DataB64: frame.Data, Meta: ScreencastMetadata{

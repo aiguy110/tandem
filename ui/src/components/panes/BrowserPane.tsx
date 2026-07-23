@@ -96,6 +96,9 @@ export function BrowserPane() {
     | { kind: 'single'; sx: number; sy: number; lx: number; ly: number; scrolling: boolean }
     | { kind: 'pinch'; distance: number; scale: number; contentX: number; contentY: number };
   const touchRef = useRef<TouchState | null>(null);
+  const pressedPointerRef = useRef<{ pointerId: number; x: number; y: number; button: BrowserInputWire['button'] } | null>(null);
+  const pendingMoveRef = useRef<BrowserInputWire | null>(null);
+  const moveFrameRef = useRef<number | null>(null);
   // Hidden field that drives the mobile soft keyboard (see onKbdInput).
   const kbdRef = useRef<HTMLTextAreaElement>(null);
   const userOwns = owner === 'user';
@@ -115,6 +118,8 @@ export function BrowserPane() {
     let disposed = false;
     let image: HTMLImageElement | null = null;
     let frame: Frame | null = null;
+    let decoding = false;
+    let pendingFrame: Frame | null = null;
 
     const redraw = () => {
       if (disposed || !image || !frame) return;
@@ -144,15 +149,36 @@ export function BrowserPane() {
     };
     redrawRef.current = redraw;
 
-    const paint = (f: Frame) => {
+    const decode = (f: Frame) => {
+      decoding = true;
       const img = new Image();
       img.onload = () => {
         if (disposed) return;
         image = img;
         frame = f;
         redraw();
+        decoding = false;
+        const next = pendingFrame;
+        pendingFrame = null;
+        if (next) decode(next);
+      };
+      img.onerror = () => {
+        decoding = false;
+        const next = pendingFrame;
+        pendingFrame = null;
+        if (!disposed && next) decode(next);
       };
       img.src = 'data:image/jpeg;base64,' + f.dataB64;
+    };
+    // JPEG decoding is asynchronous. Keep at most one decode in flight and one
+    // latest pending frame; decoding every stale frame makes the UI fall farther
+    // behind during animated pages.
+    const paint = (f: Frame) => {
+      if (decoding) {
+        pendingFrame = f;
+        return;
+      }
+      decode(f);
     };
 
     const observer = new ResizeObserver(redraw);
@@ -179,8 +205,8 @@ export function BrowserPane() {
     if (cx < 0 || cy < 0 || cx > w || cy > h) return null;
     return { x: Math.round((cx / w) * dw), y: Math.round((cy / h) * dh) };
   };
-  // Map a pointer event on the canvas to device (page) coordinates.
-  const toPage = (e: React.MouseEvent): { x: number; y: number } | null => clientToPage(e.clientX, e.clientY);
+  // Map an event on the canvas to device (page) coordinates.
+  const toPage = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => clientToPage(e.clientX, e.clientY);
 
   const emit = (event: BrowserInputWire) => browserInput(agentId, event);
   // Chromium's built-in editing/navigation commands (delete-backward, caret
@@ -191,13 +217,54 @@ export function BrowserPane() {
     Backspace: 8, Tab: 9, Enter: 13, Escape: 27, Delete: 46,
     ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34,
   };
-  const emitKey = (key: string, code: string) => emit({ kind: 'keydown', key, code, keyCode: VK_CODES[key] });
+  const keyCode = (e: React.KeyboardEvent) => e.keyCode || VK_CODES[e.key];
+  const emitKeyDown = (e: React.KeyboardEvent) => emit({
+    kind: 'keydown', key: e.key, code: e.code, keyCode: keyCode(e),
+    autoRepeat: e.repeat,
+    text: e.key.length === 1 ? e.key : undefined,
+  });
+  const emitKeyUp = (e: React.KeyboardEvent) => emit({ kind: 'keyup', key: e.key, code: e.code, keyCode: keyCode(e) });
+  const emitKeyPress = (key: string, code: string) => {
+    const vk = VK_CODES[key];
+    emit({ kind: 'keydown', key, code, keyCode: vk });
+    emit({ kind: 'keyup', key, code, keyCode: vk });
+  };
 
-  const onMouse = (kind: BrowserInputWire['kind']) => (e: React.MouseEvent) => {
-    if (!userOwns) return;
+  const buttonName = (button: number): BrowserInputWire['button'] => button === 1 ? 'middle' : button === 2 ? 'right' : 'left';
+  const flushMove = () => {
+    moveFrameRef.current = null;
+    const pending = pendingMoveRef.current;
+    pendingMoveRef.current = null;
+    if (pending) emit(pending);
+  };
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!userOwns || e.pointerType !== 'mouse') return;
     const p = toPage(e);
     if (!p) return;
-    emit({ kind, x: p.x, y: p.y, buttons: e.buttons });
+    e.currentTarget.focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const button = buttonName(e.button);
+    pressedPointerRef.current = { pointerId: e.pointerId, x: p.x, y: p.y, button };
+    emit({ kind: 'mousedown', x: p.x, y: p.y, button, buttons: e.buttons });
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!userOwns || e.pointerType !== 'mouse') return;
+    const p = toPage(e);
+    if (!p) return;
+    if (pressedPointerRef.current?.pointerId === e.pointerId) {
+      pressedPointerRef.current = { ...pressedPointerRef.current, x: p.x, y: p.y };
+    }
+    pendingMoveRef.current = { kind: 'mousemove', x: p.x, y: p.y, buttons: e.buttons };
+    if (moveFrameRef.current === null) moveFrameRef.current = requestAnimationFrame(flushMove);
+  };
+  const releasePointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse') return;
+    const pressed = pressedPointerRef.current;
+    if (!pressed || pressed.pointerId !== e.pointerId) return;
+    const p = toPage(e) ?? pressed;
+    pressedPointerRef.current = null;
+    emit({ kind: 'mouseup', x: p.x, y: p.y, button: pressed.button, buttons: 0 });
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
   };
   const onWheel = (e: React.WheelEvent) => {
     if (!userOwns) return;
@@ -208,7 +275,7 @@ export function BrowserPane() {
     const cy = e.clientY - r.top - y;
     emit({ kind: 'wheel', x: Math.round((cx / w) * dw), y: Math.round((cy / h) * dh), deltaX: e.deltaX, deltaY: e.deltaY });
   };
-  const onKey = (e: React.KeyboardEvent) => {
+  const onKeyDown = (e: React.KeyboardEvent) => {
     if (!userOwns) return;
     // We own the wheel, so this keystroke is meant for the remote page, not the
     // app. stopPropagation keeps it from bubbling to the window-level global key
@@ -218,9 +285,31 @@ export function BrowserPane() {
     // <textarea>, which useGlobalKeys already treats as text-input scope.
     e.preventDefault();
     e.stopPropagation();
-    if (e.key.length === 1) emit({ kind: 'text', text: e.key });
-    else emitKey(e.key, e.code);
+    emitKeyDown(e);
   };
+  const onKeyUp = (e: React.KeyboardEvent) => {
+    if (!userOwns) return;
+    e.preventDefault();
+    e.stopPropagation();
+    emitKeyUp(e);
+  };
+
+  useEffect(() => {
+    const release = () => {
+      const pressed = pressedPointerRef.current;
+      if (!pressed || !userOwns) return;
+      pressedPointerRef.current = null;
+      emit({ kind: 'mouseup', x: pressed.x, y: pressed.y, button: pressed.button, buttons: 0 });
+    };
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('blur', release);
+      release();
+      if (moveFrameRef.current !== null) cancelAnimationFrame(moveFrameRef.current);
+      moveFrameRef.current = null;
+      pendingMoveRef.current = null;
+    };
+  }, [agentId, userOwns]);
 
   // One finger taps or scrolls the remote page. Two fingers zoom and pan only
   // this local viewer; input coordinates are mapped back through that view.
@@ -288,7 +377,6 @@ export function BrowserPane() {
     if (!p) return;
     emit({ kind: 'mousedown', x: p.x, y: p.y, buttons: 1 });
     emit({ kind: 'mouseup', x: p.x, y: p.y, buttons: 0 });
-    emit({ kind: 'click', x: p.x, y: p.y, buttons: 0 });
   };
 
   // Soft keyboard. A <canvas> can't summon a phone's on-screen keyboard, so a
@@ -334,19 +422,19 @@ export function BrowserPane() {
         case 'insertLineBreak':
         case 'insertParagraph':
           pendingBkspInputsRef.current = 0;
-          emitKey('Enter', 'Enter');
+          emitKeyPress('Enter', 'Enter');
           break;
         case 'deleteContentBackward':
         case 'deleteWordBackward':
           if (pendingBkspInputsRef.current > 0) {
             pendingBkspInputsRef.current -= 1;
           } else {
-            emitKey('Backspace', 'Backspace');
+            emitKeyPress('Backspace', 'Backspace');
           }
           break;
         case 'deleteContentForward':
           pendingBkspInputsRef.current = 0;
-          emitKey('Delete', 'Delete');
+          emitKeyPress('Delete', 'Delete');
           break;
       }
     }
@@ -362,15 +450,24 @@ export function BrowserPane() {
   // each delayed input echo without relying on device-specific timing.
   const onKbdKeyDown = (e: React.KeyboardEvent) => {
     if (!userOwns) return;
+    e.stopPropagation();
     const k = e.key;
     if (k === 'Backspace') {
       pendingBkspInputsRef.current += 1;
-      emitKey('Backspace', 'Backspace');
+      emit({ kind: 'keydown', key: 'Backspace', code: 'Backspace', keyCode: VK_CODES.Backspace });
       return;
     }
     if (k.length === 1 || k === 'Enter' || k === 'Unidentified' || k === 'Process') return;
     e.preventDefault();
-    emitKey(k, e.code);
+    emit({ kind: 'keydown', key: k, code: e.code, keyCode: VK_CODES[k] || e.keyCode });
+  };
+  const onKbdKeyUp = (e: React.KeyboardEvent) => {
+    if (!userOwns) return;
+    e.stopPropagation();
+    const k = e.key;
+    if (k.length === 1 || k === 'Unidentified' || k === 'Process') return;
+    e.preventDefault();
+    emit({ kind: 'keyup', key: k, code: e.code, keyCode: VK_CODES[k] || e.keyCode });
   };
 
   return (
@@ -462,11 +559,12 @@ export function BrowserPane() {
         <div
           className={`browser-canvas-wrap${userOwns ? ' live' : ''}`}
           tabIndex={0}
-          onKeyDown={onKey}
-          onMouseDown={onMouse('mousedown')}
-          onMouseUp={onMouse('mouseup')}
-          onMouseMove={onMouse('mousemove')}
-          onClick={onMouse('click')}
+          onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
+          onPointerDown={onPointerDown}
+          onPointerUp={releasePointer}
+          onPointerCancel={releasePointer}
+          onPointerMove={onPointerMove}
           onWheel={onWheel}
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
@@ -486,6 +584,7 @@ export function BrowserPane() {
             defaultValue={SENTINEL}
             onInput={onKbdInput}
             onKeyDown={onKbdKeyDown}
+            onKeyUp={onKbdKeyUp}
           />
         </div>
       )}

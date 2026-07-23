@@ -166,7 +166,7 @@ func TestSharedBrowserCreatesTargetScreencastsAndDoesNotLeakListeners(t *testing
 		t.Fatalf("created targets=%d", fake.created)
 	}
 	start := fake.commandsFor("Page.startScreencast")[0]
-	if start.Params["quality"] != float64(90) {
+	if start.Params["quality"] != float64(75) {
 		t.Fatalf("screencast quality=%v", start.Params["quality"])
 	}
 	fake.sendEvent("Page.screencastFrame", map[string]any{
@@ -185,6 +185,25 @@ func TestSharedBrowserCreatesTargetScreencastsAndDoesNotLeakListeners(t *testing
 	ack := fake.commandsFor("Page.screencastFrameAck")[0]
 	if ack.SessionID != "human-session" || ack.Params["sessionId"] != float64(41) {
 		t.Fatalf("ack=%+v", ack)
+	}
+	// Frames arriving faster than the UI target rate are acknowledged but not
+	// delivered, preventing downstream JSON/decode queues from accumulating.
+	fake.sendEvent("Page.screencastFrame", map[string]any{"data": "jpeg-dropped", "sessionId": 42, "metadata": map[string]any{}})
+	waitFor(t, "dropped frame acknowledgement", func() bool { return len(fake.commandsFor("Page.screencastFrameAck")) == 2 })
+	select {
+	case frame := <-frames:
+		t.Fatalf("rate-limited frame delivered: %+v", frame)
+	case <-time.After(30 * time.Millisecond):
+	}
+	time.Sleep(40 * time.Millisecond)
+	fake.sendEvent("Page.screencastFrame", map[string]any{"data": "jpeg-after-interval", "sessionId": 43, "metadata": map[string]any{}})
+	select {
+	case frame := <-frames:
+		if frame.DataB64 != "jpeg-after-interval" {
+			t.Fatalf("post-interval frame=%+v", frame)
+		}
+	case <-ctx.Done():
+		t.Fatal("post-interval frame not delivered")
 	}
 	if err := shared.StopScreencast(ctx); err != nil {
 		t.Fatal(err)
@@ -234,7 +253,7 @@ func TestSharedBrowserInputMappingNavigationReconnectAndCleanup(t *testing.T) {
 		{Kind: "mouseup", X: 12, Y: 34, Button: "right"},
 		{Kind: "click", X: 8, Y: 9},
 		{Kind: "wheel", X: 4, Y: 5, DeltaX: 6, DeltaY: -7},
-		{Kind: "keydown", Key: "A", Code: "KeyA", KeyCode: 65, Text: "a"},
+		{Kind: "keydown", Key: "A", Code: "KeyA", KeyCode: 65, AutoRepeat: true, Text: "a"},
 		{Kind: "keyup", Key: "A", Code: "KeyA", KeyCode: 65},
 		{Kind: "text", Text: "hello"},
 	}
@@ -247,9 +266,15 @@ func TestSharedBrowserInputMappingNavigationReconnectAndCleanup(t *testing.T) {
 	if len(mouse) != 6 || mouse[0].Params["type"] != "mouseMoved" || mouse[0].Params["x"] != float64(12) || mouse[4].Params["type"] != "mouseReleased" || mouse[5].Params["deltaY"] != float64(-7) {
 		t.Fatalf("mouse mapping=%+v", mouse)
 	}
+	if mouse[4].Params["buttons"] != float64(0) {
+		t.Fatalf("synthetic click release buttons=%v", mouse[4].Params["buttons"])
+	}
 	keys := fake.commandsFor("Input.dispatchKeyEvent")
 	if len(keys) != 2 || keys[0].Params["text"] != "a" || keys[1].Params["type"] != "keyUp" {
 		t.Fatalf("key mapping=%+v", keys)
+	}
+	if keys[0].Params["autoRepeat"] != true {
+		t.Fatalf("keydown autoRepeat=%v", keys[0].Params["autoRepeat"])
 	}
 	if text := fake.commandsFor("Input.insertText"); len(text) != 1 || text[0].Params["text"] != "hello" {
 		t.Fatalf("text mapping=%+v", text)
