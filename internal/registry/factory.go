@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -13,14 +14,17 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/browser"
+	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/ptyadapter"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/terminalhost"
 	"github.com/aiguy110/tandem/internal/workspacefs"
 )
 
 type DefaultFactory struct {
 	Assets     *assets.Store
+	Config     config.Config
 	MCPServers func(agentID string) []browser.MCPServer
 }
 
@@ -41,6 +45,9 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	}
 	if launch.ACP == nil {
 		return nil, errors.New("ACP launch is missing")
+	}
+	if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
+		return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
 	}
 	fs, err := workspacefs.Open(req.CWD)
 	if err != nil {

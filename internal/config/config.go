@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -85,6 +86,19 @@ type Config struct {
 	Harnesses      map[string]Harness      `json:"harnesses"`
 	DefaultHarness string                  `json:"defaultHarness,omitempty"`
 	Browser        BrowserConfig           `json:"browser"`
+	Node           NodeConfig              `json:"node"`
+}
+
+// NodeConfig is the resolved Node runtime Tandem uses to launch ACP servers and
+// the Playwright MCP. When Managed is true Tandem downloads and owns a pinned
+// Node distribution under Root ($TANDEM_HOME/node); otherwise it uses a Node
+// found on the host (PATH or an explicit command).
+type NodeConfig struct {
+	Managed bool   `json:"managed"`
+	Command string `json:"command"`
+	Npm     string `json:"npm"`
+	Root    string `json:"root,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // Options makes environment and platform-dependent lookup deterministic in tests.
@@ -93,6 +107,97 @@ type Options struct {
 	HomeDir     string
 	RuntimeRoot string
 	TandemRoot  string
+}
+
+// DefaultManagedNodeVersion is the Node version Tandem downloads when the user
+// opts into a managed Node runtime. Keep it aligned with runtime/package.json's
+// engines and a current LTS line.
+const DefaultManagedNodeVersion = "22.11.0"
+
+// Settings is the operator-owned, file-persisted portion of Tandem's
+// configuration written by the setup wizard to $TANDEM_HOME/config.yml under the
+// top-level `settings:` key. Every field is optional; env vars override it and
+// built-in defaults fill any gaps. It is distinct from the agent catalog
+// (`agents:`/`harnesses:`), which the wizard never touches.
+type Settings struct {
+	ProjectRoots  []string     `yaml:"projectRoots,omitempty"`
+	Bind          string       `yaml:"bind,omitempty"`
+	Port          int          `yaml:"port,omitempty"`
+	BrowserDriver string       `yaml:"browserDriver,omitempty"`
+	Node          NodeSettings `yaml:"node,omitempty"`
+}
+
+// NodeSettings records the operator's Node runtime choice. Mode is "system"
+// (use Command / PATH) or "managed" (download+own the pinned Version).
+type NodeSettings struct {
+	Mode    string `yaml:"mode,omitempty"`
+	Command string `yaml:"command,omitempty"`
+	Version string `yaml:"version,omitempty"`
+}
+
+// ConfigFilePath is the operator config location under a resolved TANDEM_HOME.
+func ConfigFilePath(home string) string { return filepath.Join(home, "config.yml") }
+
+// ManagedNodePaths returns the node and npm executable paths for a managed Node
+// distribution extracted (top-level component stripped) into root.
+func ManagedNodePaths(root string) (node, npm string) {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(root, "node.exe"), filepath.Join(root, "npm.cmd")
+	}
+	return filepath.Join(root, "bin", "node"), filepath.Join(root, "bin", "npm")
+}
+
+// LoadSettings reads the persisted settings block from $TANDEM_HOME/config.yml,
+// returning a zero Settings when the file or block is absent. It is used to
+// pre-fill the setup wizard with the operator's current choices.
+func LoadSettings(home string) (Settings, error) {
+	b, err := os.ReadFile(ConfigFilePath(home))
+	if errors.Is(err, fs.ErrNotExist) {
+		return Settings{}, nil
+	}
+	if err != nil {
+		return Settings{}, err
+	}
+	var doc struct {
+		Settings Settings `yaml:"settings"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return Settings{}, fmt.Errorf("invalid %s: %w", ConfigFilePath(home), err)
+	}
+	return doc.Settings, nil
+}
+
+// SaveSettings writes s under the top-level `settings:` key of
+// $TANDEM_HOME/config.yml, preserving any existing keys (agent catalog,
+// harnesses) already in the file.
+func SaveSettings(home string, s Settings) error {
+	path := ConfigFilePath(home)
+	doc := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if doc == nil {
+			doc = map[string]any{}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	// Round-trip Settings through YAML so it lands as a plain mapping node,
+	// keeping omitempty semantics and merging cleanly with sibling keys.
+	var node yaml.Node
+	if err := node.Encode(s); err != nil {
+		return err
+	}
+	doc["settings"] = &node
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o644)
 }
 
 func Load() (Config, error) {
@@ -143,7 +248,11 @@ func LoadWithOptions(o Options) (Config, error) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return Config{}, fmt.Errorf("create TANDEM_HOME: %w", err)
 	}
-	port, err := envInt(env, "TANDEM_PORT", 7717)
+	settings, err := LoadSettings(home)
+	if err != nil {
+		return Config{}, err
+	}
+	port, err := settingInt(env, "TANDEM_PORT", settings.Port, 7717)
 	if err != nil {
 		return Config{}, err
 	}
@@ -152,26 +261,27 @@ func LoadWithOptions(o Options) (Config, error) {
 		return Config{}, err
 	}
 
-	cat, err := loadCatalog(o, home)
+	node := resolveNode(env, settings, home, o)
+	cat, err := loadCatalog(o, home, node.Command)
 	if err != nil {
 		return Config{}, err
 	}
-	roots := filepath.SplitList(value(env, "TANDEM_PROJECT_ROOTS", filepath.Join(o.HomeDir, "Projects")))
-	roots = nonempty(roots)
+	roots := resolveRoots(env, settings, o)
 	override, err := optionalLaunch(env["TANDEM_ACP_CMD"])
 	if err != nil {
 		return Config{}, fmt.Errorf("TANDEM_ACP_CMD: %w", err)
 	}
-	driver := "local"
-	if env["TANDEM_BROWSER_DRIVER"] == "steel" {
-		driver = "steel"
+	driver := resolveBrowserDriver(env, settings)
+	bind := value(env, "TANDEM_BIND", settings.Bind)
+	if bind == "" {
+		bind = "127.0.0.1"
 	}
 	steelOptions, err := objectJSON(env["STEEL_SESSION_OPTIONS"])
 	if err != nil {
 		return Config{}, err
 	}
 
-	nodeRuntime := resolveExecutable(value(env, "TANDEM_NODE_CMD", "node"), o)
+	nodeRuntime := node.Command
 	acpAgents := make(map[string]Launch)
 	resume := make(map[string]ResumeLaunch)
 	for id, agent := range cat.agents {
@@ -186,12 +296,61 @@ func LoadWithOptions(o Options) (Config, error) {
 		Home: home, RuntimeRoot: o.RuntimeRoot,
 		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
 		WorktreesDir: filepath.Join(home, "worktrees"), AssetsDir: filepath.Join(home, "assets"),
-		Host: value(env, "TANDEM_BIND", "127.0.0.1"), Port: port, UIDir: env["TANDEM_UI_DIR"],
+		Host: bind, Port: port, UIDir: env["TANDEM_UI_DIR"],
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
 		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
+		Node:    node,
 	}, nil
+}
+
+// resolveNode picks the effective Node runtime. An explicit TANDEM_NODE_CMD env
+// var always wins (and forces system mode); otherwise the persisted node.mode
+// decides between a Tandem-managed download and a host Node discovered on PATH.
+func resolveNode(env map[string]string, s Settings, home string, o Options) NodeConfig {
+	if cmd := env["TANDEM_NODE_CMD"]; cmd != "" {
+		return NodeConfig{Command: resolveExecutable(cmd, o), Npm: resolveExecutable("npm", o)}
+	}
+	if s.Node.Mode == "managed" {
+		root := filepath.Join(home, "node")
+		nodePath, npmPath := ManagedNodePaths(root)
+		version := s.Node.Version
+		if version == "" {
+			version = DefaultManagedNodeVersion
+		}
+		return NodeConfig{Managed: true, Command: nodePath, Npm: npmPath, Root: root, Version: version}
+	}
+	cmd := s.Node.Command
+	if cmd == "" {
+		cmd = "node"
+	}
+	return NodeConfig{Command: resolveExecutable(cmd, o), Npm: resolveExecutable("npm", o)}
+}
+
+// resolveRoots resolves project scan roots with env > settings > default.
+func resolveRoots(env map[string]string, s Settings, o Options) []string {
+	if raw := env["TANDEM_PROJECT_ROOTS"]; raw != "" {
+		return nonempty(filepath.SplitList(raw))
+	}
+	if len(s.ProjectRoots) > 0 {
+		return nonempty(s.ProjectRoots)
+	}
+	return nonempty([]string{filepath.Join(o.HomeDir, "Projects")})
+}
+
+// resolveBrowserDriver resolves the browser driver with env > settings > local.
+func resolveBrowserDriver(env map[string]string, s Settings) string {
+	if v := env["TANDEM_BROWSER_DRIVER"]; v != "" {
+		if v == "steel" {
+			return "steel"
+		}
+		return "local"
+	}
+	if s.BrowserDriver == "steel" {
+		return "steel"
+	}
+	return "local"
 }
 
 type fileConfig struct {
@@ -206,7 +365,7 @@ type catalog struct {
 	defaultAgent, defaultHarness string
 }
 
-func loadCatalog(o Options, home string) (catalog, error) {
+func loadCatalog(o Options, home, nodeCmd string) (catalog, error) {
 	shipped, err := parseFile(tandem.DefaultCatalog, "shipped agent catalog")
 	if err != nil {
 		return catalog{}, err
@@ -222,7 +381,7 @@ func loadCatalog(o Options, home string) (catalog, error) {
 		return catalog{}, readErr
 	}
 
-	subs := map[string]string{"node": resolveExecutable(value(o.Env, "TANDEM_NODE_CMD", "node"), o), "runtimeRoot": o.RuntimeRoot, "tandemRoot": o.TandemRoot, "home": home}
+	subs := map[string]string{"node": nodeCmd, "runtimeRoot": o.RuntimeRoot, "tandemRoot": o.TandemRoot, "home": home}
 	agents := make(map[string]Agent)
 	if err := mergeAgents(agents, shipped.Agents, subs, o); err != nil {
 		return catalog{}, err
@@ -530,6 +689,19 @@ func envInt(m map[string]string, key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer: %q", key, raw)
 	}
 	return v, nil
+}
+func settingInt(m map[string]string, key string, fileVal, fallback int) (int, error) {
+	if raw := m[key]; raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer: %q", key, raw)
+		}
+		return v, nil
+	}
+	if fileVal != 0 {
+		return fileVal, nil
+	}
+	return fallback, nil
 }
 func nonempty(in []string) []string {
 	out := []string{}

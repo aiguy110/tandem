@@ -177,7 +177,7 @@ func New(o Options) (*Registry, error) {
 				return nil, err
 			}
 		}
-		o.Factory = DefaultFactory{Assets: assetStore}
+		o.Factory = DefaultFactory{Assets: assetStore, Config: o.Config}
 	}
 	max, err := o.Store.MaxAgentSuffix()
 	if err != nil {
