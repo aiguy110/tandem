@@ -1,8 +1,11 @@
 package setup
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -34,15 +37,21 @@ func TestUnitFileNoNodeBinDir(t *testing.T) {
 func TestRunEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TANDEM_HOME", home)
+	steel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer steel.Close()
 
-	// Answers in prompt order: project roots, bind, port, browser driver,
-	// node choice (2 = managed, so this doesn't depend on a host Node being
-	// present), then decline the systemd service install.
+	// Answers in prompt order: project roots, bind, port, Steel, existing
+	// service, URL, blank API key, managed Node, then decline systemd.
 	answers := strings.Join([]string{
 		"/tmp/proj-a, /tmp/proj-b",
 		"0.0.0.0",
 		"8080",
-		"steel",
+		"2",
+		"2",
+		steel.URL,
+		"",
 		"2",
 		"n",
 	}, "\n") + "\n"
@@ -75,6 +84,9 @@ func TestRunEndToEnd(t *testing.T) {
 	if settings.BrowserDriver != "steel" {
 		t.Errorf("BrowserDriver = %q, want steel", settings.BrowserDriver)
 	}
+	if settings.SteelBaseURL != steel.URL {
+		t.Errorf("SteelBaseURL = %q, want %q", settings.SteelBaseURL, steel.URL)
+	}
 	if settings.Node.Mode != "managed" {
 		t.Errorf("Node.Mode = %q, want managed", settings.Node.Mode)
 	}
@@ -84,5 +96,19 @@ func TestRunEndToEnd(t *testing.T) {
 
 	if !strings.Contains(out.String(), config.ConfigFilePath(home)) {
 		t.Errorf("expected wizard output to mention config path, got:\n%s", out.String())
+	}
+}
+
+func TestPromptBrowserLocal(t *testing.T) {
+	var out bytes.Buffer
+	got, eof, err := promptBrowser(bufio.NewReader(strings.NewReader("1\n")), &out, config.Settings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eof || got.BrowserDriver != "local" || got.SteelBaseURL != "" {
+		t.Fatalf("browser settings = %+v, eof=%v", got, eof)
+	}
+	if !strings.Contains(out.String(), "Browser readiness: local") {
+		t.Fatalf("missing readiness summary:\n%s", out.String())
 	}
 }

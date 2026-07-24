@@ -71,21 +71,22 @@ Common configuration:
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
-| `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
+| `TANDEM_BROWSER_DRIVER` | `local` | `local` (installed Chrome/Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
 
 **Self-hosting Steel (optional):** for the shared browser you can back agents with
 [Steel](https://github.com/steel-dev/steel-browser) instead of local Chromium. Run it with
-Docker and point Tandem at it:
+Docker and point Tandem at it. The interactive setup wizard can detect Docker, create this
+container as `tandem-steel`, verify it, and persist the URL automatically:
 
 ```bash
-docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
+docker run -d --name tandem-steel --restart unless-stopped --shm-size=2g -p 3000:3000 -p 9223:9223 \
   -e CHROME_HEADLESS=false -e DISPLAY=:10 \
   --entrypoint /bin/sh ghcr.io/steel-dev/steel-browser:latest \
   -c 'Xvfb :10 -screen 0 1920x1080x24 -nolisten tcp & exec /app/api/entrypoint.sh'
 TANDEM_BROWSER_DRIVER=steel STEEL_BASE_URL=http://localhost:3000 ./start-dev-server.sh
 ```
 
-Setup notes and troubleshooting (bundled-Chromium launch crashes, `CHROME_EXECUTABLE_PATH`)
+Setup notes and troubleshooting (Steel Chromium launch crashes, `CHROME_EXECUTABLE_PATH`)
 are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 
 **Remote access:** the daemon binds localhost by default; front it with `tailscale serve`

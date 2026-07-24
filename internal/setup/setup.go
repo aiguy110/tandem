@@ -10,12 +10,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/config"
 )
@@ -162,28 +165,15 @@ func promptSettings(r *bufio.Reader, out io.Writer, existing config.Settings) (c
 		break
 	}
 
-	// 4. Browser driver.
-	driverDefault := existing.BrowserDriver
-	if driverDefault == "" {
-		driverDefault = "local"
+	// 4. Shared browser.
+	browserSettings, browserEOF, err := promptBrowser(r, out, existing, atEOF)
+	if err != nil {
+		return settings, err
 	}
-	settings.BrowserDriver = driverDefault
-	for !atEOF {
-		driverAnswer, err := ask(r, out, "Browser driver (local/steel)", driverDefault)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return settings, fmt.Errorf("read browser driver: %w", err)
-		}
-		atEOF = errors.Is(err, io.EOF)
-		if driverAnswer != "local" && driverAnswer != "steel" {
-			fmt.Fprintf(out, "  %q must be \"local\" or \"steel\", try again.\n", driverAnswer)
-			if atEOF {
-				break
-			}
-			continue
-		}
-		settings.BrowserDriver = driverAnswer
-		break
-	}
+	settings.BrowserDriver = browserSettings.BrowserDriver
+	settings.SteelBaseURL = browserSettings.SteelBaseURL
+	settings.SteelAPIKey = browserSettings.SteelAPIKey
+	atEOF = browserEOF
 
 	// 5. Node runtime.
 	node, err := promptNode(r, out, existing.Node, atEOF)
@@ -193,6 +183,288 @@ func promptSettings(r *bufio.Reader, out io.Writer, existing config.Settings) (c
 	settings.Node = node
 
 	return settings, nil
+}
+
+func promptBrowser(r *bufio.Reader, out io.Writer, existing config.Settings, atEOF bool) (config.Settings, bool, error) {
+	result := config.Settings{BrowserDriver: "local"}
+	chromium, _ := discoverChromium()
+
+	fmt.Fprintln(out, "\nShared browser:")
+	if chromium != "" {
+		fmt.Fprintf(out, "  1) Local Chrome/Chromium (recommended; detected %s)\n", chromium)
+	} else {
+		fmt.Fprintln(out, "  1) Local Chrome/Chromium (none detected; install Chrome/Chromium before using browser tools)")
+	}
+	fmt.Fprintln(out, "  2) Steel browser service (local Docker container, remote server, or Steel Cloud)")
+
+	def := "1"
+	if existing.BrowserDriver == "steel" {
+		def = "2"
+	}
+	if atEOF {
+		if def == "2" && existing.SteelBaseURL != "" {
+			result.BrowserDriver = "steel"
+			result.SteelBaseURL = existing.SteelBaseURL
+			result.SteelAPIKey = existing.SteelAPIKey
+		}
+		printBrowserSummary(out, result, chromium)
+		return result, true, nil
+	}
+
+	for {
+		answer, err := ask(r, out, "Choose", def)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return result, false, fmt.Errorf("read browser choice: %w", err)
+		}
+		eof := errors.Is(err, io.EOF)
+		switch answer {
+		case "1", "local":
+			printBrowserSummary(out, result, chromium)
+			return result, eof, nil
+		case "2", "steel":
+			steel, steelEOF, err := promptSteel(r, out, existing, eof)
+			if err != nil {
+				return result, false, err
+			}
+			if steel.BrowserDriver == "local" {
+				printBrowserSummary(out, steel, chromium)
+			}
+			return steel, steelEOF, nil
+		default:
+			fmt.Fprintf(out, "  %q is not a valid choice, enter 1 or 2.\n", answer)
+			if eof {
+				printBrowserSummary(out, result, chromium)
+				return result, true, nil
+			}
+		}
+	}
+}
+
+func promptSteel(r *bufio.Reader, out io.Writer, existing config.Settings, atEOF bool) (config.Settings, bool, error) {
+	result := config.Settings{BrowserDriver: "local"}
+	dockerPath, dockerErr := exec.LookPath("docker")
+	dockerReady := false
+	if dockerErr == nil {
+		check := exec.Command(dockerPath, "info", "--format", "{{.ServerVersion}}")
+		check.Stdout = io.Discard
+		check.Stderr = io.Discard
+		dockerReady = check.Run() == nil
+	}
+
+	fmt.Fprintln(out, "\nSteel service:")
+	if dockerReady {
+		fmt.Fprintln(out, "  1) Start and manage a local Steel container with Docker (Docker is ready)")
+	} else if dockerErr == nil {
+		fmt.Fprintln(out, "  1) Start and manage a local Steel container with Docker (Docker is installed, but its daemon is unavailable)")
+	} else {
+		fmt.Fprintln(out, "  1) Start and manage a local Steel container with Docker (Docker is not installed)")
+	}
+	fmt.Fprintln(out, "  2) Connect to an existing Steel service")
+	fmt.Fprintln(out, "  3) Go back and use local Chrome/Chromium")
+
+	if atEOF {
+		return result, true, nil
+	}
+	for {
+		answer, err := ask(r, out, "Choose", "2")
+		if err != nil && !errors.Is(err, io.EOF) {
+			return result, false, fmt.Errorf("read Steel provider: %w", err)
+		}
+		eof := errors.Is(err, io.EOF)
+		switch answer {
+		case "1":
+			if !dockerReady {
+				fmt.Fprintln(out, "  Docker is not ready. Start/install Docker, connect to an existing Steel service, or choose local Chrome/Chromium.")
+				if eof {
+					return result, true, nil
+				}
+				continue
+			}
+			fmt.Fprintln(out, "Starting Tandem's Steel container as `tandem-steel`...")
+			if err := startSteelContainer(dockerPath); err != nil {
+				fmt.Fprintf(out, "  Could not start Steel: %v\n", err)
+				if eof {
+					return result, true, nil
+				}
+				continue
+			}
+			baseURL := "http://localhost:3000"
+			if err := waitForSteel(baseURL, "", 20*time.Second); err != nil {
+				fmt.Fprintf(out, "  Steel container started, but its API is not ready: %v\n", err)
+				if eof {
+					return result, true, nil
+				}
+				continue
+			}
+			result.BrowserDriver = "steel"
+			result.SteelBaseURL = baseURL
+			printBrowserSummary(out, result, "")
+			return result, eof, nil
+		case "2":
+			steel, urlEOF, err := promptExistingSteel(r, out, existing, eof)
+			return steel, urlEOF, err
+		case "3":
+			return result, eof, nil
+		default:
+			fmt.Fprintf(out, "  %q is not a valid choice, enter 1, 2, or 3.\n", answer)
+			if eof {
+				return result, true, nil
+			}
+		}
+	}
+}
+
+func promptExistingSteel(r *bufio.Reader, out io.Writer, existing config.Settings, atEOF bool) (config.Settings, bool, error) {
+	result := config.Settings{BrowserDriver: "local"}
+	if atEOF {
+		return result, true, nil
+	}
+	urlDefault := existing.SteelBaseURL
+	if urlDefault == "" {
+		urlDefault = "http://localhost:3000"
+	}
+	for {
+		baseURL, err := ask(r, out, "Steel base URL", urlDefault)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return result, false, fmt.Errorf("read Steel base URL: %w", err)
+		}
+		eof := errors.Is(err, io.EOF)
+		parsed, parseErr := url.ParseRequestURI(baseURL)
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			fmt.Fprintf(out, "  %q is not a valid http(s) URL, try again.\n", baseURL)
+			if eof {
+				return result, true, nil
+			}
+			continue
+		}
+		apiKey, keyErr := promptSteelAPIKey(r, out, existing.SteelAPIKey)
+		if keyErr != nil && !errors.Is(keyErr, io.EOF) {
+			return result, false, fmt.Errorf("read Steel API key: %w", keyErr)
+		}
+		eof = eof || errors.Is(keyErr, io.EOF)
+		fmt.Fprintf(out, "Checking %s...\n", strings.TrimRight(baseURL, "/"))
+		if checkErr := waitForSteel(baseURL, apiKey, 5*time.Second); checkErr != nil {
+			fmt.Fprintf(out, "  Could not reach Steel: %v\n", checkErr)
+			if eof {
+				return result, true, nil
+			}
+			retry, retryErr := ask(r, out, "Retry URL, save anyway, or use local? (retry/save/local)", "retry")
+			if retryErr != nil && !errors.Is(retryErr, io.EOF) {
+				return result, false, retryErr
+			}
+			switch strings.ToLower(retry) {
+			case "save":
+			case "local":
+				return result, errors.Is(retryErr, io.EOF), nil
+			default:
+				continue
+			}
+		}
+		result.BrowserDriver = "steel"
+		result.SteelBaseURL = strings.TrimRight(baseURL, "/")
+		result.SteelAPIKey = apiKey
+		printBrowserSummary(out, result, "")
+		return result, eof, nil
+	}
+}
+
+func promptSteelAPIKey(r *bufio.Reader, out io.Writer, existing string) (string, error) {
+	if existing != "" {
+		keep, err := ask(r, out, "Keep the existing Steel API key? (y/N)", "y")
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		if strings.EqualFold(keep, "y") || strings.EqualFold(keep, "yes") {
+			return existing, err
+		}
+	}
+	return ask(r, out, "Steel API key (optional; input is visible, config is owner-only)", "")
+}
+
+func discoverChromium() (string, error) {
+	names := []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"}
+	if runtime.GOOS == "darwin" {
+		names = append([]string{"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium"}, names...)
+	}
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("Chrome/Chromium not found")
+}
+
+func startSteelContainer(dockerPath string) error {
+	inspect := exec.Command(dockerPath, "inspect", "tandem-steel")
+	inspect.Stdout = io.Discard
+	inspect.Stderr = io.Discard
+	if inspect.Run() == nil {
+		update := exec.Command(dockerPath, "update", "--restart", "unless-stopped", "tandem-steel")
+		update.Stdout = io.Discard
+		update.Stderr = io.Discard
+		if err := update.Run(); err != nil {
+			return fmt.Errorf("set tandem-steel restart policy: %w", err)
+		}
+		out, err := exec.Command(dockerPath, "start", "tandem-steel").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("docker start tandem-steel: %s", strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	args := []string{"run", "-d", "--name", "tandem-steel", "--restart", "unless-stopped", "--shm-size=2g",
+		"-p", "3000:3000", "-p", "9223:9223", "-e", "CHROME_HEADLESS=false", "-e", "DISPLAY=:10",
+		"--entrypoint", "/bin/sh", "ghcr.io/steel-dev/steel-browser:latest",
+		"-c", "Xvfb :10 -screen 0 1920x1080x24 -nolisten tcp & exec /app/api/entrypoint.sh"}
+	out, err := exec.Command(dockerPath, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker run tandem-steel: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func waitForSteel(baseURL, apiKey string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	var lastErr error
+	for {
+		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/", nil)
+		if err != nil {
+			return err
+		}
+		if apiKey != "" {
+			req.Header.Set("steel-api-key", apiKey)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode < http.StatusInternalServerError {
+				return nil
+			}
+			lastErr = fmt.Errorf("server returned %s", resp.Status)
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func printBrowserSummary(out io.Writer, settings config.Settings, chromium string) {
+	if settings.BrowserDriver == "steel" {
+		auth := "no API key"
+		if settings.SteelAPIKey != "" {
+			auth = "API key configured"
+		}
+		fmt.Fprintf(out, "Browser readiness: Steel at %s (%s).\n", settings.SteelBaseURL, auth)
+		return
+	}
+	if chromium != "" {
+		fmt.Fprintf(out, "Browser readiness: local Chrome/Chromium at %s.\n", chromium)
+	} else {
+		fmt.Fprintln(out, "Browser readiness: local selected; Chrome/Chromium must be installed before browser tools are used.")
+	}
 }
 
 func splitRoots(answer string) []string {
