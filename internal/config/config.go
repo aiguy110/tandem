@@ -124,6 +124,8 @@ type Settings struct {
 	Bind          string       `yaml:"bind,omitempty"`
 	Port          int          `yaml:"port,omitempty"`
 	BrowserDriver string       `yaml:"browserDriver,omitempty"`
+	SteelBaseURL  string       `yaml:"steelBaseUrl,omitempty"`
+	SteelAPIKey   string       `yaml:"steelApiKey,omitempty"`
 	Node          NodeSettings `yaml:"node,omitempty"`
 }
 
@@ -197,7 +199,10 @@ func SaveSettings(home string, s Settings) error {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, 0o644)
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func Load() (Config, error) {
@@ -300,7 +305,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
-		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: env["STEEL_BASE_URL"], SteelAPIKey: env["STEEL_API_KEY"], SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
+		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 		Node:    node,
 	}, nil
 }

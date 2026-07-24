@@ -88,7 +88,7 @@ Implemented in `internal/browser/` (`driver.go`, `broker.go`, `shared_browser.go
 
 One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(agentId)`:
 
-- **`LocalChromiumDriver`** (default): launches Playwright's bundled headless Chromium per
+- **`LocalChromiumDriver`** (default): launches an installed Chrome/Chromium executable per
   agent with a per-agent user-data dir under `$TANDEM_HOME/browser-profiles/<agent>`.
   Used by all automated tests and wherever no Steel/Docker exists.
 - **`SteelDriver`**: `POST {STEEL_BASE_URL}/v1/sessions` → the session's CDP websocket
@@ -98,6 +98,9 @@ One `BrowserDriver` seam — `provision(agentId) → { cdpUrl }` / `teardown(age
 Config: `TANDEM_BROWSER_DRIVER=local|steel` (default `local`; `steel` requires
 `STEEL_BASE_URL`, optional `STEEL_API_KEY`). `TANDEM_BROWSER_MCP=off` disables the MCP
 registration at `session/new` (mock-agent derisk suites run with it off; default on).
+The setup wizard persists the equivalent `browserDriver`, `steelBaseUrl`, and optional
+`steelApiKey` settings in owner-only `$TANDEM_HOME/config.yml`; environment variables
+continue to take precedence.
 The Go local driver accepts `TANDEM_CHROMIUM_EXECUTABLE`; when unset it searches ordinary
 Chromium/Chrome executable names on `PATH` (and standard macOS application paths). It does
 not depend on Playwright's private browser installation or `chromium.executablePath()`.
@@ -108,7 +111,7 @@ Steel is the open-source headless-browser API (`ghcr.io/steel-dev/steel-browser`
 provisions/releases per-agent Chrome sessions over a CDP endpoint. Run one with Docker:
 
 ```bash
-docker run -d --name steel --shm-size=2g -p 3000:3000 -p 9223:9223 \
+docker run -d --name tandem-steel --restart unless-stopped --shm-size=2g -p 3000:3000 -p 9223:9223 \
   -e CHROME_HEADLESS=false -e DISPLAY=:10 \
   --entrypoint /bin/sh ghcr.io/steel-dev/steel-browser:latest \
   -c 'Xvfb :10 -screen 0 1920x1080x24 -nolisten tcp & exec /app/api/entrypoint.sh'

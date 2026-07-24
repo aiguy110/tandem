@@ -7,8 +7,8 @@ Type=simple
 WorkingDirectory=%h/Projects/tandem
 Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/local/go/bin:/usr/bin:/bin
 # Shared browser: drive per-agent CDP sessions through a self-hosted Steel
-# (docker: ghcr.io/steel-dev/steel-browser on :3000). Falls back to the
-# bundled LocalChromiumDriver only if these are unset (see docs/browser.md).
+# (docker: ghcr.io/steel-dev/steel-browser on :3000). To avoid this external
+# dependency, remove these two lines and use the installed-Chrome local driver.
 Environment=TANDEM_BROWSER_DRIVER=steel
 Environment=STEEL_BASE_URL=http://localhost:3000
 # Keep this major version aligned with the Chromium bundled by the Steel image.

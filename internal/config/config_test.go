@@ -79,10 +79,19 @@ func TestSettingsFilePrecedence(t *testing.T) {
 		Bind:          "0.0.0.0",
 		Port:          9000,
 		BrowserDriver: "steel",
+		SteelBaseURL:  "https://steel.example",
+		SteelAPIKey:   "file-secret",
 		Node:          NodeSettings{Mode: "managed", Version: "20.10.0"},
 	}
 	if err := SaveSettings(home, s); err != nil {
 		t.Fatal(err)
+	}
+	info, err := os.Stat(ConfigFilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("config permissions = %o, want 600", info.Mode().Perm())
 	}
 	got, err := LoadSettings(home)
 	if err != nil {
@@ -95,8 +104,8 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "0.0.0.0" || c.Port != 9000 || c.Browser.Driver != "steel" {
-		t.Fatalf("settings not applied: host=%q port=%d driver=%q", c.Host, c.Port, c.Browser.Driver)
+	if c.Host != "0.0.0.0" || c.Port != 9000 || c.Browser.Driver != "steel" || c.Browser.SteelBaseURL != "https://steel.example" || c.Browser.SteelAPIKey != "file-secret" {
+		t.Fatalf("settings not applied: host=%q port=%d browser=%+v", c.Host, c.Port, c.Browser)
 	}
 	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b"}) {
 		t.Fatalf("project roots = %v", c.ProjectRoots)

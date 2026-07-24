@@ -44,15 +44,17 @@ harnesses: {}
 # the agent catalog above. It is never present in this shipped example file;
 # it's documented here only so the schema is discoverable. All fields are
 # optional — env vars (TANDEM_PROJECT_ROOTS, TANDEM_BIND, TANDEM_PORT,
-# TANDEM_BROWSER_DRIVER, TANDEM_NODE_CMD) override it, and built-in defaults
-# fill any gaps.
+# TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_NODE_CMD)
+# override it, and built-in defaults fill any gaps.
 #
 # settings:
 #   projectRoots:          # dirs scanned for repos in the spawn palette
 #     - /home/you/Projects
 #   bind: 127.0.0.1        # HTTP + WS listen address
 #   port: 7717              # HTTP + WS listen port
-#   browserDriver: local    # "local" (bundled Chromium) or "steel"
+#   browserDriver: local    # "local" (installed Chrome/Chromium) or "steel"
+#   steelBaseUrl: http://localhost:3000  # required when browserDriver is "steel"
+#   steelApiKey: ""         # optional; config.yml is written owner-only
 #   node:
 #     mode: system           # "system" (use command/PATH) or "managed" (Tandem-downloaded)
 #     command: node          # only used when mode is "system"
