@@ -158,11 +158,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
 .agent-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
 .agent-row .delete-btn, .agent-row .rename-btn {
-  background: transparent; border: none; padding: 2px 4px; margin-top: 1px;
+  align-self: center; background: transparent; border: none; padding: 2px 4px;
   font-size: var(--fs-sm); line-height: 1; color: var(--text-faint);
-  opacity: 0; border-radius: var(--r-sm);
+  border-radius: var(--r-sm);
 }
-.agent-row:hover .delete-btn, .agent-row:hover .rename-btn { opacity: 1; }
 .agent-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
 .agent-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
 .dot.idle { background: var(--ok); }
