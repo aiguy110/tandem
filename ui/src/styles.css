@@ -220,7 +220,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .diff-error { margin: 16px; color: var(--err); border-color: var(--err); }
 .unified-diff { display: flex; flex-direction: column; gap: 12px; }
 .diff-file { overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
-.diff-file > header { padding: 7px 11px; border-bottom: 1px solid var(--border); font: 600 var(--fs-sm) var(--font-mono); }
+.diff-file > summary { display: flex; align-items: center; gap: 7px; padding: 7px 11px; font: 600 var(--fs-sm) var(--font-mono); cursor: pointer; list-style: none; user-select: none; }
+.diff-file > summary::-webkit-details-marker { display: none; }
+.diff-file[open] > summary { border-bottom: 1px solid var(--border); }
+.diff-file-chevron { color: var(--text-faint); transition: transform .12s ease; }
+.diff-file[open] .diff-file-chevron { transform: rotate(90deg); }
+.diff-file-kind { margin-left: auto; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 400; }
 .diff-code { overflow-x: auto; font: var(--fs-xs)/1.55 var(--font-mono); }
 .diff-line { display: grid; grid-template-columns: 44px 44px minmax(max-content, 1fr); min-height: 20px; }
 .diff-num { padding: 0 7px; border-right: 1px solid var(--border); color: var(--text-faint); text-align: right; user-select: none; }

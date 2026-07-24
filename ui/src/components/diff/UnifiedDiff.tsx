@@ -11,6 +11,7 @@ export interface DiffFile {
   key: string;
   label: string;
   lines: DiffLine[];
+  isBinary: boolean;
 }
 
 const hunkPattern = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
@@ -26,12 +27,15 @@ export function parseUnifiedDiff(patch: string): DiffFile[] {
   for (const text of patch.split('\n')) {
     if (text.startsWith('diff --git ')) {
       const match = /^diff --git a\/(.+) b\/(.+)$/.exec(text);
-      file = { key: `${files.length}:${match?.[2] ?? text}`, label: match?.[2] ?? text, lines: [] };
+      file = { key: `${files.length}:${match?.[2] ?? text}`, label: match?.[2] ?? text, lines: [], isBinary: false };
       files.push(file);
     }
     if (!file) {
-      file = { key: '0:diff', label: 'Changes', lines: [] };
+      file = { key: '0:diff', label: 'Changes', lines: [], isBinary: false };
       files.push(file);
+    }
+    if (text === 'GIT binary patch' || /^Binary files .+ differ$/.test(text)) {
+      file.isBinary = true;
     }
 
     const hunk = hunkPattern.exec(text);
@@ -66,8 +70,12 @@ export function UnifiedDiff({ patch }: { patch: string }) {
   return (
     <div className="unified-diff">
       {parseUnifiedDiff(patch).map((file) => (
-        <section className="diff-file" key={file.key}>
-          <header>{file.label}</header>
+        <details className="diff-file" key={file.key} open={!file.isBinary}>
+          <summary>
+            <span className="diff-file-chevron" aria-hidden="true">›</span>
+            <span>{file.label}</span>
+            {file.isBinary && <span className="diff-file-kind">binary</span>}
+          </summary>
           <div className="diff-code">
             {file.lines.map((line, index) => (
               <div className={`diff-line ${line.kind}`} key={index}>
@@ -77,7 +85,7 @@ export function UnifiedDiff({ patch }: { patch: string }) {
               </div>
             ))}
           </div>
-        </section>
+        </details>
       ))}
     </div>
   );
