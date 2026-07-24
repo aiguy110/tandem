@@ -153,6 +153,7 @@ function Row({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
+  const [mouseHovered, setMouseHovered] = useState(false);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
   const target = ws.targetRef?.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '');
@@ -182,8 +183,16 @@ function Row({
     setEditing(false);
     setRenameError('');
   };
+  const showActions = active || mouseHovered;
   return (
-    <div className={`agent-row${active ? ' active' : ''}`} onClick={onClick}>
+    <div
+      className={`agent-row${active ? ' active' : ''}`}
+      onClick={onClick}
+      onPointerEnter={(event) => {
+        if (event.pointerType === 'mouse') setMouseHovered(true);
+      }}
+      onPointerLeave={() => setMouseHovered(false)}
+    >
       <span className={`dot ${agent.status}`} title={agent.status} />
       <div style={{ minWidth: 0 }}>
         <div className="name">
@@ -226,29 +235,31 @@ function Row({
           </span>
         </div>
       </div>
-      <button
-        className="rename-btn"
-        title="Rename agent"
-        aria-label={`Rename ${agent.name}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          setName(agent.name);
-          setRenameError('');
-          setEditing(true);
-        }}
-      >
-        ✎
-      </button>
-      <button
-        className="delete-btn"
-        title="Delete agent"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-      >
-        🗑
-      </button>
+      {showActions && <>
+        <button
+          className="rename-btn"
+          title="Rename agent"
+          aria-label={`Rename ${agent.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setName(agent.name);
+            setRenameError('');
+            setEditing(true);
+          }}
+        >
+          ✎
+        </button>
+        <button
+          className="delete-btn"
+          title="Delete agent"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          🗑
+        </button>
+      </>}
     </div>
   );
 }
