@@ -22,7 +22,6 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/registry"
-	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
@@ -35,10 +34,8 @@ func Run(stdout io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if cfg.ManagedRuntime {
-		if err := runtimeinstall.Ensure(ctx, cfg.RuntimeRoot, stdout); err != nil {
-			return err
-		}
+	if _, statErr := os.Stat(config.ConfigFilePath(cfg.Home)); os.IsNotExist(statErr) {
+		fmt.Fprintf(stdout, "tandem: no configuration found at %s; using defaults. Run 'tandem' in a terminal to configure Tandem.\n", config.ConfigFilePath(cfg.Home))
 	}
 	return Serve(ctx, cfg, stdout)
 }
@@ -114,7 +111,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			return exeErr
 		}
 		wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token}
-		factory = registry.DefaultFactory{Assets: assetStore, MCPServers: func(id string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id) }}
+		factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id) }}
 	}
 	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker})
 	if err != nil {

@@ -12,7 +12,9 @@ import (
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/controlmcp"
 	"github.com/aiguy110/tandem/internal/daemon"
+	"github.com/aiguy110/tandem/internal/setup"
 	"github.com/aiguy110/tandem/internal/updater"
+	"github.com/mattn/go-isatty"
 )
 
 const usage = "usage: tandem <version|daemon|debug config>"
@@ -44,6 +46,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, string(data))
 		return 0
+	}
+	if len(args) == 0 {
+		if isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()) {
+			if err := setup.Run(context.Background(), os.Stdin, stdout); err != nil {
+				fmt.Fprintf(stderr, "setup: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+		fmt.Fprintln(stderr, usage)
+		return 2
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, usage)
