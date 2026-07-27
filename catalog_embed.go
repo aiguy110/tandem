@@ -16,3 +16,15 @@ var RuntimePackageJSON []byte
 
 //go:embed runtime/package-lock.json
 var RuntimePackageLock []byte
+
+// History importer sources are copied into a standalone installation's managed
+// runtime before the first importer invocation.
+//
+//go:embed runtime/history/sdk.ts
+var RuntimeHistorySDK []byte
+
+//go:embed runtime/history/runner.ts
+var RuntimeHistoryRunner []byte
+
+//go:embed runtime/tsconfig.json
+var RuntimeTSConfig []byte

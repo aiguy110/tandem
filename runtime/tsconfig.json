@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "@tandem/history-importer": ["./history/sdk.ts"]
+    },
+    "strict": true,
+    "target": "ES2022"
+  }
+}

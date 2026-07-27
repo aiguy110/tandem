@@ -32,10 +32,22 @@ type ResumeLaunch struct {
 	Env       map[string]string `json:"env,omitempty"`
 }
 
+// History configures an out-of-process transcript importer. Parser is a
+// TypeScript module run by Tandem's pinned tsx runtime. Resume is metadata for
+// later catalog integration; importers never supply commands to execute.
+type History struct {
+	Parser  string            `json:"parser"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Resume  string            `json:"resume"`
+	Enabled bool              `json:"enabled"`
+}
+
 type Agent struct {
 	Name     string        `json:"name"`
 	ACP      *Launch       `json:"acp,omitempty"`
 	Terminal *ResumeLaunch `json:"terminal,omitempty"`
+	History  *History      `json:"history,omitempty"`
 }
 
 // Harness is a named launch variant of an agent (extra ACP/terminal args). It is
@@ -563,6 +575,56 @@ func mergeAgents(dst map[string]Agent, entries map[string]any, subs map[string]s
 			l := ResumeLaunch{Cmd: resolveExecutable(expand(cmd, subs), o), Args: expandAll(resume, subs), StartArgs: expandAll(start, subs), Env: expandMap(env, subs)}
 			agent.Terminal = &l
 		}
+		if rawHistory, exists := m["history"]; exists {
+			v, ok := stringAnyMap(rawHistory)
+			if !ok {
+				return fmt.Errorf("agents.%s.history must be a mapping", id)
+			}
+			prior := History{Resume: "auto", Enabled: true}
+			if previous.History != nil {
+				prior = *previous.History
+			}
+			parser := stringValue(v["parser"], prior.Parser)
+			if parser == "" {
+				return fmt.Errorf("agents.%s.history.parser must be a non-empty string", id)
+			}
+			args := prior.Args
+			if raw, exists := v["args"]; exists {
+				var e error
+				args, e = stringArray(raw, "agents."+id+".history.args")
+				if e != nil {
+					return e
+				}
+			}
+			env := prior.Env
+			if raw, exists := v["env"]; exists {
+				var e error
+				env, e = stringMap(raw, "agents."+id+".history.env")
+				if e != nil {
+					return e
+				}
+			}
+			resume := stringValue(v["resume"], prior.Resume)
+			if resume != "auto" && resume != "acp" && resume != "terminal" {
+				return fmt.Errorf("agents.%s.history.resume must be auto, acp, or terminal", id)
+			}
+			enabled := prior.Enabled
+			if raw, exists := v["enabled"]; exists {
+				var yes bool
+				enabled, yes = raw.(bool)
+				if !yes {
+					return fmt.Errorf("agents.%s.history.enabled must be a boolean", id)
+				}
+			}
+			parser = expand(parser, subs)
+			if !filepath.IsAbs(parser) {
+				return fmt.Errorf("agents.%s.history.parser must resolve to an absolute path", id)
+			}
+			agent.History = &History{
+				Parser: filepath.Clean(parser), Args: expandAll(args, subs),
+				Env: expandMap(env, subs), Resume: resume, Enabled: enabled,
+			}
+		}
 		if agent.ACP == nil && agent.Terminal == nil {
 			return fmt.Errorf("agents.%s must configure acp or terminal", id)
 		}
@@ -632,6 +694,11 @@ func Redacted(c Config) Config {
 		if a.Terminal != nil {
 			v := redactResume(*a.Terminal)
 			a.Terminal = &v
+		}
+		if a.History != nil {
+			v := *a.History
+			v.Env = redactMap(v.Env)
+			a.History = &v
 		}
 		out.Agents[k] = a
 	}

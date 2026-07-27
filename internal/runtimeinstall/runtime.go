@@ -5,6 +5,7 @@ package runtimeinstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	tandem "github.com/aiguy110/tandem"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/noderuntime"
 )
@@ -35,6 +37,8 @@ var agentPins = map[string]pin{
 // playwrightPin is the Playwright MCP server Tandem installs alongside an
 // agent's ACP package when browser MCP tools are enabled.
 var playwrightPin = pin{spec: "@playwright/mcp@^0.0.78", dist: filepath.Join("node_modules", "@playwright", "mcp", "cli.js")}
+
+var historyPin = pin{spec: "tsx@4.23.1", dist: filepath.Join("node_modules", "tsx", "dist", "cli.mjs")}
 
 // installMu serializes all installs into the shared RuntimeRoot node_modules;
 // concurrent `npm install`s into the same node_modules can corrupt it.
@@ -91,6 +95,52 @@ func EnsureAgent(ctx context.Context, cfg config.Config, agentID string, log io.
 		if !distExists(cfg.RuntimeRoot, playwrightPin.dist) {
 			return fmt.Errorf("provision playwright mcp: npm completed without required module")
 		}
+	}
+	return nil
+}
+
+// EnsureHistory provisions the TypeScript execution dependency and the
+// embedded, version-matched SDK/runner used by historyimport.Runner. It is
+// explicit rather than daemon-startup work; lifecycle callers decide when an
+// importer scan should incur provisioning.
+func EnsureHistory(ctx context.Context, cfg config.Config, log io.Writer) error {
+	installMu.Lock()
+	defer installMu.Unlock()
+
+	if cfg.Node.Managed {
+		if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
+			return fmt.Errorf("provision managed node: %w", err)
+		}
+	}
+	if err := ensureRuntimeRoot(cfg.RuntimeRoot); err != nil {
+		return err
+	}
+	files := map[string][]byte{
+		filepath.Join("history", "sdk.ts"):    tandem.RuntimeHistorySDK,
+		filepath.Join("history", "runner.ts"): tandem.RuntimeHistoryRunner,
+		"tsconfig.json":                       tandem.RuntimeTSConfig,
+	}
+	for rel, contents := range files {
+		path := filepath.Join(cfg.RuntimeRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("provision history runtime: %w", err)
+		}
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			return fmt.Errorf("provision history runtime: %w", err)
+		}
+	}
+	if distExists(cfg.RuntimeRoot, historyPin.dist) {
+		return nil
+	}
+	npm, err := resolveNpm(cfg)
+	if err != nil {
+		return err
+	}
+	if err := install(ctx, cfg, npm, historyPin.spec, log); err != nil {
+		return err
+	}
+	if !distExists(cfg.RuntimeRoot, historyPin.dist) {
+		return errors.New("provision history runtime: npm completed without tsx")
 	}
 	return nil
 }

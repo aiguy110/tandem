@@ -156,6 +156,11 @@ agents:
       command: "{node}"
       args: ["{runtimeRoot}/mock.mjs", "{tandemRoot}"]
       env: {HOME_PATH: "{home}"}
+    history:
+      parser: "{runtimeRoot}/history/custom.ts"
+      args: ["--root", "{home}"]
+      env: {CUSTOM_TOKEN: "secret"}
+      resume: terminal
 harnesses:
   custom-fast:
     agent: custom
@@ -180,6 +185,16 @@ harnesses:
 	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/runtime/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
 		t.Fatalf("placeholders not expanded: %+v", custom)
 	}
+	history := c.Agents["custom"].History
+	if history == nil || history.Parser != "/fixtures/tandem/runtime/history/custom.ts" ||
+		!history.Enabled || history.Resume != "terminal" ||
+		!reflect.DeepEqual(history.Args, []string{"--root", c.Home}) ||
+		history.Env["CUSTOM_TOKEN"] != "secret" {
+		t.Fatalf("history config not resolved: %+v", history)
+	}
+	if got := Redacted(c).Agents["custom"].History.Env["CUSTOM_TOKEN"]; got != "[REDACTED]" {
+		t.Fatalf("history environment not redacted: %q", got)
+	}
 	if !reflect.DeepEqual(c.Harnesses["custom-fast"].ACPArgs, []string{"--fast"}) {
 		t.Fatalf("harness not loaded: %+v", c.Harnesses)
 	}
@@ -191,6 +206,9 @@ func TestInvalidConfiguration(t *testing.T) {
 		{"missing command", "agents:\n  broken:\n    acp:\n      args: []\n", "agents.broken.acp.command must be a non-empty string"},
 		{"bad argument list", "agents:\n  broken:\n    terminal:\n      command: node\n      startArgs: nope\n", "agents.broken.terminal.startArgs must be an array of strings"},
 		{"bad environment", "agents:\n  broken:\n    acp:\n      command: node\n      env: {COUNT: 3}\n", "agents.broken.acp.env must be a mapping of string values"},
+		{"relative history parser", "agents:\n  broken:\n    terminal: {command: x}\n    history: {parser: relative.ts}\n", "history.parser must resolve to an absolute path"},
+		{"bad history resume", "agents:\n  broken:\n    terminal: {command: x}\n    history: {parser: /tmp/x.ts, resume: magic}\n", "history.resume must be auto, acp, or terminal"},
+		{"bad history enabled", "agents:\n  broken:\n    terminal: {command: x}\n    history: {parser: /tmp/x.ts, enabled: yes-please}\n", "history.enabled must be a boolean"},
 		{"unknown harness agent", "harnesses:\n  bad: {agent: missing}\n", "harnesses.bad references unknown agent: missing"},
 		{"unknown default harness", "defaults: {harness: absent}\n", "defaults.harness references unknown harness: absent"},
 	}

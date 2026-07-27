@@ -37,6 +37,23 @@ agents:
       startArgs: []
       resumeArgs: [--session, "{sessionId}"]
 
+# Agent definitions may attach a vendor-neutral transcript importer. Tandem
+# runs the TypeScript module with its configured Node runtime and owns all
+# validation, checkpoints, SQLite writes, and FTS indexing. Importer env values
+# are treated as secrets in config diagnostics.
+#
+#  custom:
+#    name: Custom
+#    terminal:
+#      command: custom
+#      resumeArgs: [--resume, "{sessionId}"]
+#    history:
+#      parser: "{home}/importers/custom-history.ts" # must resolve absolute
+#      args: [--include-tools]
+#      env: {CUSTOM_HISTORY_ROOT: "{home}/.custom/history"}
+#      resume: terminal  # auto | acp | terminal; consumed by later resume integration
+#      enabled: true
+
 harnesses: {}
 
 # The `tandem` setup wizard (run bare `tandem` from a terminal) writes an

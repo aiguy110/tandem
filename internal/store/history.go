@@ -44,6 +44,25 @@ type HistoryEntry struct {
 	Truncated  bool
 }
 
+type HistoryImportCheckpoint struct {
+	ImporterID      string
+	ImporterVersion int
+	SourceKey       string
+	Checkpoint      json.RawMessage
+	LastSuccessAt   *int64
+	LastError       string
+}
+
+type HistoryImportRun struct {
+	ID           int64
+	Agent        string
+	StartedAt    int64
+	CompletedAt  *int64
+	SessionsSeen int
+	EntriesSeen  int
+	Error        string
+}
+
 type Highlight struct {
 	Start int
 	End   int
@@ -71,6 +90,20 @@ type HistorySearchHit struct {
 // ReplaceHistorySession atomically replaces a transcript. A failed validation
 // or insert leaves the last successfully indexed version untouched.
 func (s *Store) ReplaceHistorySession(session HistorySession, entries []HistoryEntry) error {
+	return s.replaceHistorySessionAndCheckpoint(session, entries, "", 0, nil)
+}
+
+// ImportHistorySession atomically replaces one importer-owned transcript and
+// advances its opaque source checkpoint. A crash before end_session therefore
+// preserves both the previous transcript and checkpoint.
+func (s *Store) ImportHistorySession(session HistorySession, entries []HistoryEntry, importerID string, importerVersion int, checkpoint json.RawMessage) error {
+	if importerID == "" || importerVersion < 1 || len(checkpoint) == 0 || !json.Valid(checkpoint) {
+		return errors.New("valid importer ID, version, and checkpoint are required")
+	}
+	return s.replaceHistorySessionAndCheckpoint(session, entries, importerID, importerVersion, checkpoint)
+}
+
+func (s *Store) replaceHistorySessionAndCheckpoint(session HistorySession, entries []HistoryEntry, importerID string, importerVersion int, checkpoint json.RawMessage) error {
 	if session.Source == "" || session.Agent == "" || session.ExternalID == "" || session.SourceKey == "" {
 		return errors.New("history session source, agent, external ID, and source key are required")
 	}
@@ -111,7 +144,88 @@ func (s *Store) ReplaceHistorySession(session HistorySession, entries []HistoryE
 			return err
 		}
 	}
+	if importerID != "" {
+		now := s.now().UnixMilli()
+		if _, err := tx.Exec(`INSERT INTO history_import_state
+(agent, importerId, importerVersion, sourceKey, checkpoint, lastSuccessAt, lastError)
+VALUES (?, ?, ?, ?, ?, ?, '')
+ON CONFLICT(agent, importerId, sourceKey) DO UPDATE SET
+importerVersion=excluded.importerVersion, checkpoint=excluded.checkpoint,
+lastSuccessAt=excluded.lastSuccessAt, lastError=''`,
+			session.Agent, importerID, importerVersion, session.SourceKey, string(checkpoint), now); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func (s *Store) HistoryImportCheckpoints(agent string) ([]HistoryImportCheckpoint, error) {
+	rows, err := s.db.Query(`SELECT importerId, importerVersion, sourceKey, checkpoint, lastSuccessAt, lastError
+FROM history_import_state WHERE agent = ? ORDER BY importerId, sourceKey`, agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HistoryImportCheckpoint
+	for rows.Next() {
+		var value HistoryImportCheckpoint
+		var checkpoint string
+		var success sql.NullInt64
+		if err := rows.Scan(&value.ImporterID, &value.ImporterVersion, &value.SourceKey, &checkpoint, &success, &value.LastError); err != nil {
+			return nil, err
+		}
+		value.Checkpoint = json.RawMessage(checkpoint)
+		value.LastSuccessAt = nullableInt64(success)
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) StartHistoryImportRun(agent string) (int64, error) {
+	result, err := s.db.Exec("INSERT INTO history_import_runs(agent, startedAt) VALUES (?, ?)", agent, s.now().UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *Store) FinishHistoryImportRun(id int64, sessions, entries int, runErr error) error {
+	message := ""
+	if runErr != nil {
+		message = runErr.Error()
+	}
+	_, err := s.db.Exec(`UPDATE history_import_runs
+SET completedAt = ?, sessionsSeen = ?, entriesSeen = ?, error = ? WHERE id = ?`,
+		s.now().UnixMilli(), sessions, entries, message, id)
+	return err
+}
+
+func (s *Store) MarkHistoryImportError(agent, importerID string, importErr error) error {
+	if importerID == "" || importErr == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE history_import_state SET lastError = ?
+WHERE agent = ? AND importerId = ?`, importErr.Error(), agent, importerID)
+	return err
+}
+
+func (s *Store) LatestHistoryImportRun(agent string) (*HistoryImportRun, error) {
+	var value HistoryImportRun
+	var completed sql.NullInt64
+	var message sql.NullString
+	err := s.db.QueryRow(`SELECT id, agent, startedAt, completedAt, sessionsSeen, entriesSeen, error
+FROM history_import_runs WHERE agent = ? ORDER BY id DESC LIMIT 1`, agent).Scan(
+		&value.ID, &value.Agent, &value.StartedAt, &completed,
+		&value.SessionsSeen, &value.EntriesSeen, &message)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	value.CompletedAt = nullableInt64(completed)
+	value.Error = message.String
+	return &value, nil
 }
 
 func replaceHistorySessionRow(tx *sql.Tx, session HistorySession) (int64, error) {

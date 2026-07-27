@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	tandem "github.com/aiguy110/tandem"
 	"github.com/aiguy110/tandem/internal/config"
 )
 
@@ -18,6 +19,39 @@ func TestEnsureAgentUnknownAgentIsNoop(t *testing.T) {
 	}
 	if log.Len() != 0 {
 		t.Fatalf("expected no log output for unknown agent, got %q", log.String())
+	}
+}
+
+func TestEnsureHistoryStagesEmbeddedRuntimeAndUsesExistingTSX(t *testing.T) {
+	root := t.TempDir()
+	distPath := filepath.Join(root, historyPin.dist)
+	if err := os.MkdirAll(filepath.Dir(distPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(distPath, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	cfg := config.Config{RuntimeRoot: root}
+	var log bytes.Buffer
+	if err := EnsureHistory(context.Background(), cfg, &log); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string][]byte{
+		filepath.Join("history", "sdk.ts"):    tandem.RuntimeHistorySDK,
+		filepath.Join("history", "runner.ts"): tandem.RuntimeHistoryRunner,
+		"tsconfig.json":                       tandem.RuntimeTSConfig,
+	} {
+		got, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s did not match embedded source", rel)
+		}
+	}
+	if log.Len() != 0 {
+		t.Fatalf("unexpected install log: %q", log.String())
 	}
 }
 
