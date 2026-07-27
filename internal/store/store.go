@@ -80,6 +80,70 @@ CREATE TABLE IF NOT EXISTS profile_recent (
         profileId  TEXT NOT NULL,
         lastUsedAt INTEGER NOT NULL,
         PRIMARY KEY (project, profileId)
+      );
+CREATE TABLE IF NOT EXISTS history_sessions (
+        id          INTEGER PRIMARY KEY,
+        source      TEXT NOT NULL,
+        agent       TEXT NOT NULL,
+        externalId  TEXT NOT NULL,
+        agentId     TEXT NOT NULL DEFAULT '',
+        cwd         TEXT NOT NULL DEFAULT '',
+        title       TEXT NOT NULL DEFAULT '',
+        createdAt   INTEGER,
+        updatedAt   INTEGER,
+        indexedAt   INTEGER NOT NULL,
+        resumable   INTEGER NOT NULL DEFAULT 1,
+        sourceKey   TEXT NOT NULL,
+        sourceMeta  TEXT NOT NULL DEFAULT '{}',
+        UNIQUE (source, agent, externalId)
+      );
+CREATE TABLE IF NOT EXISTS history_entries (
+        id          INTEGER PRIMARY KEY,
+        sessionId   INTEGER NOT NULL,
+        externalId  TEXT NOT NULL,
+        ordinal     INTEGER NOT NULL,
+        role        TEXT NOT NULL DEFAULT '',
+        kind        TEXT NOT NULL DEFAULT '',
+        ts          INTEGER,
+        text        TEXT NOT NULL,
+        truncated   INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (sessionId, externalId),
+        FOREIGN KEY (sessionId) REFERENCES history_sessions(id) ON DELETE CASCADE
+      );
+CREATE VIRTUAL TABLE IF NOT EXISTS history_entries_fts USING fts5(
+        text,
+        content='history_entries',
+        content_rowid='id',
+        tokenize='unicode61'
+      );
+CREATE TRIGGER IF NOT EXISTS history_entries_ai AFTER INSERT ON history_entries BEGIN
+        INSERT INTO history_entries_fts(rowid, text) VALUES (new.id, new.text);
+      END;
+CREATE TRIGGER IF NOT EXISTS history_entries_ad AFTER DELETE ON history_entries BEGIN
+        INSERT INTO history_entries_fts(history_entries_fts, rowid, text) VALUES ('delete', old.id, old.text);
+      END;
+CREATE TRIGGER IF NOT EXISTS history_entries_au AFTER UPDATE ON history_entries BEGIN
+        INSERT INTO history_entries_fts(history_entries_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        INSERT INTO history_entries_fts(rowid, text) VALUES (new.id, new.text);
+      END;
+CREATE TABLE IF NOT EXISTS history_import_state (
+        agent           TEXT NOT NULL,
+        importerId      TEXT NOT NULL,
+        importerVersion INTEGER NOT NULL,
+        sourceKey       TEXT NOT NULL,
+        checkpoint      TEXT NOT NULL,
+        lastSuccessAt   INTEGER,
+        lastError       TEXT,
+        PRIMARY KEY (agent, importerId, sourceKey)
+      );
+CREATE TABLE IF NOT EXISTS history_import_runs (
+        id            INTEGER PRIMARY KEY,
+        agent         TEXT NOT NULL,
+        startedAt     INTEGER NOT NULL,
+        completedAt   INTEGER,
+        sessionsSeen  INTEGER NOT NULL DEFAULT 0,
+        entriesSeen   INTEGER NOT NULL DEFAULT 0,
+        error         TEXT
       );`
 
 // Store serializes access through one connection. This makes connection-local
@@ -181,6 +245,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agents.cwd: %w", err)
 	}
+	if err := s.backfillTandemHistory(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("index tandem history: %w", err)
+	}
 	return s, nil
 }
 
@@ -196,12 +264,22 @@ func (s *Store) UpsertAgent(a Agent) error {
 	if err := json.Compact(&compactSpec, a.Spec); err != nil {
 		return fmt.Errorf("compact agent spec: %w", err)
 	}
-	_, err := s.db.Exec(`INSERT INTO agents (id, name, spec, cwd, acpSessionId, status, createdAt, closedAt)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO agents (id, name, spec, cwd, acpSessionId, status, createdAt, closedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name, spec=excluded.spec, cwd=excluded.cwd,
 acpSessionId=excluded.acpSessionId, status=excluded.status, closedAt=excluded.closedAt`,
-		a.ID, a.Name, compactSpec.String(), a.CWD, a.ACPSessionID, a.Status, a.CreatedAt, a.ClosedAt)
-	return err
+		a.ID, a.Name, compactSpec.String(), a.CWD, a.ACPSessionID, a.Status, a.CreatedAt, a.ClosedAt); err != nil {
+		return err
+	}
+	if err := upsertTandemHistorySession(tx, a, s.now().UnixMilli()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetStatus(id, status string) error {
@@ -210,7 +288,12 @@ func (s *Store) SetStatus(id, status string) error {
 }
 
 func (s *Store) SetAgentName(id, name string) error {
-	result, err := s.db.Exec("UPDATE agents SET name = ? WHERE id = ?", name, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE agents SET name = ? WHERE id = ?", name, id)
 	if err != nil {
 		return err
 	}
@@ -221,7 +304,10 @@ func (s *Store) SetAgentName(id, name string) error {
 	if changed == 0 {
 		return errors.New("no such agent")
 	}
-	return nil
+	if _, err := tx.Exec("UPDATE history_sessions SET title = ? WHERE source = 'tandem' AND agentId = ?", name, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetSessionID(id, sessionID string) error {
@@ -245,7 +331,7 @@ func (s *Store) DeleteAgent(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -587,6 +673,9 @@ func (s *Store) AppendEvent(agentID, kind, payload string, ts int64) (int64, err
 		return 0, err
 	}
 	if _, err := tx.Exec("INSERT INTO events (agentId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", agentID, seq, kind, payload, ts); err != nil {
+		return 0, err
+	}
+	if err := indexTandemEvent(tx, agentID, seq, kind, payload, ts, s.now().UnixMilli()); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

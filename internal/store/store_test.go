@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func openTestStore(t *testing.T) (*Store, string) {
+func openTestStore(t testing.TB) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tandem.db")
 	s, err := Open(path)
@@ -44,7 +44,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		}
 	}
 	var tables []string
-	rows, err := s.db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	rows, err := s.db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'history_entries_fts_%' ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agents", "assets", "browser_sessions", "browser_snapshots", "events", "profile_recent", "profiles"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agents", "assets", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -132,7 +132,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	if err := json.Unmarshal(b, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.db.Query("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table', 'index') AND (type = 'index' OR name NOT LIKE 'sqlite_%') ORDER BY type, name")
+	rows, err := s.db.Query("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table', 'index') AND (type = 'index' OR name NOT LIKE 'sqlite_%') AND name NOT LIKE 'history_entries_fts_%' ORDER BY type, name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +156,12 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 			}
 			return *v
 		}
-		for i := range got {
+		for i := 0; i < len(got) && i < len(fixture.Schema); i++ {
 			if !reflect.DeepEqual(got[i], fixture.Schema[i]) {
 				t.Errorf("schema row %s differs\n got SQL: %q\nwant SQL: %q", got[i].Name, text(got[i].SQL), text(fixture.Schema[i].SQL))
 			}
 		}
+		t.Errorf("schema row count=%d want=%d", len(got), len(fixture.Schema))
 		t.FailNow()
 	}
 }
