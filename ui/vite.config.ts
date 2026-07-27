@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // Built assets go to dist/ with relative base so the daemon can serve them from
@@ -14,5 +14,8 @@ export default defineConfig({
   build: {
     target: 'es2022',
     outDir: 'dist',
+  },
+  test: {
+    environment: 'jsdom',
   },
 });

@@ -52,12 +52,18 @@ repo discovery for the quick-spawn palette), and — Phase 5 — the browser cha
 yet"`) pending the diff/merge UI. Multiple concurrent clients and multiplexed multi-agent
 subscriptions on one socket are supported.
 
-### `list_sessions` / `resume_session`
+### `list_sessions` / `search_sessions` / `resume_session`
 
-`list_sessions` returns a catalog combining Tandem-owned ACP sessions with external
-sessions exposed by adapters that advertise ACP `sessionCapabilities.list`. Entries are
-deduplicated by session id, with the richer Tandem record taking precedence. The response
-also reports each adapter's enumeration support so the UI can identify a partial catalog.
+`list_sessions` returns a catalog combining Tandem-owned sessions, external sessions
+exposed by ACP adapters, and transcript-imported history. Entries are deduplicated by
+`(agent, session id)`, with live Tandem, closed Tandem, ACP, then history precedence.
+The response also reports each adapter's enumeration support.
+
+`search_sessions` performs literal token-prefix FTS over the normalized local transcript
+index. Its correlated `session_search` response groups up to `maxHitsPerSession` excerpts
+under each resumable session, including structured highlight ranges and adjacent-entry
+context. User input is tokenized server-side and is never passed through as raw FTS
+`MATCH` syntax.
 
 `resume_session` focuses an already-live session, restores a closed Tandem session
 (reattaching its worktree when necessary), or imports an external session. `agent` and
@@ -192,7 +198,8 @@ type ClientMsg =
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
   | { t: 'list_agent_catalog' }                                         // configured definitions + profiles
   | { t: 'list_sessions' }                                              // resumable-session catalog
-  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string }
+  | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number }
+  | { t: 'resume_session'; sessionId: string; source: 'tandem'|'acp'|'history'; agent: string; cwd?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean }
   | { t: 'leave_terminal'; agentId: string }
   | { t: 'shell_open'; agentId: string; cols: number; rows: number }
@@ -240,6 +247,7 @@ type ServerMsg =
   | { t: 'dirs';     dirs: RepoInfo[] }                                 // reply to list_dirs
   | { t: 'spawn_options'; options?: SpawnOptions; error?: string }      // reply to get_spawn_options
   | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions
+  | { t: 'session_search'; query?: string; results?: SessionSearchResult[]; error?: string }
   // Phase 5 browser channel (only sent to subscribers of that agent's 'browser' channel):
   | { t: 'browser_frame'; agentId: string; dataB64: string;             // CDP screencast JPEG
       meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }

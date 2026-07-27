@@ -141,6 +141,9 @@ type clientMessage struct {
 	DeleteWorktree *bool                      `json:"deleteWorktree"`
 	SessionID      string                     `json:"sessionId"`
 	Source         string                     `json:"source"`
+	Query          string                     `json:"query"`
+	Limit          int                        `json:"limit"`
+	MaxHits        int                        `json:"maxHitsPerSession"`
 	InterruptFirst bool                       `json:"interrupt"`
 	Action         string                     `json:"action"`
 	Event          browser.BrowserInputEvent  `json:"event"`
@@ -338,6 +341,20 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
+	case "search_sessions":
+		backend, ok := c.server.opts.Registry.(interface {
+			SearchSessions(context.Context, string, int, int) ([]registry.SessionSearchResult, error)
+		})
+		if !ok {
+			c.send(withCorr(map[string]any{"t": "session_search", "error": "session history search is unsupported"}, m.CorrID))
+			return
+		}
+		results, err := backend.SearchSessions(context.Background(), m.Query, m.Limit, m.MaxHits)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "session_search", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "session_search", "query": m.Query, "results": results}, m.CorrID))
 	case "resume_session":
 		backend, ok := c.server.opts.Registry.(interface {
 			Resume(context.Context, string, string, string, string) (*session.Session, error)

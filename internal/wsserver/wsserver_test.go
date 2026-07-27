@@ -109,6 +109,19 @@ func (*testBackend) ResumeCatalog(context.Context) (registry.ResumeCatalog, erro
 		Adapter: "pty", CWD: "/repo", Resumable: true,
 	}}}, nil
 }
+func (*testBackend) SearchSessions(_ context.Context, query string, _, _ int) ([]registry.SessionSearchResult, error) {
+	return []registry.SessionSearchResult{{
+		Session: registry.ResumableSession{
+			SessionID: "vendor-session", Source: "history", Agent: "codex",
+			Adapter: "pty", CWD: "/repo", Resumable: true,
+		},
+		Score: -1,
+		Hits: []registry.SessionSearchHit{{
+			EntryID: "entry-1", Role: "assistant",
+			Match: store.HistoryExcerpt{Text: "matched " + query, Highlights: []store.Highlight{{Start: 8, End: 8 + len([]rune(query))}}},
+		}},
+	}}, nil
+}
 func (b *testBackend) Resume(_ context.Context, sessionID, agent, cwd, source string) (*session.Session, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -314,6 +327,33 @@ func TestResumeProtocolPreservesAgentIdentityAndSource(t *testing.T) {
 	if call.sessionID != "vendor-session" || call.agent != "codex" ||
 		call.cwd != "/repo" || call.source != "history" {
 		t.Fatalf("resume call %#v", call)
+	}
+}
+
+func TestSessionSearchProtocolPreservesCorrelationAndStructuredHighlights(t *testing.T) {
+	_, _, _, _, url := setupWS(t, 0)
+	c := dial(t, url)
+	send(t, c, map[string]any{
+		"t": "search_sessions", "query": "東京", "limit": 12,
+		"maxHitsPerSession": 3, "corrId": "search-2",
+	})
+	got := recv(t, c)
+	if got["t"] != "session_search" || got["corrId"] != "search-2" || got["query"] != "東京" {
+		t.Fatalf("search response %#v", got)
+	}
+	results, ok := got["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("results %#v", got["results"])
+	}
+	result := results[0].(map[string]any)
+	hits := result["hits"].([]any)
+	match := hits[0].(map[string]any)["match"].(map[string]any)
+	if match["text"] != "matched 東京" {
+		t.Fatalf("match %#v", match)
+	}
+	highlight := match["highlights"].([]any)[0].(map[string]any)
+	if highlight["start"] != float64(8) || highlight["end"] != float64(10) {
+		t.Fatalf("highlight %#v", highlight)
 	}
 }
 

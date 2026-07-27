@@ -161,6 +161,62 @@ func TestHistoryOnlyFailureExplanations(t *testing.T) {
 	}
 }
 
+func TestSearchSessionsGroupsHitsAndUsesCatalogResumeState(t *testing.T) {
+	agent := historyAgent("terminal")
+	agent.Terminal.Args = nil
+	r, db := historyRegistry(t, &phaseFactory{}, map[string]config.Agent{"fake": agent})
+	cwd := t.TempDir()
+	updated := time.Now().UnixMilli()
+	err := db.ReplaceHistorySession(store.HistorySession{
+		Source: "history", Agent: "fake", ExternalID: "grouped", CWD: cwd,
+		Title: "Grouped result", UpdatedAt: &updated, Resumable: true,
+		SourceKey: "fake/grouped", SourceMeta: json.RawMessage(`{}`),
+	}, []store.HistoryEntry{
+		{ExternalID: "one", Ordinal: 1, Role: "user", Text: "Résumé punctuation: needle!"},
+		{ExternalID: "two", Ordinal: 2, Role: "assistant", Text: "A second needle appears."},
+		{ExternalID: "three", Ordinal: 3, Role: "assistant", Text: "A third needle appears."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := r.SearchSessions(context.Background(), `needle:`, 10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || len(results[0].Hits) != 2 {
+		t.Fatalf("grouped results = %#v", results)
+	}
+	if results[0].Session.SessionID != "grouped" || results[0].Session.Resumable ||
+		!results[0].Session.HistoryOnly || !strings.Contains(results[0].Session.ResumeError, "resumeArgs") {
+		t.Fatalf("catalog resume state was not applied: %#v", results[0].Session)
+	}
+	if results[0].Hits[0].Match.Text == "" || results[0].Hits[0].After == nil {
+		t.Fatalf("missing excerpt context: %#v", results[0].Hits[0])
+	}
+}
+
+func TestSearchSessionsMapsTandemIndexIdentityToResumeSession(t *testing.T) {
+	r, db := historyRegistry(t, &phaseFactory{}, map[string]config.Agent{"fake": historyAgent("auto")})
+	live, err := r.Spawn(context.Background(), agentadapter.Spec{
+		Adapter: "acp", Agent: "fake",
+		Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AppendEvent(live.ID, "user_message", `{"kind":"user_message","text":"identity mapping sentinel"}`, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := r.SearchSessions(context.Background(), "sentinel", 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Session.SessionID != "sess_mock" ||
+		results[0].Session.AgentID != live.ID || results[0].Session.Source != "tandem" {
+		t.Fatalf("search did not preserve resumable identity: %#v", results)
+	}
+}
+
 func TestHistoryTerminalResumeUsesConfiguredArgs(t *testing.T) {
 	f := &phaseFactory{}
 	r, db := historyRegistry(t, f, map[string]config.Agent{"fake": historyAgent("terminal")})

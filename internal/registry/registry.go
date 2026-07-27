@@ -154,6 +154,22 @@ type ResumeCatalog struct {
 	Sessions []ResumableSession  `json:"sessions"`
 	Adapters []ResumeAdapterInfo `json:"adapters"`
 }
+
+type SessionSearchHit struct {
+	EntryID   string                `json:"entryId"`
+	Role      string                `json:"role,omitempty"`
+	Kind      string                `json:"kind,omitempty"`
+	Timestamp string                `json:"timestamp,omitempty"`
+	Match     store.HistoryExcerpt  `json:"match"`
+	Before    *store.HistoryExcerpt `json:"before,omitempty"`
+	After     *store.HistoryExcerpt `json:"after,omitempty"`
+}
+
+type SessionSearchResult struct {
+	Session ResumableSession   `json:"session"`
+	Score   float64            `json:"score"`
+	Hits    []SessionSearchHit `json:"hits"`
+}
 type Options struct {
 	Store        *store.Store
 	Config       config.Config
@@ -902,6 +918,85 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 	}
 	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].UpdatedAt > sessions[j].UpdatedAt })
 	return ResumeCatalog{Sessions: sessions, Adapters: adapters}, nil
+}
+
+// SearchSessions groups normalized FTS entry hits by their preferred resumable
+// catalog session. SearchHistory sanitizes ordinary user input into literal
+// token-prefix MATCH terms; callers never supply SQLite FTS syntax.
+func (r *Registry) SearchSessions(ctx context.Context, query string, limit, maxHitsPerSession int) ([]SessionSearchResult, error) {
+	if limit <= 0 {
+		limit = 30
+	} else if limit > 50 {
+		limit = 50
+	}
+	if maxHitsPerSession <= 0 {
+		maxHitsPerSession = 3
+	} else if maxHitsPerSession > 5 {
+		maxHitsPerSession = 5
+	}
+	raw, err := r.store.SearchHistory(query, min(limit*maxHitsPerSession*2, 100))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return []SessionSearchResult{}, nil
+	}
+	catalog, err := r.ResumeCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	key := func(agent, id string) string { return agent + "\x00" + id }
+	byKey := make(map[string]ResumableSession, len(catalog.Sessions))
+	byAgentID := make(map[string]ResumableSession, len(catalog.Sessions))
+	for _, item := range catalog.Sessions {
+		byKey[key(item.Agent, item.SessionID)] = item
+		if item.AgentID != "" {
+			byAgentID[item.AgentID] = item
+		}
+	}
+
+	grouped := make(map[string]*SessionSearchResult)
+	order := make([]string, 0, min(limit, len(raw)))
+	for _, hit := range raw {
+		item, ok := byKey[key(hit.Session.Agent, hit.Session.ExternalID)]
+		if hit.Session.AgentID != "" {
+			if preferred, found := byAgentID[hit.Session.AgentID]; found {
+				item, ok = preferred, true
+			}
+		}
+		if !ok {
+			item = r.historyCatalogSession(hit.Session)
+		}
+		groupKey := key(item.Agent, item.SessionID)
+		group := grouped[groupKey]
+		if group == nil {
+			if len(order) >= limit {
+				continue
+			}
+			group = &SessionSearchResult{Session: item, Score: hit.Score, Hits: []SessionSearchHit{}}
+			grouped[groupKey] = group
+			order = append(order, groupKey)
+		}
+		if len(group.Hits) >= maxHitsPerSession {
+			continue
+		}
+		timestamp := ""
+		if hit.Timestamp != nil {
+			timestamp = time.UnixMilli(*hit.Timestamp).UTC().Format(time.RFC3339Nano)
+		}
+		group.Hits = append(group.Hits, SessionSearchHit{
+			EntryID: hit.ExternalID, Role: hit.Role, Kind: hit.Kind, Timestamp: timestamp,
+			Match: hit.Match, Before: hit.Before, After: hit.After,
+		})
+		if hit.Score < group.Score {
+			group.Score = hit.Score
+		}
+	}
+	results := make([]SessionSearchResult, 0, len(order))
+	for _, groupKey := range order {
+		results = append(results, *grouped[groupKey])
+	}
+	return results, nil
 }
 
 func enrichResumable(dst *ResumableSession, src ResumableSession) {

@@ -64,13 +64,13 @@ type HistoryImportRun struct {
 }
 
 type Highlight struct {
-	Start int
-	End   int
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 type HistoryExcerpt struct {
-	Text       string
-	Highlights []Highlight
+	Text       string      `json:"text"`
+	Highlights []Highlight `json:"highlights"`
 }
 
 type HistorySearchHit struct {

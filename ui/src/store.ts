@@ -23,6 +23,7 @@ import type {
   RepoInfo,
   ResumableSession,
   ResumeCatalog,
+  SessionSearchResult,
   ServerMsg,
   SessionConfigOption,
   SessionModeState,
@@ -157,6 +158,7 @@ interface StoreState {
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
+  searchSessions: (query: string) => Promise<SessionSearchResult[]>;
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
   leaveTerminal: (agentId: string) => Promise<AckResult>;
@@ -206,6 +208,7 @@ const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) 
 const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
 const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
 const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
+const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -347,6 +350,15 @@ export const useStore = create<StoreState>((set, get) => {
       case 'sessions':
         set({ resumeCatalog: msg.catalog, resumeLoading: false });
         return;
+      case 'session_search': {
+        const pending = msg.corrId ? pendingSessionSearches.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingSessionSearches.delete(msg.corrId);
+          if (msg.error) pending.reject(new Error(msg.error));
+          else pending.resolve(msg.results ?? []);
+        }
+        return;
+      }
       case 'close_preview': {
         const pending = msg.corrId ? pendingClosePreviews.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -628,6 +640,12 @@ export const useStore = create<StoreState>((set, get) => {
       set({ resumeLoading: true });
       client.send({ t: 'list_sessions' });
     },
+    searchSessions: (query) =>
+      new Promise<SessionSearchResult[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingSessionSearches.set(corrId, { resolve, reject });
+        client.send({ t: 'search_sessions', query, limit: 30, maxHitsPerSession: 3, corrId });
+      }),
     resumeSession: (session) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();

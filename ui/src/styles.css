@@ -474,6 +474,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .row .dirty { color: var(--warn); }
 .modal .row .occupied { color: var(--human); }
 .modal .row .sub { color: var(--text-faint); font-size: var(--fs-xs); }
+.resume-modal { width: min(780px, calc(100vw - 32px)); }
+.modal .resume-row { align-items: stretch; }
+.modal .resume-row.disabled { cursor: not-allowed; }
+.resume-content { min-width: 0; width: 100%; }
+.resume-heading { display: flex; align-items: center; gap: 10px; }
+.resume-heading > :first-child { min-width: 0; }
+.resume-heading .primary, .resume-heading .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-hit { margin-top: 8px; border-left: 2px solid var(--border); padding-left: 9px; font-size: var(--fs-xs); line-height: 1.45; }
+.history-context { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-match { color: var(--text); }
+.history-match mark { border-radius: 2px; background: var(--warn-soft); color: inherit; padding: 0 1px; }
+.history-kind { margin-right: 7px; color: var(--agent); font-family: var(--font-mono); }
+.resume-disabled-reason { margin-top: 6px; color: var(--err); font-size: var(--fs-xs); }
 .modal .row .repo-details { min-width: 0; flex: 1; }
 .modal .row .repo-details .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal .row .profile-button { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

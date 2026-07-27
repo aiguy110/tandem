@@ -179,6 +179,28 @@ export interface ResumeCatalog {
   sessions: ResumableSession[];
   adapters: ResumeAdapterInfo[];
 }
+export interface HistoryHighlight {
+  start: number;
+  end: number;
+}
+export interface HistoryExcerpt {
+  text: string;
+  highlights: HistoryHighlight[];
+}
+export interface SessionSearchHit {
+  entryId: string;
+  role?: string;
+  kind?: string;
+  timestamp?: string;
+  match: HistoryExcerpt;
+  before?: HistoryExcerpt;
+  after?: HistoryExcerpt;
+}
+export interface SessionSearchResult {
+  session: ResumableSession;
+  score: number;
+  hits: SessionSearchHit[];
+}
 
 export type Workspace =
   | {
@@ -306,6 +328,7 @@ export type ClientMsg =
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
+  | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; corrId?: string }
   | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
   | { t: 'leave_terminal'; agentId: string; corrId?: string }
@@ -346,5 +369,6 @@ export type ServerMsg =
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }
+  | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; agentId: string; active: boolean; controlOwner: 'agent' | 'user' };
