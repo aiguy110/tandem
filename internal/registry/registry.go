@@ -129,19 +129,22 @@ type persistedSessionConfig struct {
 }
 
 type ResumableSession struct {
-	SessionID string         `json:"sessionId"`
-	Source    string         `json:"source"`
-	Agent     string         `json:"agent"`
-	Adapter   string         `json:"adapter"`
-	CWD       string         `json:"cwd"`
-	Title     string         `json:"title,omitempty"`
-	UpdatedAt string         `json:"updatedAt,omitempty"`
-	AgentID   string         `json:"agentId,omitempty"`
-	AgentName string         `json:"agentName,omitempty"`
-	Branch    string         `json:"branch,omitempty"`
-	Live      *bool          `json:"live,omitempty"`
-	Closed    *bool          `json:"closed,omitempty"`
-	Status    session.Status `json:"status,omitempty"`
+	SessionID   string         `json:"sessionId"`
+	Source      string         `json:"source"`
+	Agent       string         `json:"agent"`
+	Adapter     string         `json:"adapter,omitempty"`
+	CWD         string         `json:"cwd"`
+	Title       string         `json:"title,omitempty"`
+	UpdatedAt   string         `json:"updatedAt,omitempty"`
+	AgentID     string         `json:"agentId,omitempty"`
+	AgentName   string         `json:"agentName,omitempty"`
+	Branch      string         `json:"branch,omitempty"`
+	Live        *bool          `json:"live,omitempty"`
+	Closed      *bool          `json:"closed,omitempty"`
+	Status      session.Status `json:"status,omitempty"`
+	Resumable   bool           `json:"resumable"`
+	HistoryOnly bool           `json:"historyOnly,omitempty"`
+	ResumeError string         `json:"resumeError,omitempty"`
 }
 type ResumeAdapterInfo struct {
 	Agent        string `json:"agent"`
@@ -819,25 +822,48 @@ func hasUserMessage(db *store.Store, agentID string) (bool, error) {
 	return false, nil
 }
 
-// ResumeCatalog unions durable Tandem rows with ACP-discovered external
-// sessions. Durable rows win every session-ID collision because they carry the
-// workspace and agent linkage needed for an exact restore.
+// ResumeCatalog unions durable Tandem rows, ACP-discovered sessions, and
+// importer-owned history. Identity is (agent definition, opaque session ID).
+// Live Tandem > closed Tandem > ACP > history.
 func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 	rows, err := r.store.AllAgents()
 	if err != nil {
 		return ResumeCatalog{}, err
 	}
-	seen := map[string]bool{}
-	sessions := make([]ResumableSession, 0, len(rows))
+	history, err := r.store.HistorySessions("history")
+	if err != nil {
+		return ResumeCatalog{}, err
+	}
+	type ranked struct {
+		session ResumableSession
+		rank    int
+	}
+	byKey := map[string]ranked{}
+	key := func(agent, id string) string { return agent + "\x00" + id }
+	merge := func(entry ResumableSession, rank int) {
+		k := key(entry.Agent, entry.SessionID)
+		if prior, ok := byKey[k]; ok {
+			if rank <= prior.rank {
+				enrichResumable(&prior.session, entry)
+				byKey[k] = prior
+				return
+			}
+			enrichResumable(&entry, prior.session)
+		}
+		byKey[k] = ranked{session: entry, rank: rank}
+	}
 	for _, rec := range rows {
-		if rec.ACPSessionID == nil || *rec.ACPSessionID == "" || seen[*rec.ACPSessionID] {
+		if rec.ACPSessionID == nil || *rec.ACPSessionID == "" {
 			continue
 		}
 		var spec agentadapter.Spec
-		if json.Unmarshal(rec.Spec, &spec) != nil || spec.Adapter != "acp" {
+		if json.Unmarshal(rec.Spec, &spec) != nil {
 			continue
 		}
-		seen[*rec.ACPSessionID] = true
+		agent := spec.Agent
+		if agent == "" {
+			agent = r.config.ACP.Default
+		}
 		r.mu.RLock()
 		live := r.sessions[rec.ID]
 		r.mu.RUnlock()
@@ -846,10 +872,7 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 			updated = *rec.ClosedAt
 		}
 		isLive, isClosed := live != nil, rec.ClosedAt != nil
-		entry := ResumableSession{SessionID: *rec.ACPSessionID, Source: "tandem", Agent: spec.Agent, Adapter: "acp", CWD: rec.CWD, Title: rec.Name, UpdatedAt: time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), AgentID: rec.ID, AgentName: rec.Name, Live: &isLive, Closed: &isClosed}
-		if entry.Agent == "" {
-			entry.Agent = r.config.ACP.Default
-		}
+		entry := ResumableSession{SessionID: *rec.ACPSessionID, Source: "tandem", Agent: agent, Adapter: spec.Adapter, CWD: rec.CWD, Title: rec.Name, UpdatedAt: time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), AgentID: rec.ID, AgentName: rec.Name, Live: &isLive, Closed: &isClosed, Resumable: true}
 		if spec.Workspace.Kind == workspace.KindWorktree {
 			entry.Branch = spec.Workspace.Branch
 			if entry.Branch == "" {
@@ -859,16 +882,101 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 		if live != nil {
 			entry.Status = live.Status()
 		}
-		sessions = append(sessions, entry)
+		rank := 4
+		if isLive {
+			rank = 5
+		}
+		merge(entry, rank)
 	}
 	external, adapters := r.externalSessions(ctx)
 	for _, entry := range external {
-		if !seen[entry.SessionID] {
-			sessions = append(sessions, entry)
-		}
+		merge(entry, 3)
+	}
+	for _, item := range history {
+		entry := r.historyCatalogSession(item)
+		merge(entry, 2)
+	}
+	sessions := make([]ResumableSession, 0, len(byKey))
+	for _, item := range byKey {
+		sessions = append(sessions, item.session)
 	}
 	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].UpdatedAt > sessions[j].UpdatedAt })
 	return ResumeCatalog{Sessions: sessions, Adapters: adapters}, nil
+}
+
+func enrichResumable(dst *ResumableSession, src ResumableSession) {
+	if dst.CWD == "" {
+		dst.CWD = src.CWD
+	}
+	if src.Source == "history" && src.Title != "" {
+		// Preserve Tandem's display name separately in AgentName while using
+		// the vendor transcript's usually more descriptive conversation title.
+		dst.Title = src.Title
+	} else if dst.Title == "" {
+		dst.Title = src.Title
+	}
+	if dst.UpdatedAt == "" || (src.Source == "history" && src.UpdatedAt > dst.UpdatedAt) {
+		dst.UpdatedAt = src.UpdatedAt
+	}
+}
+
+func historyTimeString(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return time.UnixMilli(*value).UTC().Format(time.RFC3339Nano)
+}
+
+func (r *Registry) historyCatalogSession(item store.HistorySession) ResumableSession {
+	updatedAt := item.UpdatedAt
+	if updatedAt == nil {
+		updatedAt = item.CreatedAt
+	}
+	if updatedAt == nil {
+		updatedAt = &item.IndexedAt
+	}
+	entry := ResumableSession{SessionID: item.ExternalID, Source: "history", Agent: item.Agent,
+		CWD: item.CWD, Title: item.Title, UpdatedAt: historyTimeString(updatedAt)}
+	def, exists := r.config.Agents[item.Agent]
+	if !exists || def.History == nil || !def.History.Enabled {
+		entry.HistoryOnly, entry.ResumeError = true, "history is searchable but its agent history configuration is unavailable"
+		return entry
+	}
+	if !item.Resumable {
+		entry.HistoryOnly, entry.ResumeError = true, "the history importer marked this session as not resumable"
+		return entry
+	}
+	if item.CWD == "" {
+		entry.HistoryOnly, entry.ResumeError = true, "history is searchable but has no working directory for a safe resume"
+		return entry
+	}
+	mode := def.History.Resume
+	hasACP := def.ACP != nil || r.config.ACP.Override != nil
+	hasTerminal := def.Terminal != nil && len(def.Terminal.Args) > 0
+	switch mode {
+	case "acp":
+		entry.Adapter, entry.Resumable = "acp", hasACP
+		if !hasACP {
+			entry.ResumeError = "agent has no ACP launch configured"
+		}
+	case "terminal":
+		entry.Adapter, entry.Resumable = "pty", hasTerminal
+		if !hasTerminal {
+			entry.ResumeError = "agent has no terminal resumeArgs configured"
+		}
+	default:
+		entry.Resumable = hasACP || hasTerminal
+		if hasACP {
+			entry.Adapter = "acp"
+		} else if hasTerminal {
+			entry.Adapter = "pty"
+		}
+		if !entry.Resumable {
+			entry.ResumeError = "agent has neither ACP load nor terminal resumeArgs configured"
+		}
+	}
+	entry.HistoryOnly = !entry.Resumable
+	return entry
 }
 
 func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []ResumeAdapterInfo) {
@@ -914,11 +1022,16 @@ func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []
 		res := <-results
 		adapters = append(adapters, ResumeAdapterInfo{Agent: res.agent, SupportsList: res.supported})
 		for _, s := range res.sessions {
-			if dedupe[s.SessionID] {
+			identity := res.agent + "\x00" + s.SessionID
+			if dedupe[identity] {
 				continue
 			}
-			dedupe[s.SessionID] = true
-			discovered = append(discovered, ResumableSession{SessionID: s.SessionID, Source: "external", Agent: res.agent, Adapter: "acp", CWD: s.CWD, Title: s.Title, UpdatedAt: s.UpdatedAt})
+			dedupe[identity] = true
+			entry := ResumableSession{SessionID: s.SessionID, Source: "acp", Agent: res.agent, Adapter: "acp", CWD: s.CWD, Title: s.Title, UpdatedAt: s.UpdatedAt, Resumable: s.CWD != ""}
+			if s.CWD == "" {
+				entry.ResumeError = "ACP discovery returned no working directory for a safe resume"
+			}
+			discovered = append(discovered, entry)
 		}
 	}
 	sort.Slice(adapters, func(i, j int) bool { return adapters[i].Agent < adapters[j].Agent })
@@ -931,14 +1044,19 @@ func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []
 }
 
 // Resume focuses an existing live session, restores a closed Tandem row, or
-// imports an externally discovered ACP session when supplied its agent/cwd.
-func (r *Registry) Resume(ctx context.Context, sessionID, agent, cwd string) (*session.Session, error) {
+// imports an ACP/history session using only the selected agent's configured
+// resume policy. Source disambiguates history policy from ACP discovery.
+func (r *Registry) Resume(ctx context.Context, sessionID, agent, cwd, source string) (*session.Session, error) {
 	for _, s := range r.List() {
-		if s.SessionID() == sessionID {
+		sessionAgent := s.Spec.Agent
+		if sessionAgent == "" {
+			sessionAgent = r.config.ACP.Default
+		}
+		if s.SessionID() == sessionID && (agent == "" || sessionAgent == agent) {
 			return s, nil
 		}
 	}
-	rec, err := r.store.AgentBySessionID(sessionID)
+	rec, err := r.tandemSession(agent, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -963,11 +1081,100 @@ func (r *Registry) Resume(ctx context.Context, sessionID, agent, cwd string) (*s
 	if agent == "" || cwd == "" {
 		return nil, errors.New("resume: unknown session — agent and cwd are required to resume an external session")
 	}
-	return r.spawnResumed(ctx, agent, cwd, sessionID)
+	if source == "history" {
+		return r.resumeHistory(ctx, agent, cwd, sessionID)
+	}
+	return r.spawnResumed(ctx, agent, cwd, sessionID, "acp")
 }
 
-func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID string) (*session.Session, error) {
-	spec, err := r.resolve(agentadapter.Spec{Adapter: "acp", Agent: agent, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
+func (r *Registry) tandemSession(agent, sessionID string) (*store.Agent, error) {
+	rows, err := r.store.AllAgents()
+	if err != nil {
+		return nil, err
+	}
+	var match *store.Agent
+	matchAgent := ""
+	for i := range rows {
+		rec := rows[i]
+		if rec.ACPSessionID == nil || *rec.ACPSessionID != sessionID {
+			continue
+		}
+		var spec agentadapter.Spec
+		if json.Unmarshal(rec.Spec, &spec) != nil {
+			continue
+		}
+		specAgent := spec.Agent
+		if specAgent == "" {
+			specAgent = r.config.ACP.Default
+		}
+		if agent != "" && specAgent != agent {
+			continue
+		}
+		copy := rec
+		if agent != "" {
+			// AllAgents is newest-first, matching catalog precedence among
+			// multiple durable rows for one vendor identity.
+			return &copy, nil
+		}
+		if match != nil && matchAgent != specAgent {
+			return nil, errors.New("resume: session ID is ambiguous — agent is required")
+		}
+		if match == nil {
+			match, matchAgent = &copy, specAgent
+		}
+	}
+	return match, nil
+}
+
+func (r *Registry) resumeHistory(ctx context.Context, agent, cwd, sessionID string) (*session.Session, error) {
+	var imported *store.HistorySession
+	history, err := r.store.HistorySessions("history")
+	if err != nil {
+		return nil, err
+	}
+	for i := range history {
+		if history[i].Agent == agent && history[i].ExternalID == sessionID {
+			imported = &history[i]
+			break
+		}
+	}
+	if imported == nil {
+		return nil, errors.New("resume: selected history session is no longer indexed")
+	}
+	entry := r.historyCatalogSession(*imported)
+	if !entry.Resumable {
+		return nil, fmt.Errorf("resume: %s", entry.ResumeError)
+	}
+	// The indexed source, not mutable client input, owns the workspace used to
+	// resume imported history.
+	cwd = imported.CWD
+	def := r.config.Agents[agent]
+	switch def.History.Resume {
+	case "acp":
+		return r.spawnResumed(ctx, agent, cwd, sessionID, "acp")
+	case "terminal":
+		return r.spawnResumed(ctx, agent, cwd, sessionID, "pty")
+	default:
+		if def.ACP != nil || r.config.ACP.Override != nil {
+			s, acpErr := r.spawnResumed(ctx, agent, cwd, sessionID, "acp")
+			if acpErr == nil {
+				return s, nil
+			}
+			if def.Terminal != nil && len(def.Terminal.Args) > 0 {
+				s, terminalErr := r.spawnResumed(ctx, agent, cwd, sessionID, "pty")
+				if terminalErr == nil {
+					return s, nil
+				}
+				return nil, fmt.Errorf("resume: ACP load failed (%v); terminal fallback failed (%v)", acpErr, terminalErr)
+			}
+			return nil, fmt.Errorf("resume: ACP load failed: %w", acpErr)
+		}
+		return r.spawnResumed(ctx, agent, cwd, sessionID, "pty")
+	}
+}
+
+func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID, adapter string) (*session.Session, error) {
+	spec, err := r.resolve(agentadapter.Spec{Adapter: adapter, Agent: agent, Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: cwd}})
 	if err != nil {
 		return nil, err
 	}
@@ -978,11 +1185,24 @@ func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID strin
 		return nil, err
 	}
 	spec.Name, spec.Workspace = name, p.Workspace
+	if adapter == "pty" {
+		terminal := spec.ResolvedLaunch.Terminal
+		if terminal == nil || len(terminal.ResumeArgs) == 0 {
+			r.workspace.Rollback(ctx, spec.Workspace, p.CWD, p.CreatedBranch)
+			r.releaseKnown(name)
+			return nil, fmt.Errorf("agent has no resumable terminal command configured: %s", agent)
+		}
+		terminal.StartArgs = expand(terminal.ResumeArgs, name, name, p.CWD, sessionID)
+	}
 	raw, _ := json.Marshal(spec)
 	rec := store.Agent{ID: name, Name: name, Spec: raw, CWD: p.CWD, ACPSessionID: &sessionID, Status: "idle", CreatedAt: time.Now().UnixMilli()}
 	if err = r.store.UpsertAgent(rec); err == nil {
 		var s *session.Session
-		s, err = r.start(ctx, rec, spec, sessionID, true)
+		if adapter == "acp" {
+			s, err = r.start(ctx, rec, spec, sessionID, true)
+		} else {
+			s, err = r.start(ctx, rec, spec, "")
+		}
 		if err == nil {
 			return s, nil
 		}

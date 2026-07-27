@@ -140,6 +140,7 @@ type clientMessage struct {
 	Force          bool                       `json:"force"`
 	DeleteWorktree *bool                      `json:"deleteWorktree"`
 	SessionID      string                     `json:"sessionId"`
+	Source         string                     `json:"source"`
 	InterruptFirst bool                       `json:"interrupt"`
 	Action         string                     `json:"action"`
 	Event          browser.BrowserInputEvent  `json:"event"`
@@ -339,13 +340,13 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
 	case "resume_session":
 		backend, ok := c.server.opts.Registry.(interface {
-			Resume(context.Context, string, string, string) (*session.Session, error)
+			Resume(context.Context, string, string, string, string) (*session.Session, error)
 		})
 		if !ok {
 			c.commandError(m, errors.New("session resume is unsupported"))
 			return
 		}
-		sess, err := backend.Resume(context.Background(), m.SessionID, m.Agent, m.CWD)
+		sess, err := backend.Resume(context.Background(), m.SessionID, m.Agent, m.CWD, m.Source)
 		if err != nil {
 			c.commandError(m, err)
 			return

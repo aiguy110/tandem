@@ -87,6 +87,40 @@ type HistorySearchHit struct {
 	After      *HistoryExcerpt
 }
 
+// HistorySessions returns normalized sessions for catalog integration without
+// exposing transcript rows. An empty source returns sessions from every source.
+func (s *Store) HistorySessions(source string) ([]HistorySession, error) {
+	query := `SELECT source, agent, externalId, agentId, cwd, title, createdAt, updatedAt,
+indexedAt, resumable, sourceKey, sourceMeta FROM history_sessions`
+	var args []any
+	if source != "" {
+		query += " WHERE source = ?"
+		args = append(args, source)
+	}
+	query += " ORDER BY COALESCE(updatedAt, createdAt, indexedAt) DESC"
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HistorySession{}
+	for rows.Next() {
+		var value HistorySession
+		var created, updated sql.NullInt64
+		var sourceMeta string
+		if err := rows.Scan(&value.Source, &value.Agent, &value.ExternalID, &value.AgentID,
+			&value.CWD, &value.Title, &created, &updated, &value.IndexedAt,
+			&value.Resumable, &value.SourceKey, &sourceMeta); err != nil {
+			return nil, err
+		}
+		value.CreatedAt = nullableInt64(created)
+		value.UpdatedAt = nullableInt64(updated)
+		value.SourceMeta = json.RawMessage(sourceMeta)
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 // ReplaceHistorySession atomically replaces a transcript. A failed validation
 // or insert leaves the last successfully indexed version untouched.
 func (s *Store) ReplaceHistorySession(session HistorySession, entries []HistoryEntry) error {

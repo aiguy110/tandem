@@ -151,13 +151,13 @@ export interface AgentSummary {
 }
 
 // A resumable coding-agent session for the Resume picker — either a session
-// Tandem spawned ('tandem', with full linkage) or one discovered via an ACP
-// agent's session/list ('external'). `sessionId` == the agent's CLI --resume id.
+// Tandem spawned ('tandem', with full linkage), ACP-discovered ('acp'), or
+// transcript-imported ('history'). Identity is `(agent, sessionId)`.
 export interface ResumableSession {
   sessionId: string;
-  source: 'tandem' | 'external';
+  source: 'tandem' | 'acp' | 'history';
   agent: string;
-  adapter: 'acp' | 'pty';
+  adapter?: 'acp' | 'pty';
   cwd: string;
   title?: string;
   updatedAt?: string;
@@ -167,6 +167,9 @@ export interface ResumableSession {
   live?: boolean;
   closed?: boolean;
   status?: AgentStatus;
+  resumable: boolean;
+  historyOnly?: boolean;
+  resumeError?: string;
 }
 export interface ResumeAdapterInfo {
   agent: string;
@@ -303,7 +306,7 @@ export type ClientMsg =
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
-  | { t: 'resume_session'; sessionId: string; agent?: string; cwd?: string; corrId?: string }
+  | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
   | { t: 'leave_terminal'; agentId: string; corrId?: string }
   | { t: 'shell_open'; agentId: string; cols: number; rows: number; corrId?: string }

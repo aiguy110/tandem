@@ -33,6 +33,10 @@ export function ResumePalette() {
 
   const resume = async (session: ResumableSession | undefined) => {
     if (!session || busy) return;
+    if (!session.resumable) {
+      setError(session.resumeError ?? 'This transcript is searchable but cannot be resumed.');
+      return;
+    }
     setBusy(true);
     setError(null);
     const result = await resumeSession(session);
@@ -86,7 +90,7 @@ export function ResumePalette() {
               </div>
               <div className="meta">
                 <span>{session.agent}</span>
-                <span>{session.live ? 'live' : session.source === 'tandem' ? 'Tandem' : 'external'}</span>
+                <span>{session.live ? 'live' : session.source === 'tandem' ? 'Tandem' : session.source === 'acp' ? 'ACP' : session.historyOnly ? 'history only' : 'history'}</span>
                 {session.updatedAt && <span>{displayDate(session.updatedAt)}</span>}
               </div>
             </div>

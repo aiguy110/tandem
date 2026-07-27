@@ -641,8 +641,9 @@ export const useStore = create<StoreState>((set, get) => {
         client.send({
           t: 'resume_session',
           sessionId: session.sessionId,
-          agent: session.source === 'external' ? session.agent : undefined,
-          cwd: session.source === 'external' ? session.cwd : undefined,
+          source: session.source,
+          agent: session.agent,
+          cwd: session.cwd || undefined,
           corrId,
         });
       }),

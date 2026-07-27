@@ -125,6 +125,7 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	addImportedHistory(t, db, "fake", "sess_external", t.TempDir(), "Imported external title", true)
 	catalog, err := r.ResumeCatalog(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 			}
 		}
 		if s.SessionID == "sess_external" {
-			external = s.Source == "external"
+			external = s.Source == "acp" && s.Title == "Imported external title"
 		}
 	}
 	for _, a := range catalog.Adapters {
@@ -151,18 +152,18 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	if mockCount != 1 || !external || !supports {
 		t.Fatalf("catalog %#v adapters %#v", catalog.Sessions, catalog.Adapters)
 	}
-	focused, err := r.Resume(context.Background(), "sess_mock", "", "")
+	focused, err := r.Resume(context.Background(), "sess_mock", "", "", "tandem")
 	if err != nil || focused != live {
 		t.Fatalf("live resume: %v %#v", err, focused)
 	}
 	if ok, err := r.Close(context.Background(), live.ID, false, false); err != nil || !ok {
 		t.Fatal(err)
 	}
-	restored, err := r.Resume(context.Background(), "sess_mock", "", "")
+	restored, err := r.Resume(context.Background(), "sess_mock", "", "", "tandem")
 	if err != nil || restored.ID != live.ID {
 		t.Fatalf("closed resume: %v %#v", err, restored)
 	}
-	imported, err := r.Resume(context.Background(), "sess_external", "fake", t.TempDir())
+	imported, err := r.Resume(context.Background(), "sess_external", "fake", t.TempDir(), "acp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +205,7 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	if s.ControlMode() != "terminal" {
 		t.Fatalf("mode %s", s.ControlMode())
 	}
-	resumed, err := r.Resume(context.Background(), "sess_mock", "", "")
+	resumed, err := r.Resume(context.Background(), "sess_mock", "", "", "tandem")
 	if err != nil || resumed != s {
 		t.Fatalf("terminal live resume %v", err)
 	}

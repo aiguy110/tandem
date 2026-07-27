@@ -24,6 +24,9 @@ import (
 type testBackend struct {
 	mu       sync.RWMutex
 	sessions map[string]*session.Session
+	resume   struct {
+		sessionID, agent, cwd, source string
+	}
 }
 
 type inertBrowserDriver struct{}
@@ -100,6 +103,18 @@ func (b *testBackend) RestartBrowser(context.Context, string, string) error   { 
 func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
 func (b *testBackend) RenameProfile(string, string) error                     { return nil }
 func (b *testBackend) DeleteProfile(string) error                             { return nil }
+func (*testBackend) ResumeCatalog(context.Context) (registry.ResumeCatalog, error) {
+	return registry.ResumeCatalog{Sessions: []registry.ResumableSession{{
+		SessionID: "vendor-session", Source: "history", Agent: "codex",
+		Adapter: "pty", CWD: "/repo", Resumable: true,
+	}}}, nil
+}
+func (b *testBackend) Resume(_ context.Context, sessionID, agent, cwd, source string) (*session.Session, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.resume.sessionID, b.resume.agent, b.resume.cwd, b.resume.source = sessionID, agent, cwd, source
+	return b.sessions["a"], nil
+}
 
 type testAdapter struct {
 	events        chan eventlog.Event
@@ -270,6 +285,36 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		}
 	}
 	server.CloseClientConnections()
+}
+
+func TestResumeProtocolPreservesAgentIdentityAndSource(t *testing.T) {
+	_, backend, _, _, url := setupWS(t, 0)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "list_sessions", "corrId": "list"})
+	got := recv(t, c)
+	if got["t"] != "sessions" || got["corrId"] != "list" {
+		t.Fatalf("catalog response %#v", got)
+	}
+	send(t, c, map[string]any{
+		"t": "resume_session", "sessionId": "vendor-session", "agent": "codex",
+		"cwd": "/repo", "source": "history", "corrId": "resume",
+	})
+	for {
+		got = recv(t, c)
+		if got["corrId"] == "resume" {
+			break
+		}
+	}
+	if got["t"] != "ack" || got["corrId"] != "resume" || got["agentId"] != "a" {
+		t.Fatalf("resume response %#v", got)
+	}
+	backend.mu.RLock()
+	call := backend.resume
+	backend.mu.RUnlock()
+	if call.sessionID != "vendor-session" || call.agent != "codex" ||
+		call.cwd != "/repo" || call.source != "history" {
+		t.Fatalf("resume call %#v", call)
+	}
 }
 
 func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
