@@ -6,6 +6,9 @@ defaults:
 agents:
   claude:
     name: Claude
+    history:
+      parser: "{runtimeRoot}/history/importers/claude.ts"
+      resume: auto
     acp:
       command: "{node}"
       args:
@@ -17,6 +20,9 @@ agents:
 
   codex:
     name: Codex
+    history:
+      parser: "{runtimeRoot}/history/importers/codex.ts"
+      resume: auto
     acp:
       command: "{node}"
       args:
@@ -28,12 +34,25 @@ agents:
 
   pi:
     name: Pi
+    history:
+      parser: "{runtimeRoot}/history/importers/pi.ts"
+      resume: auto
     acp:
       command: "{node}"
       args:
         - "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
     terminal:
       command: pi
+      startArgs: []
+      resumeArgs: [--session, "{sessionId}"]
+
+  opencode:
+    name: OpenCode
+    history:
+      parser: "{runtimeRoot}/history/importers/opencode.ts"
+      resume: terminal
+    terminal:
+      command: opencode
       startArgs: []
       resumeArgs: [--session, "{sessionId}"]
 

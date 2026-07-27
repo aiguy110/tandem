@@ -16,6 +16,11 @@
           "--resume",
           "{sessionId}"
         ]
+      },
+      "history": {
+        "parser": "/fixtures/tandem/runtime/history/importers/claude.ts",
+        "resume": "auto",
+        "enabled": true
       }
     },
     "codex": {
@@ -32,6 +37,11 @@
           "resume",
           "{sessionId}"
         ]
+      },
+      "history": {
+        "parser": "/fixtures/tandem/runtime/history/importers/codex.ts",
+        "resume": "auto",
+        "enabled": true
       }
     },
     "custom": {
@@ -44,6 +54,21 @@
         "env": {
           "FIXTURE_HOME": "{home}"
         }
+      }
+    },
+    "opencode": {
+      "name": "OpenCode",
+      "terminal": {
+        "cmd": "opencode",
+        "args": [
+          "--session",
+          "{sessionId}"
+        ]
+      },
+      "history": {
+        "parser": "/fixtures/tandem/runtime/history/importers/opencode.ts",
+        "resume": "terminal",
+        "enabled": true
       }
     },
     "pi": {
@@ -60,6 +85,11 @@
           "--session",
           "{sessionId}"
         ]
+      },
+      "history": {
+        "parser": "/fixtures/tandem/runtime/history/importers/pi.ts",
+        "resume": "auto",
+        "enabled": true
       }
     }
   },

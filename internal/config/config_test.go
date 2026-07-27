@@ -45,7 +45,8 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	if c.Host != "0.0.0.0" || c.Port != 8123 || c.DirScanDepth != 3 || c.UIDir != "/ui" {
 		t.Fatalf("environment not applied: %+v", c)
 	}
-	if c.ACP.Default != "claude" || len(c.Agents) != 3 || c.Agents["claude"].Name != "Claude" {
+	if c.ACP.Default != "claude" || len(c.Agents) != 4 || c.Agents["claude"].Name != "Claude" ||
+		c.Agents["opencode"].Name != "OpenCode" {
 		t.Fatalf("shipped catalog not loaded: %+v", c.Agents)
 	}
 	if c.Agents["claude"].ACP.Cmd != "/fixtures/bin/node" {
