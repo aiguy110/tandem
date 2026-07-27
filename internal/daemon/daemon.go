@@ -20,8 +20,10 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/registry"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
@@ -120,6 +122,30 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	if err := agents.RestoreAll(ctx); err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	var historyLifecycle *historyimport.Lifecycle
+	for _, definition := range cfg.Agents {
+		if definition.History == nil || !definition.History.Enabled {
+			continue
+		}
+		historyRunner, runnerErr := historyimport.New(historyimport.Options{
+			Store: db, Node: cfg.Node.Command, RuntimeRoot: cfg.RuntimeRoot,
+		})
+		if runnerErr != nil {
+			return fmt.Errorf("configure history importer: %w", runnerErr)
+		}
+		historyLifecycle, err = historyimport.NewLifecycle(historyimport.LifecycleOptions{
+			Store: db, Importer: historyRunner, Agents: cfg.Agents,
+			EnsureRuntime: func(scanCtx context.Context) error {
+				return runtimeinstall.EnsureHistory(scanCtx, cfg, stdout)
+			},
+		})
+		if err != nil {
+			return err
+		}
+		historyLifecycle.Start(ctx)
+		defer historyLifecycle.Close()
+		break
+	}
 	reattachBrowsers(ctx, db, driver, broker, agents, stdout)
 	defer func() {
 		disposeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -180,7 +206,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)

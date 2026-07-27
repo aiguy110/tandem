@@ -49,6 +49,7 @@ async function importDatabase(ctx: Parameters<Parameters<typeof defineHistoryImp
       // each one a source key prevents an interrupted scan from checkpointing
       // later, not-yet-emitted sessions by accident.
       const sourceKey = `${dbPath}#session:${encodeURIComponent(id)}`;
+      ctx.source(sourceKey);
       if (sameCheckpoint(ctx.checkpoints.get(sourceKey), checkpoint)) continue;
       let messages: Row[] = [];
       let parts: Row[] = [];
@@ -86,6 +87,7 @@ async function importLegacy(ctx: Parameters<Parameters<typeof defineHistoryImpor
   // indexed, while uncorrelated cache/config JSON is ignored.
   for await (const path of walk(root, [".json", ".jsonl"])) {
     const checkpoint = await sourceCheckpoint(path);
+    ctx.source(path);
     if (!checkpoint || sameCheckpoint(ctx.checkpoints.get(path), checkpoint)) continue;
     const records = path.endsWith(".jsonl") ? (await readJSONLines(path)).map((v) => v.value) :
       await import("node:fs/promises").then(async ({ readFile }) => {

@@ -71,7 +71,8 @@ test("Pi imports all branch nodes, summaries, and ignores corrupt/base64 records
   const unchanged = await run("pi.ts", ["--root", root], [{
     importerId: "pi", importerVersion: 1, sourceKey: end.sourceKey, checkpoint: end.checkpoint,
   }]);
-  assert.deepEqual(unchanged.map((v) => v.type), ["hello"]);
+  assert.deepEqual(unchanged.map((v) => v.type), ["hello", "complete"]);
+  assert.deepEqual((unchanged[1].sourceKeys as string[]), [path]);
 });
 
 test("Claude normalizes messages and reads only session-local spilled tool results", async () => {
@@ -150,7 +151,8 @@ test("OpenCode reads SQLite in read-only mode and normalizes JSON data", async (
     importerId: "opencode", importerVersion: 1,
     sourceKey: end.sourceKey, checkpoint: end.checkpoint,
   }]);
-  assert.deepEqual(unchanged.map((v) => v.type), ["hello"]);
+  assert.deepEqual(unchanged.map((v) => v.type), ["hello", "complete"]);
+  assert.deepEqual((unchanged[1].sourceKeys as string[]), [end.sourceKey]);
 });
 
 test("OpenCode conservatively imports legacy session-shaped JSON", async () => {

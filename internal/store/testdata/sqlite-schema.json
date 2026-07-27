@@ -136,7 +136,7 @@
       "type": "table",
       "name": "history_sessions",
       "tableName": "history_sessions",
-      "sql": "CREATE TABLE history_sessions (\n        id          INTEGER PRIMARY KEY,\n        source      TEXT NOT NULL,\n        agent       TEXT NOT NULL,\n        externalId  TEXT NOT NULL,\n        agentId     TEXT NOT NULL DEFAULT '',\n        cwd         TEXT NOT NULL DEFAULT '',\n        title       TEXT NOT NULL DEFAULT '',\n        createdAt   INTEGER,\n        updatedAt   INTEGER,\n        indexedAt   INTEGER NOT NULL,\n        resumable   INTEGER NOT NULL DEFAULT 1,\n        sourceKey   TEXT NOT NULL,\n        sourceMeta  TEXT NOT NULL DEFAULT '{}',\n        UNIQUE (source, agent, externalId)\n      )"
+      "sql": "CREATE TABLE history_sessions (\n        id          INTEGER PRIMARY KEY,\n        source      TEXT NOT NULL,\n        agent       TEXT NOT NULL,\n        externalId  TEXT NOT NULL,\n        agentId     TEXT NOT NULL DEFAULT '',\n        cwd         TEXT NOT NULL DEFAULT '',\n        title       TEXT NOT NULL DEFAULT '',\n        createdAt   INTEGER,\n        updatedAt   INTEGER,\n        indexedAt   INTEGER NOT NULL,\n        resumable   INTEGER NOT NULL DEFAULT 1,\n        sourceKey   TEXT NOT NULL,\n        sourceMeta  TEXT NOT NULL DEFAULT '{}',\n        importerId  TEXT NOT NULL DEFAULT '',\n        importerVersion INTEGER NOT NULL DEFAULT 0,\n        missingSince INTEGER,\n        UNIQUE (source, agent, externalId)\n      )"
     },
     {
       "type": "table",

@@ -14,6 +14,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -207,6 +208,10 @@ func (*testAdapter) SessionID() string { return "" }
 func (*testAdapter) PID() int          { return 0 }
 
 func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
+	return setupWSHistory(t, queue, nil)
+}
+
+func setupWSHistory(t *testing.T, queue int, history HistoryLifecycle) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -222,9 +227,32 @@ func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter,
 		t.Fatal(err)
 	}
 	b := &testBackend{sessions: map[string]*session.Session{"a": s}}
-	server := httptest.NewServer(New(Options{Token: "secret", Registry: b, WriteQueue: queue}))
+	server := httptest.NewServer(New(Options{Token: "secret", Registry: b, WriteQueue: queue, History: history}))
 	t.Cleanup(func() { server.Close(); db.Close() })
 	return db, b, a, server, "ws" + strings.TrimPrefix(server.URL, "http")
+}
+
+type testHistoryLifecycle struct {
+	mu       sync.Mutex
+	triggers int
+	refresh  int
+	reindex  bool
+}
+
+func (h *testHistoryLifecycle) TriggerStale(string) {
+	h.mu.Lock()
+	h.triggers++
+	h.mu.Unlock()
+}
+func (h *testHistoryLifecycle) Refresh(_ string, reindex bool) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.refresh++
+	h.reindex = reindex
+	return true, nil
+}
+func (*testHistoryLifecycle) Status(agent string) ([]historyimport.AgentStatus, error) {
+	return []historyimport.AgentStatus{{Agent: agent}}, nil
 }
 func event(text string) eventlog.Event {
 	b, _ := json.Marshal(map[string]any{"kind": "message_chunk", "text": text})
@@ -354,6 +382,35 @@ func TestSessionSearchProtocolPreservesCorrelationAndStructuredHighlights(t *tes
 	highlight := match["highlights"].([]any)[0].(map[string]any)
 	if highlight["start"] != float64(8) || highlight["end"] != float64(10) {
 		t.Fatalf("highlight %#v", highlight)
+	}
+}
+
+func TestHistoryLifecycleProtocolTriggersNonblockingRefresh(t *testing.T) {
+	history := &testHistoryLifecycle{}
+	_, _, _, _, url := setupWSHistory(t, 0, history)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "list_sessions", "corrId": "list"})
+	if got := recv(t, c); got["t"] != "sessions" {
+		t.Fatalf("list response %#v", got)
+	}
+	send(t, c, map[string]any{"t": "search_sessions", "query": "needle", "corrId": "search"})
+	if got := recv(t, c); got["t"] != "session_search" {
+		t.Fatalf("search response %#v", got)
+	}
+	send(t, c, map[string]any{
+		"t": "refresh_history", "agent": "codex", "reindex": true, "corrId": "refresh",
+	})
+	if got := recv(t, c); got["t"] != "history_refresh" || got["scheduled"] != true {
+		t.Fatalf("refresh response %#v", got)
+	}
+	send(t, c, map[string]any{"t": "history_status", "agent": "codex", "corrId": "status"})
+	if got := recv(t, c); got["t"] != "history_status" {
+		t.Fatalf("status response %#v", got)
+	}
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.triggers != 2 || history.refresh != 1 || !history.reindex {
+		t.Fatalf("history lifecycle calls=%+v", history)
 	}
 }
 

@@ -50,8 +50,12 @@ type Runner struct {
 }
 
 type Result struct {
-	Sessions int
-	Entries  int
+	Sessions        int
+	Entries         int
+	ImporterID      string
+	ImporterVersion int
+	SourceKeys      []string
+	Complete        bool
 }
 
 func New(options Options) (*Runner, error) {
@@ -128,6 +132,17 @@ type endRecord struct {
 }
 
 func (r *Runner) Import(ctx context.Context, agentID string, history config.History) (result Result, retErr error) {
+	return r.importWithOptions(ctx, agentID, history, false)
+}
+
+// Reindex runs an importer without checkpoints. Existing indexed sessions are
+// retained unless the complete fresh scan succeeds and lifecycle reconciliation
+// later identifies them as missing.
+func (r *Runner) Reindex(ctx context.Context, agentID string, history config.History) (result Result, retErr error) {
+	return r.importWithOptions(ctx, agentID, history, true)
+}
+
+func (r *Runner) importWithOptions(ctx context.Context, agentID string, history config.History, fresh bool) (result Result, retErr error) {
 	if !history.Enabled {
 		return Result{}, nil
 	}
@@ -149,8 +164,11 @@ func (r *Runner) Import(ctx context.Context, agentID string, history config.Hist
 	if err != nil {
 		return result, err
 	}
-	req := request{ProtocolVersion: ProtocolVersion, Agent: agentID}
+	req := request{ProtocolVersion: ProtocolVersion, Agent: agentID, Checkpoints: []requestCheckpoint{}}
 	for _, checkpoint := range checkpoints {
+		if fresh {
+			break
+		}
 		req.Checkpoints = append(req.Checkpoints, requestCheckpoint{
 			ImporterID: checkpoint.ImporterID, ImporterVersion: checkpoint.ImporterVersion,
 			SourceKey: checkpoint.SourceKey, Checkpoint: checkpoint.Checkpoint,
@@ -219,6 +237,7 @@ func (r *Runner) Import(ctx context.Context, agentID string, history config.Hist
 	if waitErr != nil {
 		return result, withDiagnostic(fmt.Errorf("history importer exited: %w", waitErr), diagnostic)
 	}
+	result.ImporterID = importerID
 	return result, nil
 }
 
@@ -230,6 +249,7 @@ func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, r
 	var active *beginRecord
 	var entries []store.HistoryEntry
 	importerVersion := 0
+	completeSeen := false
 	for {
 		line, err := readLimitedLine(br, maxLineBytes)
 		if len(line) > 0 {
@@ -249,6 +269,9 @@ func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, r
 			if err := json.Unmarshal(line, &envelope); err != nil {
 				return fmt.Errorf("history importer line %d is invalid JSON", lineNumber)
 			}
+			if completeSeen {
+				return fmt.Errorf("history importer line %d follows complete", lineNumber)
+			}
 			switch envelope.Type {
 			case "hello":
 				if helloSeen || active != nil {
@@ -264,6 +287,7 @@ func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, r
 				helloSeen = true
 				*importerID = record.Importer.ID
 				importerVersion = record.Importer.Version
+				result.ImporterVersion = importerVersion
 			case "begin_session":
 				if !helloSeen || active != nil {
 					return fmt.Errorf("history importer line %d has misplaced begin_session", lineNumber)
@@ -326,6 +350,26 @@ func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, r
 				result.Sessions++
 				result.Entries += len(entries)
 				active, entries = nil, nil
+			case "complete":
+				if !helloSeen || active != nil || completeSeen {
+					return fmt.Errorf("history importer line %d has misplaced complete", lineNumber)
+				}
+				var record struct {
+					Type       string   `json:"type"`
+					SourceKeys []string `json:"sourceKeys"`
+				}
+				if err := decodeStrict(line, &record); err != nil {
+					return lineError(lineNumber, err)
+				}
+				seen := map[string]bool{}
+				for _, key := range record.SourceKeys {
+					if key == "" || seen[key] {
+						return fmt.Errorf("history importer line %d has invalid source inventory", lineNumber)
+					}
+					seen[key] = true
+				}
+				result.SourceKeys = append([]string(nil), record.SourceKeys...)
+				result.Complete, completeSeen = true, true
 			default:
 				return fmt.Errorf("history importer line %d has unknown record type %q", lineNumber, envelope.Type)
 			}

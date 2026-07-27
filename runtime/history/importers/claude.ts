@@ -18,6 +18,7 @@ export default defineHistoryImporter({
       const transcriptCheckpoint = await sourceCheckpoint(path);
       const sourceKey = path;
       if (!transcriptCheckpoint) continue;
+      ctx.source(sourceKey);
       const spills: Record<string, JSONValue> = {};
       const spillRoot = join(dirname(path), filenameSessionId(path), "tool-results");
       for await (const spill of walk(spillRoot, [".txt"])) {

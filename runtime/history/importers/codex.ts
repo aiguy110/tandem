@@ -47,6 +47,7 @@ export default defineHistoryImporter({
     for (const path of [...await rolloutPaths(root)].sort()) {
       const checkpoint = await sourceCheckpoint(path);
       const sourceKey = path;
+      ctx.source(sourceKey);
       if (!checkpoint || sameCheckpoint(ctx.checkpoints.get(sourceKey), checkpoint)) continue;
       const records = await readJSONLines(path);
       const meta = records.map(({ value }) => object(object(value)?.payload))

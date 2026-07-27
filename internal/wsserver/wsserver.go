@@ -16,6 +16,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -52,6 +53,13 @@ type Options struct {
 	Fallback   http.Handler
 	WriteQueue int
 	Browser    *browser.Broker
+	History    HistoryLifecycle
+}
+
+type HistoryLifecycle interface {
+	TriggerStale(string)
+	Refresh(string, bool) (bool, error)
+	Status(string) ([]historyimport.AgentStatus, error)
 }
 
 type Handler struct {
@@ -144,6 +152,7 @@ type clientMessage struct {
 	Query          string                     `json:"query"`
 	Limit          int                        `json:"limit"`
 	MaxHits        int                        `json:"maxHitsPerSession"`
+	Reindex        bool                       `json:"reindex"`
 	InterruptFirst bool                       `json:"interrupt"`
 	Action         string                     `json:"action"`
 	Event          browser.BrowserInputEvent  `json:"event"`
@@ -328,6 +337,9 @@ func (c *connection) handle(m clientMessage) {
 	case "list_agent_catalog":
 		c.send(withCorr(map[string]any{"t": "agent_catalog", "catalog": c.server.opts.Registry.AgentCatalog()}, m.CorrID))
 	case "list_sessions":
+		if c.server.opts.History != nil {
+			c.server.opts.History.TriggerStale("")
+		}
 		backend, ok := c.server.opts.Registry.(interface {
 			ResumeCatalog(context.Context) (registry.ResumeCatalog, error)
 		})
@@ -342,6 +354,9 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
 	case "search_sessions":
+		if c.server.opts.History != nil {
+			c.server.opts.History.TriggerStale("")
+		}
 		backend, ok := c.server.opts.Registry.(interface {
 			SearchSessions(context.Context, string, int, int) ([]registry.SessionSearchResult, error)
 		})
@@ -355,6 +370,28 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "session_search", "query": m.Query, "results": results}, m.CorrID))
+	case "refresh_history":
+		if c.server.opts.History == nil {
+			c.commandError(m, errors.New("session history import is unsupported"))
+			return
+		}
+		scheduled, err := c.server.opts.History.Refresh(m.Agent, m.Reindex)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "history_refresh", "agent": m.Agent, "reindex": m.Reindex, "scheduled": scheduled}, m.CorrID))
+	case "history_status":
+		if c.server.opts.History == nil {
+			c.send(withCorr(map[string]any{"t": "history_status", "agents": []any{}}, m.CorrID))
+			return
+		}
+		status, err := c.server.opts.History.Status(m.Agent)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "history_status", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "history_status", "agents": status}, m.CorrID))
 	case "resume_session":
 		backend, ok := c.server.opts.Registry.(interface {
 			Resume(context.Context, string, string, string, string) (*session.Session, error)

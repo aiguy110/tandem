@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS history_sessions (
         resumable   INTEGER NOT NULL DEFAULT 1,
         sourceKey   TEXT NOT NULL,
         sourceMeta  TEXT NOT NULL DEFAULT '{}',
+        importerId  TEXT NOT NULL DEFAULT '',
+        importerVersion INTEGER NOT NULL DEFAULT 0,
+        missingSince INTEGER,
         UNIQUE (source, agent, externalId)
       );
 CREATE TABLE IF NOT EXISTS history_entries (
@@ -244,6 +247,32 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec("ALTER TABLE agents ADD COLUMN cwd TEXT NOT NULL DEFAULT ''"); err != nil && !isDuplicateColumn(err) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agents.cwd: %w", err)
+	}
+	for _, migration := range []struct {
+		sql, name string
+	}{
+		{"ALTER TABLE history_sessions ADD COLUMN importerId TEXT NOT NULL DEFAULT ''", "history_sessions.importerId"},
+		{"ALTER TABLE history_sessions ADD COLUMN importerVersion INTEGER NOT NULL DEFAULT 0", "history_sessions.importerVersion"},
+		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
+	} {
+		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
+			db.Close()
+			return nil, fmt.Errorf("migrate %s: %w", migration.name, err)
+		}
+	}
+	// Phase-6 ownership columns can be reconstructed from the atomically
+	// persisted source checkpoints, avoiding a needless rewrite (and later
+	// grace-period purge) of unchanged transcripts on upgrade.
+	if _, err := db.Exec(`UPDATE history_sessions
+SET importerId = COALESCE((SELECT his.importerId FROM history_import_state his
+      WHERE his.agent = history_sessions.agent AND his.sourceKey = history_sessions.sourceKey
+      ORDER BY his.lastSuccessAt DESC LIMIT 1), ''),
+    importerVersion = COALESCE((SELECT his.importerVersion FROM history_import_state his
+      WHERE his.agent = history_sessions.agent AND his.sourceKey = history_sessions.sourceKey
+      ORDER BY his.lastSuccessAt DESC LIMIT 1), 0)
+WHERE source = 'history' AND importerId = ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("backfill history importer ownership: %w", err)
 	}
 	if err := s.backfillTandemHistory(); err != nil {
 		db.Close()

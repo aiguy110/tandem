@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -19,18 +20,21 @@ var historyTerms = regexp.MustCompile(`[\pL\pN_]+`)
 // ExternalID is opaque to Tandem. SourceKey identifies the physical source used
 // for incremental import and may differ from the resume identifier.
 type HistorySession struct {
-	Source     string
-	Agent      string
-	ExternalID string
-	AgentID    string
-	CWD        string
-	Title      string
-	CreatedAt  *int64
-	UpdatedAt  *int64
-	IndexedAt  int64
-	Resumable  bool
-	SourceKey  string
-	SourceMeta json.RawMessage
+	Source          string
+	Agent           string
+	ExternalID      string
+	AgentID         string
+	CWD             string
+	Title           string
+	CreatedAt       *int64
+	UpdatedAt       *int64
+	IndexedAt       int64
+	Resumable       bool
+	SourceKey       string
+	SourceMeta      json.RawMessage
+	ImporterID      string
+	ImporterVersion int
+	MissingSince    *int64
 }
 
 // HistoryEntry is one normalized, searchable unit in a transcript.
@@ -54,13 +58,13 @@ type HistoryImportCheckpoint struct {
 }
 
 type HistoryImportRun struct {
-	ID           int64
-	Agent        string
-	StartedAt    int64
-	CompletedAt  *int64
-	SessionsSeen int
-	EntriesSeen  int
-	Error        string
+	ID           int64  `json:"id"`
+	Agent        string `json:"agent"`
+	StartedAt    int64  `json:"startedAt"`
+	CompletedAt  *int64 `json:"completedAt,omitempty"`
+	SessionsSeen int    `json:"sessionsSeen"`
+	EntriesSeen  int    `json:"entriesSeen"`
+	Error        string `json:"error,omitempty"`
 }
 
 type Highlight struct {
@@ -91,7 +95,7 @@ type HistorySearchHit struct {
 // exposing transcript rows. An empty source returns sessions from every source.
 func (s *Store) HistorySessions(source string) ([]HistorySession, error) {
 	query := `SELECT source, agent, externalId, agentId, cwd, title, createdAt, updatedAt,
-indexedAt, resumable, sourceKey, sourceMeta FROM history_sessions`
+indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missingSince FROM history_sessions`
 	var args []any
 	if source != "" {
 		query += " WHERE source = ?"
@@ -107,15 +111,18 @@ indexedAt, resumable, sourceKey, sourceMeta FROM history_sessions`
 	for rows.Next() {
 		var value HistorySession
 		var created, updated sql.NullInt64
+		var missing sql.NullInt64
 		var sourceMeta string
 		if err := rows.Scan(&value.Source, &value.Agent, &value.ExternalID, &value.AgentID,
 			&value.CWD, &value.Title, &created, &updated, &value.IndexedAt,
-			&value.Resumable, &value.SourceKey, &sourceMeta); err != nil {
+			&value.Resumable, &value.SourceKey, &sourceMeta, &value.ImporterID,
+			&value.ImporterVersion, &missing); err != nil {
 			return nil, err
 		}
 		value.CreatedAt = nullableInt64(created)
 		value.UpdatedAt = nullableInt64(updated)
 		value.SourceMeta = json.RawMessage(sourceMeta)
+		value.MissingSince = nullableInt64(missing)
 		out = append(out, value)
 	}
 	return out, rows.Err()
@@ -149,6 +156,9 @@ func (s *Store) replaceHistorySessionAndCheckpoint(session HistorySession, entri
 	}
 	if session.IndexedAt == 0 {
 		session.IndexedAt = s.now().UnixMilli()
+	}
+	if importerID != "" {
+		session.ImporterID, session.ImporterVersion = importerID, importerVersion
 	}
 	for _, entry := range entries {
 		if entry.ExternalID == "" {
@@ -262,16 +272,82 @@ FROM history_import_runs WHERE agent = ? ORDER BY id DESC LIMIT 1`, agent).Scan(
 	return &value, nil
 }
 
+// FinishHistoryImporterScan reconciles source discovery only after the
+// importer has completed successfully. Missing sources are retained for a
+// grace period so a transient mount/configuration issue cannot erase the last
+// useful index. Importer/version changes invalidate old checkpoints and mark
+// records from the superseded importer generation missing.
+func (s *Store) FinishHistoryImporterScan(agent, importerID string, importerVersion int, seen []string, grace time.Duration) error {
+	if agent == "" || importerID == "" || importerVersion < 1 {
+		return errors.New("valid agent, importer ID, and version are required")
+	}
+	now := s.now().UnixMilli()
+	cutoff := now - grace.Milliseconds()
+	if grace < 0 {
+		cutoff = now
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE history_sessions SET missingSince = COALESCE(missingSince, ?)
+WHERE source = 'history' AND agent = ? AND
+(importerId != ? OR importerVersion != ? OR sourceKey NOT IN (`+
+		placeholders(len(seen))+`))`, append([]any{now, agent, importerID, importerVersion}, stringsToAny(seen)...)...); err != nil {
+		return err
+	}
+	if len(seen) > 0 {
+		if _, err := tx.Exec(`UPDATE history_sessions SET missingSince = NULL
+WHERE source = 'history' AND agent = ? AND importerId = ? AND importerVersion = ?
+AND sourceKey IN (`+placeholders(len(seen))+`)`,
+			append([]any{agent, importerID, importerVersion}, stringsToAny(seen)...)...); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM history_sessions
+WHERE source = 'history' AND agent = ? AND missingSince IS NOT NULL AND missingSince <= ?`, agent, cutoff); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM history_import_state
+WHERE agent = ? AND (importerId != ? OR importerVersion != ?)`, agent, importerID, importerVersion); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM history_import_state
+WHERE agent = ? AND importerId = ? AND importerVersion = ? AND sourceKey NOT IN (`+
+		placeholders(len(seen))+`)`, append([]any{agent, importerID, importerVersion}, stringsToAny(seen)...)...); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func placeholders(n int) string {
+	if n == 0 {
+		return "SELECT NULL WHERE 0"
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+func stringsToAny(values []string) []any {
+	out := make([]any, len(values))
+	for i := range values {
+		out[i] = values[i]
+	}
+	return out
+}
+
 func replaceHistorySessionRow(tx *sql.Tx, session HistorySession) (int64, error) {
 	_, err := tx.Exec(`INSERT INTO history_sessions
-(source, agent, externalId, agentId, cwd, title, createdAt, updatedAt, indexedAt, resumable, sourceKey, sourceMeta)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+(source, agent, externalId, agentId, cwd, title, createdAt, updatedAt, indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missingSince)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 ON CONFLICT(source, agent, externalId) DO UPDATE SET
 agentId=excluded.agentId, cwd=excluded.cwd, title=excluded.title, createdAt=excluded.createdAt,
 updatedAt=excluded.updatedAt, indexedAt=excluded.indexedAt, resumable=excluded.resumable,
-sourceKey=excluded.sourceKey, sourceMeta=excluded.sourceMeta`,
+sourceKey=excluded.sourceKey, sourceMeta=excluded.sourceMeta, importerId=excluded.importerId,
+importerVersion=excluded.importerVersion, missingSince=NULL`,
 		session.Source, session.Agent, session.ExternalID, session.AgentID, session.CWD, session.Title,
-		session.CreatedAt, session.UpdatedAt, session.IndexedAt, session.Resumable, session.SourceKey, string(session.SourceMeta))
+		session.CreatedAt, session.UpdatedAt, session.IndexedAt, session.Resumable, session.SourceKey,
+		string(session.SourceMeta), session.ImporterID, session.ImporterVersion)
 	if err != nil {
 		return 0, err
 	}

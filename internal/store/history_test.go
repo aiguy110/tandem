@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func historyTime(value int64) *int64 { return &value }
@@ -134,6 +135,58 @@ func TestSearchHistoryUnicodeAndLimits(t *testing.T) {
 		if err != nil || len(hits) != 1 {
 			t.Fatalf("query %q hits=%#v err=%v", query, hits, err)
 		}
+	}
+}
+
+func TestHistoryImporterVersionInvalidationAndMissingGrace(t *testing.T) {
+	s, _ := openTestStore(t)
+	now := time.UnixMilli(1_000_000)
+	s.now = func() time.Time { return now }
+	add := func(id, source string, version int) {
+		t.Helper()
+		err := s.ImportHistorySession(
+			HistorySession{Source: "history", Agent: "pi", ExternalID: id, SourceKey: source, Resumable: true},
+			[]HistoryEntry{{ExternalID: "entry", Ordinal: 1, Text: "retention " + id}},
+			"pi", version, json.RawMessage(`{"size":1}`),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("kept", "kept.jsonl", 1)
+	add("removed", "removed.jsonl", 1)
+
+	// A successful version bump marks the old generation missing but retains it
+	// during the grace period; the freshly imported source is current.
+	add("kept", "kept.jsonl", 2)
+	if err := s.FinishHistoryImporterScan("pi", "pi", 2, []string{"kept.jsonl"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := s.HistorySessions("history")
+	if err != nil || len(sessions) != 2 {
+		t.Fatalf("grace retention sessions=%#v err=%v", sessions, err)
+	}
+	var removedMissing bool
+	for _, session := range sessions {
+		if session.ExternalID == "removed" {
+			removedMissing = session.MissingSince != nil
+		}
+	}
+	if !removedMissing {
+		t.Fatal("missing source was not marked")
+	}
+	checkpoints, err := s.HistoryImportCheckpoints("pi")
+	if err != nil || len(checkpoints) != 1 || checkpoints[0].ImporterVersion != 2 {
+		t.Fatalf("version checkpoints=%#v err=%v", checkpoints, err)
+	}
+
+	now = now.Add(2 * time.Hour)
+	if err := s.FinishHistoryImporterScan("pi", "pi", 2, []string{"kept.jsonl"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	sessions, _ = s.HistorySessions("history")
+	if len(sessions) != 1 || sessions[0].ExternalID != "kept" {
+		t.Fatalf("expired missing session not purged: %#v", sessions)
 	}
 }
 

@@ -22,7 +22,7 @@ test("runner loads a TypeScript importer and emits versioned session frames", ()
   assert.equal(result.status, 0, result.stderr);
   const records = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(records.map(({ type }) => type), [
-    "hello", "begin_session", "entry", "end_session",
+    "hello", "begin_session", "entry", "end_session", "complete",
   ]);
   assert.deepEqual(records[0], {
     type: "hello",
@@ -32,4 +32,5 @@ test("runner loads a TypeScript importer and emits versioned session frames", ()
   assert.equal(records[1].session.id, "session");
   assert.equal(records[2].entry.text, "hello history");
   assert.deepEqual(records[3].checkpoint, { offset: 8 });
+  assert.deepEqual(records[4].sourceKeys, ["source"]);
 });

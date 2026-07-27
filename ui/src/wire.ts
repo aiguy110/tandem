@@ -329,6 +329,8 @@ export type ClientMsg =
   | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; corrId?: string }
+  | { t: 'refresh_history'; agent: string; reindex?: boolean; corrId?: string }
+  | { t: 'history_status'; agent?: string; corrId?: string }
   | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
   | { t: 'leave_terminal'; agentId: string; corrId?: string }

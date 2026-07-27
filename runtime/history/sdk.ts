@@ -54,6 +54,8 @@ export interface HistoryImportContext {
   agent: string;
   args: string[];
   checkpoints: ReadonlyMap<string, JSONValue>;
+  /** Reports a discovered source even when its checkpoint is unchanged. */
+  source(sourceKey: string): void;
   session(value: SessionImport): Promise<void>;
 }
 
@@ -111,11 +113,17 @@ export async function runHistoryImporter(
         importerId === importer.id && importerVersion === importer.version)
       .map(({ sourceKey, checkpoint }) => [sourceKey, checkpoint]),
   );
+  const sources = new Set<string>();
   await importer.scan({
     agent: request.agent,
     args,
     checkpoints,
+    source(sourceKey) {
+      if (!sourceKey) throw new Error("history source key is required");
+      sources.add(sourceKey);
+    },
     async session(value) {
+      sources.add(value.sourceKey);
       await write({
         type: "begin_session",
         mode: "replace",
@@ -132,4 +140,5 @@ export async function runHistoryImporter(
       });
     },
   });
+  await write({ type: "complete", sourceKeys: [...sources].sort() });
 }

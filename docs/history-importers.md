@@ -61,6 +61,9 @@ export default defineHistoryImporter({
 
   async scan(ctx) {
     for await (const source of discoverSessions(ctx.args)) {
+      // Report every discovered source, including checkpoint-unchanged ones.
+      // This lets Tandem distinguish an unchanged transcript from a deletion.
+      ctx.source(source.path);
       const previous = ctx.checkpoints.get(source.path);
       if (source.isUnchanged(previous)) continue;
 
@@ -103,19 +106,27 @@ documented for diagnostics:
 {"type":"begin_session","mode":"replace","sourceKey":"...","session":{"id":"..."}}
 {"type":"entry","entry":{"id":"...","ordinal":1,"role":"user","kind":"message","text":"..."}}
 {"type":"end_session","sourceKey":"...","checkpoint":{"offset":1234}}
+{"type":"complete","sourceKeys":["..."]}
 ```
 
 Only replacement mode is supported initially. Tandem buffers one framed
 session and commits it only after a valid matching `end_session`; malformed or
 interrupted output leaves the last indexed version and checkpoint untouched.
+The final source inventory is applied only after a successful process exit.
+Missing sources are marked and retained for a seven-day grace period before
+purge; failed scans never perform deletion reconciliation. An importer version
+change suppresses old checkpoints and safely rebuilds the current generation.
 Different agents' importer failures are isolated and recorded in
 `history_import_runs`, while per-source checkpoints and their latest errors
 live in `history_import_state`.
 
 The runner enforces a two-minute default timeout, a 2 MiB NDJSON-line limit,
 a 256 MiB total-output limit, 100,000 entries per session, and a bounded stderr
-diagnostic. Callers invoke `historyimport.Runner.Import` or `ImportAll`;
+diagnostic. The daemon schedules a nonblocking startup scan, refreshes stale
+indexes when the Resume surface is opened, and runs a low-frequency periodic
+scan. Per-agent singleflight prevents overlap; `refresh_history` supports
+explicit refresh or checkpoint-free reindex, and `history_status` reports the
+latest run. Search/list requests always return the existing index without
+waiting for this work. Callers invoke `historyimport.Runner.Import` or `ImportAll`;
 standalone deployments first call `runtimeinstall.EnsureHistory` to stage the
-embedded version-matched SDK/runner and install `tsx`. Deciding when to
-provision and when to run startup, palette-open, or periodic refreshes is
-intentionally a separate lifecycle concern.
+embedded version-matched SDK/runner/importers and install `tsx`.

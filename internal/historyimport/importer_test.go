@@ -54,7 +54,8 @@ printf '%s\n' \
 '{"type":"begin_session","mode":"replace","sourceKey":"/vendor/s1.jsonl","session":{"id":"s1","cwd":"/repo","title":"Fixture","createdAt":10,"updatedAt":20}}' \
 '{"type":"entry","entry":{"id":"m1","ordinal":1,"role":"user","kind":"message","timestamp":12,"text":"find the cobalt turbine"}}' \
 '{"type":"entry","entry":{"id":"m2","ordinal":2,"role":"assistant","kind":"message","text":"the turbine is ready"}}' \
-'{"type":"end_session","sourceKey":"/vendor/s1.jsonl","checkpoint":{"offset":42}}'
+'{"type":"end_session","sourceKey":"/vendor/s1.jsonl","checkpoint":{"offset":42}}' \
+'{"type":"complete","sourceKeys":["/vendor/s1.jsonl"]}'
 `)
 	result, err := runner.Import(context.Background(), "custom", config.History{
 		Parser: filepath.Join(root, "parser.ts"), Enabled: true,
@@ -65,6 +66,10 @@ printf '%s\n' \
 	}
 	if result.Sessions != 1 || result.Entries != 2 {
 		t.Fatalf("result=%+v", result)
+	}
+	if !result.Complete || result.ImporterID != "fixture" || result.ImporterVersion != 2 ||
+		len(result.SourceKeys) != 1 || result.SourceKeys[0] != "/vendor/s1.jsonl" {
+		t.Fatalf("scan inventory=%+v", result)
 	}
 	hits, err := db.SearchHistory("cobalt", 10)
 	if err != nil || len(hits) != 1 || hits[0].Session.Agent != "custom" || hits[0].Session.Source != "history" {
@@ -172,5 +177,27 @@ esac
 	checkpoints, cpErr := db.HistoryImportCheckpoints("custom")
 	if cpErr != nil || len(checkpoints) != 1 || !json.Valid(checkpoints[0].Checkpoint) {
 		t.Fatalf("checkpoints=%#v err=%v", checkpoints, cpErr)
+	}
+}
+
+func TestReindexOmitsPersistedCheckpoints(t *testing.T) {
+	runner, db, root := testRunner(t, `
+printf '%s' "$request" | grep -q '"checkpoints":\[\]'
+printf '%s\n' \
+'{"type":"hello","protocolVersion":1,"importer":{"id":"fixture","version":2}}' \
+'{"type":"complete","sourceKeys":[]}'
+`)
+	if err := db.ImportHistorySession(
+		store.HistorySession{Source: "history", Agent: "custom", ExternalID: "old", SourceKey: "old", Resumable: true},
+		[]store.HistoryEntry{{ExternalID: "entry", Ordinal: 1, Text: "old content"}},
+		"fixture", 1, json.RawMessage(`{"offset":9}`),
+	); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Reindex(context.Background(), "custom", config.History{
+		Parser: filepath.Join(root, "fresh.ts"), Enabled: true,
+	})
+	if err != nil || !result.Complete || result.ImporterVersion != 2 {
+		t.Fatalf("reindex result=%+v err=%v", result, err)
 	}
 }

@@ -14,6 +14,7 @@ export default defineHistoryImporter({
     for await (const path of walk(root, [".jsonl"])) {
       const checkpoint = await sourceCheckpoint(path);
       const sourceKey = path;
+      ctx.source(sourceKey);
       if (!checkpoint || sameCheckpoint(ctx.checkpoints.get(sourceKey), checkpoint)) continue;
       const records = await readJSONLines(path);
       const header = records.map(({ value }) => object(value))

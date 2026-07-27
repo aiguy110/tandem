@@ -26,5 +26,20 @@ var RuntimeHistorySDK []byte
 //go:embed runtime/history/runner.ts
 var RuntimeHistoryRunner []byte
 
+//go:embed runtime/history/importers/common.ts
+var RuntimeHistoryImporterCommon []byte
+
+//go:embed runtime/history/importers/claude.ts
+var RuntimeHistoryImporterClaude []byte
+
+//go:embed runtime/history/importers/codex.ts
+var RuntimeHistoryImporterCodex []byte
+
+//go:embed runtime/history/importers/pi.ts
+var RuntimeHistoryImporterPi []byte
+
+//go:embed runtime/history/importers/opencode.ts
+var RuntimeHistoryImporterOpenCode []byte
+
 //go:embed runtime/tsconfig.json
 var RuntimeTSConfig []byte
