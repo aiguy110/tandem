@@ -22,8 +22,12 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("servers = %#v", got)
 	}
-	if got[0].Name != "playwright" || got[0].Command != "/tools/node" || !reflect.DeepEqual(got[0].Args, []string{cli, "--cdp-endpoint", b.EndpointFor("api/58")}) {
+	wantOutputDir := filepath.Join(os.TempDir(), "api-58")
+	if got[0].Name != "playwright" || got[0].Command != "/tools/node" || !reflect.DeepEqual(got[0].Args, []string{cli, "--cdp-endpoint", b.EndpointFor("api/58"), "--output-dir", wantOutputDir}) {
 		t.Fatalf("playwright declaration = %#v", got[0])
+	}
+	if info, err := os.Stat(wantOutputDir); err != nil || !info.IsDir() {
+		t.Fatalf("expected output dir %s to be created: %v", wantOutputDir, err)
 	}
 	wantEnv := []MCPEnvVariable{{Name: "TANDEM_CONTROL_URL", Value: "http://127.0.0.1:7717"}, {Name: "TANDEM_TOKEN", Value: "secret"}, {Name: "TANDEM_AGENT_ID", Value: "api/58"}}
 	if got[1].Name != "tandem-control" || got[1].Command != "/bin/tandem" || !reflect.DeepEqual(got[1].Args, []string{"mcp-control"}) || !reflect.DeepEqual(got[1].Env, wantEnv) {
