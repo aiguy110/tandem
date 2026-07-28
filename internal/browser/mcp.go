@@ -3,6 +3,7 @@ package browser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MCPServer is an ACP-independent stdio MCP declaration. The ACP agent owns
@@ -32,9 +33,11 @@ type MCPWiring struct {
 func BuildMCPServers(w MCPWiring, agentID string) []MCPServer {
 	servers := make([]MCPServer, 0, 2)
 	if w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
+		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(agentID))
+		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{
 			Name: "playwright", Command: w.NodeRuntime,
-			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(agentID)},
+			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(agentID), "--output-dir", outputDir},
 			Env:  []MCPEnvVariable{},
 		})
 	}
@@ -49,6 +52,12 @@ func BuildMCPServers(w MCPWiring, agentID string) []MCPServer {
 		})
 	}
 	return servers
+}
+
+// sanitizeAgentSlug makes an agent ID safe to use as a single path component,
+// since agent IDs may contain "/" (e.g. catalog-derived spawn-option IDs).
+func sanitizeAgentSlug(agentID string) string {
+	return strings.ReplaceAll(agentID, "/", "-")
 }
 
 func regularFile(path string) bool {
