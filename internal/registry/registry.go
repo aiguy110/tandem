@@ -1171,7 +1171,15 @@ func (r *Registry) Resume(ctx context.Context, sessionID, agent, cwd, source str
 			return nil, err
 		}
 		rec.ClosedAt, rec.Status = nil, "idle"
-		return r.start(ctx, *rec, spec, sessionID)
+		resume := sessionID
+		// Same rationale as RestoreAll: an ACP session that never saw a
+		// prompt may never have been persisted by the agent harness, so
+		// loading it after the live connection is gone fails. Start a fresh
+		// ACP session in the same durable agent/workspace instead.
+		if prompted, err := hasUserMessage(r.store, rec.ID); err == nil && !prompted {
+			resume = ""
+		}
+		return r.start(ctx, *rec, spec, resume)
 	}
 	if agent == "" || cwd == "" {
 		return nil, errors.New("resume: unknown session — agent and cwd are required to resume an external session")

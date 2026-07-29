@@ -279,6 +279,35 @@ func TestRestorePromptedAgentResumesACPSession(t *testing.T) {
 	}
 }
 
+func TestResumeUnpromptedTandemSessionStartsFreshACPSession(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, _ := setup(t, f)
+	spec := existing(t.TempDir())
+	s, err := r.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := s.SessionID()
+	if ok, err := r.Close(context.Background(), s.ID, false, false); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+
+	resumed, err := r.Resume(context.Background(), sessionID, "", spec.Workspace.CWD, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ID != s.ID {
+		t.Fatalf("resumed wrong agent: got %s want %s", resumed.ID, s.ID)
+	}
+	if got := f.requests[s.ID].ResumeSessionID; got != "" {
+		t.Fatalf("unprompted tandem session resumed ACP session %q, want a fresh session", got)
+	}
+	rec, err := db.Agent(s.ID)
+	if err != nil || rec == nil || rec.ClosedAt != nil {
+		t.Fatalf("agent not reopened: %+v err=%v", rec, err)
+	}
+}
+
 func TestSessionConfigPersistsAndReapplies(t *testing.T) {
 	f := &fakeFactory{}
 	r, db, cfg := setup(t, f)
