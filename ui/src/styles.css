@@ -526,6 +526,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .confirm-modal section { margin-top: 14px; }
 .confirm-modal pre { max-height: 150px; overflow: auto; margin: 5px 0 0; padding: 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); white-space: pre-wrap; }
 .delete-worktree-option { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.confirm-modal .copyable-path { user-select: all; cursor: text; word-break: break-all; white-space: pre-wrap; }
 .confirm-modal .foot { justify-content: flex-end; }
 .btn.danger { background: var(--err-soft); border-color: var(--err); color: var(--err); }
 .btn.danger:hover { background: var(--err); color: var(--surface); }

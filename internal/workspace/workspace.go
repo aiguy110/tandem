@@ -287,6 +287,7 @@ type ClosePreview struct {
 	TargetRef   string `json:"targetRef,omitempty"`
 	Ahead       *int   `json:"ahead,omitempty"`
 	Behind      *int   `json:"behind,omitempty"`
+	NotGitRepo  bool   `json:"notGitRepo,omitempty"`
 }
 
 // Diff separates work that still needs committing from commits that have not
@@ -334,6 +335,9 @@ func (m *Manager) Diff(ctx context.Context, cwd string, ws Workspace) (Diff, err
 func (m *Manager) ClosePreview(ctx context.Context, cwd string, ws Workspace) (ClosePreview, error) {
 	uncommitted, err := m.git.Run(ctx, cwd, "status", "--short")
 	if err != nil {
+		if ws.Kind == KindExisting && strings.Contains(err.Error(), "not a git repository") {
+			return ClosePreview{Kind: ws.Kind, NotGitRepo: true}, nil
+		}
 		return ClosePreview{}, err
 	}
 	p := ClosePreview{Kind: ws.Kind, Uncommitted: uncommitted}

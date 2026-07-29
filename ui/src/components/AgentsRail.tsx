@@ -25,7 +25,7 @@ export function AgentsRail() {
     setCloseError('');
     try {
       const preview = await getClosePreview(id);
-      if (!preview.uncommitted && !preview.unmerged) {
+      if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged) {
         const result = await closeAgent(id, false, true);
         if (result.error) setCloseError(result.error);
         return;
@@ -98,26 +98,43 @@ export function AgentsRail() {
           <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-body">
               <div>Delete agent <b>{agents[confirmation.id].name}</b>?</div>
-              {confirmation.preview.uncommitted && (
-                <section><strong>Uncommitted changes</strong><pre>{confirmation.preview.uncommitted}</pre></section>
-              )}
-              {confirmation.preview.unmerged && (
-                <section><strong>Unmerged commits</strong><pre>{confirmation.preview.unmerged}</pre></section>
-              )}
-              {confirmation.preview.targetRef && (
-                <section><strong>Integration target</strong><pre>{confirmation.preview.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}{typeof confirmation.preview.ahead === 'number' ? `\n${confirmation.preview.ahead} ahead · ${confirmation.preview.behind ?? 0} behind` : ''}</pre></section>
-              )}
-              {confirmation.preview.kind === 'worktree' && (
-                <label className="delete-worktree-option">
-                  <input type="checkbox" checked={deleteWorktree} onChange={(e) => setDeleteWorktree(e.target.checked)} />
-                  Delete worktree
-                </label>
+              {confirmation.preview.notGitRepo ? (
+                <>
+                  <section>
+                    <strong>Not a git repository</strong>
+                    <p>Tandem cannot tell whether this directory has any changes. Really delete?</p>
+                  </section>
+                  <section>
+                    <strong>Directory</strong>
+                    <pre className="copyable-path" onClick={(e) => e.stopPropagation()}>{agents[confirmation.id].workspace.cwd}</pre>
+                  </section>
+                </>
+              ) : (
+                <>
+                  {confirmation.preview.uncommitted && (
+                    <section><strong>Uncommitted changes</strong><pre>{confirmation.preview.uncommitted}</pre></section>
+                  )}
+                  {confirmation.preview.unmerged && (
+                    <section><strong>Unmerged commits</strong><pre>{confirmation.preview.unmerged}</pre></section>
+                  )}
+                  {confirmation.preview.targetRef && (
+                    <section><strong>Integration target</strong><pre>{confirmation.preview.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}{typeof confirmation.preview.ahead === 'number' ? `\n${confirmation.preview.ahead} ahead · ${confirmation.preview.behind ?? 0} behind` : ''}</pre></section>
+                  )}
+                  {confirmation.preview.kind === 'worktree' && (
+                    <label className="delete-worktree-option">
+                      <input type="checkbox" checked={deleteWorktree} onChange={(e) => setDeleteWorktree(e.target.checked)} />
+                      Delete worktree
+                    </label>
+                  )}
+                </>
               )}
             </div>
             <div className="foot">
-              <button className="btn" onClick={() => promptForCommitMerge(confirmation.id)}>
-                Prompt for commit+merge
-              </button>
+              {!confirmation.preview.notGitRepo && (
+                <button className="btn" onClick={() => promptForCommitMerge(confirmation.id)}>
+                  Prompt for commit+merge
+                </button>
+              )}
               <button className="btn success" onClick={() => setConfirmation(null)}>Cancel</button>
               <button
                 className="btn danger"
@@ -127,7 +144,7 @@ export function AgentsRail() {
                   else setConfirmation(null);
                 }}
               >
-                Delete
+                Delete agent
               </button>
             </div>
           </div>

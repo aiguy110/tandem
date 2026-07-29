@@ -287,6 +287,7 @@ export interface ClosePreview {
   targetRef?: string;
   ahead?: number;
   behind?: number;
+  notGitRepo?: boolean;
 }
 export interface WorkspaceDiff {
   uncommitted: string;
