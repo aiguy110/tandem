@@ -8,7 +8,10 @@
         "cmd": "/fixtures/bin/node",
         "args": [
           "/fixtures/tandem/runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
-        ]
+        ],
+        "meta": {
+          "parentToolCallIdPath": "claudeCode.parentToolUseId"
+        }
       },
       "terminal": {
         "cmd": "claude",

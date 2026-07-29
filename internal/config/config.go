@@ -23,6 +23,21 @@ type Launch struct {
 	Cmd  string            `json:"cmd"`
 	Args []string          `json:"args"`
 	Env  map[string]string `json:"env,omitempty"`
+	Meta *ACPMeta          `json:"meta,omitempty"`
+}
+
+// ACPMeta maps Tandem's normalized event annotations onto vendor-specific paths
+// inside an ACP session/update's `_meta` object. Values are dotted paths (e.g.
+// "claudeCode.parentToolUseId"). It is an ACP-transport concern, carried on the
+// agent's ACP Launch. Empty fields mean the vendor exposes no such annotation
+// and Tandem falls back to flat rendering.
+type ACPMeta struct {
+	// ParentToolCallIDPath resolves to the `toolCallId` of the tool call that
+	// spawned the emitter — e.g. a subagent's parent Task/Agent call. When set
+	// and the resolved value matches a known tool call, Tandem attributes the
+	// emitting event to that parent (normalized to `parentId`) so the UI can
+	// group subagent activity under its spawn instead of interleaving it.
+	ParentToolCallIDPath string `json:"parentToolCallIdPath,omitempty"`
 }
 
 type ResumeLaunch struct {
@@ -548,7 +563,11 @@ func mergeAgents(dst map[string]Agent, entries map[string]any, subs map[string]s
 			if e != nil {
 				return e
 			}
-			l := Launch{Cmd: resolveExecutable(expand(cmd, subs), o), Args: expandAll(args, subs), Env: expandMap(env, subs)}
+			meta, e := parseACPMeta(v["meta"], "agents."+id+".acp.meta")
+			if e != nil {
+				return e
+			}
+			l := Launch{Cmd: resolveExecutable(expand(cmd, subs), o), Args: expandAll(args, subs), Env: expandMap(env, subs), Meta: meta}
 			agent.ACP = &l
 		}
 		if rawTerminal, exists := m["terminal"]; exists {
@@ -849,6 +868,33 @@ func stringMap(v any, key string) (map[string]string, error) {
 		out[k] = s
 	}
 	return out, nil
+}
+
+// parseACPMeta reads the optional `acp.meta` block. Absent → nil (flat
+// rendering). Unknown keys are rejected so a typo surfaces at load rather than
+// silently degrading to today's behavior.
+func parseACPMeta(v any, key string) (*ACPMeta, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, ok := stringAnyMap(v)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a mapping", key)
+	}
+	meta := &ACPMeta{}
+	for k, x := range raw {
+		s, isStr := x.(string)
+		if !isStr {
+			return nil, fmt.Errorf("%s.%s must be a string", key, k)
+		}
+		switch k {
+		case "parentToolCallIdPath":
+			meta.ParentToolCallIDPath = s
+		default:
+			return nil, fmt.Errorf("%s has unknown key %q", key, k)
+		}
+	}
+	return meta, nil
 }
 func expand(s string, subs map[string]string) string {
 	for k, v := range subs {

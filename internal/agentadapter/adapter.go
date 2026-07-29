@@ -52,6 +52,10 @@ type Launch struct {
 	Cmd  string            `json:"cmd"`
 	Args []string          `json:"args"`
 	Env  map[string]string `json:"env,omitempty"`
+	// ParentToolCallIDPath is the resolved `acp.meta.parentToolCallIdPath`: a
+	// dotted path into an ACP session/update's `_meta` whose value is the parent
+	// tool call's id. Empty = the agent exposes no such annotation.
+	ParentToolCallIDPath string `json:"parentToolCallIdPath,omitempty"`
 }
 type TerminalLaunch struct {
 	Cmd        string            `json:"cmd"`
