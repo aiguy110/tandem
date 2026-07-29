@@ -636,3 +636,73 @@ func TestConfigOptionsFlattenGroups(t *testing.T) {
 		t.Fatalf("normalized option = %s", normalized[0])
 	}
 }
+
+// newUpdateAdapter builds an Adapter wired just enough to exercise handleUpdate
+// directly (no subprocess): an event sink, a live context, and the maps the
+// tool_call path writes into. parentPath mirrors what StartAdapter derives from
+// AdapterConfig.ParentToolCallIDPath.
+func newUpdateAdapter(parentPath []string) *Adapter {
+	return &Adapter{
+		cfg:        AdapterConfig{AgentID: "api-1"},
+		ctx:        context.Background(),
+		events:     make(chan eventlog.Event, 16),
+		liveTools:  map[string]struct{}{},
+		toolFiles:  map[string]string{},
+		parentPath: parentPath,
+	}
+}
+
+func TestParentToolCallMetaAnnotatesSubagentUpdates(t *testing.T) {
+	// A subagent tool call carries the spawning Task call's id under the
+	// configured _meta path; it should surface as a normalized parentId.
+	a := newUpdateAdapter([]string{"claudeCode", "parentToolUseId"})
+	update := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"child-1",` +
+		`"title":"Bash","status":"in_progress","_meta":{"claudeCode":{"parentToolUseId":"task-parent"}}}}`
+	if err := a.handleUpdate(json.RawMessage(update)); err != nil {
+		t.Fatal(err)
+	}
+	got := waitEvent(t, a, "tool_call", func(m map[string]any) bool { return m["id"] == "child-1" })
+	if got["parentId"] != "task-parent" {
+		t.Fatalf("parentId = %v, want task-parent (event: %v)", got["parentId"], got)
+	}
+
+	// A message chunk from the same subagent is attributed too, so the UI can
+	// group its narration under the spawn alongside its tool calls.
+	msg := `{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk",` +
+		`"content":{"type":"text","text":"hi"},"_meta":{"claudeCode":{"parentToolUseId":"task-parent"}}}}`
+	if err := a.handleUpdate(json.RawMessage(msg)); err != nil {
+		t.Fatal(err)
+	}
+	got = waitEvent(t, a, "message_chunk", nil)
+	if got["parentId"] != "task-parent" {
+		t.Fatalf("message chunk parentId = %v, want task-parent", got["parentId"])
+	}
+}
+
+func TestParentToolCallMetaAbsentLeavesToolCallFlat(t *testing.T) {
+	// Unconfigured path, and a configured path that doesn't resolve, both leave
+	// the event unannotated (today's flat rendering) rather than erroring.
+	cases := []struct {
+		name       string
+		parentPath []string
+		meta       string
+	}{
+		{"unconfigured", nil, `,"_meta":{"claudeCode":{"parentToolUseId":"task-parent"}}`},
+		{"missing-segment", []string{"claudeCode", "parentToolUseId"}, `,"_meta":{"claudeCode":{}}`},
+		{"no-meta", []string{"claudeCode", "parentToolUseId"}, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newUpdateAdapter(tc.parentPath)
+			update := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"top-1",` +
+				`"title":"Bash","status":"in_progress"` + tc.meta + `}}`
+			if err := a.handleUpdate(json.RawMessage(update)); err != nil {
+				t.Fatal(err)
+			}
+			got := waitEvent(t, a, "tool_call", func(m map[string]any) bool { return m["id"] == "top-1" })
+			if _, ok := got["parentId"]; ok {
+				t.Fatalf("unexpected parentId on flat tool call: %v", got)
+			}
+		})
+	}
+}

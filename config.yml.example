@@ -13,6 +13,13 @@ agents:
       command: "{node}"
       args:
         - "{runtimeRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+      # The Claude ACP bridge stamps the spawning Task/Agent tool call's id onto
+      # subagent-originated session/updates under this `_meta` path. Tandem reads
+      # it into a normalized `parentId` so subagent activity groups under its
+      # spawn instead of interleaving with the parent's transcript. Other agents
+      # omit `meta` and render flat; point this at their path if they adopt one.
+      meta:
+        parentToolCallIdPath: claudeCode.parentToolUseId
     terminal:
       command: claude
       startArgs: []

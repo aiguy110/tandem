@@ -513,6 +513,9 @@ func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	}
 	if launch != nil {
 		resolved.ACP = &agentadapter.Launch{Cmd: launch.Cmd, Args: append(append(append([]string{}, launch.Args...), h.ACPArgs...), spec.ACPArgs...), Env: launch.Env}
+		if launch.Meta != nil {
+			resolved.ACP.ParentToolCallIDPath = launch.Meta.ParentToolCallIDPath
+		}
 	}
 	if def.Terminal != nil {
 		resolved.Terminal = &agentadapter.TerminalLaunch{Cmd: def.Terminal.Cmd, StartArgs: append(append(append([]string{}, def.Terminal.StartArgs...), h.TerminalArgs...), spec.TerminalArgs...), ResumeArgs: append(append(append([]string{}, def.Terminal.Args...), h.TerminalArgs...), spec.TerminalArgs...), Env: def.Terminal.Env}

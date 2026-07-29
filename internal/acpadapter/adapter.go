@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,11 @@ type AdapterConfig struct {
 	WorkspaceFS     *workspacefs.FS
 	Terminals       *terminalhost.Host
 	Logger          *log.Logger
+	// ParentToolCallIDPath is a dotted path into a session/update's `_meta`
+	// whose value is the parent tool call's id (see config.ACPMeta). When set,
+	// updates carrying it are annotated with a normalized `parentId`. Empty
+	// disables the lookup — the common case for agents without subagent meta.
+	ParentToolCallIDPath string
 }
 
 type Capabilities struct {
@@ -123,6 +129,9 @@ type Adapter struct {
 	serviceDone bool
 	fatal       error
 	closeOnce   sync.Once
+	// parentPath is cfg.ParentToolCallIDPath pre-split on "." (nil when unset),
+	// used to pull a normalized parentId out of each update's `_meta`.
+	parentPath []string
 }
 
 var permissionCounter atomic.Uint64
@@ -145,6 +154,9 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	}
 	serviceCtx, serviceStop := context.WithCancel(childCtx)
 	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop}
+	if cfg.ParentToolCallIDPath != "" {
+		a.parentPath = strings.Split(cfg.ParentToolCallIDPath, ".")
+	}
 	a.promptGate = make(chan struct{}, 1)
 	a.promptGate <- struct{}{}
 	a.replayBarrier = make(chan chan struct{})
@@ -820,6 +832,51 @@ func (a *Adapter) dispatchService(ctx context.Context, method string, raw json.R
 	}
 }
 
+// parentToolCallID resolves the configured `_meta` dotted path (parentPath)
+// against a session/update's raw `_meta` object, returning the parent tool
+// call's id when present. Returns "" when unconfigured, when `_meta` is absent
+// or malformed, or when any path segment is missing — every miss degrades to
+// flat (unattributed) rendering rather than erroring. The path may terminate on
+// a string or (defensively) a number, matching how vendors stamp ids.
+func (a *Adapter) parentToolCallID(meta json.RawMessage) string {
+	if len(a.parentPath) == 0 || len(meta) == 0 {
+		return ""
+	}
+	var node any
+	if err := json.Unmarshal(meta, &node); err != nil {
+		return ""
+	}
+	for _, seg := range a.parentPath {
+		obj, ok := node.(map[string]any)
+		if !ok {
+			return ""
+		}
+		node, ok = obj[seg]
+		if !ok {
+			return ""
+		}
+	}
+	switch v := node.(type) {
+	case string:
+		return v
+	case float64:
+		// Numeric ids arrive as float64 from encoding/json; render without a
+		// spurious decimal so it matches the string toolCallId it points at.
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return ""
+	}
+}
+
+// attachParentID adds the normalized parent attribution to an emitted event
+// when one was resolved. Kept separate so every emitting variant opts in with a
+// single line and an empty id never writes a noisy `"parentId":""`.
+func attachParentID(ev map[string]any, parentID string) {
+	if parentID != "" {
+		ev["parentId"] = parentID
+	}
+}
+
 func (a *Adapter) handleUpdate(params json.RawMessage) error {
 	var note struct {
 		SessionID string          `json:"sessionId"`
@@ -838,6 +895,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 	if err := json.Unmarshal(note.Update, &u); err != nil {
 		return fmt.Errorf("acp: malformed %s update: %w", header.Variant, err)
 	}
+	parentID := a.parentToolCallID(u["_meta"])
 	switch header.Variant {
 	case "agent_message_chunk", "agent_thought_chunk":
 		text, err := textContent(u["content"])
@@ -848,7 +906,9 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		if header.Variant == "agent_thought_chunk" {
 			kind = "thought_chunk"
 		}
-		a.push(map[string]any{"kind": kind, "text": text})
+		ev := map[string]any{"kind": kind, "text": text}
+		attachParentID(ev, parentID)
+		a.push(ev)
 	case "tool_call":
 		id, err := requiredString(u, "toolCallId")
 		if err != nil {
@@ -877,6 +937,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		}
 		copyJSONField(ev, "rawInput", u["rawInput"])
 		copyJSONField(ev, "toolKind", u["kind"])
+		attachParentID(ev, parentID)
 		a.push(ev)
 	case "tool_call_update":
 		id, err := requiredString(u, "toolCallId")
@@ -909,6 +970,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
 			ev["content"] = content
 		}
+		attachParentID(ev, parentID)
 		a.push(ev)
 	case "plan", "plan_update":
 		var entries []struct {
