@@ -5,6 +5,7 @@ import type { Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, 
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
+import { usesSoftKeyboard } from '../../mobile';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -916,7 +917,9 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         <textarea
           ref={textRef}
           data-prompt-agent={agentId}
-          placeholder={working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`}
+          placeholder={usesSoftKeyboard()
+            ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentId}…  (use the button to send)`)
+            : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`)}
           value={text}
           onPaste={(e) => {
             const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
@@ -955,7 +958,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               return;
             }
           }
-          if (e.key === 'Enter' && !e.shiftKey) {
+          if (e.key === 'Enter' && !e.shiftKey && !usesSoftKeyboard()) {
             e.preventDefault();
             void send();
           }
