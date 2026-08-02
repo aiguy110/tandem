@@ -26,6 +26,30 @@
     },
     {
       "type": "index",
+      "name": "sqlite_autoindex_automation_jobs_1",
+      "tableName": "automation_jobs",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_automation_runs_1",
+      "tableName": "automation_runs",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_automation_tool_calls_1",
+      "tableName": "automation_tool_calls",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_automation_wakeups_1",
+      "tableName": "automation_wakeups",
+      "sql": null
+    },
+    {
+      "type": "index",
       "name": "sqlite_autoindex_browser_sessions_1",
       "tableName": "browser_sessions",
       "sql": null
@@ -73,6 +97,12 @@
       "sql": null
     },
     {
+      "type": "index",
+      "name": "sqlite_autoindex_repository_tool_grants_1",
+      "tableName": "repository_tool_grants",
+      "sql": null
+    },
+    {
       "type": "table",
       "name": "agent_assets",
       "tableName": "agent_assets",
@@ -89,6 +119,30 @@
       "name": "assets",
       "tableName": "assets",
       "sql": "CREATE TABLE assets (\n        id        TEXT PRIMARY KEY,\n        mimeType  TEXT NOT NULL,\n        size      INTEGER NOT NULL,\n        createdAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "automation_jobs",
+      "tableName": "automation_jobs",
+      "sql": "CREATE TABLE automation_jobs (\n        id                  TEXT PRIMARY KEY,\n        repositoryId        TEXT NOT NULL,\n        scriptPath          TEXT NOT NULL,\n        name                TEXT NOT NULL DEFAULT '',\n        cron                TEXT NOT NULL,\n        timezone            TEXT NOT NULL DEFAULT '',\n        browserSnapshotId   TEXT NOT NULL DEFAULT '',\n        defaultAgentProfile TEXT NOT NULL DEFAULT '',\n        wakePrompt          TEXT NOT NULL DEFAULT '',\n        concurrency         TEXT NOT NULL DEFAULT 'skip',\n        manifestHash        TEXT NOT NULL DEFAULT '',\n        enabled             INTEGER NOT NULL DEFAULT 1,\n        createdAt           INTEGER NOT NULL,\n        updatedAt           INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "automation_runs",
+      "tableName": "automation_runs",
+      "sql": "CREATE TABLE automation_runs (\n        id                TEXT PRIMARY KEY,\n        jobId             TEXT,\n        repositoryId      TEXT NOT NULL,\n        scriptPath        TEXT NOT NULL DEFAULT '',\n        trigger           TEXT NOT NULL,\n        sourceHash        TEXT NOT NULL DEFAULT '',\n        browserSnapshotId TEXT NOT NULL DEFAULT '',\n        browserCloneId    TEXT NOT NULL DEFAULT '',\n        scheduledAt       INTEGER,\n        startedAt         INTEGER NOT NULL,\n        completedAt       INTEGER,\n        outcome           TEXT NOT NULL,\n        reason            TEXT NOT NULL DEFAULT '',\n        exitCode          INTEGER,\n        stdout            TEXT NOT NULL DEFAULT '',\n        stderr            TEXT NOT NULL DEFAULT '',\n        report            TEXT,\n        error             TEXT,\n        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "automation_tool_calls",
+      "tableName": "automation_tool_calls",
+      "sql": "CREATE TABLE automation_tool_calls (\n        id          TEXT PRIMARY KEY,\n        runId       TEXT NOT NULL,\n        toolName    TEXT NOT NULL,\n        arguments   TEXT NOT NULL DEFAULT '{}',\n        result      TEXT,\n        error       TEXT,\n        startedAt   INTEGER NOT NULL,\n        completedAt INTEGER,\n        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE\n      )"
+    },
+    {
+      "type": "table",
+      "name": "automation_wakeups",
+      "tableName": "automation_wakeups",
+      "sql": "CREATE TABLE automation_wakeups (\n        runId        TEXT PRIMARY KEY,\n        jobId        TEXT,\n        agentId      TEXT,\n        agentProfile TEXT NOT NULL DEFAULT '',\n        prompt       TEXT NOT NULL DEFAULT '',\n        reason       TEXT NOT NULL,\n        context      TEXT NOT NULL DEFAULT '{}',\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        completedAt INTEGER,\n        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE,\n        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL\n      )"
     },
     {
       "type": "table",
@@ -149,6 +203,12 @@
       "name": "profiles",
       "tableName": "profiles",
       "sql": "CREATE TABLE profiles (\n        id         TEXT PRIMARY KEY,\n        name       TEXT NOT NULL,\n        autoNamed  INTEGER NOT NULL DEFAULT 1,\n        agent      TEXT NOT NULL DEFAULT '',\n        harness    TEXT NOT NULL DEFAULT '',\n        model      TEXT NOT NULL DEFAULT '',\n        effort     TEXT NOT NULL DEFAULT '',\n        permission TEXT NOT NULL DEFAULT '',\n        snapshotId TEXT NOT NULL DEFAULT '',\n        createdAt  INTEGER NOT NULL,\n        lastUsedAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "repository_tool_grants",
+      "tableName": "repository_tool_grants",
+      "sql": "CREATE TABLE repository_tool_grants (\n        repositoryId TEXT NOT NULL,\n        toolName     TEXT NOT NULL,\n        approvalId   TEXT NOT NULL DEFAULT '',\n        grantedBy    TEXT NOT NULL DEFAULT '',\n        grantedAt    INTEGER NOT NULL,\n        revokedAt    INTEGER,\n        PRIMARY KEY (repositoryId, toolName)\n      )"
     }
   ]
 }

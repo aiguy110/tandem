@@ -17,9 +17,9 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	if err := os.WriteFile(cli, []byte("// fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := MCPWiring{Broker: b, NodeRuntime: "/tools/node", PlaywrightCLI: cli, TandemExecutable: "/bin/tandem", ControlURL: "http://127.0.0.1:7717", Token: "secret"}
-	got := BuildMCPServers(w, "api/58")
-	if len(got) != 2 {
+	w := MCPWiring{Broker: b, NodeRuntime: "/tools/node", PlaywrightCLI: cli, TandemExecutable: "/bin/tandem", ControlURL: "http://127.0.0.1:7717", Token: "secret", BrowserEnabled: true}
+	got := BuildMCPServers(w, "api/58", "/worktrees/api-58")
+	if len(got) != 3 {
 		t.Fatalf("servers = %#v", got)
 	}
 	wantOutputDir := filepath.Join(os.TempDir(), "api-58")
@@ -33,11 +33,22 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	if got[1].Name != "tandem-control" || got[1].Command != "/bin/tandem" || !reflect.DeepEqual(got[1].Args, []string{"mcp-control"}) || !reflect.DeepEqual(got[1].Env, wantEnv) {
 		t.Fatalf("control declaration = %#v", got[1])
 	}
+	wantScriptEnv := append(append([]MCPEnvVariable{}, wantEnv...), MCPEnvVariable{Name: "TANDEM_WORKSPACE_CWD", Value: "/worktrees/api-58"})
+	if got[2].Name != "tandem-scripts" || !reflect.DeepEqual(got[2].Args, []string{"mcp-scripts"}) || !reflect.DeepEqual(got[2].Env, wantScriptEnv) {
+		t.Fatalf("scripts declaration = %#v", got[2])
+	}
 }
 
 func TestBuildMCPServersSkipsMissingPlaywright(t *testing.T) {
-	got := BuildMCPServers(MCPWiring{NodeRuntime: "/tools/node", PlaywrightCLI: "/missing/cli.js", TandemExecutable: "/bin/tandem"}, "one")
-	if len(got) != 1 || got[0].Name != "tandem-control" {
+	got := BuildMCPServers(MCPWiring{NodeRuntime: "/tools/node", PlaywrightCLI: "/missing/cli.js", TandemExecutable: "/bin/tandem", BrowserEnabled: true}, "one", "/repo")
+	if len(got) != 2 || got[0].Name != "tandem-control" || got[1].Name != "tandem-scripts" {
+		t.Fatalf("servers = %#v", got)
+	}
+}
+
+func TestBuildMCPServersIncludesScriptsWhenBrowserMCPDisabled(t *testing.T) {
+	got := BuildMCPServers(MCPWiring{TandemExecutable: "/bin/tandem"}, "one", "/repo")
+	if len(got) != 1 || got[0].Name != "tandem-scripts" {
 		t.Fatalf("servers = %#v", got)
 	}
 }

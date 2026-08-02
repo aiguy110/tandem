@@ -25,7 +25,7 @@ import (
 type DefaultFactory struct {
 	Assets     *assets.Store
 	Config     config.Config
-	MCPServers func(agentID string) []browser.MCPServer
+	MCPServers func(agentID, workspaceCWD string) []browser.MCPServer
 }
 
 func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest) (agentadapter.Adapter, error) {
@@ -61,7 +61,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	}
 	var mcpServers []acpadapter.MCPServer
 	if f.MCPServers != nil {
-		for _, server := range f.MCPServers(req.AgentID) {
+		for _, server := range f.MCPServers(req.AgentID, req.CWD) {
 			env := make([]acp.EnvVariable, len(server.Env))
 			for i, variable := range server.Env {
 				env[i] = acp.EnvVariable{Name: variable.Name, Value: variable.Value}

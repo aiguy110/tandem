@@ -201,6 +201,41 @@ func TestApprovalsInterruptAndRepeatedDispose(t *testing.T) {
 	}
 }
 
+func TestDaemonOwnedPermissionUsesSharedApprovalQueue(t *testing.T) {
+	s, _, _ := testSession(t)
+	result := make(chan struct {
+		option string
+		err    error
+	}, 1)
+	go func() {
+		option, err := s.RequestPermission(context.Background(), "automation-grant-1", "Allow browser_snapshot for this repository?", []agentadapter.ApprovalOption{
+			{OptionID: "allow", Name: "Allow"},
+			{OptionID: "deny", Name: "Deny"},
+		})
+		result <- struct {
+			option string
+			err    error
+		}{option, err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for len(s.PendingApprovals()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := s.PendingApprovals(); len(got) != 1 || got[0].ReqID != "automation-grant-1" {
+		t.Fatalf("pending=%+v", got)
+	}
+	if err := s.RespondPermission("automation-grant-1", "allow"); err != nil {
+		t.Fatal(err)
+	}
+	got := <-result
+	if got.err != nil || got.option != "allow" {
+		t.Fatalf("result=%+v", got)
+	}
+	if len(s.PendingApprovals()) != 0 || s.Status() != Working {
+		t.Fatalf("pending=%+v status=%s", s.PendingApprovals(), s.Status())
+	}
+}
+
 func TestImageValidationRejectsBeforeLoggingAndCountsBeforeResolution(t *testing.T) {
 	t.Run("negotiated capability false", func(t *testing.T) {
 		s, a, _ := testSession(t)

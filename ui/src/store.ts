@@ -13,6 +13,8 @@ import type {
   AgentSummary,
   AgentCatalog,
   Approval,
+  AutomationJob,
+  AutomationRun,
   BrowserInputWire,
   BrowserSnapshot,
   Channel,
@@ -105,7 +107,7 @@ export interface AgentView {
   canHandoff: boolean;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
 
 export interface AckResult {
   agentId?: string;
@@ -129,6 +131,10 @@ interface StoreState {
   agentCatalog: AgentCatalog | null;
   // Captured browser snapshots (seed states), refreshed on demand.
   snapshots: BrowserSnapshot[];
+  automationJobs: AutomationJob[];
+  automationRuns: AutomationRun[];
+  automationLoading: boolean;
+  automationError: string | null;
   // Resume picker: the resumable-session catalog (null until first fetched) and a
   // loading flag while the daemon probes agents for external sessions.
   resumeCatalog: ResumeCatalog | null;
@@ -158,6 +164,8 @@ interface StoreState {
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
+  refreshAutomation: (repositoryId?: string) => Promise<void>;
+  setAutomationEnabled: (id: string, enabled: boolean) => Promise<void>;
   searchSessions: (query: string) => Promise<SessionSearchResult[]>;
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
@@ -209,6 +217,7 @@ const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; r
 const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
 const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
 const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
+const pendingAutomation = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -350,6 +359,25 @@ export const useStore = create<StoreState>((set, get) => {
       case 'sessions':
         set({ resumeCatalog: msg.catalog, resumeLoading: false });
         return;
+      case 'automation': {
+        if (msg.error) {
+          set({ automationLoading: false, automationError: msg.error });
+        } else {
+          set({
+            automationJobs: msg.jobs ?? [],
+            automationRuns: msg.runs ?? [],
+            automationLoading: false,
+            automationError: null,
+          });
+        }
+        const pending = msg.corrId ? pendingAutomation.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingAutomation.delete(msg.corrId);
+          if (msg.error) pending.reject(new Error(msg.error));
+          else pending.resolve();
+        }
+        return;
+      }
       case 'session_search': {
         const pending = msg.corrId ? pendingSessionSearches.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -577,6 +605,10 @@ export const useStore = create<StoreState>((set, get) => {
     dirs: [],
     agentCatalog: null,
     snapshots: [],
+    automationJobs: [],
+    automationRuns: [],
+    automationLoading: false,
+    automationError: null,
     resumeCatalog: null,
     resumeLoading: false,
     drafts: {},
@@ -631,6 +663,7 @@ export const useStore = create<StoreState>((set, get) => {
         client.send({ t: 'list_agent_catalog' });
       }
       if (m === 'resume') get().refreshSessions();
+      if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
       set({ modal: m });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
@@ -640,6 +673,20 @@ export const useStore = create<StoreState>((set, get) => {
       set({ resumeLoading: true });
       client.send({ t: 'list_sessions' });
     },
+    refreshAutomation: (repositoryId) =>
+      new Promise<void>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingAutomation.set(corrId, { resolve, reject });
+        set({ automationLoading: true, automationError: null });
+        client.send({ t: 'list_automation', repositoryId, corrId });
+      }),
+    setAutomationEnabled: (id, enabled) =>
+      new Promise<void>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingAutomation.set(corrId, { resolve, reject });
+        set({ automationLoading: true, automationError: null });
+        client.send({ t: 'set_automation_enabled', id, enabled, corrId });
+      }),
     searchSessions: (query) =>
       new Promise<SessionSearchResult[]>((resolve, reject) => {
         const corrId = nextCorr();

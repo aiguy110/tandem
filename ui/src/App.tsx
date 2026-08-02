@@ -11,6 +11,7 @@ import { Inspector } from './components/Inspector';
 import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
 import { ResumePalette } from './components/ResumePalette';
+import { AutomationModal } from './components/AutomationModal';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -50,6 +51,7 @@ export function App() {
       {modal === 'spawn' && <SpawnPalette />}
       {modal === 'command' && <CommandPalette />}
       {modal === 'resume' && <ResumePalette />}
+      {modal === 'automation' && <AutomationModal />}
     </>
   );
 }

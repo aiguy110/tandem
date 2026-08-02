@@ -54,6 +54,13 @@ type Options struct {
 	WriteQueue int
 	Browser    *browser.Broker
 	History    HistoryLifecycle
+	Automation AutomationStore
+}
+
+type AutomationStore interface {
+	AutomationJobs(string) ([]store.AutomationJob, error)
+	AutomationRuns(string, int) ([]store.AutomationRun, error)
+	SetAutomationJobEnabled(string, bool) error
 }
 
 type HistoryLifecycle interface {
@@ -160,6 +167,8 @@ type clientMessage struct {
 	ID             string                     `json:"id"`
 	SnapshotID     string                     `json:"snapshotId"`
 	Project        string                     `json:"project"`
+	RepositoryID   string                     `json:"repositoryId"`
+	Enabled        bool                       `json:"enabled"`
 }
 
 type connection struct {
@@ -306,6 +315,30 @@ func withCorr(base map[string]any, raw json.RawMessage) map[string]any {
 	return base
 }
 
+func (c *connection) sendAutomation(repositoryID string, corrID json.RawMessage) {
+	if c.server.opts.Automation == nil {
+		c.send(withCorr(map[string]any{"t": "automation", "error": "automation unavailable"}, corrID))
+		return
+	}
+	jobs, err := c.server.opts.Automation.AutomationJobs(repositoryID)
+	if err != nil {
+		c.send(withCorr(map[string]any{"t": "automation", "error": err.Error()}, corrID))
+		return
+	}
+	runs, err := c.server.opts.Automation.AutomationRuns("", 100)
+	if err != nil {
+		c.send(withCorr(map[string]any{"t": "automation", "error": err.Error()}, corrID))
+		return
+	}
+	if jobs == nil {
+		jobs = []store.AutomationJob{}
+	}
+	if runs == nil {
+		runs = []store.AutomationRun{}
+	}
+	c.send(withCorr(map[string]any{"t": "automation", "jobs": jobs, "runs": runs}, corrID))
+}
+
 func (c *connection) handle(m clientMessage) {
 	switch m.T {
 	case "subscribe":
@@ -324,6 +357,22 @@ func (c *connection) handle(m clientMessage) {
 			dirs = []workspace.RepoInfo{}
 		}
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
+	case "list_automation":
+		c.sendAutomation(m.RepositoryID, m.CorrID)
+	case "set_automation_enabled":
+		if c.server.opts.Automation == nil {
+			c.send(withCorr(map[string]any{"t": "automation", "error": "automation unavailable"}, m.CorrID))
+			return
+		}
+		if m.ID == "" {
+			c.send(withCorr(map[string]any{"t": "automation", "error": "id is required"}, m.CorrID))
+			return
+		}
+		if err := c.server.opts.Automation.SetAutomationJobEnabled(m.ID, m.Enabled); err != nil {
+			c.send(withCorr(map[string]any{"t": "automation", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.sendAutomation(m.RepositoryID, m.CorrID)
 	case "list_git_refs":
 		refs, err := c.server.opts.Registry.ListGitRefs(context.Background(), m.Repo)
 		if err != nil {
