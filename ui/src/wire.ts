@@ -243,6 +243,44 @@ export interface BrowserSnapshot {
   createdAt: number;
 }
 
+export interface AutomationJob {
+  id: string;
+  repositoryId: string;
+  scriptPath: string;
+  name: string;
+  cron: string;
+  timezone: string;
+  browserSnapshotId: string;
+  defaultAgentProfile: string;
+  wakePrompt: string;
+  concurrency: string;
+  manifestHash: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AutomationRun {
+  id: string;
+  jobId?: string;
+  repositoryId: string;
+  scriptPath: string;
+  trigger: string;
+  sourceHash: string;
+  browserSnapshotId: string;
+  browserCloneId: string;
+  scheduledAt?: number;
+  startedAt: number;
+  completedAt?: number;
+  outcome: string;
+  reason: string;
+  exitCode?: number;
+  stdout: string;
+  stderr: string;
+  report?: unknown;
+  error?: string;
+}
+
 // Profile is a daemon-owned, auto-created, renamable bundle of launch settings.
 export interface Profile {
   id: string;
@@ -333,6 +371,8 @@ export type ClientMsg =
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; corrId?: string }
   | { t: 'list_sessions'; corrId?: string }
+  | { t: 'list_automation'; repositoryId?: string; corrId?: string }
+  | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; corrId?: string }
   | { t: 'refresh_history'; agent: string; reindex?: boolean; corrId?: string }
   | { t: 'history_status'; agent?: string; corrId?: string }
@@ -376,6 +416,7 @@ export type ServerMsg =
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }
+  | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; agentId: string; active: boolean; controlOwner: 'agent' | 'user' };

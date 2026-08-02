@@ -147,6 +147,77 @@ CREATE TABLE IF NOT EXISTS history_import_runs (
         sessionsSeen  INTEGER NOT NULL DEFAULT 0,
         entriesSeen   INTEGER NOT NULL DEFAULT 0,
         error         TEXT
+      );
+CREATE TABLE IF NOT EXISTS repository_tool_grants (
+        repositoryId TEXT NOT NULL,
+        toolName     TEXT NOT NULL,
+        approvalId   TEXT NOT NULL DEFAULT '',
+        grantedBy    TEXT NOT NULL DEFAULT '',
+        grantedAt    INTEGER NOT NULL,
+        revokedAt    INTEGER,
+        PRIMARY KEY (repositoryId, toolName)
+      );
+CREATE TABLE IF NOT EXISTS automation_jobs (
+        id                  TEXT PRIMARY KEY,
+        repositoryId        TEXT NOT NULL,
+        scriptPath          TEXT NOT NULL,
+        name                TEXT NOT NULL DEFAULT '',
+        cron                TEXT NOT NULL,
+        timezone            TEXT NOT NULL DEFAULT '',
+        browserSnapshotId   TEXT NOT NULL DEFAULT '',
+        defaultAgentProfile TEXT NOT NULL DEFAULT '',
+        wakePrompt          TEXT NOT NULL DEFAULT '',
+        concurrency         TEXT NOT NULL DEFAULT 'skip',
+        manifestHash        TEXT NOT NULL DEFAULT '',
+        enabled             INTEGER NOT NULL DEFAULT 1,
+        createdAt           INTEGER NOT NULL,
+        updatedAt           INTEGER NOT NULL
+      );
+CREATE TABLE IF NOT EXISTS automation_runs (
+        id                TEXT PRIMARY KEY,
+        jobId             TEXT,
+        repositoryId      TEXT NOT NULL,
+        scriptPath        TEXT NOT NULL DEFAULT '',
+        trigger           TEXT NOT NULL,
+        sourceHash        TEXT NOT NULL DEFAULT '',
+        browserSnapshotId TEXT NOT NULL DEFAULT '',
+        browserCloneId    TEXT NOT NULL DEFAULT '',
+        scheduledAt       INTEGER,
+        startedAt         INTEGER NOT NULL,
+        completedAt       INTEGER,
+        outcome           TEXT NOT NULL,
+        reason            TEXT NOT NULL DEFAULT '',
+        exitCode          INTEGER,
+        stdout            TEXT NOT NULL DEFAULT '',
+        stderr            TEXT NOT NULL DEFAULT '',
+        report            TEXT,
+        error             TEXT,
+        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL
+      );
+CREATE TABLE IF NOT EXISTS automation_wakeups (
+        runId        TEXT PRIMARY KEY,
+        jobId        TEXT,
+        agentId      TEXT,
+        agentProfile TEXT NOT NULL DEFAULT '',
+        prompt       TEXT NOT NULL DEFAULT '',
+        reason       TEXT NOT NULL,
+        context      TEXT NOT NULL DEFAULT '{}',
+        status       TEXT NOT NULL,
+        createdAt    INTEGER NOT NULL,
+        completedAt INTEGER,
+        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL
+      );
+CREATE TABLE IF NOT EXISTS automation_tool_calls (
+        id          TEXT PRIMARY KEY,
+        runId       TEXT NOT NULL,
+        toolName    TEXT NOT NULL,
+        arguments   TEXT NOT NULL DEFAULT '{}',
+        result      TEXT,
+        error       TEXT,
+        startedAt   INTEGER NOT NULL,
+        completedAt INTEGER,
+        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE
       );`
 
 // Store serializes access through one connection. This makes connection-local

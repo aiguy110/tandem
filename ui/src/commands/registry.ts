@@ -25,6 +25,7 @@ export function buildCommands(): Command[] {
   return [
     { id: 'agent.spawn', title: 'Spawn agent…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
     { id: 'agent.resume', title: 'Resume session…', subtitle: 'Find a Tandem or external ACP session', run: () => s().setModal('resume') },
+    { id: 'automation.open', title: 'Automation…', subtitle: 'View schedules and recent runs', run: () => s().setModal('automation') },
     {
       id: 'agent.spawn.sibling',
       title: 'Spawn sibling agent',

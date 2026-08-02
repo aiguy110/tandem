@@ -227,9 +227,28 @@ func setupWSHistory(t *testing.T, queue int, history HistoryLifecycle) (*store.S
 		t.Fatal(err)
 	}
 	b := &testBackend{sessions: map[string]*session.Session{"a": s}}
-	server := httptest.NewServer(New(Options{Token: "secret", Registry: b, WriteQueue: queue, History: history}))
+	server := httptest.NewServer(New(Options{Token: "secret", Registry: b, WriteQueue: queue, History: history, Automation: db}))
 	t.Cleanup(func() { server.Close(); db.Close() })
 	return db, b, a, server, "ws" + strings.TrimPrefix(server.URL, "http")
+}
+
+func TestAutomationListAndEnableToggle(t *testing.T) {
+	db, _, _, _, url := setupWS(t, 0)
+	if err := db.UpsertAutomationJob(store.AutomationJob{ID: "job-1", RepositoryID: "/repo/.git", ScriptPath: ".tandem/scripts/check.ts", Name: "check", Cron: "every 5m", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "list_automation", "corrId": "auto-1"})
+	got := recv(t, c)
+	if got["t"] != "automation" || got["corrId"] != "auto-1" || len(got["jobs"].([]any)) != 1 {
+		t.Fatalf("automation=%#v", got)
+	}
+	send(t, c, map[string]any{"t": "set_automation_enabled", "id": "job-1", "enabled": false, "corrId": "auto-2"})
+	got = recv(t, c)
+	jobs := got["jobs"].([]any)
+	if len(jobs) != 1 || jobs[0].(map[string]any)["enabled"] != false {
+		t.Fatalf("toggled=%#v", got)
+	}
 }
 
 type testHistoryLifecycle struct {

@@ -32,17 +32,21 @@ type Session struct {
 	Log     *eventlog.Log
 	adapter agentadapter.Adapter
 
-	mu           sync.RWMutex
-	status       Status
-	approvals    map[string]agentadapter.Approval
-	listeners    map[uint64]func(eventlog.LoggedEvent)
-	nextListener uint64
-	active       int
-	controlMode  string
-	adapterEpoch uint64
-	disposeOnce  sync.Once
-	disposeErr   error
-	done         chan struct{}
+	mu        sync.RWMutex
+	status    Status
+	approvals map[string]agentadapter.Approval
+	// approvalHandlers contains daemon-owned approvals (for example automation
+	// repository grants). Adapter-owned ACP approvals are absent from this map
+	// and continue through Adapter.RespondPermission.
+	approvalHandlers map[string]func(string) error
+	listeners        map[uint64]func(eventlog.LoggedEvent)
+	nextListener     uint64
+	active           int
+	controlMode      string
+	adapterEpoch     uint64
+	disposeOnce      sync.Once
+	disposeErr       error
+	done             chan struct{}
 
 	promptMu      sync.Mutex
 	promptQueue   []*queuedPrompt
@@ -107,7 +111,7 @@ func NewWithStatus(id, name string, spec agentadapter.Spec, adapter agentadapter
 	if adapter == nil || log == nil {
 		return nil, errors.New("session: adapter and event log are required")
 	}
-	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, controlMode: "transcript", approvals: map[string]agentadapter.Approval{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
+	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, controlMode: "transcript", approvals: map[string]agentadapter.Approval{}, approvalHandlers: map[string]func(string) error{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
 	if binder, ok := adapter.(agentadapter.EventBinder); ok {
 		binder.BindEventSink(s.append)
 	}
@@ -378,6 +382,19 @@ func newPromptID() string {
 func (s *Session) SendInput(b []byte) error       { return s.adapter.SendInput(b) }
 func (s *Session) Resize(cols, rows uint16) error { return s.adapter.Resize(cols, rows) }
 func (s *Session) RespondPermission(reqID, optionID string) error {
+	s.mu.Lock()
+	if handler := s.approvalHandlers[reqID]; handler != nil {
+		delete(s.approvalHandlers, reqID)
+		delete(s.approvals, reqID)
+		s.mu.Unlock()
+		if err := handler(optionID); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "working"})
+		s.emit(eventlog.Event{Kind: "status", Payload: payload})
+		return nil
+	}
+	s.mu.Unlock()
 	if err := s.adapter.RespondPermission(reqID, optionID); err != nil {
 		return err
 	}
@@ -385,6 +402,57 @@ func (s *Session) RespondPermission(reqID, optionID string) error {
 	delete(s.approvals, reqID)
 	s.mu.Unlock()
 	return nil
+}
+
+// RequestPermission presents a daemon-owned approval through the same durable
+// approvals queue used by ACP. It blocks until the user selects an option, the
+// context is canceled, or the session closes. reqID must be unique within the
+// session while the request is pending.
+func (s *Session) RequestPermission(ctx context.Context, reqID, title string, options []agentadapter.ApprovalOption) (string, error) {
+	if reqID == "" || title == "" || len(options) == 0 {
+		return "", errors.New("permission request requires reqID, title, and options")
+	}
+	choice := make(chan string, 1)
+	s.mu.Lock()
+	if _, exists := s.approvals[reqID]; exists {
+		s.mu.Unlock()
+		return "", fmt.Errorf("permission request already pending: %s", reqID)
+	}
+	s.approvalHandlers[reqID] = func(optionID string) error {
+		for _, option := range options {
+			if option.OptionID == optionID {
+				choice <- optionID
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown permission option: %s", optionID)
+	}
+	s.mu.Unlock()
+	payload, _ := json.Marshal(map[string]any{
+		"kind": "permission_request", "reqId": reqID, "toolCallId": reqID,
+		"title": title, "options": options,
+	})
+	s.emit(eventlog.Event{Kind: "permission_request", Payload: payload})
+
+	select {
+	case optionID := <-choice:
+		return optionID, nil
+	case <-ctx.Done():
+		s.cancelExternalApproval(reqID)
+		return "", ctx.Err()
+	case <-s.done:
+		s.cancelExternalApproval(reqID)
+		return "", errors.New("session closed while awaiting permission")
+	}
+}
+
+func (s *Session) cancelExternalApproval(reqID string) {
+	s.mu.Lock()
+	delete(s.approvalHandlers, reqID)
+	delete(s.approvals, reqID)
+	s.mu.Unlock()
+	payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "working"})
+	s.emit(eventlog.Event{Kind: "status", Payload: payload})
 }
 func (s *Session) Interrupt() error {
 	s.mu.RLock()
@@ -395,6 +463,7 @@ func (s *Session) Interrupt() error {
 	}
 	s.mu.Lock()
 	s.approvals = map[string]agentadapter.Approval{}
+	s.approvalHandlers = map[string]func(string) error{}
 	s.mu.Unlock()
 	return nil
 }

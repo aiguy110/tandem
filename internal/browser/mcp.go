@@ -25,14 +25,15 @@ type MCPWiring struct {
 	TandemExecutable string
 	ControlURL       string
 	Token            string
+	BrowserEnabled   bool
 }
 
 // BuildMCPServers returns the external Playwright MCP and Tandem's internal
 // control MCP declarations for one agent. A missing Playwright installation is
 // tolerated; tandem-control remains available.
-func BuildMCPServers(w MCPWiring, agentID string) []MCPServer {
-	servers := make([]MCPServer, 0, 2)
-	if w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
+func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
+	servers := make([]MCPServer, 0, 3)
+	if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
 		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(agentID))
 		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{
@@ -41,13 +42,24 @@ func BuildMCPServers(w MCPWiring, agentID string) []MCPServer {
 			Env:  []MCPEnvVariable{},
 		})
 	}
-	if w.TandemExecutable != "" {
+	if w.BrowserEnabled && w.TandemExecutable != "" {
 		servers = append(servers, MCPServer{
 			Name: "tandem-control", Command: w.TandemExecutable, Args: []string{"mcp-control"},
 			Env: []MCPEnvVariable{
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
 				{Name: "TANDEM_AGENT_ID", Value: agentID},
+			},
+		})
+	}
+	if w.TandemExecutable != "" {
+		servers = append(servers, MCPServer{
+			Name: "tandem-scripts", Command: w.TandemExecutable, Args: []string{"mcp-scripts"},
+			Env: []MCPEnvVariable{
+				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
+				{Name: "TANDEM_TOKEN", Value: w.Token},
+				{Name: "TANDEM_AGENT_ID", Value: agentID},
+				{Name: "TANDEM_WORKSPACE_CWD", Value: workspaceCWD},
 			},
 		})
 	}

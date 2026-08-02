@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/assets"
+	"github.com/aiguy110/tandem/internal/automation"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -107,14 +109,12 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "working"})
 		},
 	})
-	if cfg.Browser.MCPEnabled {
-		exe, exeErr := os.Executable()
-		if exeErr != nil {
-			return exeErr
-		}
-		wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token}
-		factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id) }}
+	exe, exeErr := os.Executable()
+	if exeErr != nil {
+		return exeErr
 	}
+	wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
+	factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id, cwd string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id, cwd) }}
 	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker})
 	if err != nil {
 		return err
@@ -122,6 +122,56 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	if err := agents.RestoreAll(ctx); err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	automationService := &automation.Service{
+		Store: db, Agents: agents, Token: token,
+		Runner: automation.Runner{NodeCommand: cfg.Node.Command},
+	}
+	automationService.CaptureBrowser = func(captureCtx context.Context, runID string) (string, string, func(), error) {
+		if !broker.IsProvisioned(runID) {
+			return "", "", func() {}, nil
+		}
+		dest := filepath.Join(cfg.Browser.SnapshotRoot, "automation-transfer", runID)
+		_ = os.RemoveAll(dest)
+		kind, ref, captureErr := broker.CaptureSnapshot(captureCtx, runID, dest)
+		if captureErr != nil {
+			return "", "", func() {}, captureErr
+		}
+		cleanup := func() {}
+		if kind == "local" {
+			cleanup = func() { _ = os.RemoveAll(dest) }
+		}
+		return kind, ref, cleanup, nil
+	}
+	automationService.Tools = func(runCtx context.Context, runID, repoRoot string, requested []string, snapshotRef string) (automation.ToolSession, error) {
+		if snapshotRef != "" {
+			snapshots, listErr := db.ListBrowserSnapshots()
+			if listErr != nil {
+				return nil, listErr
+			}
+			var selected *store.BrowserSnapshot
+			for i := range snapshots {
+				if snapshots[i].ID == snapshotRef || snapshots[i].Name == snapshotRef {
+					selected = &snapshots[i]
+					break
+				}
+			}
+			if selected == nil {
+				return nil, fmt.Errorf("no such browser snapshot: %s", snapshotRef)
+			}
+			if selected.Kind != "" && selected.Kind != broker.DriverKind() {
+				return nil, fmt.Errorf("browser snapshot %q is for the %s driver, not %s", selected.Name, selected.Kind, broker.DriverKind())
+			}
+			broker.SeedSnapshot(runID, selected.Kind, selected.Ref)
+		}
+		servers := browser.BuildMCPServers(wiring, runID, repoRoot)
+		return automation.StartMCPToolSession(runCtx, servers, repoRoot, requested, os.Stderr, func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = broker.Teardown(cleanupCtx, runID)
+		})
+	}
+	automationScheduler := &automation.Scheduler{Service: automationService}
+	automationScheduler.Start(ctx)
 	var historyLifecycle *historyimport.Lifecycle
 	for _, definition := range cfg.Agents {
 		if definition.History == nil || !definition.History.Enabled {
@@ -162,6 +212,9 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	deferred := newDeferredShutdown(ctx, token, agents)
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/internal/automation/run", "/internal/automation/evaluate", "/internal/automation/preapprove":
+			automationService.ServeHTTP(w, r)
+			return
 		case "/internal/shutdown-after-turns":
 			deferred.ServeHTTP(w, r)
 			return
@@ -206,7 +259,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)

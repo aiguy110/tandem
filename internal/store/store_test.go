@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agents", "assets", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agents", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
