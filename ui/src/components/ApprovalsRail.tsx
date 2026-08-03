@@ -1,10 +1,11 @@
-import { useStore, allApprovals, allTakeovers } from '../store';
+import { useStore, allApprovals, allTakeovers, allTurnNotifications } from '../store';
 
-// Right rail — the conductor's inbox: every pending approval AND browser-takeover
-// request across ALL agents, most-urgent first. Clicking a card focuses that agent.
+// Right rail — the conductor's inbox for completed turns, approvals, and browser
+// requests across every agent. Clicking a completed-turn card marks it read.
 export function ApprovalsRail() {
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
+  const notifications = useStore(allTurnNotifications);
   const agents = useStore((s) => s.agents);
   const respond = useStore((s) => s.respond);
   const focus = useStore((s) => s.focus);
@@ -13,14 +14,14 @@ export function ApprovalsRail() {
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
 
-  const total = items.length + takeovers.length;
+  const total = items.length + takeovers.length + notifications.length;
 
   if (collapsed) {
     return (
       <div className="rail rail-r approvals collapsed">
-        <button className="rail-toggle" title="Show approvals" onClick={toggleCollapsed}>
+        <button className="rail-toggle" title="Show notifications" onClick={toggleCollapsed}>
           <span className="chevron">‹</span>
-          <span className="label">Approvals</span>
+          <span className="label">Notifications</span>
           {total > 0 && <span className="count hot">{total}</span>}
         </button>
       </div>
@@ -31,12 +32,20 @@ export function ApprovalsRail() {
     <div className="rail rail-r approvals">
       <div className="rail-head">
         <span className="rail-head-label" onClick={toggleCollapsed}>
-          Approvals <span className={`count${total ? ' hot' : ''}`}>{total}</span>
+          Notifications <span className={`count${total ? ' hot' : ''}`}>{total}</span>
         </span>
-        <button className="rail-toggle-btn" title="Collapse approvals" onClick={toggleCollapsed}>
+        <button className="rail-toggle-btn" title="Collapse notifications" onClick={toggleCollapsed}>
           ›
         </button>
       </div>
+      {notifications.map(({ agentId, notification }) => (
+        <div key={`${agentId}-${notification.seq}`} className="appr notification" onClick={() => focus(agentId)}>
+          <div className="who">
+            <span className="dot idle" /> {agents[agentId]?.name ?? agentId}
+          </div>
+          <div className="what">Turn complete</div>
+        </div>
+      ))}
       {takeovers.map(({ agentId, takeover }) => (
         <div
           key={agentId + takeover.reqId}
@@ -65,8 +74,8 @@ export function ApprovalsRail() {
           </div>
         </div>
       ))}
-      {items.length === 0 && takeovers.length === 0 ? (
-        <div className="empty">No pending approvals. When an agent needs a decision it appears here.</div>
+      {items.length === 0 && takeovers.length === 0 && notifications.length === 0 ? (
+        <div className="empty">No notifications. Completed agent turns and requests for attention appear here.</div>
       ) : (
         items.map(({ agentId, approval }) => {
           const status = agents[agentId]?.status;
