@@ -239,7 +239,7 @@ function Row({
               }}
             />
           ) : agent.name}
-          {agent.pendingApprovals.length > 0 && <span className="count hot badge">{agent.pendingApprovals.length}</span>}
+          {agent.turnNotifications.length > 0 && <span className="count hot badge notification-badge">{agent.turnNotifications.length}</span>}
         </div>
         {renameError && <div className="agent-rename-error">{renameError}</div>}
         <div className="ws" title={ws.cwd}>

@@ -50,6 +50,13 @@ export interface Takeover {
   reason: string;
 }
 
+// Unread state is local to this browser; the underlying completed turn remains
+// available in the durable transcript.
+export interface TurnNotification {
+  seq: number;
+  createdAt: number;
+}
+
 // Chat = the agent conversation (ACP transcript or the agent's resumable CLI,
 // toggled by the selected Chat tab's ACP/CLI switch). Shell = the user's escape-hatch shell
 // in the agent's worktree (the Terminal tab).
@@ -77,6 +84,7 @@ export interface AgentView {
   events: { seq: number; event: WireEvent }[]; // transcript/terminals channel, seq-ordered
   lastSeq: number;
   pendingApprovals: Approval[];
+  turnNotifications: TurnNotification[];
   hasPty: boolean; // any raw_pty seen → the agent CLI view has live content
   // User escape-hatch shell (Terminal tab). shellExited flips true when the
   // shell process ends (shell_exit) so the pane can offer a restart.
@@ -590,6 +598,12 @@ export const useStore = create<StoreState>((set, get) => {
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
           const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
           applyEventToView(next, event, usageReceivedAt);
+          // Adapters report a completed turn as a working → idle transition.
+          // Do this only for live events, so snapshot replay never resurrects
+          // notifications that have already been read.
+          if (event.kind === 'status' && a.status === 'working' && event.status === 'idle') {
+            next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now() }];
+          }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
@@ -675,7 +689,13 @@ export const useStore = create<StoreState>((set, get) => {
       }
     },
     submitToken: (t) => client.setToken(t.trim()),
-    focus: (id) => set({ focusedId: id }),
+    // Focusing an agent acknowledges its completed-turn notifications, whether
+    // the user came from the left rail or the notifications rail.
+    focus: (id) => set((st) => {
+      const agent = st.agents[id];
+      if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
+      return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
+    }),
     // Selecting Terminal is view-only until its shroud's explicit Take control
     // action calls enterTerminal. Even an idle ACP session must never be swapped
     // merely because the user inspected the tab.
@@ -981,6 +1001,16 @@ export function allApprovals(st: StoreState): { agentId: string; approval: Appro
   return out;
 }
 
+// Completed turns waiting to be read, newest first within each agent.
+export function allTurnNotifications(st: StoreState): { agentId: string; notification: TurnNotification }[] {
+  const out: { agentId: string; notification: TurnNotification }[] = [];
+  for (const id of rankAgents(st.agents, st.order)) {
+    const agent = st.agents[id];
+    for (const notification of agent.turnNotifications) out.push({ agentId: id, notification });
+  }
+  return out.sort((a, b) => b.notification.createdAt - a.notification.createdAt);
+}
+
 function shell(id: string): AgentView {
   return {
     id,
@@ -990,6 +1020,7 @@ function shell(id: string): AgentView {
     events: [],
     lastSeq: 0,
     pendingApprovals: [],
+    turnNotifications: [],
     hasPty: false,
     shellExited: false,
     shellExitMessage: null,
