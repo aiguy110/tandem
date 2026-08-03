@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agents", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agents", "annotations", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -243,6 +243,80 @@ func TestDeleteAgentRemovesBrowserSession(t *testing.T) {
 	}
 	if got, _ := s.ListBrowserSessions(); len(got) != 0 {
 		t.Fatalf("browser session survived agent delete: %#v", got)
+	}
+}
+
+func TestAnnotationCRUD(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	a1 := Annotation{ID: "ann-1", AgentID: "a-1", Seq: 5, Role: "assistant", Quote: "hello", Comment: "clarify this", CreatedAt: 100, UpdatedAt: 100}
+	a2 := Annotation{ID: "ann-2", AgentID: "a-1", Seq: 3, Role: "user", Quote: "world", Comment: "", CreatedAt: 50, UpdatedAt: 50}
+	if err := s.UpsertAnnotation(a1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertAnnotation(a2); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListAnnotations("a-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ordered by seq then createdAt, not insertion order.
+	if len(got) != 2 || got[0].ID != "ann-2" || got[1].ID != "ann-1" {
+		t.Fatalf("list order = %#v", got)
+	}
+	// Upsert-by-id updates in place (edit comment).
+	a1.Comment = "actually never mind"
+	a1.UpdatedAt = 200
+	if err := s.UpsertAnnotation(a1); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListAnnotations("a-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1].Comment != "actually never mind" || got[1].UpdatedAt != 200 {
+		t.Fatalf("update-in-place = %#v", got)
+	}
+	if err := s.DeleteAnnotation("ann-2"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListAnnotations("a-1")
+	if err != nil || len(got) != 1 || got[0].ID != "ann-1" {
+		t.Fatalf("after single delete = %#v err=%v", got, err)
+	}
+	if err := s.UpsertAnnotation(Annotation{ID: "ann-3", AgentID: "a-1", Seq: 1, Role: "tool", Quote: "q", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.DeleteAnnotationsForAgent("a-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("cleared count = %d, want 2", n)
+	}
+	got, err = s.ListAnnotations("a-1")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("after clear = %#v err=%v", got, err)
+	}
+}
+
+func TestDeleteAgentRemovesAnnotations(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertAnnotation(Annotation{ID: "ann-1", AgentID: "a-1", Seq: 1, Role: "assistant", Quote: "q", Comment: "c", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent("a-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListAnnotations("a-1")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("annotations survived agent delete: %#v err=%v", got, err)
 	}
 }
 

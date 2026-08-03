@@ -19,6 +19,15 @@ type PromptBlock struct {
 	AssetID  string `json:"assetId,omitempty"`
 	MIMEType string `json:"mimeType,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// RefSeq/Role/Quote/Comment carry a "quote" block: a transcript annotation
+	// sent as a citation of the original text plus the user's note (see
+	// docs/transcript-annotations.md). ACP adapters don't understand this
+	// variant; the daemon flattens it to a text block before handing prompts to
+	// the adapter but keeps the rich block in the persisted user_message event.
+	RefSeq  int64  `json:"refSeq,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Quote   string `json:"quote,omitempty"`
+	Comment string `json:"comment,omitempty"`
 }
 
 type ApprovalOption struct {

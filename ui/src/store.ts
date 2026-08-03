@@ -12,6 +12,7 @@ import type {
   AgentStatus,
   AgentSummary,
   AgentCatalog,
+  Annotation,
   Approval,
   AutomationJob,
   AutomationRun,
@@ -143,6 +144,11 @@ interface StoreState {
   // state) so a draft survives tab switches and agent switches, which remount the
   // TranscriptPane.
   drafts: Record<string, string>;
+  // Pending transcript annotations (review tray), keyed by agentId. Daemon-owned:
+  // hydrated from `snapshot` and replaced wholesale by `annotations` broadcasts —
+  // actions never mutate this locally, they only send the WS message and wait
+  // for the echo (cross-device correctness).
+  annotations: Record<string, Annotation[]>;
   // Which agent (if any) currently has its browser channel subscribed (i.e. the
   // focused agent with the Browser pane open) — drives the screencast focus rule.
   browserSubAgent: string | null;
@@ -188,6 +194,10 @@ interface StoreState {
   removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (agentId: string) => Promise<AckResult>;
   interruptAndClearQueue: (agentId: string) => Promise<AckResult>;
+  addAnnotation: (agentId: string, anchor: { seq: number; role: string; quote: string }, comment: string) => Promise<AckResult>;
+  updateAnnotation: (agentId: string, id: string, comment: string) => Promise<AckResult>;
+  removeAnnotation: (agentId: string, id: string) => Promise<AckResult>;
+  clearAnnotations: (agentId: string) => Promise<AckResult>;
   setDraft: (agentId: string, text: string) => void;
   interrupt: (agentId: string) => void;
   respond: (agentId: string, reqId: string, optionId: string) => void;
@@ -224,6 +234,15 @@ let client: WsClient;
 // twice under React StrictMode in dev).
 let hashListenerAttached = false;
 let gitRefreshListenersAttached = false;
+// The store's ServerMsg reducer (`apply`, defined inside the `create` factory
+// below) captured here so tests can drive it directly without a real
+// WebSocket — this is the ONLY place the daemon mutates agent/annotation
+// state, so exercising it is how a "store reducer test" is possible at all.
+// Not used by runtime code outside this module.
+let applyServerMsg: (msg: ServerMsg) => void;
+export function __testApplyServerMsg(msg: ServerMsg): void {
+  applyServerMsg(msg);
+}
 
 const GIT_REFRESH_INTERVAL_MS = 15_000;
 
@@ -451,7 +470,9 @@ export const useStore = create<StoreState>((set, get) => {
           delete agents[msg.agentId];
           const order = st.order.filter((id) => id !== msg.agentId);
           const focusedId = st.focusedId === msg.agentId ? order[0] ?? null : st.focusedId;
-          return { agents, order, focusedId };
+          const annotations = { ...st.annotations };
+          delete annotations[msg.agentId];
+          return { agents, order, focusedId, annotations };
         });
         ptyHub.clear(msg.agentId);
         shellHub.clear(msg.agentId);
@@ -523,7 +544,12 @@ export const useStore = create<StoreState>((set, get) => {
             shellExitMessage,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
-          return { agents, order, focusedId: st.focusedId ?? msg.agentId };
+          return {
+            agents,
+            order,
+            focusedId: st.focusedId ?? msg.agentId,
+            annotations: { ...st.annotations, [msg.agentId]: msg.annotations ?? [] },
+          };
         });
         return;
       }
@@ -578,8 +604,12 @@ export const useStore = create<StoreState>((set, get) => {
           return { agents: { ...st.agents, [msg.agentId]: { ...agent, queuedPrompts: msg.queuedPrompts } } };
         });
         return;
+      case 'annotations':
+        set((st) => ({ annotations: { ...st.annotations, [msg.agentId]: msg.annotations } }));
+        return;
     }
   };
+  applyServerMsg = apply;
 
   client = new WsClient({
     onMessage: apply,
@@ -612,6 +642,7 @@ export const useStore = create<StoreState>((set, get) => {
     resumeCatalog: null,
     resumeLoading: false,
     drafts: {},
+    annotations: {},
     browserSubAgent: null,
     agentsRailCollapsed: isNarrowViewport(),
     approvalsRailCollapsed: isNarrowViewport(),
@@ -841,6 +872,33 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'interrupt_and_clear_queue', agentId, corrId });
+      }),
+    // Annotations are daemon-authoritative: these actions only send the WS
+    // message and resolve the ack. Local `annotations` state updates only via
+    // the `annotations` broadcast (and `snapshot` hydration) above.
+    addAnnotation: (agentId, anchor, comment) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'add_annotation', agentId, seq: anchor.seq, role: anchor.role, quote: anchor.quote, comment, corrId });
+      }),
+    updateAnnotation: (agentId, id, comment) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'update_annotation', agentId, id, comment, corrId });
+      }),
+    removeAnnotation: (agentId, id) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'delete_annotation', agentId, id, corrId });
+      }),
+    clearAnnotations: (agentId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'clear_annotations', agentId, corrId });
       }),
     setDraft: (agentId, text) => set((st) => ({ drafts: { ...st.drafts, [agentId]: text } })),
     interrupt: (agentId) => client.send({ t: 'interrupt', agentId }),

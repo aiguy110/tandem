@@ -4,8 +4,10 @@ package wsserver
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -45,6 +47,10 @@ type Backend interface {
 	RenameProfile(string, string) error
 	DeleteProfile(string) error
 	Rename(string, string) error
+	ListAnnotations(string) ([]store.Annotation, error)
+	UpsertAnnotation(store.Annotation) error
+	DeleteAnnotation(string) error
+	ClearAnnotations(string) (int, error)
 }
 
 type Options struct {
@@ -169,6 +175,10 @@ type clientMessage struct {
 	Project        string                     `json:"project"`
 	RepositoryID   string                     `json:"repositoryId"`
 	Enabled        bool                       `json:"enabled"`
+	Seq            int64                      `json:"seq"`
+	Role           string                     `json:"role"`
+	Quote          string                     `json:"quote"`
+	Comment        string                     `json:"comment"`
 }
 
 type connection struct {
@@ -805,6 +815,79 @@ func (c *connection) handle(m clientMessage) {
 		if len(m.CorrID) > 0 && string(m.CorrID) != "null" {
 			c.commandAck(m, m.AgentID)
 		}
+	case "add_annotation":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		now := time.Now().UnixMilli()
+		ann := store.Annotation{
+			ID:        "ann-" + randHex(8),
+			AgentID:   sess.ID,
+			Seq:       m.Seq,
+			Role:      m.Role,
+			Quote:     m.Quote,
+			Comment:   m.Comment,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := c.server.opts.Registry.UpsertAnnotation(ann); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAnnotations(sess.ID)
+		c.commandAck(m, sess.ID)
+	case "update_annotation":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		annotations, err := c.server.opts.Registry.ListAnnotations(sess.ID)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		var found *store.Annotation
+		for i := range annotations {
+			if annotations[i].ID == m.ID {
+				found = &annotations[i]
+				break
+			}
+		}
+		if found == nil {
+			c.commandError(m, errors.New("no such annotation: "+m.ID))
+			return
+		}
+		found.Comment = m.Comment
+		found.UpdatedAt = time.Now().UnixMilli()
+		if err := c.server.opts.Registry.UpsertAnnotation(*found); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAnnotations(sess.ID)
+		c.commandAck(m, sess.ID)
+	case "delete_annotation":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if err := c.server.opts.Registry.DeleteAnnotation(m.ID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAnnotations(sess.ID)
+		c.commandAck(m, sess.ID)
+	case "clear_annotations":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if _, err := c.server.opts.Registry.ClearAnnotations(sess.ID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAnnotations(sess.ID)
+		c.commandAck(m, sess.ID)
 	case "merge_back":
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
@@ -848,6 +931,43 @@ func (h *Handler) broadcastClosed(agentID string) {
 		c.mu.Unlock()
 		if sub != nil {
 			c.send(map[string]any{"t": "agent_closed", "agentId": agentID})
+		}
+	}
+}
+
+// randHex returns n random bytes hex-encoded, for daemon-assigned annotation
+// ids (mirrors internal/registry's id-generation pattern).
+func randHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return hex.EncodeToString([]byte(time.Now().String()))[:n*2]
+	}
+	return hex.EncodeToString(b)
+}
+
+// broadcastAnnotations sends the current annotation list for agentID to every
+// connection subscribed to it, for cross-device tray sync after a mutation.
+// Modeled on broadcastClosed.
+func (h *Handler) broadcastAnnotations(agentID string) {
+	annotations, err := h.opts.Registry.ListAnnotations(agentID)
+	if err != nil {
+		return
+	}
+	if annotations == nil {
+		annotations = []store.Annotation{}
+	}
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	for _, c := range connections {
+		c.mu.Lock()
+		_, subscribed := c.subs[agentID]
+		c.mu.Unlock()
+		if subscribed {
+			c.send(map[string]any{"t": "annotations", "agentId": agentID, "annotations": annotations})
 		}
 	}
 }
@@ -992,7 +1112,11 @@ func (c *connection) subscribe(m clientMessage) {
 				transcript = append(transcript, map[string]any{"seq": le.Seq, "event": wireEvent(le.Event)})
 			}
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts()})
+		annotations, err := c.server.opts.Registry.ListAnnotations(sess.ID)
+		if err != nil || annotations == nil {
+			annotations = []store.Annotation{}
+		}
+		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations})
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {

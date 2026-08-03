@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
-import type { AgentView } from '../../store';
-import type { Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import type { AckResult, AgentView } from '../../store';
+import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
@@ -11,11 +11,16 @@ import { usesSoftKeyboard } from '../../mobile';
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
 // per-terminal mini-terminals, inline permission cards, and error banners. A
 // prompt input sends {t:'prompt'}; Esc/Interrupt sends {t:'interrupt'}.
+//
+// Rows also carry their representative `seq` (docs/transcript-annotations.md)
+// so a DOM text selection inside an annotatable row (user/message/thought;
+// tool rows are skipped for v1) can be anchored to it and turned into a
+// durable Annotation. `permission` and `plan` rows are never annotatable.
 
 type Item =
-  | { kind: 'user'; key: string; blocks: PromptBlock[] }
-  | { kind: 'message'; key: string; text: string }
-  | { kind: 'thought'; key: string; text: string }
+  | { kind: 'user'; key: string; seq: number; blocks: PromptBlock[] }
+  | { kind: 'message'; key: string; seq: number; text: string }
+  | { kind: 'thought'; key: string; seq: number; text: string }
   | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
@@ -35,19 +40,20 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         items.push({
           kind: 'user',
           key: `u${seq}`,
+          seq,
           blocks: ev.blocks ?? (ev.text != null ? [{ type: 'text', text: ev.text }] : []),
         });
         break;
       case 'message_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'message') last.text += ev.text;
-        else items.push({ kind: 'message', key: `m${seq}`, text: ev.text });
+        else items.push({ kind: 'message', key: `m${seq}`, seq, text: ev.text });
         break;
       }
       case 'thought_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'thought') last.text += ev.text;
-        else items.push({ kind: 'thought', key: `t${seq}`, text: ev.text });
+        else items.push({ kind: 'thought', key: `t${seq}`, seq, text: ev.text });
         break;
       }
       case 'tool_call': {
@@ -117,19 +123,62 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   return visible;
 }
 
+// A captured, in-progress selection: the anchor row it resolved to plus the
+// selection's client rect (for positioning the floating Comment button /
+// popover). docs/transcript-annotations.md "Selection capture".
+interface SelectionAnchor {
+  seq: number;
+  role: string;
+  quote: string;
+  rect: { top: number; left: number; width: number };
+}
+
+// Walks up from a Selection's anchorNode to the nearest annotatable row
+// (stamped with data-seq by Row, above). Text nodes aren't Elements, so start
+// from the parent when needed.
+function closestRow(node: Node | null): HTMLElement | null {
+  if (!node) return null;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return (el?.closest('[data-seq]') as HTMLElement | null) ?? null;
+}
+
+const ANNOTATION_QUOTE_MAX = 2048;
+
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined)) as AgentView | undefined;
   const respond = useStore((s) => s.respond);
+  const annotations = useStore((s) => (agent ? s.annotations[agent.id] : undefined)) ?? [];
+  const addAnnotation = useStore((s) => s.addAnnotation);
+  const updateAnnotation = useStore((s) => s.updateAnnotation);
+  const removeAnnotation = useStore((s) => s.removeAnnotation);
   const scrollRef = useRef<HTMLDivElement>(null);
   // `stick` follows the tail as new items arrive; it flips off the moment the
   // user scrolls up and back on when they return (or hit the button). Kept in a
   // ref so the scroll handler and the items effect share it without re-rendering.
   const stick = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const [selAnchor, setSelAnchor] = useState<SelectionAnchor | null>(null);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [popoverText, setPopoverText] = useState('');
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
   const transcriptItems = items.filter((item) => item.kind !== 'plan');
+  // The actively-streaming last message row never offers annotation — its text
+  // is still growing underneath any selection the user made.
+  const lastMessageItem = useMemo(
+    () => [...transcriptItems].reverse().find((it): it is Extract<Item, { kind: 'message' }> => it.kind === 'message'),
+    [transcriptItems],
+  );
+  // Which annotation anchors still resolve to a rendered row (vs. "context
+  // unavailable" — compaction, etc.).
+  const knownSeqs = useMemo(() => {
+    const set = new Set<number>();
+    for (const it of transcriptItems) {
+      if (it.kind === 'user' || it.kind === 'message' || it.kind === 'thought') set.add(it.seq);
+    }
+    return set;
+  }, [transcriptItems]);
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -161,16 +210,84 @@ export function TranscriptPane() {
     setAtBottom(nearBottom);
   };
 
+  const clearSelectionUi = () => {
+    setSelAnchor(null);
+    setPopoverOpen(false);
+    setPopoverText('');
+  };
+
+  // Scrolls to (and briefly flashes) the row anchored by `seq` — used by both
+  // the review tray and sent citation chips. Returns whether a row was found.
+  const jumpToSeq = (seq: number): boolean => {
+    const el = scrollRef.current?.querySelector(`[data-seq="${seq}"]`) as HTMLElement | null;
+    if (!el) return false;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('annotation-flash');
+    window.setTimeout(() => el.classList.remove('annotation-flash'), 1300);
+    return true;
+  };
+
+  const onTranscriptMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      clearSelectionUi();
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text) {
+      clearSelectionUi();
+      return;
+    }
+    const rowEl = closestRow(sel.anchorNode);
+    if (!rowEl || !rowEl.dataset.seq) {
+      clearSelectionUi();
+      return;
+    }
+    const seq = Number(rowEl.dataset.seq);
+    const role = rowEl.dataset.role ?? 'assistant';
+    // Never offer annotation on the row still streaming in.
+    if (agent?.status === 'working' && lastMessageItem && rowEl.dataset.key === lastMessageItem.key) {
+      clearSelectionUi();
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      clearSelectionUi();
+      return;
+    }
+    setSelAnchor({
+      seq,
+      role,
+      quote: text.length > ANNOTATION_QUOTE_MAX ? text.slice(0, ANNOTATION_QUOTE_MAX) : text,
+      rect: { top: rect.top, left: rect.left, width: rect.width },
+    });
+    setPopoverOpen(false);
+    setPopoverText('');
+  };
+
+  // Dismiss the floating button/popover on any click outside them (including
+  // the start of a fresh selection drag).
+  useEffect(() => {
+    if (!selAnchor) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.annotation-comment-btn') || target.closest('.annotation-popover')) return;
+      clearSelectionUi();
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [selAnchor]);
+
   if (!agent) return null;
 
   return (
     <div className="pane">
       <div className="transcript-wrap">
         <div className="transcript-history">
-          <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+          <div className="transcript" ref={scrollRef} onScroll={onScroll} onMouseUp={onTranscriptMouseUp}>
             {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
             {transcriptItems.map((it) => (
-              <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} />
+              <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} onJumpToSeq={jumpToSeq} />
             ))}
           </div>
           {!atBottom && (
@@ -178,11 +295,135 @@ export function TranscriptPane() {
               ↓ Latest
             </button>
           )}
+          {selAnchor && !popoverOpen && (
+            <button
+              type="button"
+              className="annotation-comment-btn"
+              style={{ top: selAnchor.rect.top - 34, left: selAnchor.rect.left + selAnchor.rect.width / 2 }}
+              onClick={() => setPopoverOpen(true)}
+            >
+              💬 Comment
+            </button>
+          )}
+          {selAnchor && popoverOpen && (
+            <div className="annotation-popover" style={{ top: selAnchor.rect.top - 34, left: selAnchor.rect.left }}>
+              <div className="annotation-popover-quote">&ldquo;{previewText(selAnchor.quote, 160)}&rdquo;</div>
+              <textarea
+                autoFocus
+                rows={2}
+                placeholder="Add a comment…"
+                value={popoverText}
+                onChange={(e) => setPopoverText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    clearSelectionUi();
+                  }
+                }}
+              />
+              <div className="annotation-popover-actions">
+                <button type="button" onClick={clearSelectionUi}>Cancel</button>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => {
+                    void addAnnotation(agent.id, { seq: selAnchor.seq, role: selAnchor.role, quote: selAnchor.quote }, popoverText.trim());
+                    window.getSelection()?.removeAllRanges();
+                    clearSelectionUi();
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         {taskList && <TaskList item={taskList} />}
       </div>
+      {annotations.length > 0 && (
+        <AnnotationTray
+          agentId={agent.id}
+          annotations={annotations}
+          knownSeqs={knownSeqs}
+          onJump={jumpToSeq}
+          onUpdate={updateAnnotation}
+          onRemove={removeAnnotation}
+        />
+      )}
       <PromptBar agentId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
+    </div>
+  );
+}
+
+// The pending-annotation review tray, rendered above PromptBar (visual
+// precedent: the queued-prompts tray in PromptBar below). Annotations are
+// daemon-owned; edits/removes just send the WS message and wait for the
+// `annotations` broadcast to update this list.
+function AnnotationTray({
+  agentId,
+  annotations,
+  knownSeqs,
+  onJump,
+  onUpdate,
+  onRemove,
+}: {
+  agentId: string;
+  annotations: Annotation[];
+  knownSeqs: Set<number>;
+  onJump: (seq: number) => boolean;
+  onUpdate: (agentId: string, id: string, comment: string) => Promise<AckResult>;
+  onRemove: (agentId: string, id: string) => Promise<AckResult>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
+  const startEdit = (a: Annotation) => {
+    setEditingId(a.id);
+    setEditText(a.comment);
+  };
+  const saveEdit = async () => {
+    if (!editingId) return;
+    await onUpdate(agentId, editingId, editText.trim());
+    setEditingId(null);
+    setEditText('');
+  };
+
+  return (
+    <div className="annotation-tray">
+      <div className="annotation-tray-header">
+        <span>Annotations ({annotations.length})</span>
+      </div>
+      {annotations.map((a) => {
+        const available = knownSeqs.has(a.seq);
+        const editing = editingId === a.id;
+        return (
+          <div className="annotation-row" key={a.id}>
+            <div
+              className={`annotation-snippet${available ? '' : ' unavailable'}`}
+              onClick={() => available && onJump(a.seq)}
+              title={available ? 'Jump to source' : 'Context unavailable'}
+            >
+              <span className={`annotation-quote${available ? '' : ' unavailable'}`}>
+                {available ? <>&ldquo;{previewText(a.quote, 90)}&rdquo;</> : 'context unavailable'}
+              </span>
+              {!editing && a.comment && <span className="annotation-comment">{a.comment}</span>}
+            </div>
+            {editing ? (
+              <div className="annotation-edit">
+                <textarea rows={2} autoFocus value={editText} onChange={(e) => setEditText(e.target.value)} />
+                <button type="button" onClick={() => void saveEdit()}>Save</button>
+                <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+              </div>
+            ) : (
+              <div className="annotation-actions">
+                <button type="button" onClick={() => startEdit(a)} title="Edit comment" aria-label="Edit annotation">Edit</button>
+                <button type="button" onClick={() => void onRemove(agentId, a.id)} title="Remove annotation" aria-label="Remove annotation">×</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -207,23 +448,49 @@ function handleCodeCopyClick(e: React.MouseEvent<HTMLDivElement>) {
   });
 }
 
-function Row({ item, onRespond }: { item: Item; onRespond: (optionId: string) => void }) {
+// Truncates for compact display (citation chips, tray snippets) — the full
+// text is still sent/stored; this is purely a rendering affordance.
+function previewText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// A `quote` prompt block rendered as a citation chip in a sent user message —
+// click to scroll to (and flash) the row it references.
+function QuoteChip({ block, onJump }: { block: Extract<PromptBlock, { type: 'quote' }>; onJump: (seq: number) => boolean }) {
+  return (
+    <div className="citation-chip" onClick={() => onJump(block.refSeq)} title={`Jump to the referenced ${block.role} row`}>
+      <div className="citation-chip-quote">&ldquo;{previewText(block.quote, 160)}&rdquo;</div>
+      {block.comment && <div className="citation-chip-comment">{block.comment}</div>}
+    </div>
+  );
+}
+
+function Row({ item, onRespond, onJumpToSeq }: { item: Item; onRespond: (optionId: string) => void; onJumpToSeq: (seq: number) => boolean }) {
   switch (item.kind) {
     case 'user':
       return (
-        <div className="ev user">
-          {item.blocks.map((block, i) =>
-            block.type === 'text' ? <div key={i}>{block.text}</div> : <TranscriptImage key={`${block.assetId}-${i}`} block={block} />,
-          )}
+        <div className="ev user" data-seq={item.seq} data-role="user" data-key={item.key}>
+          {item.blocks.map((block, i) => {
+            if (block.type === 'text') return <div key={i}>{block.text}</div>;
+            if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
+            return <QuoteChip key={i} block={block} onJump={onJumpToSeq} />;
+          })}
         </div>
       );
     case 'message':
       return (
-        <div className="ev msg" onClick={handleCodeCopyClick} dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+        <div
+          className="ev msg"
+          data-seq={item.seq}
+          data-role="assistant"
+          data-key={item.key}
+          onClick={handleCodeCopyClick}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
+        />
       );
     case 'thought':
       return (
-        <details className="ev thought">
+        <details className="ev thought" data-seq={item.seq} data-role="thought" data-key={item.key}>
           <summary>thinking…</summary>
           {item.text}
         </details>
@@ -597,6 +864,9 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
+  // Pending annotations (review tray) consumed into quote blocks on send.
+  const annotations = useStore((s) => s.annotations[agentId] ?? []);
+  const clearAnnotations = useStore((s) => s.clearAnnotations);
   // Draft lives in the store (keyed by agent) so it survives the remounts that a
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[agentId] ?? '');
@@ -757,7 +1027,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const send = async () => {
     if (sending) return;
     const t = text.trim();
-    if (!t && attachments.length === 0) return;
+    const hasAnnotations = annotations.length > 0;
+    if (!t && attachments.length === 0 && !hasAnnotations) return;
     if (attachments.some((attachment) => attachment.status === 'uploading')) {
       setAttachmentError('Wait for image uploads to finish.');
       return;
@@ -766,7 +1037,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError('Remove or retry failed images before sending.');
       return;
     }
-    if (attachments.length === 0) {
+    if (attachments.length === 0 && !hasAnnotations) {
       setSending(true);
       const result = await prompt(agentId, t);
       setSending(false);
@@ -777,7 +1048,12 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       }
       return;
     }
-    const blocks: PromptBlock[] = [];
+    // Consumed annotations become one `quote` block each, in transcript/seq
+    // order, ahead of any trailing free-text block (docs/transcript-annotations.md
+    // "Sending flow"). Quote blocks alone (no text, no attachments) are valid.
+    const blocks: PromptBlock[] = [...annotations]
+      .sort((a, b) => a.seq - b.seq)
+      .map((a) => ({ type: 'quote', refSeq: a.seq, role: a.role, quote: a.quote, comment: a.comment }));
     if (t) blocks.push({ type: 'text', text: t });
     blocks.push(...attachments.map((attachment) => attachment.asset!));
     setSending(true);
@@ -790,13 +1066,14 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     for (const attachment of attachments) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments([]);
     setAttachmentError(null);
+    if (hasAnnotations) void clearAnnotations(agentId);
     if (result.disposition === 'queued') {
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 1200);
     }
   };
 
-  const canSubmit = !!text.trim() || attachments.length > 0;
+  const canSubmit = !!text.trim() || attachments.length > 0 || annotations.length > 0;
   const uploadsPending = attachments.some((item) => item.status === 'uploading');
   const previewQueuedPrompt = (blocks: PromptBlock[]) => {
     const message = blocks.filter((block): block is Extract<PromptBlock, { type: 'text' }> => block.type === 'text').map((block) => block.text).join(' ').trim();

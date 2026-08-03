@@ -8,6 +8,12 @@
   "schema": [
     {
       "type": "index",
+      "name": "annotations_agent",
+      "tableName": "annotations",
+      "sql": "CREATE INDEX annotations_agent ON annotations(agentId)"
+    },
+    {
+      "type": "index",
       "name": "sqlite_autoindex_agent_assets_1",
       "tableName": "agent_assets",
       "sql": null
@@ -16,6 +22,12 @@
       "type": "index",
       "name": "sqlite_autoindex_agents_1",
       "tableName": "agents",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_annotations_1",
+      "tableName": "annotations",
       "sql": null
     },
     {
@@ -113,6 +125,12 @@
       "name": "agents",
       "tableName": "agents",
       "sql": "CREATE TABLE agents (\n        id           TEXT PRIMARY KEY,\n        name         TEXT NOT NULL,\n        spec         TEXT NOT NULL,\n        cwd          TEXT NOT NULL DEFAULT '',\n        acpSessionId TEXT,\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        closedAt     INTEGER\n      )"
+    },
+    {
+      "type": "table",
+      "name": "annotations",
+      "tableName": "annotations",
+      "sql": "CREATE TABLE annotations (\n        id        TEXT PRIMARY KEY,\n        agentId   TEXT NOT NULL,\n        seq       INTEGER NOT NULL,\n        role      TEXT NOT NULL,\n        quote     TEXT NOT NULL,\n        comment   TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL,\n        updatedAt INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",

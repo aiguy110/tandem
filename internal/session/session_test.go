@@ -130,6 +130,97 @@ func TestPromptSerializationAndIndependentDurableEvents(t *testing.T) {
 	}
 }
 
+func TestFlattenQuoteBlocks(t *testing.T) {
+	blocks := []agentadapter.PromptBlock{
+		{Type: "quote", RefSeq: 42, Role: "assistant", Quote: "the answer is 4", Comment: "is this right?"},
+		{Type: "text", Text: "also please double-check the math"},
+	}
+	flat := flattenQuoteBlocks(blocks)
+	if len(flat) != 2 {
+		t.Fatalf("flattened len=%d, want 2: %+v", len(flat), flat)
+	}
+	if flat[0].Type != "text" {
+		t.Fatalf("quote block did not flatten to text: %+v", flat[0])
+	}
+	want := "> [assistant] \"the answer is 4\"\n  is this right?"
+	if flat[0].Text != want {
+		t.Fatalf("flattened quote text = %q, want %q", flat[0].Text, want)
+	}
+	// The trailing free-text block passes through unchanged.
+	if flat[1] != blocks[1] {
+		t.Fatalf("trailing text block mutated: %+v", flat[1])
+	}
+	// Non-quote input is untouched (no accidental copy divergence).
+	textOnly := []agentadapter.PromptBlock{{Type: "text", Text: "hi"}}
+	if got := flattenQuoteBlocks(textOnly); len(got) != 1 || got[0] != textOnly[0] {
+		t.Fatalf("text-only passthrough = %+v", got)
+	}
+}
+
+func TestQuoteBlocksPersistRichButAdapterSeesFlattenedText(t *testing.T) {
+	s, a, _ := testSession(t)
+	blocks := []agentadapter.PromptBlock{
+		{Type: "quote", RefSeq: 7, Role: "user", Quote: "original text", Comment: "expand on this"},
+		{Type: "text", Text: "go ahead"},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(context.Background(), blocks)
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !s.ActiveTurn() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	a.gate <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	// The adapter only ever sees flattened text — no "quote" type block, and the
+	// citation rendering ahead of the trailing free text.
+	if len(a.prompts) != 2 {
+		t.Fatalf("adapter prompts=%+v", a.prompts)
+	}
+	wantQuote := "> [user] \"original text\"\n  expand on this"
+	if a.prompts[0] != wantQuote || a.prompts[1] != "go ahead" {
+		t.Fatalf("adapter prompts=%+v", a.prompts)
+	}
+
+	// The persisted user_message event keeps the original, structured quote
+	// block so replay stays rich (not a flattened blob).
+	history, err := s.Log.FullHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range history {
+		if event.Event.Kind != "user_message" {
+			continue
+		}
+		var payload struct {
+			Blocks []agentadapter.PromptBlock `json:"blocks"`
+		}
+		if err := json.Unmarshal(event.Event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.Blocks) != 2 {
+			t.Fatalf("persisted blocks=%+v", payload.Blocks)
+		}
+		q := payload.Blocks[0]
+		if q.Type != "quote" || q.RefSeq != 7 || q.Role != "user" || q.Quote != "original text" || q.Comment != "expand on this" {
+			t.Fatalf("persisted quote block=%+v", q)
+		}
+		if payload.Blocks[1].Type != "text" || payload.Blocks[1].Text != "go ahead" {
+			t.Fatalf("persisted trailing block=%+v", payload.Blocks[1])
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("no user_message event found in history")
+	}
+}
+
 func TestExplicitPromptQueueIsFIFOAndRemovable(t *testing.T) {
 	s, a, _ := testSession(t)
 	first, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "first"}})

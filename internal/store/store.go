@@ -273,6 +273,21 @@ type BrowserSnapshot struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
+// Annotation is a durable, mutable "margin comment" anchored to one transcript
+// row (by representative seq) plus the literal selected quote. Annotations
+// accumulate in a per-agent review tray and are consumed into a single prompt
+// on send (see docs/transcript-annotations.md).
+type Annotation struct {
+	ID        string `json:"id"`
+	AgentID   string `json:"agentId"`
+	Seq       int64  `json:"seq"`
+	Role      string `json:"role"`
+	Quote     string `json:"quote"`
+	Comment   string `json:"comment"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
 // Profile is a daemon-owned, auto-created, renamable bundle of launch settings:
 // a harness plus model/effort/permission and an optional browser snapshot seed.
 // AutoNamed is true while Name is still the generated concatenation of settings.
@@ -325,6 +340,17 @@ func Open(path string) (*Store, error) {
 		{"ALTER TABLE history_sessions ADD COLUMN importerId TEXT NOT NULL DEFAULT ''", "history_sessions.importerId"},
 		{"ALTER TABLE history_sessions ADD COLUMN importerVersion INTEGER NOT NULL DEFAULT 0", "history_sessions.importerVersion"},
 		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
+		{`CREATE TABLE IF NOT EXISTS annotations (
+        id        TEXT PRIMARY KEY,
+        agentId   TEXT NOT NULL,
+        seq       INTEGER NOT NULL,
+        role      TEXT NOT NULL,
+        quote     TEXT NOT NULL,
+        comment   TEXT NOT NULL DEFAULT '',
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+CREATE INDEX IF NOT EXISTS annotations_agent ON annotations(agentId);`, "annotations table"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()
@@ -431,7 +457,7 @@ func (s *Store) DeleteAgent(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -808,6 +834,54 @@ func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, erro
 func (s *Store) EventBounds(agentID string) (min, max int64, err error) {
 	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", agentID).Scan(&min, &max)
 	return
+}
+
+// UpsertAnnotation inserts or replaces a transcript annotation by id.
+func (s *Store) UpsertAnnotation(a Annotation) error {
+	_, err := s.db.Exec(`INSERT INTO annotations (id, agentId, seq, role, quote, comment, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET agentId=excluded.agentId, seq=excluded.seq, role=excluded.role,
+  quote=excluded.quote, comment=excluded.comment, createdAt=excluded.createdAt, updatedAt=excluded.updatedAt`,
+		a.ID, a.AgentID, a.Seq, a.Role, a.Quote, a.Comment, a.CreatedAt, a.UpdatedAt)
+	return err
+}
+
+// ListAnnotations returns an agent's annotations ordered by seq then createdAt,
+// matching transcript order for the same row.
+func (s *Store) ListAnnotations(agentID string) ([]Annotation, error) {
+	rows, err := s.db.Query(`SELECT id, agentId, seq, role, quote, comment, createdAt, updatedAt
+FROM annotations WHERE agentId = ? ORDER BY seq, createdAt`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Annotation, 0)
+	for rows.Next() {
+		var a Annotation
+		if err := rows.Scan(&a.ID, &a.AgentID, &a.Seq, &a.Role, &a.Quote, &a.Comment, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// DeleteAnnotation removes one annotation by id.
+func (s *Store) DeleteAnnotation(id string) error {
+	_, err := s.db.Exec("DELETE FROM annotations WHERE id = ?", id)
+	return err
+}
+
+// DeleteAnnotationsForAgent removes every annotation for an agent — the
+// "sending consumes them" step, or agent deletion — returning the count
+// removed.
+func (s *Store) DeleteAnnotationsForAgent(agentID string) (int, error) {
+	result, err := s.db.Exec("DELETE FROM annotations WHERE agentId = ?", agentID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := result.RowsAffected()
+	return int(n), err
 }
 
 // Close checkpoints WAL contents into the main file for clean handoff to Node.
