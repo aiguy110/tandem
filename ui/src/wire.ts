@@ -46,12 +46,28 @@ export interface ImageAssetRef {
 
 export type PromptBlock =
   | { type: 'text'; text: string }
-  | ({ type: 'image' } & ImageAssetRef);
+  | ({ type: 'image' } & ImageAssetRef)
+  | { type: 'quote'; refSeq: number; role: string; quote: string; comment: string };
 
 export interface QueuedPrompt {
   id: string;
   blocks: PromptBlock[];
   queuedAt: string;
+}
+
+// A durable, mutable draft comment anchored to one transcript row (the
+// representative seq encoded in the row's React key). Persisted in the
+// daemon so the review tray syncs across devices; consumed (cleared) once
+// sent as `quote` prompt blocks. docs/transcript-annotations.md.
+export interface Annotation {
+  id: string;
+  agentId: string;
+  seq: number;
+  role: 'assistant' | 'user' | 'thought' | 'tool';
+  quote: string;
+  comment: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type AgentEvent =
@@ -305,6 +321,10 @@ export type ClientMsg =
   | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'remove_queued_prompt'; agentId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; agentId: string; corrId?: string }
+  | { t: 'add_annotation'; agentId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }
+  | { t: 'update_annotation'; agentId: string; id: string; comment: string; corrId?: string }
+  | { t: 'delete_annotation'; agentId: string; id: string; corrId?: string }
+  | { t: 'clear_annotations'; agentId: string; corrId?: string }
   | { t: 'interrupt_and_clear_queue'; agentId: string; corrId?: string }
   | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
   | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
@@ -361,8 +381,9 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[] }
+  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[] }
   | { t: 'prompt_queue'; agentId: string; queuedPrompts: QueuedPrompt[] }
+  | { t: 'annotations'; agentId: string; annotations: Annotation[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued'; position?: number; cleared?: number }
   | { t: 'agent_closed'; agentId: string }

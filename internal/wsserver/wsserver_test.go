@@ -28,6 +28,7 @@ type testBackend struct {
 	resume   struct {
 		sessionID, agent, cwd, source string
 	}
+	annotations map[string][]store.Annotation
 }
 
 type inertBrowserDriver struct{}
@@ -128,6 +129,53 @@ func (b *testBackend) Resume(_ context.Context, sessionID, agent, cwd, source st
 	defer b.mu.Unlock()
 	b.resume.sessionID, b.resume.agent, b.resume.cwd, b.resume.source = sessionID, agent, cwd, source
 	return b.sessions["a"], nil
+}
+
+// ListAnnotations, UpsertAnnotation, DeleteAnnotation, and ClearAnnotations are
+// an in-memory stand-in for the store, exercising the wsserver protocol
+// (add/update/delete/clear + snapshot + broadcast) without a real database.
+func (b *testBackend) ListAnnotations(agentID string) ([]store.Annotation, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]store.Annotation, len(b.annotations[agentID]))
+	copy(out, b.annotations[agentID])
+	return out, nil
+}
+func (b *testBackend) UpsertAnnotation(a store.Annotation) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.annotations == nil {
+		b.annotations = map[string][]store.Annotation{}
+	}
+	list := b.annotations[a.AgentID]
+	for i := range list {
+		if list[i].ID == a.ID {
+			list[i] = a
+			return nil
+		}
+	}
+	b.annotations[a.AgentID] = append(list, a)
+	return nil
+}
+func (b *testBackend) DeleteAnnotation(id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for agentID, list := range b.annotations {
+		for i := range list {
+			if list[i].ID == id {
+				b.annotations[agentID] = append(list[:i], list[i+1:]...)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+func (b *testBackend) ClearAnnotations(agentID string) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(b.annotations[agentID])
+	delete(b.annotations, agentID)
+	return n, nil
 }
 
 type testAdapter struct {
@@ -519,6 +567,100 @@ func TestPromptQueueAcknowledgementSnapshotAndRemoval(t *testing.T) {
 		t.Fatal("queued prompt remained after removal")
 	}
 	a.promptGate <- struct{}{}
+}
+
+func TestAnnotationsAddUpdateDeleteClearAndBroadcast(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	one, two := dial(t, url), dial(t, url)
+	for _, c := range []*websocket.Conn{one, two} {
+		send(t, c, map[string]any{"t": "subscribe", "agentId": "a"})
+		snap := recv(t, c)
+		if snap["t"] != "snapshot" {
+			t.Fatalf("snapshot=%#v", snap)
+		}
+		if anns, ok := snap["annotations"].([]any); !ok || len(anns) != 0 {
+			t.Fatalf("expected empty annotations in snapshot, got %#v", snap["annotations"])
+		}
+		if ack := recv(t, c); ack["t"] != "ack" {
+			t.Fatalf("subscribe ack=%#v", ack)
+		}
+	}
+
+	// add_annotation: the daemon broadcasts the full list to every subscriber —
+	// including the sender, ahead of the sender's own command ack — then ack's.
+	send(t, one, map[string]any{"t": "add_annotation", "agentId": "a", "seq": float64(5), "role": "assistant", "quote": "hello world", "comment": "please clarify", "corrId": "add"})
+	var annID string
+	if msg := recv(t, one); msg["t"] != "annotations" {
+		t.Fatalf("broadcast to sender=%#v", msg)
+	} else {
+		row := msg["annotations"].([]any)[0].(map[string]any)
+		annID, _ = row["id"].(string)
+		if row["quote"] != "hello world" || row["comment"] != "please clarify" || row["role"] != "assistant" || row["seq"] != float64(5) || annID == "" {
+			t.Fatalf("annotation row=%#v", row)
+		}
+	}
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "add" || ack["error"] != nil {
+		t.Fatalf("add ack=%#v", ack)
+	}
+	if msg := recv(t, two); msg["t"] != "annotations" || msg["agentId"] != "a" || len(msg["annotations"].([]any)) != 1 {
+		t.Fatalf("broadcast to peer=%#v", msg)
+	}
+	if got, _ := b.ListAnnotations("a"); len(got) != 1 || got[0].ID != annID {
+		t.Fatalf("store after add=%#v", got)
+	}
+
+	// update_annotation edits only the comment, preserving quote/seq/role.
+	send(t, one, map[string]any{"t": "update_annotation", "agentId": "a", "id": annID, "comment": "actually nvm", "corrId": "update"})
+	if msg := recv(t, one); msg["t"] != "annotations" {
+		t.Fatalf("broadcast to sender=%#v", msg)
+	} else {
+		row := msg["annotations"].([]any)[0].(map[string]any)
+		if row["comment"] != "actually nvm" || row["quote"] != "hello world" || row["seq"] != float64(5) {
+			t.Fatalf("updated annotation=%#v", row)
+		}
+	}
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "update" || ack["error"] != nil {
+		t.Fatalf("update ack=%#v", ack)
+	}
+	recv(t, two) // broadcast to peer
+
+	// update_annotation on an unknown id is a structured command error.
+	send(t, one, map[string]any{"t": "update_annotation", "agentId": "a", "id": "missing", "comment": "x", "corrId": "update-missing"})
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "update-missing" || ack["error"] == nil {
+		t.Fatalf("update-missing ack=%#v", ack)
+	}
+
+	// delete_annotation removes just the targeted row.
+	send(t, one, map[string]any{"t": "delete_annotation", "agentId": "a", "id": annID, "corrId": "del"})
+	if msg := recv(t, one); msg["t"] != "annotations" || len(msg["annotations"].([]any)) != 0 {
+		t.Fatalf("broadcast after delete=%#v", msg)
+	}
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "del" || ack["error"] != nil {
+		t.Fatalf("delete ack=%#v", ack)
+	}
+	recv(t, two) // broadcast to peer
+
+	// clear_annotations empties the tray for everyone; add two rows first.
+	send(t, one, map[string]any{"t": "add_annotation", "agentId": "a", "seq": float64(1), "role": "user", "quote": "x", "corrId": "add2"})
+	recv(t, one) // broadcast
+	recv(t, one) // ack
+	recv(t, two) // broadcast
+	send(t, one, map[string]any{"t": "add_annotation", "agentId": "a", "seq": float64(2), "role": "user", "quote": "y", "corrId": "add3"})
+	recv(t, one) // broadcast
+	recv(t, one) // ack
+	recv(t, two) // broadcast
+
+	send(t, one, map[string]any{"t": "clear_annotations", "agentId": "a", "corrId": "clear"})
+	if msg := recv(t, one); msg["t"] != "annotations" || len(msg["annotations"].([]any)) != 0 {
+		t.Fatalf("broadcast after clear=%#v", msg)
+	}
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "clear" || ack["error"] != nil {
+		t.Fatalf("clear ack=%#v", ack)
+	}
+	recv(t, two) // broadcast to peer
+	if got, _ := b.ListAnnotations("a"); len(got) != 0 {
+		t.Fatalf("store not cleared: %#v", got)
+	}
 }
 
 func TestCloseBroadcastsSubscribersAndErrorsAreStructured(t *testing.T) {

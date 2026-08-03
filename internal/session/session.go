@@ -224,6 +224,10 @@ func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
+		case "quote":
+			// A transcript annotation citation; flattened to text before the
+			// adapter sees it (flattenQuoteBlocks), but valid at the wire/session
+			// boundary since the persisted user_message keeps it structured.
 		case "image":
 			images++
 			if !s.adapter.Capabilities().Image {
@@ -329,7 +333,28 @@ func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.Promp
 	}
 	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
 	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
-	return s.adapter.Prompt(ctx, blocks)
+	return s.adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
+}
+
+// flattenQuoteBlocks converts each "quote" block (a transcript annotation) into
+// a text block rendering a citation of the original text plus the user's note,
+// since ACP adapters only understand text/image content. Non-quote blocks pass
+// through unchanged. The caller is responsible for persisting the original,
+// unflattened blocks in the user_message event; this only prepares what is
+// handed to the adapter (docs/transcript-annotations.md).
+func flattenQuoteBlocks(blocks []agentadapter.PromptBlock) []agentadapter.PromptBlock {
+	out := make([]agentadapter.PromptBlock, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type != "quote" {
+			out = append(out, b)
+			continue
+		}
+		out = append(out, agentadapter.PromptBlock{
+			Type: "text",
+			Text: fmt.Sprintf("> [%s] \"%s\"\n  %s", b.Role, b.Quote, b.Comment),
+		})
+	}
+	return out
 }
 
 // RemoveQueuedPrompt removes a prompt that has not started yet.
