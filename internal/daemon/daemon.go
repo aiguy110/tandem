@@ -23,6 +23,7 @@ import (
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/historyimport"
+	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
@@ -50,6 +51,11 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	token, err := config.EnsureToken(cfg.TokenPath)
 	if err != nil {
 		return fmt.Errorf("ensure bearer token: %w", err)
+	}
+	// Scaffold/refresh the per-installation home base. Non-fatal: the daemon
+	// must serve even if this hits a snag.
+	if err := homebase.Ensure(ctx, cfg, stdout); err != nil {
+		fmt.Fprintf(stdout, "tandem: home base setup warning: %v\n", err)
 	}
 	db, err := store.Open(cfg.DBPath)
 	if err != nil {
