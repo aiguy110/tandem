@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ type fakeAdapter struct {
 	close                 sync.Once
 	image                 bool
 	validateCalls         int
+	validatedTypes        []string
 }
 
 func newFake() *fakeAdapter {
@@ -31,10 +33,23 @@ func newFake() *fakeAdapter {
 func (f *fakeAdapter) Capabilities() agentadapter.Capabilities {
 	return agentadapter.Capabilities{Structured: true, Image: f.image}
 }
-func (f *fakeAdapter) ValidatePrompt([]agentadapter.PromptBlock) error {
+// ValidatePrompt mirrors the real ACP adapter: it only understands text/image
+// blocks and rejects anything else, so quote blocks must be flattened before
+// they reach it.
+func (f *fakeAdapter) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 	f.mu.Lock()
 	f.validateCalls++
+	for _, b := range blocks {
+		f.validatedTypes = append(f.validatedTypes, b.Type)
+	}
 	f.mu.Unlock()
+	for _, b := range blocks {
+		switch b.Type {
+		case "text", "image":
+		default:
+			return errors.New("invalid prompt block type " + b.Type)
+		}
+	}
 	return nil
 }
 func (f *fakeAdapter) validationCount() int          { f.mu.Lock(); defer f.mu.Unlock(); return f.validateCalls }
@@ -154,6 +169,22 @@ func TestFlattenQuoteBlocks(t *testing.T) {
 	textOnly := []agentadapter.PromptBlock{{Type: "text", Text: "hi"}}
 	if got := flattenQuoteBlocks(textOnly); len(got) != 1 || got[0] != textOnly[0] {
 		t.Fatalf("text-only passthrough = %+v", got)
+	}
+}
+
+func TestValidatePromptFlattensQuoteBeforeAdapterValidator(t *testing.T) {
+	s, a, _ := testSession(t)
+	blocks := []agentadapter.PromptBlock{
+		{Type: "quote", RefSeq: 7, Role: "user", Quote: "original text", Comment: "expand on this"},
+		{Type: "text", Text: "go ahead"},
+	}
+	if err := s.ValidatePrompt(blocks); err != nil {
+		t.Fatalf("quote prompt should validate, got: %v", err)
+	}
+	// The adapter's validator must never see the raw "quote" type — only the
+	// flattened text/image blocks — or it rejects it as an invalid block type.
+	if got := a.validatedTypes; len(got) != 2 || got[0] != "text" || got[1] != "text" {
+		t.Fatalf("adapter validated block types=%+v, want [text text]", got)
 	}
 }
 
