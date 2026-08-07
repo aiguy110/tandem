@@ -101,6 +101,7 @@ type Config struct {
 	DBPath         string                  `json:"dbPath"`
 	TokenPath      string                  `json:"tokenPath"`
 	WorktreesDir   string                  `json:"worktreesDir"`
+	HomeBaseDir    string                  `json:"homeBaseDir"`
 	AssetsDir      string                  `json:"assetsDir"`
 	Host           string                  `json:"host"`
 	Port           int                     `json:"port"`
@@ -299,6 +300,12 @@ func LoadWithOptions(o Options) (Config, error) {
 		return Config{}, err
 	}
 	roots := resolveRoots(env, settings, o)
+	// The per-installation home base repo is always surfaced in the spawn
+	// palette. We register its exact path (not TANDEM_HOME) so the scan never
+	// descends into $TANDEM_HOME/worktrees and floods the palette with the
+	// daemon's own per-agent worktrees.
+	homeBase := filepath.Join(home, "home-base")
+	roots = appendUnique(roots, homeBase)
 	override, err := optionalLaunch(env["TANDEM_ACP_CMD"])
 	if err != nil {
 		return Config{}, fmt.Errorf("TANDEM_ACP_CMD: %w", err)
@@ -327,7 +334,7 @@ func LoadWithOptions(o Options) (Config, error) {
 	return Config{
 		Home: home, RuntimeRoot: o.RuntimeRoot,
 		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
-		WorktreesDir: filepath.Join(home, "worktrees"), AssetsDir: filepath.Join(home, "assets"),
+		WorktreesDir: filepath.Join(home, "worktrees"), HomeBaseDir: homeBase, AssetsDir: filepath.Join(home, "assets"),
 		Host: bind, Port: port, UIDir: env["TANDEM_UI_DIR"],
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
@@ -802,6 +809,26 @@ func nonempty(in []string) []string {
 		}
 	}
 	return out
+}
+
+// appendUnique appends path unless an equivalent entry is already present,
+// comparing by cleaned absolute form so "~/.tandem/home-base" and its
+// already-listed equivalent do not both scan.
+func appendUnique(in []string, path string) []string {
+	want := path
+	if abs, err := filepath.Abs(path); err == nil {
+		want = abs
+	}
+	for _, existing := range in {
+		cur := existing
+		if abs, err := filepath.Abs(existing); err == nil {
+			cur = abs
+		}
+		if cur == want {
+			return in
+		}
+	}
+	return append(in, path)
 }
 func cloneMap(in map[string]any) map[string]any {
 	out := make(map[string]any)
