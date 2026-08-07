@@ -236,6 +236,8 @@ export function TranscriptPane() {
   const [selAnchor, setSelAnchor] = useState<SelectionAnchor | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverText, setPopoverText] = useState('');
+  const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
+  const popoverDragOffset = useRef<{ x: number; y: number } | null>(null);
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
@@ -302,6 +304,8 @@ export function TranscriptPane() {
     setSelAnchor(null);
     setPopoverOpen(false);
     setPopoverText('');
+    setPopoverPosition(null);
+    popoverDragOffset.current = null;
   };
 
   const flash = (el: HTMLElement, className: string, duration = 1300) => {
@@ -414,14 +418,38 @@ export function TranscriptPane() {
               type="button"
               className="annotation-comment-btn"
               style={{ top: selAnchor.rect.top - 34, left: selAnchor.rect.left + selAnchor.rect.width / 2 }}
-              onClick={() => setPopoverOpen(true)}
+              onClick={() => {
+                // Preserve the established initial placement above the selected text.
+                setPopoverPosition({ top: selAnchor.rect.top - 34, left: selAnchor.rect.left });
+                setPopoverOpen(true);
+              }}
             >
               💬 Comment
             </button>
           )}
-          {selAnchor && popoverOpen && (
-            <div className="annotation-popover" style={{ top: selAnchor.rect.top - 34, left: selAnchor.rect.left }}>
-              <div className="annotation-popover-quote">&ldquo;{previewText(selAnchor.quote, 160)}&rdquo;</div>
+          {selAnchor && popoverOpen && popoverPosition && (
+            <div className="annotation-popover" style={popoverPosition}>
+              <div
+                className="annotation-popover-quote annotation-popover-drag-handle"
+                title="Drag to move comment"
+                onPointerDown={(e) => {
+                  popoverDragOffset.current = { x: e.clientX - popoverPosition.left, y: e.clientY - popoverPosition.top };
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  e.preventDefault();
+                }}
+                onPointerMove={(e) => {
+                  const offset = popoverDragOffset.current;
+                  if (!offset) return;
+                  setPopoverPosition({ top: e.clientY - offset.y, left: e.clientX - offset.x });
+                }}
+                onPointerUp={(e) => {
+                  popoverDragOffset.current = null;
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                }}
+                onPointerCancel={() => { popoverDragOffset.current = null; }}
+              >
+                &ldquo;{previewText(selAnchor.quote, 160)}&rdquo;
+              </div>
               <textarea
                 autoFocus
                 rows={2}

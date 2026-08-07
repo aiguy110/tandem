@@ -403,6 +403,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: var(--surface); box-shadow: 0 4px 18px rgba(0,0,0,.4);
 }
 .annotation-popover-quote { font-size: var(--fs-xs); color: var(--text-dim); font-style: italic; overflow-wrap: anywhere; }
+.annotation-popover-drag-handle { cursor: grab; user-select: none; touch-action: none; }
+.annotation-popover-drag-handle:active { cursor: grabbing; }
 .annotation-popover textarea { width: 100%; resize: vertical; font: inherit; font-size: var(--fs-sm); background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 8px; }
 .annotation-popover-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .annotation-popover-actions button:last-child { color: var(--text); background: var(--agent); border: 1px solid var(--agent); border-radius: var(--r-sm); padding: 4px 12px; cursor: pointer; }
