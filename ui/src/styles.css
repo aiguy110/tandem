@@ -441,20 +441,23 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 /* Momentary highlight when jumping to an annotated/cited row. */
 @keyframes annotation-flash-kf {
-  0% { background-color: color-mix(in srgb, var(--agent) 35%, transparent); }
+  0%, 16%, 54%, 70% { background-color: color-mix(in srgb, var(--agent) 35%, transparent); }
+  31%, 85% { background-color: transparent; }
   100% { background-color: transparent; }
 }
-.annotation-flash { animation: annotation-flash-kf 1.3s ease-out; border-radius: var(--r-sm); }
+.annotation-flash { animation: annotation-flash-kf 1.7s ease-out; border-radius: var(--r-sm); }
 @keyframes annotation-quote-flash-kf {
-  0%, 35% { background: color-mix(in srgb, var(--agent) 62%, transparent); }
+  0%, 16%, 54%, 70% { background: color-mix(in srgb, var(--agent) 62%, transparent); }
+  31%, 85% { background: color-mix(in srgb, var(--agent) 24%, transparent); }
   100% { background: color-mix(in srgb, var(--agent) 24%, transparent); }
 }
-.annotation-quote-flash { animation: annotation-quote-flash-kf 1.3s ease-out; }
+.annotation-quote-flash { animation: annotation-quote-flash-kf 1.7s ease-out; }
 @keyframes annotation-link-flash-kf {
-  0%, 35% { box-shadow: 0 0 0 2px var(--agent), 0 0 18px color-mix(in srgb, var(--agent) 65%, transparent); }
+  0%, 16%, 54%, 70% { box-shadow: 0 0 0 2px var(--agent), 0 0 18px color-mix(in srgb, var(--agent) 65%, transparent); background: color-mix(in srgb, var(--agent) 12%, transparent); }
+  31%, 85% { box-shadow: none; background: transparent; }
   100% { box-shadow: none; }
 }
-.annotation-link-flash { animation: annotation-link-flash-kf 1.3s ease-out; }
+.annotation-link-flash { animation: annotation-link-flash-kf 1.7s ease-out; border-radius: var(--r-sm); }
 .slash-popup {
   position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
