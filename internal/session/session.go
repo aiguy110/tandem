@@ -247,7 +247,11 @@ func (s *Session) ValidatePrompt(blocks []agentadapter.PromptBlock) error {
 	if validator, ok := s.adapter.(interface {
 		ValidatePrompt([]agentadapter.PromptBlock) error
 	}); ok {
-		return validator.ValidatePrompt(blocks)
+		// The adapter only understands text/image, so flatten quote blocks the
+		// same way executePrompt does before handing them to the adapter's
+		// validator; otherwise a valid transcript annotation is rejected as an
+		// "invalid prompt block type" here.
+		return validator.ValidatePrompt(flattenQuoteBlocks(blocks))
 	}
 	return nil
 }
