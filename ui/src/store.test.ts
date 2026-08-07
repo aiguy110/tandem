@@ -24,6 +24,20 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 
 afterEach(() => {
   useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null });
+  localStorage.removeItem('tandem.agentOrder');
+});
+
+describe('agent ordering', () => {
+  it('moves an agent before or after its drop target and saves the result', () => {
+    useStore.setState({ order: ['one', 'two', 'three'] });
+
+    useStore.getState().reorderAgent('one', 'three', false);
+    expect(useStore.getState().order).toEqual(['two', 'one', 'three']);
+
+    useStore.getState().reorderAgent('three', 'two', true);
+    expect(useStore.getState().order).toEqual(['two', 'three', 'one']);
+    expect(JSON.parse(localStorage.getItem('tandem.agentOrder') ?? '[]')).toEqual(['two', 'three', 'one']);
+  });
 });
 
 describe('annotations store reducer', () => {

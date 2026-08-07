@@ -11,13 +11,14 @@ const SEVERITY_CLASS: Record<NotifSeverity, string> = {
   failure: 'sev-failure',
 };
 
-// Left rail — the orchestra. One row per agent; blocked/error float to the top
-// (rankedOrder). Click = focus.
+// Left rail — the orchestra. One row per agent in the order arranged by the
+// user. Click = focus; drag = reorder.
 export function AgentsRail() {
   const order = useStore(rankedOrder);
   const agents = useStore((s) => s.agents);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const reorderAgent = useStore((s) => s.reorderAgent);
   const markAgentUnread = useStore((s) => s.markAgentUnread);
   const setPane = useStore((s) => s.setPane);
   const setDraft = useStore((s) => s.setDraft);
@@ -29,6 +30,8 @@ export function AgentsRail() {
   const [confirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
   const [deleteWorktree, setDeleteWorktree] = useState(true);
   const [closeError, setCloseError] = useState('');
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
 
   const requestDelete = async (id: string) => {
     setCloseError('');
@@ -99,6 +102,21 @@ export function AgentsRail() {
             onMarkUnread={() => markAgentUnread(id)}
             onRename={(name) => renameAgent(id, name)}
             onDelete={() => void requestDelete(id)}
+            dragging={id === draggedId}
+            dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
+            onDragStart={() => setDraggedId(id)}
+            onDragOver={(after) => {
+              if (draggedId && draggedId !== id) setDropTarget({ id, after });
+            }}
+            onDrop={(after) => {
+              if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
+              setDraggedId(null);
+              setDropTarget(null);
+            }}
+            onDragEnd={() => {
+              setDraggedId(null);
+              setDropTarget(null);
+            }}
           />
         ))
       )}
@@ -171,6 +189,12 @@ function Row({
   onMarkUnread,
   onRename,
   onDelete,
+  dragging,
+  dropPosition,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
 }: {
   agent: AgentView;
   active: boolean;
@@ -178,6 +202,12 @@ function Row({
   onMarkUnread: () => void;
   onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
+  dragging: boolean;
+  dropPosition: 'before' | 'after' | null;
+  onDragStart: () => void;
+  onDragOver: (after: boolean) => void;
+  onDrop: (after: boolean) => void;
+  onDragEnd: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
@@ -235,8 +265,27 @@ function Row({
   }, [contextMenu]);
   return (
     <div
-      className={`agent-row${active ? ' active' : ''}`}
+      className={`agent-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
+      draggable={!editing}
+      title={editing ? undefined : 'Drag to reorder agent'}
       onClick={onClick}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', agent.id);
+        onDragStart();
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onDragOver(event.clientY > bounds.top + bounds.height / 2);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onDrop(event.clientY > bounds.top + bounds.height / 2);
+      }}
+      onDragEnd={onDragEnd}
       onContextMenu={(event) => {
         event.preventDefault();
         setContextMenu({ x: event.clientX, y: event.clientY });
