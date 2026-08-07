@@ -208,6 +208,7 @@ interface StoreState {
   boot: () => void;
   submitToken: (t: string) => void;
   focus: (id: string) => void;
+  reorderAgent: (id: string, targetId: string, after: boolean) => void;
   markAgentUnread: (id: string) => void;
   setPane: (p: PaneId) => void;
   toggleTheme: () => void;
@@ -295,20 +296,31 @@ export function __testApplyServerMsg(msg: ServerMsg): void {
 const GIT_REFRESH_INTERVAL_MS = 15_000;
 
 function rankAgents(agents: Record<string, AgentView>, order: string[]): string[] {
-  // Blocked / error float to the top (docs/ui.md), otherwise insertion order.
-  const weight = (s: AgentStatus) => (s === 'error' ? 0 : s === 'blocked' ? 1 : 2);
-  return [...order].sort((a, b) => {
-    const av = agents[a];
-    const bv = agents[b];
-    if (!av || !bv) return 0;
-    const d = weight(av.status) - weight(bv.status);
-    return d !== 0 ? d : order.indexOf(a) - order.indexOf(b);
-  });
+  // `order` is explicitly arranged by the user via the Agents rail. Filter
+  // stale entries rather than applying a status-based sort over that order.
+  return order.filter((id) => !!agents[id]);
 }
 
 const initialTheme = (): 'dark' | 'light' => {
   const saved = localStorage.getItem('tandem.theme');
   return saved === 'light' ? 'light' : 'dark';
+};
+
+const AGENT_ORDER_STORAGE_KEY = 'tandem.agentOrder';
+const initialAgentOrder = (): string[] => {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(AGENT_ORDER_STORAGE_KEY) ?? '[]');
+    return Array.isArray(saved) && saved.every((id) => typeof id === 'string') ? saved : [];
+  } catch {
+    return [];
+  }
+};
+const saveAgentOrder = (order: string[]) => {
+  try {
+    localStorage.setItem(AGENT_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // Reordering still works when browser storage is unavailable.
+  }
 };
 
 const USAGE_STORAGE_KEY = 'tandem.agentUsage';
@@ -357,14 +369,16 @@ export const useStore = create<StoreState>((set, get) => {
         const newlyDiscovered = msg.agents.filter((s) => !get().agents[s.id]).map((s) => s.id);
         set((st) => {
           const agents = { ...st.agents };
-          const order = [...st.order];
+          // Retain a saved order only for agents that still exist locally or
+          // were included by the daemon; this also discards old browser state.
+          const live = new Set(msg.agents.map((a) => a.id));
+          const order = st.order.filter((id) => live.has(id) || !!agents[id]);
           for (const s of msg.agents) {
             const prev = agents[s.id];
             agents[s.id] = mergeSummary(prev, s);
             if (!order.includes(s.id)) order.push(s.id);
           }
           // Drop any local agent the daemon no longer reports (e.g. closed elsewhere).
-          const live = new Set(msg.agents.map((a) => a.id));
           for (const id of order.slice()) {
             if (!live.has(id) && agents[id] && agents[id].events.length === 0) {
               delete agents[id];
@@ -685,7 +699,7 @@ export const useStore = create<StoreState>((set, get) => {
     conn: 'connecting',
     theme: initialTheme(),
     agents: {},
-    order: [],
+    order: initialAgentOrder(),
     focusedId: null,
     pane: 'chat',
     modal: 'none',
@@ -740,6 +754,17 @@ export const useStore = create<StoreState>((set, get) => {
       if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
       return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
     }),
+    reorderAgent: (id, targetId, after) => {
+      const order = [...get().order];
+      const from = order.indexOf(id);
+      const target = order.indexOf(targetId);
+      if (from < 0 || target < 0 || from === target) return;
+      order.splice(from, 1);
+      const nextTarget = order.indexOf(targetId);
+      order.splice(nextTarget + (after ? 1 : 0), 0, id);
+      saveAgentOrder(order);
+      set({ order });
+    },
     // A user can restore the completed-turn badge after acknowledging it. This
     // is deliberately browser-local, like notifications created from live
     // status transitions, and is idempotent while the agent is already unread.
