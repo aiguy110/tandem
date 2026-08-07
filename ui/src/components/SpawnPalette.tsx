@@ -158,6 +158,7 @@ export function SpawnPalette() {
   const [busy, setBusy] = useState(false);
 
   const taskRef = useRef<HTMLInputElement>(null);
+  const launchRef = useRef<HTMLButtonElement>(null);
 
   const filtered = useMemo(() => {
     const matched = fuzzyFilter(query, dirs, (d) => d.name + ' ' + d.path);
@@ -583,7 +584,11 @@ export function SpawnPalette() {
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Agent profile</div>
             <label style={{ gridColumn: '1 / -1' }}>
               Profile <span className="sub">(latest 3 shown; fuzzy-find for more)</span>
-              <ProfilePicker profiles={profiles} recent={recentProfiles} value={matchedProfile} onPick={applyProfile} />
+              <ProfilePicker profiles={profiles} recent={recentProfiles} value={matchedProfile} onPick={(p) => {
+                applyProfile(p);
+                // Move focus to Launch so a subsequent Enter spawns with the picked profile.
+                requestAnimationFrame(() => launchRef.current?.focus());
+              }} />
               <div className="sub" style={{ marginTop: 4 }}>
                 {matchedProfile ? (
                   renaming ? (
@@ -760,7 +765,7 @@ export function SpawnPalette() {
             <button className="btn ghost" type="button" onClick={() => setAdvanced(false)}>Choose other repo</button>
             <span className="action-spacer" />
             <button className="btn ghost" type="button" onClick={() => setModal('none')}>Cancel</button>
-            <button className="btn" type="button" disabled={busy || optionsBusy || !selectedDir} onClick={() => selectedDir && void doSpawn(selectedDir)}>
+            <button ref={launchRef} className="btn" type="button" disabled={busy || optionsBusy || !selectedDir} onClick={() => selectedDir && void doSpawn(selectedDir)}>
               {busy ? 'Launching…' : 'Launch'}
             </button>
           </div>
