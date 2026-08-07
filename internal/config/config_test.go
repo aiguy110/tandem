@@ -108,7 +108,7 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	if c.Host != "0.0.0.0" || c.Port != 9000 || c.Browser.Driver != "steel" || c.Browser.SteelBaseURL != "https://steel.example" || c.Browser.SteelAPIKey != "file-secret" {
 		t.Fatalf("settings not applied: host=%q port=%d browser=%+v", c.Host, c.Port, c.Browser)
 	}
-	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b"}) {
+	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b", c.HomeBaseDir}) {
 		t.Fatalf("project roots = %v", c.ProjectRoots)
 	}
 	wantNode, wantNpm := ManagedNodePaths(filepath.Join(home, "node"))
@@ -117,6 +117,44 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	}
 	if c.Agents["claude"].ACP.Cmd != wantNode {
 		t.Fatalf("managed node not fed into acp {node}: %q", c.Agents["claude"].ACP.Cmd)
+	}
+}
+
+func TestHomeBaseRootAlwaysSurfaced(t *testing.T) {
+	o := options(t, map[string]string{"TANDEM_PROJECT_ROOTS": "/env/root"})
+	home := o.Env["TANDEM_HOME"]
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHomeBase := filepath.Join(home, "home-base")
+	if c.HomeBaseDir != wantHomeBase {
+		t.Fatalf("HomeBaseDir = %q, want %q", c.HomeBaseDir, wantHomeBase)
+	}
+	if !reflect.DeepEqual(c.ProjectRoots, []string{"/env/root", wantHomeBase}) {
+		t.Fatalf("home base not appended to roots: %v", c.ProjectRoots)
+	}
+	// The home base is registered by its exact path, never TANDEM_HOME, so the
+	// spawn-palette scan can never reach the daemon's own worktrees dir.
+	for _, root := range c.ProjectRoots {
+		if root == home || root == c.WorktreesDir {
+			t.Fatalf("scan root %q would expose internal $TANDEM_HOME contents", root)
+		}
+	}
+}
+
+func TestHomeBaseRootDeduped(t *testing.T) {
+	o := options(t, nil)
+	home := o.Env["TANDEM_HOME"]
+	homeBase := filepath.Join(home, "home-base")
+	// A user who already lists the home base must not get it twice.
+	o.Env["TANDEM_PROJECT_ROOTS"] = homeBase
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(c.ProjectRoots, []string{homeBase}) {
+		t.Fatalf("home base duplicated in roots: %v", c.ProjectRoots)
 	}
 }
 
@@ -136,7 +174,7 @@ func TestEnvOverridesSettings(t *testing.T) {
 	if c.Port != 7000 || c.Host != "10.0.0.1" {
 		t.Fatalf("env did not override settings: port=%d host=%q", c.Port, c.Host)
 	}
-	if !reflect.DeepEqual(c.ProjectRoots, []string{"/env/root"}) {
+	if !reflect.DeepEqual(c.ProjectRoots, []string{"/env/root", c.HomeBaseDir}) {
 		t.Fatalf("env roots not applied: %v", c.ProjectRoots)
 	}
 	if c.Node.Managed || c.Node.Command != "/env/bin/node" {
