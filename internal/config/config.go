@@ -102,6 +102,7 @@ type Config struct {
 	TokenPath      string                  `json:"tokenPath"`
 	WorktreesDir   string                  `json:"worktreesDir"`
 	HomeBaseDir    string                  `json:"homeBaseDir"`
+	TandemRoot     string                  `json:"tandemRoot,omitempty"`
 	AssetsDir      string                  `json:"assetsDir"`
 	Host           string                  `json:"host"`
 	Port           int                     `json:"port"`
@@ -334,7 +335,7 @@ func LoadWithOptions(o Options) (Config, error) {
 	return Config{
 		Home: home, RuntimeRoot: o.RuntimeRoot,
 		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
-		WorktreesDir: filepath.Join(home, "worktrees"), HomeBaseDir: homeBase, AssetsDir: filepath.Join(home, "assets"),
+		WorktreesDir: filepath.Join(home, "worktrees"), HomeBaseDir: homeBase, TandemRoot: o.TandemRoot, AssetsDir: filepath.Join(home, "assets"),
 		Host: bind, Port: port, UIDir: env["TANDEM_UI_DIR"],
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
