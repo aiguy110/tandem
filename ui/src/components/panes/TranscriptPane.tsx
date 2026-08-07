@@ -323,7 +323,7 @@ export function TranscriptPane() {
       .find((mark) => mark.dataset.annotationTargets?.split('|').includes(targetId));
     const destination = highlight ?? el;
     destination.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    flash(destination, highlight ? 'annotation-quote-flash' : 'annotation-flash');
+    flash(destination, highlight ? 'annotation-quote-flash' : 'annotation-flash', 1700);
     return true;
   };
 
@@ -331,7 +331,7 @@ export function TranscriptPane() {
     const target = document.getElementById(targetId);
     if (!target) return;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    flash(target, 'annotation-link-flash');
+    flash(target, 'annotation-link-flash', 1700);
   };
 
   const onTranscriptMouseUp = () => {
