@@ -50,11 +50,50 @@ export interface Takeover {
   reason: string;
 }
 
+// Severity of a completed-turn notification, in ascending order of urgency.
+// success = the agent finished its turn cleanly (green); attention = it needs
+// user input, e.g. a pending approval or browser takeover (yellow); failure =
+// the turn errored out (red).
+export type NotifSeverity = 'success' | 'attention' | 'failure';
+
+const SEVERITY_RANK: Record<NotifSeverity, number> = { success: 1, attention: 2, failure: 3 };
+
+// Highest-urgency severity in the list, or null when the list is empty.
+export function maxSeverity(severities: NotifSeverity[]): NotifSeverity | null {
+  return severities.reduce<NotifSeverity | null>(
+    (acc, s) => (acc && SEVERITY_RANK[acc] >= SEVERITY_RANK[s] ? acc : s),
+    null,
+  );
+}
+
 // Unread state is local to this browser; the underlying completed turn remains
 // available in the durable transcript.
 export interface TurnNotification {
   seq: number;
   createdAt: number;
+  severity: NotifSeverity;
+}
+
+// Severity a status transition should raise as a completed-turn notification,
+// or null when the transition is not worth notifying about. A pending approval
+// or browser takeover surfaces its own actionable card and contributes
+// 'attention' to the badges directly (see agentBadge), so 'blocked' itself is
+// intentionally not notified here to avoid duplicate cards.
+function turnNotificationSeverity(prev: AgentStatus, next: AgentStatus): NotifSeverity | null {
+  if (next === 'error' && prev !== 'error') return 'failure';
+  if (next === 'idle' && prev === 'working') return 'success';
+  return null;
+}
+
+// Aggregate notification state for one agent's tab badge: the count of items
+// living under it (unread turns + pending approvals + browser takeovers) and
+// the highest severity among them, so the badge can be colored red > yellow >
+// green.
+export function agentBadge(agent: AgentView): { count: number; severity: NotifSeverity | null } {
+  const severities = agent.turnNotifications.map((n) => n.severity);
+  const attention = agent.pendingApprovals.length + agent.takeovers.length;
+  for (let i = 0; i < attention; i++) severities.push('attention');
+  return { count: severities.length, severity: maxSeverity(severities) };
 }
 
 // Chat = the agent conversation (ACP transcript or the agent's resumable CLI,
@@ -596,13 +635,17 @@ export const useStore = create<StoreState>((set, get) => {
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
+          const prevStatus = a.status;
           const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
           applyEventToView(next, event, usageReceivedAt);
-          // Adapters report a completed turn as a working → idle transition.
-          // Do this only for live events, so snapshot replay never resurrects
-          // notifications that have already been read.
-          if (event.kind === 'status' && a.status === 'working' && event.status === 'idle') {
-            next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now() }];
+          // Raise a completed-turn notification on the resulting status
+          // transition (green on a clean finish, red on a failure). Only for
+          // live events, so snapshot replay never resurrects notifications that
+          // have already been read, and never while the user is already looking
+          // at this agent's tab — there's nothing to notify them about.
+          const severity = turnNotificationSeverity(prevStatus, next.status);
+          if (severity && st.focusedId !== agentId) {
+            next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now(), severity }];
           }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
           const agents = { ...st.agents, [agentId]: next };
@@ -1009,6 +1052,19 @@ export function allTurnNotifications(st: StoreState): { agentId: string; notific
     for (const notification of agent.turnNotifications) out.push({ agentId: id, notification });
   }
   return out.sort((a, b) => b.notification.createdAt - a.notification.createdAt);
+}
+
+// Notifications-panel badge summary: total items across every agent (unread
+// turns + approvals + takeovers) and the highest severity among them.
+export function notificationsSummary(st: StoreState): { total: number; severity: NotifSeverity | null } {
+  const severities: NotifSeverity[] = [];
+  let total = 0;
+  for (const id of Object.keys(st.agents)) {
+    const badge = agentBadge(st.agents[id]);
+    total += badge.count;
+    if (badge.severity) severities.push(badge.severity);
+  }
+  return { total, severity: maxSeverity(severities) };
 }
 
 function shell(id: string): AgentView {

@@ -1,7 +1,15 @@
 import { useState } from 'react';
-import { useStore, rankedOrder } from '../store';
+import { useStore, rankedOrder, agentBadge } from '../store';
+import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
 import type { ClosePreview } from '../wire';
+
+// Badge color per severity, matching the Notifications panel (red > yellow > green).
+const SEVERITY_CLASS: Record<NotifSeverity, string> = {
+  success: 'sev-success',
+  attention: 'sev-attention',
+  failure: 'sev-failure',
+};
 
 // Left rail — the orchestra. One row per agent; blocked/error float to the top
 // (rankedOrder). Click = focus.
@@ -171,6 +179,7 @@ function Row({
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
   const [mouseHovered, setMouseHovered] = useState(false);
+  const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
   const target = ws.targetRef?.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '');
@@ -239,7 +248,9 @@ function Row({
               }}
             />
           ) : agent.name}
-          {agent.turnNotifications.length > 0 && <span className="count hot badge notification-badge">{agent.turnNotifications.length}</span>}
+          {badge.count > 0 && badge.severity && (
+            <span className={`count badge notification-badge ${SEVERITY_CLASS[badge.severity]}`}>{badge.count}</span>
+          )}
         </div>
         {renameError && <div className="agent-rename-error">{renameError}</div>}
         <div className="ws" title={ws.cwd}>
