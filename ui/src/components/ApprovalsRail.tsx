@@ -1,4 +1,22 @@
-import { useStore, allApprovals, allTakeovers, allTurnNotifications } from '../store';
+import { useStore, allApprovals, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
+import type { NotifSeverity } from '../store';
+
+// Green / yellow / red, and the dot + card modifier that render it.
+const SEVERITY_CLASS: Record<NotifSeverity, string> = {
+  success: 'sev-success',
+  attention: 'sev-attention',
+  failure: 'sev-failure',
+};
+const SEVERITY_DOT: Record<NotifSeverity, string> = {
+  success: 'idle',
+  attention: 'blocked',
+  failure: 'error',
+};
+const SEVERITY_LABEL: Record<NotifSeverity, string> = {
+  success: 'Turn complete',
+  attention: 'Needs your input',
+  failure: 'Turn failed',
+};
 
 // Right rail — the conductor's inbox for completed turns, approvals, and browser
 // requests across every agent. Clicking a completed-turn card marks it read.
@@ -13,8 +31,12 @@ export function ApprovalsRail() {
   const toggleWheel = useStore((s) => s.toggleWheel);
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
+  const summary = useStore(notificationsSummary);
 
-  const total = items.length + takeovers.length + notifications.length;
+  const total = summary.total;
+  // The panel badge takes the color of its highest-severity item (red > yellow
+  // > green).
+  const badgeClass = summary.severity ? SEVERITY_CLASS[summary.severity] : '';
 
   if (collapsed) {
     return (
@@ -22,7 +44,7 @@ export function ApprovalsRail() {
         <button className="rail-toggle" title="Show notifications" onClick={toggleCollapsed}>
           <span className="chevron">‹</span>
           <span className="label">Notifications</span>
-          {total > 0 && <span className="count hot">{total}</span>}
+          {total > 0 && <span className={`count ${badgeClass}`}>{total}</span>}
         </button>
       </div>
     );
@@ -32,18 +54,22 @@ export function ApprovalsRail() {
     <div className="rail rail-r approvals">
       <div className="rail-head">
         <span className="rail-head-label" onClick={toggleCollapsed}>
-          Notifications <span className={`count${total ? ' hot' : ''}`}>{total}</span>
+          Notifications <span className={`count${total ? ` ${badgeClass}` : ''}`}>{total}</span>
         </span>
         <button className="rail-toggle-btn" title="Collapse notifications" onClick={toggleCollapsed}>
           ›
         </button>
       </div>
       {notifications.map(({ agentId, notification }) => (
-        <div key={`${agentId}-${notification.seq}`} className="appr notification" onClick={() => focus(agentId)}>
+        <div
+          key={`${agentId}-${notification.seq}`}
+          className={`appr notification ${SEVERITY_CLASS[notification.severity]}`}
+          onClick={() => focus(agentId)}
+        >
           <div className="who">
-            <span className="dot idle" /> {agents[agentId]?.name ?? agentId}
+            <span className={`dot ${SEVERITY_DOT[notification.severity]}`} /> {agents[agentId]?.name ?? agentId}
           </div>
-          <div className="what">Turn complete</div>
+          <div className="what">{SEVERITY_LABEL[notification.severity]}</div>
         </div>
       ))}
       {takeovers.map(({ agentId, takeover }) => (

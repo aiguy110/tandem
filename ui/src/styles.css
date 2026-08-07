@@ -147,8 +147,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   min-width: 18px; text-align: center; padding: 0 5px; border-radius: 9px;
   background: var(--surface-3); color: var(--text-dim); font-size: var(--fs-xs);
 }
-.count.hot { background: var(--warn-soft); color: var(--warn); }
-.count.notification-badge { background: var(--err-soft); color: var(--err); }
+/* Notification-severity badges, colored red > yellow > green by the highest
+   severity of the items they summarize. */
+.count.sev-success { background: var(--ok-soft); color: var(--ok); }
+.count.sev-attention { background: var(--warn-soft); color: var(--warn); }
+.count.sev-failure { background: var(--err-soft); color: var(--err); }
 
 .agent-row {
   display: grid; grid-template-columns: 14px 1fr auto auto; gap: 8px;
@@ -489,7 +492,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   cursor: pointer;
 }
 .appr.err { border-color: var(--err); background: var(--err-soft); }
-.appr.notification { border-color: var(--err); background: var(--err-soft); }
+/* Completed-turn notification cards, tinted by severity. */
+.appr.notification.sev-success { border-color: var(--ok); background: var(--ok-soft); }
+.appr.notification.sev-attention { border-color: var(--warn); background: var(--warn-soft); }
+.appr.notification.sev-failure { border-color: var(--err); background: var(--err-soft); }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
 .appr .acts { display: flex; gap: 6px; }
