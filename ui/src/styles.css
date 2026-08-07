@@ -168,6 +168,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .agent-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
 .agent-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
+.agent-context-menu {
+  position: fixed; z-index: 20; min-width: 150px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
+}
+.agent-context-menu button {
+  display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); text-align: left;
+}
+.agent-context-menu button:hover { background: var(--surface-2); }
+.agent-context-menu button.danger { color: var(--err); }
+.agent-context-menu button.danger:hover { background: var(--err-soft); }
 .dot.idle { background: var(--ok); }
 .dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 1.4s infinite; }
 .dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }

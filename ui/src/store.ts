@@ -208,6 +208,7 @@ interface StoreState {
   boot: () => void;
   submitToken: (t: string) => void;
   focus: (id: string) => void;
+  markAgentUnread: (id: string) => void;
   setPane: (p: PaneId) => void;
   toggleTheme: () => void;
   toggleAgentsRail: () => void;
@@ -738,6 +739,24 @@ export const useStore = create<StoreState>((set, get) => {
       const agent = st.agents[id];
       if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
       return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
+    }),
+    // A user can restore the completed-turn badge after acknowledging it. This
+    // is deliberately browser-local, like notifications created from live
+    // status transitions, and is idempotent while the agent is already unread.
+    markAgentUnread: (id) => set((st) => {
+      const agent = st.agents[id];
+      if (!agent || agent.turnNotifications.length > 0) return st;
+      const notification: TurnNotification = {
+        seq: agent.lastSeq,
+        createdAt: Date.now(),
+        severity: 'success',
+      };
+      return {
+        agents: {
+          ...st.agents,
+          [id]: { ...agent, turnNotifications: [...agent.turnNotifications, notification] },
+        },
+      };
     }),
     // Selecting Terminal is view-only until its shroud's explicit Take control
     // action calls enterTerminal. Even an idle ACP session must never be swapped

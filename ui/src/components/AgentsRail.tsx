@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
@@ -18,6 +18,7 @@ export function AgentsRail() {
   const agents = useStore((s) => s.agents);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const markAgentUnread = useStore((s) => s.markAgentUnread);
   const setPane = useStore((s) => s.setPane);
   const setDraft = useStore((s) => s.setDraft);
   const getClosePreview = useStore((s) => s.getClosePreview);
@@ -95,6 +96,7 @@ export function AgentsRail() {
             agent={agents[id]}
             active={id === focusedId}
             onClick={() => focus(id)}
+            onMarkUnread={() => markAgentUnread(id)}
             onRename={(name) => renameAgent(id, name)}
             onDelete={() => void requestDelete(id)}
           />
@@ -166,12 +168,14 @@ function Row({
   agent,
   active,
   onClick,
+  onMarkUnread,
   onRename,
   onDelete,
 }: {
   agent: AgentView;
   active: boolean;
   onClick: () => void;
+  onMarkUnread: () => void;
   onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
 }) {
@@ -179,6 +183,7 @@ function Row({
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
   const [mouseHovered, setMouseHovered] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -210,10 +215,32 @@ function Row({
     setRenameError('');
   };
   const showActions = active || mouseHovered;
+  const beginRename = () => {
+    setName(agent.name);
+    setRenameError('');
+    setEditing(true);
+  };
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss();
+    };
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [contextMenu]);
   return (
     <div
       className={`agent-row${active ? ' active' : ''}`}
       onClick={onClick}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setContextMenu({ x: event.clientX, y: event.clientY });
+      }}
       onPointerEnter={(event) => {
         if (event.pointerType === 'mouse') setMouseHovered(true);
       }}
@@ -270,9 +297,7 @@ function Row({
           aria-label={`Rename ${agent.name}`}
           onClick={(e) => {
             e.stopPropagation();
-            setName(agent.name);
-            setRenameError('');
-            setEditing(true);
+            beginRename();
           }}
         >
           ✎
@@ -288,6 +313,26 @@ function Row({
           🗑
         </button>
       </>}
+      {contextMenu && (
+        <div
+          className="agent-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          aria-label={`Actions for ${agent.name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" role="menuitem" onClick={() => { onMarkUnread(); setContextMenu(null); }}>
+            Mark as unread
+          </button>
+          <button type="button" role="menuitem" onClick={() => { beginRename(); setContextMenu(null); }}>
+            Edit name
+          </button>
+          <button type="button" className="danger" role="menuitem" onClick={() => { onDelete(); setContextMenu(null); }}>
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }
