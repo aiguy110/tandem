@@ -421,12 +421,28 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .citation-chip-comment { margin-top: 3px; font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; }
 .citation-chip:hover { border-color: var(--border-strong); }
 
+/* Exact source ranges remain visibly linked to their annotation or citation.
+   They are spans rather than a selection so the relationship survives after
+   the native browser selection has been cleared. */
+.annotation-quote-highlight { background: color-mix(in srgb, var(--agent) 24%, transparent); border-radius: 2px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.annotation-quote-highlight:hover { background: color-mix(in srgb, var(--agent) 38%, transparent); }
+
 /* Momentary highlight when jumping to an annotated/cited row. */
 @keyframes annotation-flash-kf {
   0% { background-color: color-mix(in srgb, var(--agent) 35%, transparent); }
   100% { background-color: transparent; }
 }
 .annotation-flash { animation: annotation-flash-kf 1.3s ease-out; border-radius: var(--r-sm); }
+@keyframes annotation-quote-flash-kf {
+  0%, 35% { background: color-mix(in srgb, var(--agent) 62%, transparent); }
+  100% { background: color-mix(in srgb, var(--agent) 24%, transparent); }
+}
+.annotation-quote-flash { animation: annotation-quote-flash-kf 1.3s ease-out; }
+@keyframes annotation-link-flash-kf {
+  0%, 35% { box-shadow: 0 0 0 2px var(--agent), 0 0 18px color-mix(in srgb, var(--agent) 65%, transparent); }
+  100% { box-shadow: none; }
+}
+.annotation-link-flash { animation: annotation-link-flash-kf 1.3s ease-out; }
 .slash-popup {
   position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);

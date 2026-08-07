@@ -133,6 +133,82 @@ interface SelectionAnchor {
   rect: { top: number; left: number; width: number };
 }
 
+// A quote can point to either a pending annotation in the review tray or a
+// citation chip in an already-sent user message.  Keeping the target as a DOM
+// id lets the source highlight work for both without giving persisted prompt
+// blocks a UI-only identifier.
+interface QuoteLink {
+  quote: string;
+  targetId: string;
+}
+
+function annotationTargetId(id: string) {
+  return `annotation-${id}`;
+}
+
+function citationTargetId(seq: number, index: number) {
+  return `citation-${seq}-${index}`;
+}
+
+// Markdown is rendered as HTML, so a quote may span several text nodes. Split
+// those nodes at every quoted-range boundary and attach all links that cover
+// each resulting fragment. This preserves the existing markdown DOM while
+// making the exact source text clickable. Re-run from the pristine React DOM
+// whenever the row's text or links change.
+function applyQuoteHighlights(container: HTMLElement, links: QuoteLink[]) {
+  for (const mark of Array.from(container.querySelectorAll('.annotation-quote-highlight'))) {
+    mark.replaceWith(...Array.from(mark.childNodes));
+  }
+  container.normalize();
+  if (links.length === 0) return;
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const nodes: { node: Text; start: number; end: number }[] = [];
+  let text = '';
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    const start = text.length;
+    text += node.data;
+    nodes.push({ node, start, end: text.length });
+  }
+
+  const ranges = links.flatMap((link) => {
+    const start = text.indexOf(link.quote);
+    return start < 0 ? [] : [{ start, end: start + link.quote.length, targetId: link.targetId }];
+  });
+  if (ranges.length === 0) return;
+
+  for (const { node: textNode, start, end } of nodes) {
+    const overlapping = ranges.filter((range) => range.start < end && range.end > start);
+    if (overlapping.length === 0) continue;
+    const cuts = new Set<number>([0, textNode.data.length]);
+    for (const range of overlapping) {
+      cuts.add(Math.max(0, range.start - start));
+      cuts.add(Math.min(textNode.data.length, range.end - start));
+    }
+    const boundaries = [...cuts].sort((a, b) => a - b);
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const from = boundaries[i];
+      const to = boundaries[i + 1];
+      const part = textNode.data.slice(from, to);
+      const targets = overlapping
+        .filter((range) => range.start < start + to && range.end > start + from)
+        .map((range) => range.targetId);
+      if (targets.length === 0) {
+        fragment.append(part);
+      } else {
+        const mark = document.createElement('span');
+        mark.className = 'annotation-quote-highlight';
+        mark.dataset.annotationTargets = targets.join('|');
+        mark.textContent = part;
+        fragment.append(mark);
+      }
+    }
+    textNode.replaceWith(fragment);
+  }
+}
+
 // Walks up from a Selection's anchorNode to the nearest annotatable row
 // (stamped with data-seq by Row, above). Text nodes aren't Elements, so start
 // from the parent when needed.
@@ -179,6 +255,18 @@ export function TranscriptPane() {
     }
     return set;
   }, [transcriptItems]);
+  const quoteLinksBySeq = useMemo(() => {
+    const links = new Map<number, QuoteLink[]>();
+    const add = (seq: number, link: QuoteLink) => links.set(seq, [...(links.get(seq) ?? []), link]);
+    for (const annotation of annotations) add(annotation.seq, { quote: annotation.quote, targetId: annotationTargetId(annotation.id) });
+    for (const item of transcriptItems) {
+      if (item.kind !== 'user') continue;
+      item.blocks.forEach((block, index) => {
+        if (block.type === 'quote') add(block.refSeq, { quote: block.quote, targetId: citationTargetId(item.seq, index) });
+      });
+    }
+    return links;
+  }, [annotations, transcriptItems]);
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -216,15 +304,34 @@ export function TranscriptPane() {
     setPopoverText('');
   };
 
-  // Scrolls to (and briefly flashes) the row anchored by `seq` — used by both
-  // the review tray and sent citation chips. Returns whether a row was found.
-  const jumpToSeq = (seq: number): boolean => {
+  const flash = (el: HTMLElement, className: string, duration = 1300) => {
+    el.classList.remove(className);
+    // Restart the animation when a user revisits the same link before its
+    // previous pulse has finished.
+    void el.offsetWidth;
+    el.classList.add(className);
+    window.setTimeout(() => el.classList.remove(className), duration);
+  };
+
+  // Scroll to the precise quoted region where it is available. Older saved
+  // annotations and unusual rendered markdown can lack an exact DOM match; in
+  // that case retain the useful row-level fallback.
+  const jumpToQuote = (seq: number, targetId: string): boolean => {
     const el = scrollRef.current?.querySelector(`[data-seq="${seq}"]`) as HTMLElement | null;
     if (!el) return false;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('annotation-flash');
-    window.setTimeout(() => el.classList.remove('annotation-flash'), 1300);
+    const highlight = Array.from(el.querySelectorAll<HTMLElement>('.annotation-quote-highlight'))
+      .find((mark) => mark.dataset.annotationTargets?.split('|').includes(targetId));
+    const destination = highlight ?? el;
+    destination.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    flash(destination, highlight ? 'annotation-quote-flash' : 'annotation-flash');
     return true;
+  };
+
+  const jumpToLinkedBlock = (targetId: string) => {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    flash(target, 'annotation-link-flash');
   };
 
   const onTranscriptMouseUp = () => {
@@ -287,7 +394,14 @@ export function TranscriptPane() {
           <div className="transcript" ref={scrollRef} onScroll={onScroll} onMouseUp={onTranscriptMouseUp}>
             {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
             {transcriptItems.map((it) => (
-              <Row key={it.key} item={it} onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)} onJumpToSeq={jumpToSeq} />
+              <Row
+                key={it.key}
+                item={it}
+                quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
+                onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
+                onJumpToQuote={jumpToQuote}
+                onJumpToLinkedBlock={jumpToLinkedBlock}
+              />
             ))}
           </div>
           {!atBottom && (
@@ -345,7 +459,7 @@ export function TranscriptPane() {
           agentId={agent.id}
           annotations={annotations}
           knownSeqs={knownSeqs}
-          onJump={jumpToSeq}
+          onJump={jumpToQuote}
           onUpdate={updateAnnotation}
           onRemove={removeAnnotation}
         />
@@ -371,7 +485,7 @@ function AnnotationTray({
   agentId: string;
   annotations: Annotation[];
   knownSeqs: Set<number>;
-  onJump: (seq: number) => boolean;
+  onJump: (seq: number, targetId: string) => boolean;
   onUpdate: (agentId: string, id: string, comment: string) => Promise<AckResult>;
   onRemove: (agentId: string, id: string) => Promise<AckResult>;
 }) {
@@ -398,10 +512,10 @@ function AnnotationTray({
         const available = knownSeqs.has(a.seq);
         const editing = editingId === a.id;
         return (
-          <div className="annotation-row" key={a.id}>
+          <div className="annotation-row" id={annotationTargetId(a.id)} key={a.id}>
             <div
               className={`annotation-snippet${available ? '' : ' unavailable'}`}
-              onClick={() => available && onJump(a.seq)}
+              onClick={() => available && onJump(a.seq, annotationTargetId(a.id))}
               title={available ? 'Jump to source' : 'Context unavailable'}
             >
               <span className={`annotation-quote${available ? '' : ' unavailable'}`}>
@@ -456,24 +570,58 @@ function previewText(text: string, max: number): string {
 
 // A `quote` prompt block rendered as a citation chip in a sent user message —
 // click to scroll to (and flash) the row it references.
-function QuoteChip({ block, onJump }: { block: Extract<PromptBlock, { type: 'quote' }>; onJump: (seq: number) => boolean }) {
+function QuoteChip({
+  block,
+  targetId,
+  onJump,
+}: {
+  block: Extract<PromptBlock, { type: 'quote' }>;
+  targetId: string;
+  onJump: (seq: number, targetId: string) => boolean;
+}) {
   return (
-    <div className="citation-chip" onClick={() => onJump(block.refSeq)} title={`Jump to the referenced ${block.role} row`}>
+    <div id={targetId} className="citation-chip" onClick={() => onJump(block.refSeq, targetId)} title={`Jump to the referenced ${block.role} quote`}>
       <div className="citation-chip-quote">&ldquo;{previewText(block.quote, 160)}&rdquo;</div>
       {block.comment && <div className="citation-chip-comment">{block.comment}</div>}
     </div>
   );
 }
 
-function Row({ item, onRespond, onJumpToSeq }: { item: Item; onRespond: (optionId: string) => void; onJumpToSeq: (seq: number) => boolean }) {
+function Row({
+  item,
+  quoteLinks,
+  onRespond,
+  onJumpToQuote,
+  onJumpToLinkedBlock,
+}: {
+  item: Item;
+  quoteLinks: QuoteLink[];
+  onRespond: (optionId: string) => void;
+  onJumpToQuote: (seq: number, targetId: string) => boolean;
+  onJumpToLinkedBlock: (targetId: string) => void;
+}) {
+  const sourceRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (sourceRef.current) applyQuoteHighlights(sourceRef.current, quoteLinks);
+  }, [quoteLinks, item]);
+
+  const onSourceClick = (event: React.MouseEvent<HTMLElement>) => {
+    const highlight = (event.target as HTMLElement).closest<HTMLElement>('.annotation-quote-highlight');
+    const targetId = highlight?.dataset.annotationTargets?.split('|')[0];
+    if (!targetId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onJumpToLinkedBlock(targetId);
+  };
+
   switch (item.kind) {
     case 'user':
       return (
-        <div className="ev user" data-seq={item.seq} data-role="user" data-key={item.key}>
+        <div ref={sourceRef as React.RefObject<HTMLDivElement>} className="ev user" data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
           {item.blocks.map((block, i) => {
             if (block.type === 'text') return <div key={i}>{block.text}</div>;
             if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
-            return <QuoteChip key={i} block={block} onJump={onJumpToSeq} />;
+            return <QuoteChip key={i} block={block} targetId={citationTargetId(item.seq, i)} onJump={onJumpToQuote} />;
           })}
         </div>
       );
@@ -481,16 +629,20 @@ function Row({ item, onRespond, onJumpToSeq }: { item: Item; onRespond: (optionI
       return (
         <div
           className="ev msg"
+          ref={sourceRef as React.RefObject<HTMLDivElement>}
           data-seq={item.seq}
           data-role="assistant"
           data-key={item.key}
-          onClick={handleCodeCopyClick}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest('.annotation-quote-highlight')) onSourceClick(event);
+            else handleCodeCopyClick(event);
+          }}
           dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
         />
       );
     case 'thought':
       return (
-        <details className="ev thought" data-seq={item.seq} data-role="thought" data-key={item.key}>
+        <details ref={sourceRef as React.RefObject<HTMLDetailsElement>} className="ev thought" data-seq={item.seq} data-role="thought" data-key={item.key} onClick={onSourceClick}>
           <summary>thinking…</summary>
           {item.text}
         </details>
