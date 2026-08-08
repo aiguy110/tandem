@@ -1,6 +1,6 @@
 # Transcript annotations (highlight + comment → prompt)
 
-Status: design / in progress. Desktop-only first pass; mobile UX deferred.
+Status: implemented. Touch selection is supported alongside desktop selection.
 
 ## Goal
 
@@ -156,12 +156,13 @@ free-text block.
   `Item`, and in `Row()` stamp `data-seq`, `data-role`, `data-key` on the wrapper
   `div` so a DOM selection can be resolved to an anchor. Skip `permission` and
   `plan` rows (not annotatable).
-- **Selection capture.** On `mouseup` within `.transcript`, read
+- **Selection capture.** On `mouseup` or `touchend` within `.transcript`, read
   `window.getSelection()`; if non-empty, walk from `anchorNode` to the nearest
   `[data-seq]`, build the anchor `{seq, role, quote}`, and show a floating
   **Comment** button at `range.getBoundingClientRect()` (same pattern as the
-  existing `scroll-latest` button). Don't offer it on the actively-streaming last
-  message row.
+  existing `scroll-latest` button). On touch devices it is placed below the
+  selection so Android/iOS's native selection toolbar does not cover it. Don't
+  offer it on the actively-streaming last message row.
 - **Comment popover.** Clicking the button opens a small popover with a textarea +
   "Add". On Add → `store.addAnnotation(agentId, anchor, comment)` → `add_annotation`
   message; clear the DOM selection.
@@ -219,6 +220,5 @@ free-text block.
 
 ## Out of scope (v1)
 
-- Mobile / touch selection UX.
 - Resolved/archived annotation states (send simply clears).
 - Multi-row annotations; character-offset anchoring; annotation replies/threads.

@@ -130,7 +130,7 @@ interface SelectionAnchor {
   seq: number;
   role: string;
   quote: string;
-  rect: { top: number; left: number; width: number };
+  rect: { top: number; left: number; width: number; height: number };
 }
 
 // A quote can point to either a pending annotation in the review tray or a
@@ -338,7 +338,10 @@ export function TranscriptPane() {
     flash(target, 'annotation-link-flash', 1700);
   };
 
-  const onTranscriptMouseUp = () => {
+  // Android/iOS selection handles complete with touchend rather than mouseup.
+  // Read on the next task so the browser has finished updating Selection after
+  // its native selection toolbar is displayed.
+  const captureSelection = () => {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
       clearSelectionUi();
@@ -370,7 +373,7 @@ export function TranscriptPane() {
       seq,
       role,
       quote: text.length > ANNOTATION_QUOTE_MAX ? text.slice(0, ANNOTATION_QUOTE_MAX) : text,
-      rect: { top: rect.top, left: rect.left, width: rect.width },
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
     });
     setPopoverOpen(false);
     setPopoverText('');
@@ -380,13 +383,13 @@ export function TranscriptPane() {
   // the start of a fresh selection drag).
   useEffect(() => {
     if (!selAnchor) return;
-    const onDocMouseDown = (e: MouseEvent) => {
+    const onDocPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('.annotation-comment-btn') || target.closest('.annotation-popover')) return;
       clearSelectionUi();
     };
-    document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('pointerdown', onDocPointerDown);
+    return () => document.removeEventListener('pointerdown', onDocPointerDown);
   }, [selAnchor]);
 
   if (!agent) return null;
@@ -395,7 +398,13 @@ export function TranscriptPane() {
     <div className="pane">
       <div className="transcript-wrap">
         <div className="transcript-history">
-          <div className="transcript" ref={scrollRef} onScroll={onScroll} onMouseUp={onTranscriptMouseUp}>
+          <div
+            className="transcript"
+            ref={scrollRef}
+            onScroll={onScroll}
+            onMouseUp={captureSelection}
+            onTouchEnd={() => window.setTimeout(captureSelection, 0)}
+          >
             {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
             {transcriptItems.map((it) => (
               <Row
@@ -417,10 +426,17 @@ export function TranscriptPane() {
             <button
               type="button"
               className="annotation-comment-btn"
-              style={{ top: selAnchor.rect.top - 34, left: selAnchor.rect.left + selAnchor.rect.width / 2 }}
+              style={{
+                top: usesSoftKeyboard() ? selAnchor.rect.top + selAnchor.rect.height + 10 : selAnchor.rect.top - 34,
+                left: selAnchor.rect.left + selAnchor.rect.width / 2,
+              }}
               onClick={() => {
-                // Preserve the established initial placement above the selected text.
-                setPopoverPosition({ top: selAnchor.rect.top - 34, left: selAnchor.rect.left });
+                // On touch devices the action is below the selection, outside
+                // Android's native copy/share toolbar; keep the popover nearby.
+                setPopoverPosition({
+                  top: usesSoftKeyboard() ? selAnchor.rect.top + selAnchor.rect.height + 44 : selAnchor.rect.top - 34,
+                  left: selAnchor.rect.left,
+                });
                 setPopoverOpen(true);
               }}
             >
