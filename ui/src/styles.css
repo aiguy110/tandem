@@ -402,6 +402,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   z-index: 40;
 }
 .annotation-comment-btn:hover { background: var(--surface-2); }
+/* Native Android/iOS selection controls occupy the space above a selection.
+   TranscriptPane puts this action below it on touch devices, so keep a generous
+   touch target without changing desktop's compact floating control. */
+@media (hover: none) and (pointer: coarse) {
+  .annotation-comment-btn { min-height: 40px; padding: 8px 15px; touch-action: manipulation; }
+}
 .annotation-popover {
   position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 7px;
   width: 260px; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-md);
