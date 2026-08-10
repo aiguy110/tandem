@@ -222,6 +222,12 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	if s.ControlMode() != "transcript" || s.SessionID() != "sess_mock" {
 		t.Fatalf("reload mode=%s sid=%s", s.ControlMode(), s.SessionID())
 	}
+	f.mu.Lock()
+	if len(f.requests) == 0 || !f.requests[len(f.requests)-1].CaptureReplay {
+		f.mu.Unlock()
+		t.Fatalf("ACP reload did not capture session/load replay: %#v", f.requests)
+	}
+	f.mu.Unlock()
 	cmd, _ := r.ResumeCLICommand(s.ID)
 	if !filepath.IsAbs(cmd) {
 		t.Fatalf("resume command %q", cmd)

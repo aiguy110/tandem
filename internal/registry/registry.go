@@ -1408,7 +1408,11 @@ func (r *Registry) EnterTerminal(ctx context.Context, id string, interrupt bool)
 
 func (r *Registry) reloadACP(ctx context.Context, s *session.Session, cwd, sessionID string) error {
 	startACP := func() (agentadapter.Adapter, error) {
-		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: s.ID, CWD: cwd, ResumeSessionID: sessionID, Spec: s.Spec, Log: s.Log})
+		// session/load re-streams the conversation. Unlike a daemon restart,
+		// this follows a live CLI handoff, so retaining that replay is how the
+		// structured transcript catches up with messages written through the
+		// resumable CLI while ACP was stopped.
+		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: s.ID, CWD: cwd, ResumeSessionID: sessionID, CaptureReplay: true, Spec: s.Spec, Log: s.Log})
 	}
 	return s.SwapAdapter(ctx, startACP, "transcript", nil)
 }
