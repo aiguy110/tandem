@@ -288,6 +288,20 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     };
     el.addEventListener('focusin', onRendererFocusIn);
 
+    // ghostty-web owns a contenteditable input surface and suppresses its
+    // beforeinput events. Its key events still arrive through onData, but a
+    // browser paste does not. Intercept it while capturing so it cannot be
+    // swallowed by that surface, then send the clipboard text to the PTY as
+    // one byte stream (including any newlines) just like a native terminal.
+    const onRendererPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData('text/plain');
+      if (text === undefined) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (text) cbs.current.onData(text);
+    };
+    el.addEventListener('paste', onRendererPaste, true);
+
     (async () => {
       const created = await createRenderer(el, selectedEngine());
       if (disposed) {
@@ -320,6 +334,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     return () => {
       disposed = true;
       el.removeEventListener('focusin', onRendererFocusIn);
+      el.removeEventListener('paste', onRendererPaste, true);
       ro?.disconnect();
       unsub?.();
       renderer?.dispose();
