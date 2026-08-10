@@ -6,6 +6,7 @@ import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
+import { PermissionRequestDetails } from '../PermissionRequest';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -705,8 +706,9 @@ function Row({
     case 'permission':
       return (
         <div className="inline-approval">
-          <div className="t">⚠ Permission required: {item.title}</div>
-          <div className="acts" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <div className="permission-request-label">Permission request</div>
+          <PermissionRequestDetails title={item.title} />
+          <div className="acts permission-request-actions">
             {item.options.map((o) => (
               <button key={o.optionId} className={/reject|deny|no/i.test(o.name) ? 'btn-deny' : 'btn-approve'} onClick={() => onRespond(o.optionId)}>
                 {o.name}

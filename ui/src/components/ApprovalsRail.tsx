@@ -1,5 +1,6 @@
 import { useStore, allApprovals, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
 import type { NotifSeverity } from '../store';
+import { PermissionRequestDetails } from './PermissionRequest';
 
 // Green / yellow / red, and the dot + card modifier that render it.
 const SEVERITY_CLASS: Record<NotifSeverity, string> = {
@@ -112,7 +113,7 @@ export function ApprovalsRail() {
               <div className="who">
                 <span className={`dot ${status ?? 'blocked'}`} /> {agents[agentId]?.name ?? agentId}
               </div>
-              <div className="what">{approval.title}</div>
+              <div className="permission-request-rail"><PermissionRequestDetails title={approval.title} /></div>
               <div className="acts">
                 <button
                   className="btn-approve"

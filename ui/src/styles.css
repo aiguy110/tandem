@@ -350,8 +350,27 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .mini-term { background: #05090c; color: #d6e2ea; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: var(--fs-xs); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
 .mini-term .th { color: var(--agent); margin-bottom: 4px; }
 
-.inline-approval { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: var(--r-md); padding: 10px 12px; }
-.inline-approval .t { font-family: var(--font-mono); font-size: var(--fs-sm); margin-bottom: 8px; }
+.inline-approval { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: var(--r-md); padding: 12px; }
+.permission-request-label {
+  margin-bottom: 7px; color: var(--warn); font-size: var(--fs-xs); font-weight: 700;
+  letter-spacing: .7px; text-transform: uppercase;
+}
+.permission-request-details { min-width: 0; }
+.permission-request-title { display: flex; align-items: flex-start; gap: 7px; font-size: var(--fs-md); font-weight: 650; line-height: 1.35; }
+.permission-request-icon { color: var(--warn); line-height: 1.3; }
+.permission-request-title code, .permission-request-tool code {
+  font-family: var(--font-mono); font-size: .92em; font-weight: 600;
+}
+.permission-request-meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin: 8px 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.permission-request-meta b { color: var(--text-faint); font-weight: 600; text-transform: uppercase; letter-spacing: .35px; }
+.permission-request-tool { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px; align-items: baseline; padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: color-mix(in srgb, var(--surface) 72%, transparent); }
+.permission-request-tool > span { color: var(--text-faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .45px; }
+.permission-request-tool code { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.permission-request-purpose { margin: 9px 0 0; color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.45; }
+.permission-request-note { margin: 8px 0 0; padding: 7px 8px; border-left: 2px solid var(--border-strong); color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.4; }
+.permission-request-note span { color: var(--agent); }
+.permission-request-fallback { color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+.permission-request-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .err-banner { border: 1px solid var(--err); background: var(--err-soft); color: var(--err); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-sm); }
 
 /* ---- prompt bar ---- */
@@ -542,6 +561,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .appr.notification.sev-failure { border-color: var(--err); background: var(--err-soft); }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
+.permission-request-rail { margin: 2px 0 10px; }
+.permission-request-rail .permission-request-title { font-size: var(--fs-sm); }
+.permission-request-rail .permission-request-meta { margin: 7px 0; }
+.permission-request-rail .permission-request-tool { padding: 6px 7px; }
+.permission-request-rail .permission-request-purpose { margin-top: 8px; }
+.permission-request-rail .permission-request-note { margin-top: 7px; }
 .appr .acts { display: flex; gap: 6px; }
 /* Option names can be long (e.g. a bundled "Always Allow Bash(…), Bash(…)"), so
    let buttons grow to fit and wrap instead of clipping at a fixed height (which
