@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +17,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem <version|daemon|debug config>"
+const usage = "usage: tandem <version|update|daemon|debug config>"
 
 // Run executes the requested Tandem subcommand and returns its process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -79,13 +78,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
+	case "update":
+		if err := updater.Update(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
+			fmt.Fprintf(stderr, "update tandem: %v\n", err)
+			return 1
+		}
+		return 0
 	case "daemon":
-		if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stderr}); err != nil {
+		if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
 			fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
-			// The binary was replaced but the restart failed; don't run stale code.
-			if errors.Is(err, updater.ErrRestartRequired) {
-				return 1
-			}
 		}
 		if err := daemon.Run(stdout); err != nil {
 			fmt.Fprintf(stderr, "run daemon: %v\n", err)

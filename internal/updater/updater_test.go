@@ -3,7 +3,6 @@ package updater
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,11 +38,10 @@ func TestNewerVersion(t *testing.T) {
 	}
 }
 
-func TestCheckAtStartupLogsWithoutDownloadingWhenNonInteractive(t *testing.T) {
+func TestCheckAtStartupReportsWithoutDownloading(t *testing.T) {
 	var downloads atomic.Int32
 	server := releaseServer(t, []byte("new binary"), &downloads)
 	defer server.Close()
-	interactive := false
 	var log strings.Builder
 
 	err := CheckAtStartup(context.Background(), Options{
@@ -51,7 +49,6 @@ func TestCheckAtStartupLogsWithoutDownloadingWhenNonInteractive(t *testing.T) {
 		APIBaseURL:     server.URL,
 		HTTPClient:     server.Client(),
 		Log:            &log,
-		Interactive:    &interactive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -59,12 +56,15 @@ func TestCheckAtStartupLogsWithoutDownloadingWhenNonInteractive(t *testing.T) {
 	if !strings.Contains(log.String(), "newer release is available: v1.1.0") {
 		t.Fatalf("log = %q", log.String())
 	}
+	if !strings.Contains(log.String(), "run 'tandem update'") {
+		t.Fatalf("log = %q, want update command", log.String())
+	}
 	if got := downloads.Load(); got != 0 {
 		t.Fatalf("download requests = %d, want 0", got)
 	}
 }
 
-func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
+func TestUpdateReplacesExecutable(t *testing.T) {
 	newBinary := []byte("new binary contents")
 	var downloads atomic.Int32
 	server := releaseServer(t, newBinary, &downloads)
@@ -74,37 +74,16 @@ func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	input := filepath.Join(t.TempDir(), "answer")
-	if err := os.WriteFile(input, []byte("yes\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := os.Open(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stdin.Close()
-	interactive := true
 	var log strings.Builder
-	var reexecArgv0 string
-	var reexecEnv []string
-	reexecCalls := 0
 
-	err = CheckAtStartup(context.Background(), Options{
+	err := Update(context.Background(), Options{
 		CurrentVersion: "1.0.0",
 		APIBaseURL:     server.URL,
 		GOOS:           "linux",
 		GOARCH:         "amd64",
-		Stdin:          stdin,
 		Log:            &log,
 		HTTPClient:     server.Client(),
 		Executable:     target,
-		Interactive:    &interactive,
-		reexec: func(argv0 string, argv, envv []string) error {
-			reexecCalls++
-			reexecArgv0 = argv0
-			reexecEnv = envv
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,82 +98,32 @@ func TestCheckAtStartupAcceptedUpdateReplacesExecutable(t *testing.T) {
 	if got := downloads.Load(); got != 2 {
 		t.Fatalf("download requests = %d, want 2", got)
 	}
-	if reexecCalls != 1 {
-		t.Fatalf("reexec calls = %d, want 1", reexecCalls)
-	}
-	if reexecArgv0 != target {
-		t.Fatalf("reexec argv0 = %q, want %q", reexecArgv0, target)
-	}
-	if !containsEnv(reexecEnv, updatedEnvVar+"=v1.1.0") {
-		t.Fatalf("reexec env missing %s=v1.1.0: %v", updatedEnvVar, reexecEnv)
-	}
-	if !strings.Contains(log.String(), "restarting into the new binary") {
+	if !strings.Contains(log.String(), "updated "+target+" from 1.0.0 to v1.1.0") {
 		t.Fatalf("log = %q", log.String())
 	}
 }
 
-func TestUpdatedEnvVarSkipsCheck(t *testing.T) {
-	t.Setenv(updatedEnvVar, "v1.1.0")
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("re-exec'd process made an HTTP request")
-		return nil, nil
-	})}
-	if err := CheckAtStartup(context.Background(), Options{CurrentVersion: "v1.0.0", HTTPClient: client}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReexecFailureReportsRestartRequired(t *testing.T) {
-	newBinary := []byte("new binary contents")
+func TestUpdateAlreadyCurrentDoesNotDownload(t *testing.T) {
 	var downloads atomic.Int32
-	server := releaseServer(t, newBinary, &downloads)
+	server := releaseServer(t, []byte("new binary contents"), &downloads)
 	defer server.Close()
+	var log strings.Builder
 
-	target := filepath.Join(t.TempDir(), "tandem")
-	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	input := filepath.Join(t.TempDir(), "answer")
-	if err := os.WriteFile(input, []byte("yes\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := os.Open(input)
+	err := Update(context.Background(), Options{
+		CurrentVersion: "v1.1.0",
+		APIBaseURL:     server.URL,
+		Log:            &log,
+		HTTPClient:     server.Client(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
-	interactive := true
-	var log strings.Builder
-
-	err = CheckAtStartup(context.Background(), Options{
-		CurrentVersion: "1.0.0",
-		APIBaseURL:     server.URL,
-		GOOS:           "linux",
-		GOARCH:         "amd64",
-		Stdin:          stdin,
-		Log:            &log,
-		HTTPClient:     server.Client(),
-		Executable:     target,
-		Interactive:    &interactive,
-		reexec: func(string, []string, []string) error {
-			return fmt.Errorf("exec denied")
-		},
-	})
-	if !errors.Is(err, ErrRestartRequired) {
-		t.Fatalf("err = %v, want ErrRestartRequired", err)
+	if got := downloads.Load(); got != 0 {
+		t.Fatalf("download requests = %d, want 0", got)
 	}
-	if !strings.Contains(log.String(), "refusing to continue on the old version") {
+	if !strings.Contains(log.String(), "already up to date") {
 		t.Fatalf("log = %q", log.String())
 	}
-}
-
-func containsEnv(env []string, want string) bool {
-	for _, entry := range env {
-		if entry == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestDevelopmentBuildSkipsNetwork(t *testing.T) {
@@ -204,6 +133,12 @@ func TestDevelopmentBuildSkipsNetwork(t *testing.T) {
 	})}
 	if err := CheckAtStartup(context.Background(), Options{CurrentVersion: "dev", HTTPClient: client}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDevelopmentBuildCannotSelfUpdate(t *testing.T) {
+	if err := Update(context.Background(), Options{CurrentVersion: "dev"}); err == nil || !strings.Contains(err.Error(), "development builds") {
+		t.Fatalf("Update(dev) error = %v", err)
 	}
 }
 

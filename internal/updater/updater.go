@@ -1,8 +1,7 @@
-// Package updater checks GitHub releases and can replace the running Tandem binary.
+// Package updater checks GitHub releases and can replace the Tandem binary.
 package updater
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,23 +15,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-
-	"github.com/mattn/go-isatty"
 )
 
 const defaultRepository = "aiguy110/tandem"
-
-// updatedEnvVar is set on the environment of the re-exec'd process so the freshly
-// started binary skips the update check (it is already the newest version) and
-// cannot enter an exec loop. A genuine later restart spawns a process without it.
-const updatedEnvVar = "TANDEM_UPDATED"
-
-// ErrRestartRequired reports that the on-disk binary was replaced with a newer
-// version but the in-place restart failed. Callers should exit rather than keep
-// running the now-stale code.
-var ErrRestartRequired = errors.New("tandem: updated the binary but could not restart into it")
 
 // Options supplies the process-specific dependencies used by CheckAtStartup.
 // Zero values select the production defaults.
@@ -42,15 +28,9 @@ type Options struct {
 	APIBaseURL     string
 	GOOS           string
 	GOARCH         string
-	Stdin          *os.File
 	Log            io.Writer
 	HTTPClient     *http.Client
 	Executable     string
-	Interactive    *bool
-	// reexec replaces the current process image with the updated binary. It
-	// defaults to syscall.Exec and is only overridden in tests, which cannot let
-	// the real exec replace the test process.
-	reexec func(argv0 string, argv, envv []string) error
 }
 
 type release struct {
@@ -63,15 +43,10 @@ type asset struct {
 	DownloadURL string `json:"browser_download_url"`
 }
 
-// CheckAtStartup checks the latest GitHub release, prompts on a TTY, and atomically
-// replaces the current executable when the user accepts. Development builds and an
-// explicitly disabled check do no network I/O.
+// CheckAtStartup checks the latest GitHub release and reports how to update. It
+// never prompts, downloads, or changes the running executable. Development
+// builds and an explicitly disabled check do no network I/O.
 func CheckAtStartup(ctx context.Context, opts Options) error {
-	// A process we just re-exec'd into is already the newest binary; skip the
-	// check so it proceeds straight to the daemon and cannot loop.
-	if os.Getenv(updatedEnvVar) != "" {
-		return nil
-	}
 	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return nil
 	}
@@ -89,26 +64,30 @@ func CheckAtStartup(ctx context.Context, opts Options) error {
 		return nil
 	}
 
-	fmt.Fprintf(opts.Log, "tandem: a newer release is available: %s (running %s)\n", latest.TagName, opts.CurrentVersion)
-	interactive := isTerminal(opts.Stdin)
-	if opts.Interactive != nil {
-		interactive = *opts.Interactive
+	fmt.Fprintf(opts.Log, "tandem: a newer release is available: %s (running %s); run 'tandem update' to install it\n", latest.TagName, opts.CurrentVersion)
+	return nil
+}
+
+// Update downloads the latest GitHub release, verifies its checksum, and
+// atomically replaces the current executable. Invoking the explicit command is
+// the user's consent, so this operation has no additional interactive prompt.
+func Update(ctx context.Context, opts Options) error {
+	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" {
+		return errors.New("self-update is unavailable for development builds")
 	}
-	if !interactive {
+	setDefaults(&opts)
+	latest, err := fetchLatest(ctx, opts)
+	if err != nil {
+		return err
+	}
+	newer, err := newerVersion(opts.CurrentVersion, latest.TagName)
+	if err != nil {
+		return err
+	}
+	if !newer {
+		fmt.Fprintf(opts.Log, "tandem: already up to date (%s)\n", opts.CurrentVersion)
 		return nil
 	}
-
-	fmt.Fprintf(opts.Log, "Update Tandem to %s in place? [y/N] ", latest.TagName)
-	answer, err := bufio.NewReader(opts.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("read update response: %w", err)
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	if answer != "y" && answer != "yes" {
-		fmt.Fprintln(opts.Log, "tandem: update skipped")
-		return nil
-	}
-
 	binaryName := fmt.Sprintf("tandem_%s_%s", opts.GOOS, opts.GOARCH)
 	binary, ok := findAsset(latest.Assets, binaryName)
 	if !ok {
@@ -125,17 +104,7 @@ func CheckAtStartup(ctx context.Context, opts Options) error {
 	if err := replaceExecutable(ctx, opts, binary.DownloadURL, wantSHA); err != nil {
 		return err
 	}
-
-	// The binary on disk is now the newer version, but this process is still
-	// running the old code. Re-exec in place (same PID, FDs, and terminal) so we
-	// continue as the new version. CheckAtStartup runs before the daemon binds
-	// anything, so there is no state to drain here.
-	fmt.Fprintf(opts.Log, "tandem: updated %s to %s; restarting into the new binary\n", opts.Executable, latest.TagName)
-	env := append(os.Environ(), updatedEnvVar+"="+latest.TagName)
-	if err := opts.reexec(opts.Executable, os.Args, env); err != nil {
-		fmt.Fprintf(opts.Log, "tandem: the binary on disk was updated to %s but the restart failed; refusing to continue on the old version\n", latest.TagName)
-		return fmt.Errorf("%w: %v", ErrRestartRequired, err)
-	}
+	fmt.Fprintf(opts.Log, "tandem: updated %s from %s to %s\n", opts.Executable, opts.CurrentVersion, latest.TagName)
 	return nil
 }
 
@@ -152,9 +121,6 @@ func setDefaults(opts *Options) {
 	if opts.GOARCH == "" {
 		opts.GOARCH = runtime.GOARCH
 	}
-	if opts.Stdin == nil {
-		opts.Stdin = os.Stdin
-	}
 	if opts.Log == nil {
 		opts.Log = os.Stderr
 	}
@@ -166,9 +132,6 @@ func setDefaults(opts *Options) {
 		if err == nil {
 			opts.Executable = executable
 		}
-	}
-	if opts.reexec == nil {
-		opts.reexec = syscall.Exec
 	}
 }
 
@@ -284,10 +247,6 @@ func download(ctx context.Context, client *http.Client, url string, limit int64)
 		return nil, errors.New("response is too large")
 	}
 	return data, nil
-}
-
-func isTerminal(file *os.File) bool {
-	return file != nil && (isatty.IsTerminal(file.Fd()) || isatty.IsCygwinTerminal(file.Fd()))
 }
 
 func newerVersion(current, latest string) (bool, error) {

@@ -49,6 +49,20 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
+func TestUpdateCommandRejectsDevelopmentBuild(t *testing.T) {
+	oldVersion := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = oldVersion })
+	buildinfo.Version = "dev"
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"update"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run(update) exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "development builds") {
+		t.Fatalf("Run(update) stderr = %q", stderr.String())
+	}
+}
+
 func TestDaemonCommandReportsConfigurationFailure(t *testing.T) {
 	t.Setenv("TANDEM_HOME", t.TempDir())
 	t.Setenv("TANDEM_PORT", "not-a-port")
