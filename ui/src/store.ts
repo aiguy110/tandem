@@ -39,10 +39,11 @@ import type {
   WorkspaceDiff,
 } from './wire';
 
-// The focus/bandwidth rule (docs/browser.md): only the focused, browser-viewing
-// client streams the screencast. Base subscription omits 'browser'; the mounted
-// BrowserPane opts its agent in via setBrowserSub.
-const BASE_CHANNELS: Channel[] = ['transcript', 'pty', 'terminals', 'status'];
+// The focus/bandwidth rules: browser frames stream only for the focused Browser
+// pane, and raw PTY / worktree-shell scrollback streams only for the focused
+// CLI or Terminal view. In particular, a page load must not replay every
+// agent's terminal history before the user asks to see it.
+const BASE_CHANNELS: Channel[] = ['transcript', 'terminals', 'status'];
 
 // A pending agent-initiated takeover (browser.request_takeover) for the rail.
 export interface Takeover {
@@ -354,11 +355,37 @@ const isNarrowViewport = (): boolean =>
   typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(MOBILE_BREAKPOINT).matches;
 
 export const useStore = create<StoreState>((set, get) => {
-  // Channels to subscribe for an agent: base always, plus 'browser' only for the
-  // agent whose Browser pane is open (the screencast focus rule).
-  const channelsFor = (id: string): Channel[] => (get().browserSubAgent === id ? [...BASE_CHANNELS, 'browser'] : BASE_CHANNELS);
-  function subscribeAgent(id: string): void {
-    client.send({ t: 'subscribe', agentId: id, channels: channelsFor(id), sinceSeq: get().agents[id]?.lastSeq ?? 0 });
+  // Channels to subscribe for an agent: base always; browser only for the
+  // focused Browser pane; and terminal bytes only when the user is looking at
+  // the agent CLI or worktree Terminal. raw_pty and shell_pty share the daemon
+  // `pty` channel, so visiting either terminal surface enables it.
+  const wantsPty = (id: string): boolean => {
+    const state = get();
+    if (state.focusedId !== id) return false;
+    if (state.pane === 'shell') return true;
+    const agent = state.agents[id];
+    return state.pane === 'chat' && !!agent && (agent.adapter === 'pty' || agent.controlMode === 'terminal');
+  };
+  const channelsFor = (id: string): Channel[] => {
+    const channels = [...BASE_CHANNELS];
+    if (wantsPty(id)) channels.push('pty');
+    if (get().browserSubAgent === id) channels.push('browser');
+    return channels;
+  };
+  function subscribeAgent(id: string, replayPty = false): void {
+    // Terminal output was deliberately skipped while this agent was in the
+    // background. Request its full channel history only on the first visit to
+    // a terminal surface; normal re-subscriptions continue incrementally.
+    const sinceSeq = replayPty ? 0 : get().agents[id]?.lastSeq ?? 0;
+    client.send({ t: 'subscribe', agentId: id, channels: channelsFor(id), sinceSeq });
+  }
+  function replayPtyFor(id: string): void {
+    if (!get().agents[id]) return;
+    // A full terminal replay replaces prior terminal state. Clear the client
+    // buffers first so re-visiting a pane never appends duplicate scrollback.
+    ptyHub.clear(id);
+    shellHub.clear(id);
+    subscribeAgent(id, true);
   }
 
   // Apply one server message. This is the ONLY place agent state is mutated by
@@ -749,11 +776,17 @@ export const useStore = create<StoreState>((set, get) => {
     submitToken: (t) => client.setToken(t.trim()),
     // Focusing an agent acknowledges its completed-turn notifications, whether
     // the user came from the left rail or the notifications rail.
-    focus: (id) => set((st) => {
-      const agent = st.agents[id];
-      if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
-      return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
-    }),
+    focus: (id) => {
+      const previous = get().focusedId;
+      const previousHadPty = previous ? wantsPty(previous) : false;
+      set((st) => {
+        const agent = st.agents[id];
+        if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
+        return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
+      });
+      if (previous && previous !== id && previousHadPty) subscribeAgent(previous);
+      if (wantsPty(id)) replayPtyFor(id);
+    },
     reorderAgent: (id, targetId, after) => {
       const order = [...get().order];
       const from = order.indexOf(id);
@@ -786,7 +819,15 @@ export const useStore = create<StoreState>((set, get) => {
     // Selecting Terminal is view-only until its shroud's explicit Take control
     // action calls enterTerminal. Even an idle ACP session must never be swapped
     // merely because the user inspected the tab.
-    setPane: (p) => set({ pane: p }),
+    setPane: (p) => {
+      if (get().pane === p) return;
+      const id = get().focusedId;
+      const hadPty = id ? wantsPty(id) : false;
+      set({ pane: p });
+      if (!id) return;
+      if (wantsPty(id) && !hadPty) replayPtyFor(id);
+      else if (hadPty && !wantsPty(id)) subscribeAgent(id);
+    },
     toggleTheme: () =>
       set((st) => {
         const theme = st.theme === 'dark' ? 'light' : 'dark';
@@ -853,13 +894,22 @@ export const useStore = create<StoreState>((set, get) => {
     enterTerminal: (agentId, interrupt = false) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, resolve);
+        pendingAcks.set(corrId, (result) => {
+          // The CLI switch is an explicit request to view terminal output. It
+          // may emit control_state before its ack, so opt into PTY replay here
+          // rather than waiting for a later pane change.
+          if (!result.error) replayPtyFor(agentId);
+          resolve(result);
+        });
         client.send({ t: 'enter_terminal', agentId, interrupt, corrId });
       }),
     leaveTerminal: (agentId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, resolve);
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error && !wantsPty(agentId)) subscribeAgent(agentId);
+          resolve(result);
+        });
         client.send({ t: 'leave_terminal', agentId, corrId });
       }),
     openShell: (agentId, cols, rows) =>
@@ -1063,14 +1113,20 @@ export const useStore = create<StoreState>((set, get) => {
       if (!a || !a.browserActive) return;
       client.send({ t: 'browser_control', agentId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
     },
-    nav: (dir) =>
+    nav: (dir) => {
+      const previous = get().focusedId;
+      const previousHadPty = previous ? wantsPty(previous) : false;
       set((st) => {
         const ranked = rankAgents(st.agents, st.order);
         if (ranked.length === 0) return st;
         const i = st.focusedId ? ranked.indexOf(st.focusedId) : -1;
         const next = ranked[(i + dir + ranked.length) % ranked.length];
         return { focusedId: next };
-      }),
+      });
+      const next = get().focusedId;
+      if (previous && previous !== next && previousHadPty) subscribeAgent(previous);
+      if (next && wantsPty(next)) replayPtyFor(next);
+    },
   };
 });
 
