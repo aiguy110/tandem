@@ -9,6 +9,7 @@ build/
 out/
 *.tsbuildinfo
 /tandem
+/release/
 
 # Env / secrets
 .env
