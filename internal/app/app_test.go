@@ -63,18 +63,41 @@ func TestUpdateCommandRejectsDevelopmentBuild(t *testing.T) {
 	}
 }
 
-func TestDaemonCommandReportsConfigurationFailure(t *testing.T) {
+func TestBareCommandReportsConfigurationFailure(t *testing.T) {
 	t.Setenv("TANDEM_HOME", t.TempDir())
 	t.Setenv("TANDEM_PORT", "not-a-port")
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"daemon"}, &stdout, &stderr); code != 1 {
-		t.Fatalf("Run(daemon) exit code = %d, want 1", code)
+	if code := Run(nil, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run(nil) exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "TANDEM_PORT") {
-		t.Fatalf("Run(daemon) stderr = %q, want configuration error", stderr.String())
+		t.Fatalf("Run(nil) stderr = %q, want configuration error", stderr.String())
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("Run(daemon) stdout = %q, want empty", stdout.String())
+		t.Fatalf("Run(nil) stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestSetupCommandRequiresTerminal(t *testing.T) {
+	old := stdinIsTerminal
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal = old })
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"setup"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("Run(setup) exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "requires an interactive terminal") {
+		t.Fatalf("Run(setup) stderr = %q", stderr.String())
+	}
+}
+
+func TestDaemonCommandWasRemoved(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"daemon"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("Run(daemon) exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown command") {
+		t.Fatalf("Run(daemon) stderr = %q", stderr.String())
 	}
 }
 

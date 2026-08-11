@@ -83,7 +83,7 @@ Stage the build, compile the native daemon, and open its bootstrap URL:
 cd ..
 ./scripts/stage-go-ui.sh
 go build -o tandem ./cmd/tandem
-./tandem daemon
+./tandem
 # → open the printed http://127.0.0.1:7717/#t=<token>
 ```
 

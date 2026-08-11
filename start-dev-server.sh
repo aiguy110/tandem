@@ -25,4 +25,4 @@ echo "==> Building native daemon"
 "$go_cmd" build -o tandem ./cmd/tandem
 
 echo "==> Starting native daemon with embedded UI"
-exec ./tandem daemon
+exec ./tandem

@@ -40,7 +40,7 @@ func Run(stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if _, statErr := os.Stat(config.ConfigFilePath(cfg.Home)); os.IsNotExist(statErr) {
-		fmt.Fprintf(stdout, "tandem: no configuration found at %s; using defaults. Run 'tandem' in a terminal to configure Tandem.\n", config.ConfigFilePath(cfg.Home))
+		fmt.Fprintf(stdout, "tandem: no configuration found at %s; using defaults. Run 'tandem setup' in a terminal to configure Tandem.\n", config.ConfigFilePath(cfg.Home))
 	}
 	return Serve(ctx, cfg, stdout)
 }
@@ -271,7 +271,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
-	fmt.Fprintf(stdout, "tandem daemon · http on %s:%d · home %s\n", cfg.Host, port, cfg.Home)
+	fmt.Fprintf(stdout, "tandem · http on %s:%d · home %s\n", cfg.Host, port, cfg.Home)
 	fmt.Fprintln(stdout, "websocket: authenticated subscriptions and replay enabled")
 	fmt.Fprintf(stdout, "bootstrap: %s\n", bootstrapURL)
 	fmt.Fprintf(stdout, "TANDEM_READY port=%d token=%s\n", port, token)

@@ -3,7 +3,7 @@
 Production runs the native Go daemon under the user unit in `deploy/tandem.service`.
 `start-dev-server.sh` is the unit entrypoint: it builds and stages the React UI, installs
 the Node-based ACP and Playwright adapters, builds `./tandem`, and replaces itself with
-`./tandem daemon`. The resulting process serves the embedded UI; `TANDEM_UI_DIR` remains an
+`./tandem`. The resulting process serves the embedded UI; `TANDEM_UI_DIR` remains an
 optional development override.
 
 Install the unit with `deploy/install.sh`. After changing Tandem, run:

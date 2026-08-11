@@ -82,7 +82,7 @@ agents:
 
 harnesses: {}
 
-# The `tandem` setup wizard (run bare `tandem` from a terminal) writes an
+# The `tandem setup` wizard writes an
 # operator-owned `settings:` block to $TANDEM_HOME/config.yml, separate from
 # the agent catalog above. It is never present in this shipped example file;
 # it's documented here only so the schema is discoverable. All fields are

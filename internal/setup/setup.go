@@ -1,6 +1,6 @@
-// Package setup implements Tandem's interactive first-run wizard: an
-// operator-facing prompt sequence, reachable only from a real terminal (bare
-// `tandem` with stdin a tty), that writes the persisted `settings:` block to
+// Package setup implements Tandem's interactive configuration wizard: an
+// operator-facing prompt sequence, reached with `tandem setup` from a real
+// terminal, that writes the persisted `settings:` block to
 // $TANDEM_HOME/config.yml and optionally installs the systemd --user service.
 package setup
 
@@ -631,7 +631,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%s daemon
+ExecStart=%s
 WorkingDirectory=%s
 Environment=TANDEM_HOME=%s
 Environment=PATH=%s

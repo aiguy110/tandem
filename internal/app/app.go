@@ -17,7 +17,11 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem <version|update|daemon|debug config>"
+const usage = "usage: tandem [setup|update|version|debug config]"
+
+var stdinIsTerminal = func() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+}
 
 // Run executes the requested Tandem subcommand and returns its process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -59,15 +63,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if len(args) == 0 {
-		if isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()) {
-			if err := setup.Run(context.Background(), os.Stdin, stdout); err != nil {
-				fmt.Fprintf(stderr, "setup: %v\n", err)
-				return 1
-			}
-			return 0
-		}
-		fmt.Fprintln(stderr, usage)
-		return 2
+		return runDaemon(stdout, stderr)
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, usage)
@@ -75,6 +71,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "setup":
+		if !stdinIsTerminal() {
+			fmt.Fprintln(stderr, "tandem setup requires an interactive terminal")
+			return 2
+		}
+		if err := setup.Run(context.Background(), os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "setup: %v\n", err)
+			return 1
+		}
+		return 0
 	case "version":
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
@@ -84,17 +90,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
-	case "daemon":
-		if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
-			fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
-		}
-		if err := daemon.Run(stdout); err != nil {
-			fmt.Fprintf(stderr, "run daemon: %v\n", err)
-			return 1
-		}
-		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
 		return 2
 	}
+}
+
+func runDaemon(stdout, stderr io.Writer) int {
+	if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
+		fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
+	}
+	if err := daemon.Run(stdout); err != nil {
+		fmt.Fprintf(stderr, "run daemon: %v\n", err)
+		return 1
+	}
+	return 0
 }

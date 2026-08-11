@@ -2,7 +2,7 @@
 
 The backend is Go; the React UI is Node-based.
 Use Go 1.24+, Node 22+, and Git. Start the complete application with
-`./start-dev-server.sh`, which embeds the current UI and runs `./tandem daemon`.
+`./start-dev-server.sh`, which embeds the current UI and runs `./tandem`.
 
 Before submitting backend changes, run `go test ./...`, `go vet ./...`, and the UI build.
 

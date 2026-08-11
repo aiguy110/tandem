@@ -25,6 +25,9 @@ and adds that directory to `.bashrc` or `.zshrc` when needed. It prints the requ
 start, the standalone binary uses `npm ci` to provision its locked ACP and browser runtime
 under `$TANDEM_HOME/runtime` (normally `~/.tandem/runtime`).
 
+Run `tandem setup` to configure Tandem, then run `tandem` to start it. The setup wizard
+can also install and enable Tandem as a systemd user service.
+
 ## What it is
 
 - **Orchestrate multiple agents** from one browser UI, each in its own isolated workspace.
@@ -54,7 +57,7 @@ steps:
 ./scripts/stage-go-ui.sh
 (cd runtime && npm install)                   # external ACP bridges + Playwright MCP
 go build -o tandem ./cmd/tandem
-./tandem daemon                              # → 127.0.0.1:7717
+./tandem                                     # → 127.0.0.1:7717
 ```
 
 The daemon prints a **bootstrap URL** with an embedded token on first run, e.g.

@@ -15,7 +15,7 @@ import (
 func TestUnitFile(t *testing.T) {
 	unit := unitFile("/path/to/tandem", "/home/op/.tandem", "/home/op/.tandem/node/bin")
 
-	if !strings.Contains(unit, "ExecStart=/path/to/tandem daemon") {
+	if !strings.Contains(unit, "ExecStart=/path/to/tandem\n") {
 		t.Errorf("unit file missing ExecStart line:\n%s", unit)
 	}
 	if !strings.Contains(unit, "Environment=PATH=/home/op/.tandem/node/bin:/usr/local/bin:/usr/bin:/bin") {

@@ -24,7 +24,7 @@ Manual equivalent:
 go test ./...                       # primary native test suite
 ./scripts/stage-go-ui.sh            # typecheck/build UI and stage embedded assets
 go build -o tandem ./cmd/tandem
-./tandem daemon
+./tandem
 
 # UI development
 cd ui && npm install && npm run build   # tsc --noEmit && vite build
