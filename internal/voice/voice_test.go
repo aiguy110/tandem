@@ -9,17 +9,18 @@ import (
 	"testing"
 
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/aiguy110/tandem/internal/languagemodel"
 )
 
-func TestRenderUsesCompatibleCleanupAndSpeechRequests(t *testing.T) {
-	var cleanupSeen, speechSeen bool
+func TestRenderUsesSharedLanguageModelAndSpeechRequests(t *testing.T) {
+	var languageModelSeen, speechSeen bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
 		}
 		switch r.URL.Path {
 		case "/v1/chat/completions":
-			cleanupSeen = true
+			languageModelSeen = true
 			var body struct {
 				Model    string                           `json:"model"`
 				Messages []struct{ Role, Content string } `json:"messages"`
@@ -28,7 +29,7 @@ func TestRenderUsesCompatibleCleanupAndSpeechRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			if body.Model != "cleaner" || len(body.Messages) != 2 || body.Messages[1].Content != "**Hello**, world." {
-				t.Errorf("cleanup body = %+v", body)
+				t.Errorf("language-model body = %+v", body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "Hello, world."}}}})
 		case "/v1/audio/speech":
@@ -48,10 +49,11 @@ func TestRenderUsesCompatibleCleanupAndSpeechRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := New(config.VoiceConfig{
-		Enabled: true, CleanupEndpoint: server.URL + "/v1/chat/completions", CleanupAPIKey: "secret", CleanupModel: "cleaner",
-		CleanupInstructions: "clean it", TTSEndpoint: server.URL + "/v1/audio/speech", TTSAPIKey: "secret", TTSModel: "speaker", TTSVoice: "sky", TTSFormat: "mp3",
-	})
+	language, err := languagemodel.New(config.LanguageModelConfig{Endpoint: server.URL + "/v1/chat/completions", APIKey: "secret", Model: "cleaner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(config.VoiceConfig{Enabled: true, Instructions: "clean it", TTSEndpoint: server.URL + "/v1/audio/speech", TTSAPIKey: "secret", TTSModel: "speaker", TTSVoice: "sky", TTSFormat: "mp3"}, language)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +61,8 @@ func TestRenderUsesCompatibleCleanupAndSpeechRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cleanupSeen || !speechSeen || string(audio.Data) != "audio-data" || audio.MIMEType != "audio/mpeg" {
-		t.Fatalf("render = %+v, cleanup=%v speech=%v", audio, cleanupSeen, speechSeen)
+	if !languageModelSeen || !speechSeen || string(audio.Data) != "audio-data" || audio.MIMEType != "audio/mpeg" {
+		t.Fatalf("render = %+v, languageModel=%v speech=%v", audio, languageModelSeen, speechSeen)
 	}
 }
 
@@ -70,7 +72,11 @@ func TestRenderSurfacesProviderProblem(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"bad credential"}}`))
 	}))
 	defer server.Close()
-	svc, err := New(config.VoiceConfig{Enabled: true, CleanupEndpoint: server.URL, CleanupModel: "cleaner", TTSEndpoint: server.URL, TTSModel: "tts", TTSVoice: "voice"})
+	language, err := languagemodel.New(config.LanguageModelConfig{Endpoint: server.URL, Model: "cleaner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(config.VoiceConfig{Enabled: true, TTSEndpoint: server.URL, TTSModel: "tts", TTSVoice: "voice"}, language)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +87,14 @@ func TestRenderSurfacesProviderProblem(t *testing.T) {
 }
 
 func TestNewRejectsInvalidEndpoint(t *testing.T) {
-	_, err := New(config.VoiceConfig{Enabled: true, CleanupEndpoint: "localhost:1", CleanupModel: "cleaner", TTSEndpoint: "http://localhost:2", TTSModel: "tts", TTSVoice: "voice"})
+	_, err := New(config.VoiceConfig{Enabled: true, TTSEndpoint: "localhost:1", TTSModel: "tts", TTSVoice: "voice"}, fakeCompleter{})
 	if err == nil || !strings.Contains(err.Error(), "absolute HTTP") {
 		t.Fatalf("New error = %v", err)
 	}
+}
+
+type fakeCompleter struct{}
+
+func (fakeCompleter) Complete(context.Context, string, string) (string, error) {
+	return "spoken text", nil
 }

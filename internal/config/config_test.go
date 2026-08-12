@@ -83,7 +83,8 @@ func TestSettingsFilePrecedence(t *testing.T) {
 		SteelBaseURL:  "https://steel.example",
 		SteelAPIKey:   "file-secret",
 		Node:          NodeSettings{Mode: "managed", Version: "20.10.0"},
-		Voice:         VoiceSettings{Enabled: true, CleanupEndpoint: "http://clean/v1/chat/completions", CleanupAPIKey: "clean-secret", CleanupModel: "cleaner", TTSEndpoint: "http://speak/v1/audio/speech", TTSAPIKey: "tts-secret", TTSModel: "speaker", TTSVoice: "voice", TTSFormat: "wav"},
+		LanguageModel: LanguageModelSettings{Endpoint: "http://clean/v1/chat/completions", APIKey: "clean-secret", Model: "cleaner"},
+		Voice:         VoiceSettings{Enabled: true, TTSEndpoint: "http://speak/v1/audio/speech", TTSAPIKey: "tts-secret", TTSModel: "speaker", TTSVoice: "voice", TTSFormat: "wav"},
 	}
 	if err := SaveSettings(home, s); err != nil {
 		t.Fatal(err)
@@ -112,12 +113,12 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b", c.HomeBaseDir}) {
 		t.Fatalf("project roots = %v", c.ProjectRoots)
 	}
-	if !c.Voice.Enabled || c.Voice.CleanupModel != "cleaner" || c.Voice.TTSVoice != "voice" || c.Voice.TTSFormat != "wav" {
-		t.Fatalf("voice settings not applied: %+v", c.Voice)
+	if c.LanguageModel.Model != "cleaner" || c.LanguageModel.Endpoint != "http://clean/v1/chat/completions" || !c.Voice.Enabled || c.Voice.TTSVoice != "voice" || c.Voice.TTSFormat != "wav" {
+		t.Fatalf("language/voice settings not applied: language=%+v voice=%+v", c.LanguageModel, c.Voice)
 	}
 	redacted := Redacted(c)
-	if redacted.Voice.CleanupAPIKey != "[REDACTED]" || redacted.Voice.TTSAPIKey != "[REDACTED]" {
-		t.Fatalf("voice credentials not redacted: %+v", redacted.Voice)
+	if redacted.LanguageModel.APIKey != "[REDACTED]" || redacted.Voice.TTSAPIKey != "[REDACTED]" {
+		t.Fatalf("language/voice credentials not redacted: language=%+v voice=%+v", redacted.LanguageModel, redacted.Voice)
 	}
 	wantNode, wantNpm := ManagedNodePaths(filepath.Join(home, "node"))
 	if !c.Node.Managed || c.Node.Version != "20.10.0" || c.Node.Command != wantNode || c.Node.Npm != wantNpm {
@@ -170,8 +171,8 @@ func TestEnvOverridesSettings(t *testing.T) {
 	o := options(t, map[string]string{
 		"TANDEM_PORT": "7000", "TANDEM_BIND": "10.0.0.1",
 		"TANDEM_PROJECT_ROOTS": "/env/root", "TANDEM_NODE_CMD": "/env/bin/node",
-		"TANDEM_VOICE_ENABLED": "true", "TANDEM_VOICE_CLEANUP_ENDPOINT": "http://env/clean",
-		"TANDEM_VOICE_CLEANUP_MODEL": "env-cleaner", "TANDEM_VOICE_TTS_ENDPOINT": "http://env/speak",
+		"TANDEM_VOICE_ENABLED": "true", "TANDEM_LANGUAGE_MODEL_ENDPOINT": "http://env/clean",
+		"TANDEM_LANGUAGE_MODEL_MODEL": "env-cleaner", "TANDEM_VOICE_TTS_ENDPOINT": "http://env/speak",
 		"TANDEM_VOICE_TTS_MODEL": "env-tts", "TANDEM_VOICE_TTS_VOICE": "env-voice",
 	})
 	home := o.Env["TANDEM_HOME"]
@@ -191,8 +192,26 @@ func TestEnvOverridesSettings(t *testing.T) {
 	if c.Node.Managed || c.Node.Command != "/env/bin/node" {
 		t.Fatalf("TANDEM_NODE_CMD should force system node: %+v", c.Node)
 	}
-	if !c.Voice.Enabled || c.Voice.CleanupModel != "env-cleaner" || c.Voice.TTSModel != "env-tts" || c.Voice.TTSVoice != "env-voice" {
-		t.Fatalf("voice environment overrides missing: %+v", c.Voice)
+	if !c.Voice.Enabled || c.LanguageModel.Model != "env-cleaner" || c.Voice.TTSModel != "env-tts" || c.Voice.TTSVoice != "env-voice" {
+		t.Fatalf("language/voice environment overrides missing: language=%+v voice=%+v", c.LanguageModel, c.Voice)
+	}
+}
+
+func TestLegacyVoiceCleanupSettingsMigrateToSharedLanguageModel(t *testing.T) {
+	o := options(t, nil)
+	home := o.Env["TANDEM_HOME"]
+	if err := SaveSettings(home, Settings{Voice: VoiceSettings{
+		Enabled: true, LegacyCleanupEndpoint: "http://legacy/clean", LegacyCleanupAPIKey: "legacy-key", LegacyCleanupModel: "legacy-model",
+		TTSEndpoint: "http://legacy/speech", TTSModel: "tts", TTSVoice: "voice",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LanguageModel.Endpoint != "http://legacy/clean" || c.LanguageModel.APIKey != "legacy-key" || c.LanguageModel.Model != "legacy-model" {
+		t.Fatalf("legacy language model = %+v", c.LanguageModel)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,7 +44,8 @@ func TestRunEndToEnd(t *testing.T) {
 	defer steel.Close()
 
 	// Answers in prompt order: project roots, bind, port, Steel, existing
-	// service, URL, blank API key, managed Node, decline voice, then accept the
+	// service, URL, blank API key, managed Node, decline shared language-model
+	// setup, then accept the
 	// default systemd answer at EOF.
 	answers := strings.Join([]string{
 		"/tmp/proj-a, /tmp/proj-b",
@@ -103,21 +105,42 @@ func TestRunEndToEnd(t *testing.T) {
 	}
 }
 
-func TestPromptVoiceConfiguresBothEndpoints(t *testing.T) {
+func TestPromptLanguageModelConfiguresSharedEndpoint(t *testing.T) {
 	answers := strings.Join([]string{
-		"y", "http://localhost:11434/v1/chat/completions", "ollama", "gpt-oss:20b", "Speak plainly.",
-		"http://localhost:8880/v1/audio/speech", "", "kokoro", "af_sky", "mp3",
+		"y", "http://localhost:11434/v1/chat/completions", "ollama", "gpt-oss:20b",
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	got, eof, err := promptLanguageModel(bufio.NewReader(strings.NewReader(answers)), &out, config.LanguageModelSettings{}, config.VoiceSettings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eof || got.Endpoint != "http://localhost:11434/v1/chat/completions" || got.APIKey != "ollama" || got.Model != "gpt-oss:20b" {
+		t.Fatalf("language model settings = %+v, eof=%v", got, eof)
+	}
+	if !strings.Contains(out.String(), "docs.ollama.com") || !strings.Contains(out.String(), "localai.io") {
+		t.Fatalf("missing local provider links:\n%s", out.String())
+	}
+}
+
+func TestPromptVoiceConfiguresSpeechEndpoint(t *testing.T) {
+	answers := strings.Join([]string{
+		"y", "Speak plainly.", "http://localhost:8880/v1/audio/speech", "", "kokoro", "af_sky", "mp3",
 	}, "\n") + "\n"
 	var out bytes.Buffer
 	got, err := promptVoice(bufio.NewReader(strings.NewReader(answers)), &out, config.VoiceSettings{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Enabled || got.CleanupModel != "gpt-oss:20b" || got.CleanupAPIKey != "ollama" || got.TTSModel != "kokoro" || got.TTSVoice != "af_sky" || got.TTSFormat != "mp3" {
+	if !got.Enabled || got.Instructions != "Speak plainly." || got.TTSModel != "kokoro" || got.TTSVoice != "af_sky" || got.TTSFormat != "mp3" {
 		t.Fatalf("voice settings = %+v", got)
 	}
-	if !strings.Contains(out.String(), "docs.ollama.com") || !strings.Contains(out.String(), "localai.io") {
-		t.Fatalf("missing local provider links:\n%s", out.String())
+}
+
+func TestPromptLanguageModelMigratesLegacyVoiceSettingsAtEOF(t *testing.T) {
+	legacy := config.VoiceSettings{LegacyCleanupEndpoint: "http://legacy/clean", LegacyCleanupAPIKey: "key", LegacyCleanupModel: "model"}
+	got, eof, err := promptLanguageModel(bufio.NewReader(strings.NewReader("")), io.Discard, config.LanguageModelSettings{}, legacy, true)
+	if err != nil || !eof || got.Endpoint != "http://legacy/clean" || got.APIKey != "key" || got.Model != "model" {
+		t.Fatalf("legacy migration = %+v, eof=%v, err=%v", got, eof, err)
 	}
 }
 

@@ -75,7 +75,8 @@ Common configuration:
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (installed Chrome/Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
-| `TANDEM_VOICE_ENABLED` | `off` | Enables per-message spoken responses; the remaining `TANDEM_VOICE_*` settings select compatible cleanup and TTS endpoints |
+| `TANDEM_LANGUAGE_MODEL_ENDPOINT` / `_API_KEY` / `_MODEL` | unset | Shared OpenAI-compatible Chat Completions configuration for voice preparation and future summaries/titles |
+| `TANDEM_VOICE_ENABLED` | `off` | Enables per-message spoken responses; `TANDEM_VOICE_TTS_*` selects the compatible Speech endpoint |
 
 **Self-hosting Steel (optional):** for the shared browser you can back agents with
 [Steel](https://github.com/steel-dev/steel-browser) instead of local Chromium. Run it with
@@ -94,7 +95,7 @@ Setup notes and troubleshooting (Steel Chromium launch crashes, `CHROME_EXECUTAB
 are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 
 **Spoken responses (optional):** run `tandem setup` to configure a daemon-side
-OpenAI-compatible cleanup model and Speech endpoint. Completed agent messages then expose a
+shared OpenAI-compatible language model and Speech endpoint. Completed agent messages then expose a
 **Listen** control in the transcript. Paid and local/open-weight provider options, request
 shapes, environment overrides, and privacy notes are in [`docs/voice.md`](docs/voice.md).
 
