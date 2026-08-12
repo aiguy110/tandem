@@ -221,6 +221,22 @@ function closestRow(node: Node | null): HTMLElement | null {
 
 const ANNOTATION_QUOTE_MAX = 2048;
 
+function visibleViewport() {
+  const viewport = window.visualViewport;
+  return {
+    top: viewport?.offsetTop ?? 0,
+    left: viewport?.offsetLeft ?? 0,
+    width: viewport?.width ?? window.innerWidth,
+    height: viewport?.height ?? window.innerHeight,
+  };
+}
+
+function mobilePopoverPosition() {
+  const viewport = visibleViewport();
+  const width = Math.min(360, viewport.width - 24);
+  return { top: viewport.top + 8, left: viewport.left + (viewport.width - width) / 2 };
+}
+
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined)) as AgentView | undefined;
   const respond = useStore((s) => s.respond);
@@ -454,13 +470,9 @@ export function TranscriptPane() {
                 left: selAnchor.rect.left + selAnchor.rect.width / 2,
               }}
               onClick={() => {
-                // On touch devices the action is below the selection, outside
-                // Android's native copy/share toolbar. CSS turns both controls
-                // into viewport-bottom actions on coarse-pointer devices.
-                setPopoverPosition({
-                  top: usesSoftKeyboard() ? selAnchor.rect.top + selAnchor.rect.height + 44 : selAnchor.rect.top - 34,
-                  left: selAnchor.rect.left,
-                });
+                setPopoverPosition(usesSoftKeyboard()
+                  ? mobilePopoverPosition()
+                  : { top: selAnchor.rect.top - 34, left: selAnchor.rect.left });
                 setPopoverOpen(true);
               }}
             >
@@ -480,11 +492,25 @@ export function TranscriptPane() {
                 onPointerMove={(e) => {
                   const offset = popoverDragOffset.current;
                   if (!offset) return;
-                  setPopoverPosition({ top: e.clientY - offset.y, left: e.clientX - offset.x });
+                  const popover = e.currentTarget.parentElement;
+                  const viewport = visibleViewport();
+                  const width = popover?.offsetWidth ?? 260;
+                  const height = popover?.offsetHeight ?? 160;
+                  const gutter = 8;
+                  setPopoverPosition({
+                    top: Math.min(
+                      Math.max(e.clientY - offset.y, viewport.top + gutter),
+                      Math.max(viewport.top + gutter, viewport.top + viewport.height - height - gutter),
+                    ),
+                    left: Math.min(
+                      Math.max(e.clientX - offset.x, viewport.left + gutter),
+                      Math.max(viewport.left + gutter, viewport.left + viewport.width - width - gutter),
+                    ),
+                  });
                 }}
                 onPointerUp={(e) => {
                   popoverDragOffset.current = null;
-                  e.currentTarget.releasePointerCapture(e.pointerId);
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
                 }}
                 onPointerCancel={() => { popoverDragOffset.current = null; }}
               >

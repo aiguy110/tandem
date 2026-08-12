@@ -43,6 +43,8 @@ afterEach(() => {
 
 describe('TranscriptPane annotations', () => {
   it('offers the comment action when native selection emits selectionchange', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    vi.stubGlobal('PointerEvent', MouseEvent);
     const addAnnotation = vi.fn().mockResolvedValue({});
     useStore.setState({
       ...initialState,
@@ -70,6 +72,23 @@ describe('TranscriptPane annotations', () => {
 
     const comment = await waitFor(() => view.getByRole('button', { name: /comment/i }));
     fireEvent.click(comment);
+    const handle = view.getByTitle('Drag to move comment');
+    const popover = handle.parentElement!;
+    Object.defineProperties(popover, {
+      offsetWidth: { configurable: true, value: 320 },
+      offsetHeight: { configurable: true, value: 160 },
+    });
+    Object.assign(handle, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: vi.fn().mockReturnValue(true),
+      releasePointerCapture: vi.fn(),
+    });
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 400, clientY: 30 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 500, clientY: 200 });
+
+    expect(popover.style.left).toBe('432px');
+    expect(popover.style.top).toBe('178px');
+
     fireEvent.change(view.getByPlaceholderText('Add a comment…'), { target: { value: 'Please clarify.' } });
     fireEvent.click(view.getByRole('button', { name: 'Add' }));
 

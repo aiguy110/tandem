@@ -165,6 +165,10 @@ free-text block.
   selection toolbar, Android's contextual-search bottom sheet, the soft
   keyboard, and viewport edges cannot cover them. Don't offer it on the
   actively-streaming last message row.
+- **Mobile composer movement.** The quote header is a thumb-sized drag handle.
+  Pointer capture keeps the drag active under the thumb, and movement is
+  clamped to the current visual viewport so the composer remains recoverable
+  when the soft keyboard resizes the visible page.
 - **Comment popover.** Clicking the button opens a small popover with a textarea +
   "Add". On Add → `store.addAnnotation(agentId, anchor, comment)` → `add_annotation`
   message; clear the DOM selection.

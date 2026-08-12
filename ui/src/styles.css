@@ -448,8 +448,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .annotation-popover-actions button:first-child:hover { color: var(--text); }
 @media (hover: none) and (pointer: coarse) {
   .annotation-popover {
-    top: calc(8px + env(safe-area-inset-top)) !important; right: 12px; bottom: auto; left: 12px !important;
-    width: auto; max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+    right: auto; bottom: auto;
+    width: min(360px, calc(100vw - 24px)); max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+  }
+  /* A thumb-sized handle with a visible grip. Inline top/left coordinates are
+     intentionally allowed to win here so pointer dragging can move the box. */
+  .annotation-popover-drag-handle {
+    position: relative; min-height: 44px; display: flex; align-items: center;
+    padding: 10px 4px 2px;
+  }
+  .annotation-popover-drag-handle::before {
+    content: ''; position: absolute; top: 3px; left: 50%; width: 42px; height: 4px;
+    border-radius: 999px; background: var(--border-strong); transform: translateX(-50%);
   }
   /* Prevent iOS from zooming the viewport when the comment field receives
      focus; the compact desktop size remains unchanged. */
