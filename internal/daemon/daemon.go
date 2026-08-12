@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
 
@@ -65,6 +67,13 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	assetStore, err := assets.Open(cfg.AssetsDir, db)
 	if err != nil {
 		return err
+	}
+	var voiceRenderer voice.Renderer
+	if cfg.Voice.Enabled {
+		voiceRenderer, err = voice.New(cfg.Voice)
+		if err != nil {
+			return fmt.Errorf("configure voice rendering: %w", err)
+		}
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	if err != nil {
@@ -210,6 +219,10 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	}()
 	httpHandler := httpserver.New(httpserver.Options{
 		Token: token, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
+		Voice: voiceRenderer,
+		MessageText: func(agentID string, seq int64) (string, error) {
+			return transcriptMessageText(db, agentID, seq)
+		},
 		AgentExists: func(id string) bool {
 			agent, lookupErr := db.Agent(id)
 			return lookupErr == nil && agent != nil
@@ -295,6 +308,44 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		return nil
 	}
 	return err
+}
+
+func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, error) {
+	after := seq - 2
+	if after < 0 {
+		after = 0
+	}
+	rows, err := db.RangeEvents(agentID, after)
+	if err != nil {
+		return "", err
+	}
+	start := 0
+	if len(rows) > 0 && rows[0].Seq == seq-1 {
+		if rows[0].Kind == "message_chunk" {
+			return "", httpserver.ErrMessageNotFound
+		}
+		start = 1
+	}
+	if start >= len(rows) || rows[start].Seq != seq || rows[start].Kind != "message_chunk" {
+		return "", httpserver.ErrMessageNotFound
+	}
+	var text strings.Builder
+	for _, row := range rows[start:] {
+		if row.Kind != "message_chunk" {
+			break
+		}
+		var event struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(row.Payload), &event); err != nil {
+			return "", err
+		}
+		text.WriteString(event.Text)
+	}
+	if strings.TrimSpace(text.String()) == "" {
+		return "", httpserver.ErrMessageNotFound
+	}
+	return text.String(), nil
 }
 
 // reattachBrowsers re-connects to externalized (Steel) browser sessions that

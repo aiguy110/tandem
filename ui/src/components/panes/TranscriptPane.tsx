@@ -453,6 +453,8 @@ export function TranscriptPane() {
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
                 onJumpToQuote={jumpToQuote}
                 onJumpToLinkedBlock={jumpToLinkedBlock}
+                agentId={agent.id}
+                canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
               />
             ))}
           </div>
@@ -683,12 +685,16 @@ function QuoteChip({
 
 function Row({
   item,
+  agentId,
+  canRenderAudio,
   quoteLinks,
   onRespond,
   onJumpToQuote,
   onJumpToLinkedBlock,
 }: {
   item: Item;
+  agentId: string;
+  canRenderAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -731,8 +737,10 @@ function Row({
             if ((event.target as HTMLElement).closest('.annotation-quote-highlight')) onSourceClick(event);
             else handleCodeCopyClick(event);
           }}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
-        />
+        >
+          <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} />
+        </div>
       );
     case 'thought':
       return (
@@ -769,6 +777,56 @@ function Row({
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
   }
+}
+
+function MessageAudio({ agentId, seq, enabled }: { agentId: string; seq: number; enabled: boolean }) {
+  const [loading, setLoading] = useState(false);
+  const [audioURL, setAudioURL] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    if (audioURL) URL.revokeObjectURL(audioURL);
+  }, [audioURL]);
+
+  const render = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const token = storedToken();
+      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages/${seq}/audio`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        let message = `Voice rendering failed (${response.status})`;
+        try {
+          const body = await response.json() as { error?: string };
+          if (body.error) message = body.error;
+        } catch { /* retain the status message for non-JSON provider failures */ }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      setAudioURL((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return URL.createObjectURL(blob);
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="message-audio">
+      {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : (
+        <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
+          {loading ? 'Rendering speech…' : 'Listen'}
+        </button>
+      )}
+      {error && <span className="message-audio-error" role="alert">{error}</span>}
+    </div>
+  );
 }
 
 function TaskList({ item }: { item: Extract<Item, { kind: 'plan' }> }) {

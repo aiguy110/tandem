@@ -182,7 +182,94 @@ func promptSettings(r *bufio.Reader, out io.Writer, existing config.Settings) (c
 	}
 	settings.Node = node
 
+	// 6. Optional spoken agent responses.
+	voiceSettings, err := promptVoice(r, out, existing.Voice, atEOF)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return settings, fmt.Errorf("read voice settings: %w", err)
+	}
+	settings.Voice = voiceSettings
+
 	return settings, nil
+}
+
+func promptVoice(r *bufio.Reader, out io.Writer, existing config.VoiceSettings, atEOF bool) (config.VoiceSettings, error) {
+	fmt.Fprintln(out, "\nSpoken agent responses (optional):")
+	fmt.Fprintln(out, "  Tandem first cleans an agent message with an OpenAI-compatible Chat Completions endpoint,")
+	fmt.Fprintln(out, "  then sends that text to an OpenAI-compatible Speech endpoint.")
+	fmt.Fprintln(out, "  Paid: https://developers.openai.com/api/docs/guides/text-to-speech")
+	fmt.Fprintln(out, "        https://platform.openai.com/docs/api-reference/audio/createSpeech")
+	fmt.Fprintln(out, "  Local cleanup: https://docs.ollama.com/api/openai-compatibility")
+	fmt.Fprintln(out, "  Local speech: https://github.com/remsky/Kokoro-FastAPI or https://localai.io/")
+	if atEOF {
+		return existing, nil
+	}
+	def := "N"
+	if existing.Enabled {
+		def = "Y"
+	}
+	enabled, err := ask(r, out, "Configure spoken responses? [y/N]", def)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return config.VoiceSettings{}, err
+	}
+	if !strings.EqualFold(enabled, "y") && !strings.EqualFold(enabled, "yes") {
+		return config.VoiceSettings{}, err
+	}
+
+	result := existing
+	result.Enabled = true
+	askField := func(label, current, fallback string) error {
+		if current == "" {
+			current = fallback
+		}
+		value, askErr := ask(r, out, label, current)
+		if askErr != nil && !errors.Is(askErr, io.EOF) {
+			return askErr
+		}
+		switch label {
+		case "Cleanup Chat Completions endpoint":
+			result.CleanupEndpoint = value
+		case "Cleanup API key (optional; input is visible, config is owner-only)":
+			result.CleanupAPIKey = value
+		case "Cleanup model":
+			result.CleanupModel = value
+		case "Cleanup instructions":
+			result.CleanupInstructions = value
+		case "Speech endpoint":
+			result.TTSEndpoint = value
+		case "Speech API key (optional; input is visible, config is owner-only)":
+			result.TTSAPIKey = value
+		case "Speech model":
+			result.TTSModel = value
+		case "Voice":
+			result.TTSVoice = value
+		case "Audio format":
+			result.TTSFormat = value
+		}
+		return askErr
+	}
+	fields := []struct{ label, current, fallback string }{
+		{"Cleanup Chat Completions endpoint", result.CleanupEndpoint, "https://api.openai.com/v1/chat/completions"},
+		{"Cleanup API key (optional; input is visible, config is owner-only)", result.CleanupAPIKey, ""},
+		{"Cleanup model", result.CleanupModel, "gpt-5.6-luna"},
+		{"Cleanup instructions", result.CleanupInstructions, config.DefaultVoiceCleanupInstructions},
+		{"Speech endpoint", result.TTSEndpoint, "https://api.openai.com/v1/audio/speech"},
+		{"Speech API key (optional; input is visible, config is owner-only)", result.TTSAPIKey, result.CleanupAPIKey},
+		{"Speech model", result.TTSModel, "tts-1"},
+		{"Voice", result.TTSVoice, "alloy"},
+		{"Audio format", result.TTSFormat, "mp3"},
+	}
+	for _, field := range fields {
+		if field.label == "Speech API key (optional; input is visible, config is owner-only)" {
+			field.fallback = result.CleanupAPIKey
+		}
+		if fieldErr := askField(field.label, field.current, field.fallback); fieldErr != nil {
+			if errors.Is(fieldErr, io.EOF) {
+				return result, nil
+			}
+			return config.VoiceSettings{}, fieldErr
+		}
+	}
+	return result, err
 }
 
 func promptBrowser(r *bufio.Reader, out io.Writer, existing config.Settings, atEOF bool) (config.Settings, bool, error) {

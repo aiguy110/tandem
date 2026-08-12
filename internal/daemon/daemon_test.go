@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -73,6 +76,35 @@ func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 	ws.SetReadDeadline(time.Now().Add(time.Second))
 	if _, _, err := ws.ReadMessage(); err == nil {
 		t.Fatal("websocket remained open after daemon shutdown")
+	}
+}
+
+func TestTranscriptMessageTextCollectsOnlySelectedContiguousMessage(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, event := range []struct{ kind, payload string }{
+		{"message_chunk", `{"kind":"message_chunk","text":"Hello "}`},
+		{"message_chunk", `{"kind":"message_chunk","text":"world"}`},
+		{"tool_call", `{"kind":"tool_call","id":"one","title":"tool","status":"done"}`},
+		{"message_chunk", `{"kind":"message_chunk","text":"Second message"}`},
+	} {
+		if _, err := db.AppendEvent("agent", event.kind, event.payload, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := transcriptMessageText(db, "agent", 1)
+	if err != nil || got != "Hello world" {
+		t.Fatalf("first message = %q, %v", got, err)
+	}
+	got, err = transcriptMessageText(db, "agent", 4)
+	if err != nil || got != "Second message" {
+		t.Fatalf("second message = %q, %v", got, err)
+	}
+	if _, err = transcriptMessageText(db, "agent", 2); !errors.Is(err, httpserver.ErrMessageNotFound) {
+		t.Fatalf("non-anchor error = %v", err)
 	}
 }
 

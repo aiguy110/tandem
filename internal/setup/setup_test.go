@@ -43,7 +43,8 @@ func TestRunEndToEnd(t *testing.T) {
 	defer steel.Close()
 
 	// Answers in prompt order: project roots, bind, port, Steel, existing
-	// service, URL, blank API key, managed Node, then decline systemd.
+	// service, URL, blank API key, managed Node, decline voice, then accept the
+	// default systemd answer at EOF.
 	answers := strings.Join([]string{
 		"/tmp/proj-a, /tmp/proj-b",
 		"0.0.0.0",
@@ -96,6 +97,27 @@ func TestRunEndToEnd(t *testing.T) {
 
 	if !strings.Contains(out.String(), config.ConfigFilePath(home)) {
 		t.Errorf("expected wizard output to mention config path, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Kokoro-FastAPI") || !strings.Contains(out.String(), "OpenAI-compatible") {
+		t.Errorf("expected voice provider guidance, got:\n%s", out.String())
+	}
+}
+
+func TestPromptVoiceConfiguresBothEndpoints(t *testing.T) {
+	answers := strings.Join([]string{
+		"y", "http://localhost:11434/v1/chat/completions", "ollama", "gpt-oss:20b", "Speak plainly.",
+		"http://localhost:8880/v1/audio/speech", "", "kokoro", "af_sky", "mp3",
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	got, err := promptVoice(bufio.NewReader(strings.NewReader(answers)), &out, config.VoiceSettings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.CleanupModel != "gpt-oss:20b" || got.CleanupAPIKey != "ollama" || got.TTSModel != "kokoro" || got.TTSVoice != "af_sky" || got.TTSFormat != "mp3" {
+		t.Fatalf("voice settings = %+v", got)
+	}
+	if !strings.Contains(out.String(), "docs.ollama.com") || !strings.Contains(out.String(), "localai.io") {
+		t.Fatalf("missing local provider links:\n%s", out.String())
 	}
 }
 

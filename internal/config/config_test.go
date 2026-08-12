@@ -83,6 +83,7 @@ func TestSettingsFilePrecedence(t *testing.T) {
 		SteelBaseURL:  "https://steel.example",
 		SteelAPIKey:   "file-secret",
 		Node:          NodeSettings{Mode: "managed", Version: "20.10.0"},
+		Voice:         VoiceSettings{Enabled: true, CleanupEndpoint: "http://clean/v1/chat/completions", CleanupAPIKey: "clean-secret", CleanupModel: "cleaner", TTSEndpoint: "http://speak/v1/audio/speech", TTSAPIKey: "tts-secret", TTSModel: "speaker", TTSVoice: "voice", TTSFormat: "wav"},
 	}
 	if err := SaveSettings(home, s); err != nil {
 		t.Fatal(err)
@@ -110,6 +111,13 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.ProjectRoots, []string{"/work/a", "/work/b", c.HomeBaseDir}) {
 		t.Fatalf("project roots = %v", c.ProjectRoots)
+	}
+	if !c.Voice.Enabled || c.Voice.CleanupModel != "cleaner" || c.Voice.TTSVoice != "voice" || c.Voice.TTSFormat != "wav" {
+		t.Fatalf("voice settings not applied: %+v", c.Voice)
+	}
+	redacted := Redacted(c)
+	if redacted.Voice.CleanupAPIKey != "[REDACTED]" || redacted.Voice.TTSAPIKey != "[REDACTED]" {
+		t.Fatalf("voice credentials not redacted: %+v", redacted.Voice)
 	}
 	wantNode, wantNpm := ManagedNodePaths(filepath.Join(home, "node"))
 	if !c.Node.Managed || c.Node.Version != "20.10.0" || c.Node.Command != wantNode || c.Node.Npm != wantNpm {
@@ -162,6 +170,9 @@ func TestEnvOverridesSettings(t *testing.T) {
 	o := options(t, map[string]string{
 		"TANDEM_PORT": "7000", "TANDEM_BIND": "10.0.0.1",
 		"TANDEM_PROJECT_ROOTS": "/env/root", "TANDEM_NODE_CMD": "/env/bin/node",
+		"TANDEM_VOICE_ENABLED": "true", "TANDEM_VOICE_CLEANUP_ENDPOINT": "http://env/clean",
+		"TANDEM_VOICE_CLEANUP_MODEL": "env-cleaner", "TANDEM_VOICE_TTS_ENDPOINT": "http://env/speak",
+		"TANDEM_VOICE_TTS_MODEL": "env-tts", "TANDEM_VOICE_TTS_VOICE": "env-voice",
 	})
 	home := o.Env["TANDEM_HOME"]
 	if err := SaveSettings(home, Settings{Port: 9000, Bind: "0.0.0.0", ProjectRoots: []string{"/file/root"}, Node: NodeSettings{Mode: "managed"}}); err != nil {
@@ -179,6 +190,9 @@ func TestEnvOverridesSettings(t *testing.T) {
 	}
 	if c.Node.Managed || c.Node.Command != "/env/bin/node" {
 		t.Fatalf("TANDEM_NODE_CMD should force system node: %+v", c.Node)
+	}
+	if !c.Voice.Enabled || c.Voice.CleanupModel != "env-cleaner" || c.Voice.TTSModel != "env-tts" || c.Voice.TTSVoice != "env-voice" {
+		t.Fatalf("voice environment overrides missing: %+v", c.Voice)
 	}
 }
 
