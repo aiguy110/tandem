@@ -15,6 +15,7 @@ export function FocusArea() {
   const setPane = useStore((s) => s.setPane);
   const enterTerminal = useStore((s) => s.enterTerminal);
   const leaveTerminal = useStore((s) => s.leaveTerminal);
+  const toggleThreadAudio = useStore((s) => s.toggleThreadAudio);
   const [confirm, setConfirm] = useState<null | 'to-cli-busy' | 'to-acp'>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
 
@@ -62,6 +63,16 @@ export function FocusArea() {
           </span>
         </span>
         <div className="tabs">
+          <button
+            type="button"
+            className={`audio-toggle${agent.audioOnTurnEnd ? ' active' : ''}`}
+            aria-pressed={agent.audioOnTurnEnd}
+            onClick={() => toggleThreadAudio(agent.id)}
+            title={agent.audioOnTurnEnd ? 'Read this thread’s completed replies aloud — on' : 'Read this thread’s completed replies aloud — off'}
+          >
+            <span aria-hidden="true">{agent.audioOnTurnEnd ? '🔊' : '🔈'}</span>
+            <span className="sr-only">{agent.audioOnTurnEnd ? 'Disable' : 'Enable'} completed-reply audio</span>
+          </button>
           {agent.controlMode === 'switching' && pane === 'chat' && (
             <span className="chat-switch-note">switching…</span>
           )}

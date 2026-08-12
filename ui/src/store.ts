@@ -8,6 +8,7 @@ import { WsClient, resolveToken, type ConnState } from './ws/client';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
+import { lastAgentMessage, speak } from './audio';
 import type {
   AgentStatus,
   AgentSummary,
@@ -154,6 +155,9 @@ export interface AgentView {
   // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
+  // A local per-thread preference: audio is rendered by this browser, never by
+  // the daemon, so it cannot interrupt another collaborator's session.
+  audioOnTurnEnd: boolean;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -217,6 +221,7 @@ interface StoreState {
   toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
+  toggleThreadAudio: (agentId: string) => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
@@ -323,6 +328,29 @@ const saveAgentOrder = (order: string[]) => {
     // Reordering still works when browser storage is unavailable.
   }
 };
+
+const THREAD_AUDIO_STORAGE_KEY = 'tandem.threadAudio';
+
+function readStoredThreadAudio(agentId: string): boolean {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(THREAD_AUDIO_STORAGE_KEY) ?? '{}');
+    return !!stored && typeof stored === 'object' && (stored as Record<string, unknown>)[agentId] === true;
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredThreadAudio(agentId: string, enabled: boolean): void {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(THREAD_AUDIO_STORAGE_KEY) ?? '{}');
+    const all = stored && typeof stored === 'object' ? stored as Record<string, boolean> : {};
+    if (enabled) all[agentId] = true;
+    else delete all[agentId];
+    localStorage.setItem(THREAD_AUDIO_STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // The toggle remains usable for this page when storage is unavailable.
+  }
+}
 
 const USAGE_STORAGE_KEY = 'tandem.agentUsage';
 type StoredUsage = NonNullable<AgentView['usage']>;
@@ -674,6 +702,7 @@ export const useStore = create<StoreState>((set, get) => {
           return;
         }
         const usageReceivedAt = event.kind === 'usage' ? Date.now() : undefined;
+        let completedReply: string | null = null;
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
@@ -690,10 +719,16 @@ export const useStore = create<StoreState>((set, get) => {
             next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now(), severity }];
           }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
+          // This branch handles live daemon events only. Snapshots/replay use a
+          // separate reducer path above, so reconnecting never repeats speech.
+          if (prevStatus === 'working' && next.status === 'idle' && next.audioOnTurnEnd) {
+            completedReply = lastAgentMessage(next.events);
+          }
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
         });
+        if (completedReply) speak(completedReply);
         return;
       }
       case 'prompt_queue':
@@ -846,6 +881,13 @@ export const useStore = create<StoreState>((set, get) => {
       set({ modal: m });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
+    toggleThreadAudio: (agentId) => set((st) => {
+      const agent = st.agents[agentId];
+      if (!agent) return st;
+      const audioOnTurnEnd = !agent.audioOnTurnEnd;
+      writeStoredThreadAudio(agentId, audioOnTurnEnd);
+      return { agents: { ...st.agents, [agentId]: { ...agent, audioOnTurnEnd } } };
+    }),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
     refreshSessions: () => {
@@ -1192,6 +1234,7 @@ function shell(id: string): AgentView {
     controlMode: 'transcript',
     adapter: 'acp',
     canHandoff: false,
+    audioOnTurnEnd: readStoredThreadAudio(id),
   };
 }
 
