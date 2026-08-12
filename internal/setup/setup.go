@@ -182,23 +182,105 @@ func promptSettings(r *bufio.Reader, out io.Writer, existing config.Settings) (c
 	}
 	settings.Node = node
 
-	// 6. Optional spoken agent responses.
+	// 6. Shared language model for transcript-derived features.
+	languageModel, languageEOF, err := promptLanguageModel(r, out, existing.LanguageModel, existing.Voice, atEOF)
+	if err != nil {
+		return settings, fmt.Errorf("read language model settings: %w", err)
+	}
+	settings.LanguageModel = languageModel
+	atEOF = languageEOF
+
+	// 7. Optional spoken agent responses.
 	voiceSettings, err := promptVoice(r, out, existing.Voice, atEOF)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return settings, fmt.Errorf("read voice settings: %w", err)
+	}
+	// A write through the current wizard migrates the original voice-scoped
+	// Chat Completions values into settings.languageModel.
+	if settings.LanguageModel.Endpoint != "" {
+		voiceSettings.LegacyCleanupEndpoint = ""
+		voiceSettings.LegacyCleanupAPIKey = ""
+		voiceSettings.LegacyCleanupModel = ""
+		voiceSettings.LegacyCleanupInstructions = ""
 	}
 	settings.Voice = voiceSettings
 
 	return settings, nil
 }
 
+func promptLanguageModel(r *bufio.Reader, out io.Writer, existing config.LanguageModelSettings, legacy config.VoiceSettings, atEOF bool) (config.LanguageModelSettings, bool, error) {
+	fmt.Fprintln(out, "\nShared language model (optional):")
+	fmt.Fprintln(out, "  Tandem uses this OpenAI-compatible Chat Completions endpoint for spoken-response preparation today,")
+	fmt.Fprintln(out, "  and it is the shared configuration for future conversation summaries and automatic titles.")
+	fmt.Fprintln(out, "  Paid: https://developers.openai.com/api/docs/guides/text-generation")
+	fmt.Fprintln(out, "  Local/open-weight: https://docs.ollama.com/api/openai-compatibility or https://localai.io/")
+	if atEOF {
+		result := existing
+		if result.Endpoint == "" {
+			result.Endpoint = legacy.LegacyCleanupEndpoint
+		}
+		if result.APIKey == "" {
+			result.APIKey = legacy.LegacyCleanupAPIKey
+		}
+		if result.Model == "" {
+			result.Model = legacy.LegacyCleanupModel
+		}
+		return result, true, nil
+	}
+	def := "N"
+	if existing.Endpoint != "" || legacy.LegacyCleanupEndpoint != "" {
+		def = "Y"
+	}
+	enabled, err := ask(r, out, "Configure a shared language model? [y/N]", def)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return config.LanguageModelSettings{}, false, err
+	}
+	if !strings.EqualFold(enabled, "y") && !strings.EqualFold(enabled, "yes") {
+		return config.LanguageModelSettings{}, errors.Is(err, io.EOF), nil
+	}
+	result := existing
+	if result.Endpoint == "" {
+		result.Endpoint = legacy.LegacyCleanupEndpoint
+	}
+	if result.APIKey == "" {
+		result.APIKey = legacy.LegacyCleanupAPIKey
+	}
+	if result.Model == "" {
+		result.Model = legacy.LegacyCleanupModel
+	}
+	fields := []struct {
+		label    string
+		value    *string
+		fallback string
+	}{
+		{"Chat Completions endpoint", &result.Endpoint, "https://api.openai.com/v1/chat/completions"},
+		{"Language model API key (optional; input is visible, config is owner-only)", &result.APIKey, ""},
+		{"Language model", &result.Model, "gpt-5.6-luna"},
+	}
+	for _, field := range fields {
+		fallback := *field.value
+		if fallback == "" {
+			fallback = field.fallback
+		}
+		answer, fieldErr := ask(r, out, field.label, fallback)
+		*field.value = answer
+		if fieldErr != nil {
+			if errors.Is(fieldErr, io.EOF) {
+				return result, true, nil
+			}
+			return config.LanguageModelSettings{}, false, fieldErr
+		}
+	}
+	return result, false, nil
+}
+
 func promptVoice(r *bufio.Reader, out io.Writer, existing config.VoiceSettings, atEOF bool) (config.VoiceSettings, error) {
 	fmt.Fprintln(out, "\nSpoken agent responses (optional):")
-	fmt.Fprintln(out, "  Tandem first cleans an agent message with an OpenAI-compatible Chat Completions endpoint,")
-	fmt.Fprintln(out, "  then sends that text to an OpenAI-compatible Speech endpoint.")
+	fmt.Fprintln(out, "  Tandem prepares an agent message with the shared language model, then sends it to an")
+	fmt.Fprintln(out, "  OpenAI-compatible Speech endpoint.")
 	fmt.Fprintln(out, "  Paid: https://developers.openai.com/api/docs/guides/text-to-speech")
 	fmt.Fprintln(out, "        https://platform.openai.com/docs/api-reference/audio/createSpeech")
-	fmt.Fprintln(out, "  Local cleanup: https://docs.ollama.com/api/openai-compatibility")
+	fmt.Fprintln(out, "  Local language model: https://docs.ollama.com/api/openai-compatibility")
 	fmt.Fprintln(out, "  Local speech: https://github.com/remsky/Kokoro-FastAPI or https://localai.io/")
 	if atEOF {
 		return existing, nil
@@ -217,6 +299,9 @@ func promptVoice(r *bufio.Reader, out io.Writer, existing config.VoiceSettings, 
 
 	result := existing
 	result.Enabled = true
+	if result.Instructions == "" {
+		result.Instructions = result.LegacyCleanupInstructions
+	}
 	askField := func(label, current, fallback string) error {
 		if current == "" {
 			current = fallback
@@ -226,14 +311,8 @@ func promptVoice(r *bufio.Reader, out io.Writer, existing config.VoiceSettings, 
 			return askErr
 		}
 		switch label {
-		case "Cleanup Chat Completions endpoint":
-			result.CleanupEndpoint = value
-		case "Cleanup API key (optional; input is visible, config is owner-only)":
-			result.CleanupAPIKey = value
-		case "Cleanup model":
-			result.CleanupModel = value
-		case "Cleanup instructions":
-			result.CleanupInstructions = value
+		case "Speech preparation instructions":
+			result.Instructions = value
 		case "Speech endpoint":
 			result.TTSEndpoint = value
 		case "Speech API key (optional; input is visible, config is owner-only)":
@@ -248,20 +327,14 @@ func promptVoice(r *bufio.Reader, out io.Writer, existing config.VoiceSettings, 
 		return askErr
 	}
 	fields := []struct{ label, current, fallback string }{
-		{"Cleanup Chat Completions endpoint", result.CleanupEndpoint, "https://api.openai.com/v1/chat/completions"},
-		{"Cleanup API key (optional; input is visible, config is owner-only)", result.CleanupAPIKey, ""},
-		{"Cleanup model", result.CleanupModel, "gpt-5.6-luna"},
-		{"Cleanup instructions", result.CleanupInstructions, config.DefaultVoiceCleanupInstructions},
+		{"Speech preparation instructions", result.Instructions, config.DefaultVoicePreparationInstructions},
 		{"Speech endpoint", result.TTSEndpoint, "https://api.openai.com/v1/audio/speech"},
-		{"Speech API key (optional; input is visible, config is owner-only)", result.TTSAPIKey, result.CleanupAPIKey},
+		{"Speech API key (optional; input is visible, config is owner-only)", result.TTSAPIKey, ""},
 		{"Speech model", result.TTSModel, "tts-1"},
 		{"Voice", result.TTSVoice, "alloy"},
 		{"Audio format", result.TTSFormat, "mp3"},
 	}
 	for _, field := range fields {
-		if field.label == "Speech API key (optional; input is visible, config is owner-only)" {
-			field.fallback = result.CleanupAPIKey
-		}
 		if fieldErr := askField(field.label, field.current, field.fallback); fieldErr != nil {
 			if errors.Is(fieldErr, io.EOF) {
 				return result, nil

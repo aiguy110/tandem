@@ -88,7 +88,7 @@ harnesses: {}
 # it's documented here only so the schema is discoverable. All fields are
 # optional — env vars (TANDEM_PROJECT_ROOTS, TANDEM_BIND, TANDEM_PORT,
 # TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_NODE_CMD, and
-# TANDEM_VOICE_*)
+# TANDEM_LANGUAGE_MODEL_*, and TANDEM_VOICE_*)
 # override it, and built-in defaults fill any gaps.
 #
 # settings:
@@ -103,12 +103,13 @@ harnesses: {}
 #     mode: system           # "system" (use command/PATH) or "managed" (Tandem-downloaded)
 #     command: node          # only used when mode is "system"
 #     version: 22.11.0       # pinned version downloaded when mode is "managed"
+#   languageModel:             # shared Chat Completions model (voice, summaries, titles)
+#     endpoint: https://api.openai.com/v1/chat/completions
+#     apiKey: ""               # optional for local services; stored owner-only
+#     model: gpt-5.6-luna
 #   voice:
 #     enabled: true
-#     cleanupEndpoint: https://api.openai.com/v1/chat/completions
-#     cleanupApiKey: ""       # optional for local services; stored owner-only
-#     cleanupModel: gpt-5.6-luna
-#     cleanupInstructions: "Rewrite the assistant response as clear, natural speech..."
+#     instructions: "Rewrite the assistant response as clear, natural speech..."
 #     ttsEndpoint: https://api.openai.com/v1/audio/speech
 #     ttsApiKey: ""           # optional for local services; stored owner-only
 #     ttsModel: tts-1

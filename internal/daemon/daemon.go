@@ -26,6 +26,7 @@ import (
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/languagemodel"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
@@ -70,7 +71,11 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	}
 	var voiceRenderer voice.Renderer
 	if cfg.Voice.Enabled {
-		voiceRenderer, err = voice.New(cfg.Voice)
+		languageModel, languageErr := languagemodel.New(cfg.LanguageModel)
+		if languageErr != nil {
+			return fmt.Errorf("configure language model for voice rendering: %w", languageErr)
+		}
+		voiceRenderer, err = voice.New(cfg.Voice, languageModel)
 		if err != nil {
 			return fmt.Errorf("configure voice rendering: %w", err)
 		}
