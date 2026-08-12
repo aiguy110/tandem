@@ -160,10 +160,11 @@ free-text block.
   `mouseup` / delayed `touchend` fallbacks), read `window.getSelection()`, and,
   if non-empty, walk from `anchorNode` to the nearest `[data-seq]`. Build the
   anchor `{seq, role, quote}` and show a floating **Comment** button at
-  `range.getBoundingClientRect()`. On coarse-pointer devices the button is a
-  fixed bottom action so Android/iOS's native selection toolbar, the prompt bar,
-  and viewport edges cannot cover it. Don't offer it on the actively-streaming
-  last message row.
+  `range.getBoundingClientRect()`. On coarse-pointer devices the button and
+  composer are fixed at the viewport's top-right so Android/iOS's native
+  selection toolbar, Android's contextual-search bottom sheet, the soft
+  keyboard, and viewport edges cannot cover them. Don't offer it on the
+  actively-streaming last message row.
 - **Comment popover.** Clicking the button opens a small popover with a textarea +
   "Add". On Add → `store.addAnnotation(agentId, anchor, comment)` → `add_annotation`
   message; clear the DOM selection.
