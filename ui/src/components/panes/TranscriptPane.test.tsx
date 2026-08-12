@@ -32,6 +32,9 @@ function agent(): AgentView {
     adapter: 'acp',
     canHandoff: false,
     audioOnTurnEnd: false,
+    audioState: 'idle',
+    audioError: null,
+    audioRun: 0,
   };
 }
 

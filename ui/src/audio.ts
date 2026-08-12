@@ -33,11 +33,36 @@ export function speechText(message: string): string {
     .trim();
 }
 
-export function speak(message: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
+export interface SpeechCallbacks {
+  onStart?: () => void;
+  onEnd?: () => void;
+  onError?: (message: string) => void;
+  onUnavailable?: () => void;
+}
+
+// Use the browser's device-local speech engine for automatic replies. Unlike
+// the transcript's explicit Listen control this does not create a server-side
+// audio file, so report its lifecycle to the UI rather than leaving a silent
+// best-effort call with no indication of what happened.
+export function speak(message: string, callbacks: SpeechCallbacks = {}): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+    callbacks.onUnavailable?.();
+    return;
+  }
   const text = speechText(message);
-  if (!text) return;
+  if (!text) {
+    callbacks.onError?.('The completed reply has no text to speak.');
+    return;
+  }
   // Avoid a backlog when multiple agents finish close together.
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.onstart = () => callbacks.onStart?.();
+  utterance.onend = () => callbacks.onEnd?.();
+  utterance.onerror = (event) => callbacks.onError?.(event.error || 'The browser could not play this reply.');
+  try {
+    window.speechSynthesis.speak(utterance);
+  } catch (cause) {
+    callbacks.onError?.(cause instanceof Error ? cause.message : 'The browser could not start speech.');
+  }
 }
