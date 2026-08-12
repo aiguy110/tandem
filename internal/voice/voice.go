@@ -14,13 +14,17 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/languagemodel"
 )
 
 const (
-	maxAudioResponse = 32 << 20
+	maxAudioResponse         = 32 << 20
+	maxCombinedAudioResponse = 32 << 20
+	maxSpeechChunkCharacters = 3500
+	speechChunkDelimiter     = "[[TANDEM_SPEECH_CHUNK]]"
 )
 
 type Audio struct {
@@ -69,11 +73,83 @@ func (s *Service) Render(ctx context.Context, source string) (Audio, error) {
 	if source == "" {
 		return Audio{}, errors.New("message has no text to render")
 	}
-	spoken, err := s.completer.Complete(ctx, s.config.Instructions, source)
+	spoken, err := s.completer.Complete(ctx, speechPreparationInstructions(s.config.Instructions), source)
 	if err != nil {
 		return Audio{}, fmt.Errorf("prepare message for speech: %w", err)
 	}
-	return s.speak(ctx, spoken)
+	chunks, err := splitSpeechChunks(spoken)
+	if err != nil {
+		return Audio{}, err
+	}
+	return s.speakChunks(ctx, chunks)
+}
+
+// speechPreparationInstructions makes the language model's output safe for
+// speech providers with relatively small input limits. The delimiter is kept
+// out of the text sent to the provider below.
+func speechPreparationInstructions(instructions string) string {
+	return instructions + "\n\nWhen the response needs more than one speech request, split it at natural paragraph or sentence boundaries. " +
+		"Put the literal delimiter " + speechChunkDelimiter + " on its own line between parts. " +
+		fmt.Sprintf("Keep every part at most %d characters. Do not put the delimiter anywhere else.", maxSpeechChunkCharacters)
+}
+
+func splitSpeechChunks(spoken string) ([]string, error) {
+	var chunks []string
+	for _, part := range strings.Split(spoken, speechChunkDelimiter) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		chunks = append(chunks, splitOversizedChunk(part)...)
+	}
+	if len(chunks) == 0 {
+		return nil, errors.New("speech preparation returned no text")
+	}
+	return chunks, nil
+}
+
+// splitOversizedChunk is a guard for language models that miss the delimiter
+// instruction. Prefer a sentence or whitespace break, keeping an individual
+// TTS request safely below the provider's 4,096-character limit.
+func splitOversizedChunk(text string) []string {
+	runes := []rune(strings.TrimSpace(text))
+	var chunks []string
+	for len(runes) > maxSpeechChunkCharacters {
+		cut := maxSpeechChunkCharacters
+		for i := maxSpeechChunkCharacters - 1; i >= maxSpeechChunkCharacters/2; i-- {
+			if strings.ContainsRune(".!?", runes[i]) || unicode.IsSpace(runes[i]) {
+				cut = i + 1
+				break
+			}
+		}
+		chunks = append(chunks, strings.TrimSpace(string(runes[:cut])))
+		runes = []rune(strings.TrimLeftFunc(string(runes[cut:]), unicode.IsSpace))
+	}
+	if text := strings.TrimSpace(string(runes)); text != "" {
+		chunks = append(chunks, text)
+	}
+	return chunks
+}
+
+func (s *Service) speakChunks(ctx context.Context, chunks []string) (Audio, error) {
+	var combined []byte
+	mimeType := ""
+	for index, chunk := range chunks {
+		audio, err := s.speak(ctx, chunk)
+		if err != nil {
+			return Audio{}, fmt.Errorf("render speech chunk %d of %d: %w", index+1, len(chunks), err)
+		}
+		if mimeType == "" {
+			mimeType = audio.MIMEType
+		} else if audio.MIMEType != mimeType {
+			return Audio{}, fmt.Errorf("speech chunks returned inconsistent content types: %q and %q", mimeType, audio.MIMEType)
+		}
+		if len(combined)+len(audio.Data) > maxCombinedAudioResponse {
+			return Audio{}, errors.New("combined speech response exceeds 32 MiB")
+		}
+		combined = append(combined, audio.Data...)
+	}
+	return Audio{Data: combined, MIMEType: mimeType}, nil
 }
 
 func (s *Service) speak(ctx context.Context, input string) (Audio, error) {

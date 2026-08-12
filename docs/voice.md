@@ -20,7 +20,11 @@ requests:
    OpenAI-compatible Chat Completions endpoint. This removes Markdown and turns code/tables
    into language that sounds natural. The same configuration is intended for conversation
    summaries and automatic title generation.
-2. `POST` the cleaned text to an OpenAI-compatible `v1/audio/speech` endpoint.
+2. Instruct the language model to place `[[TANDEM_SPEECH_CHUNK]]` between
+   natural speech boundaries, then `POST` each cleaned chunk to an
+   OpenAI-compatible `v1/audio/speech` endpoint. Tandem targets 3,500
+   characters per chunk and also safely splits an oversized chunk if the model
+   misses the delimiter.
 
 Both requests originate from the Tandem daemon. Provider API keys remain in the owner-only
 `$TANDEM_HOME/config.yml` (or daemon environment), are redacted by `tandem debug config`, and
@@ -54,7 +58,8 @@ Open-weight/local choices include:
   models from one local service.
 
 Endpoint fields are complete URLs, not base URLs. Tandem sends the standard Chat Completions
-body (`model`, `messages`) and Speech body (`model`, `input`, `voice`, `response_format`).
+body (`model`, `messages`) and one Speech body per prepared chunk (`model`, `input`, `voice`,
+`response_format`).
 
 ## Environment overrides
 
