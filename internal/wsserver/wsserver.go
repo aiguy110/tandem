@@ -51,6 +51,7 @@ type Backend interface {
 	UpsertAnnotation(store.Annotation) error
 	DeleteAnnotation(string) error
 	ClearAnnotations(string) (int, error)
+	SetAudioEnabled(string, bool) error
 }
 
 type Options struct {
@@ -723,6 +724,12 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.server.broadcastAgents()
+		c.commandAck(m, m.AgentID)
+	case "set_audio_enabled":
+		if err := c.server.opts.Registry.SetAudioEnabled(m.AgentID, m.Enabled); err != nil {
+			c.commandError(m, err)
+			return
+		}
 		c.commandAck(m, m.AgentID)
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {

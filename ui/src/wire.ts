@@ -94,7 +94,9 @@ export type AgentEvent =
   | { kind: 'control_state'; mode: ControlMode }
   | { kind: 'prompt_queued'; promptId: string; blocks: PromptBlock[]; queuedAt: string; position: number }
   | { kind: 'prompt_started'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
-  | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string };
+  | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
+  | { kind: 'audio_preference'; enabled: boolean }
+  | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
 // AgentEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
@@ -371,6 +373,7 @@ export type ClientMsg =
   | { t: 'interrupt'; agentId: string; corrId?: string }
   | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
+  | { t: 'set_audio_enabled'; agentId: string; enabled: boolean; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }

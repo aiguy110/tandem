@@ -96,8 +96,8 @@ are in [`docs/browser.md`](docs/browser.md) › **Self-hosting Steel**.
 
 **Spoken responses (optional):** run `tandem setup` to configure a daemon-side
 shared OpenAI-compatible language model and Speech endpoint. Completed agent messages expose a
-**Listen** control in the transcript; the per-thread speaker control can also pre-render the next
-completed reply so its normal player is ready when you open the chat. Paid and local/open-weight provider options, request
+**Listen** control in the transcript; the per-thread speaker control can also have Tandem pre-render
+and retain completed replies so their normal players are ready when you open the chat. Paid and local/open-weight provider options, request
 shapes, environment overrides, and privacy notes are in [`docs/voice.md`](docs/voice.md).
 
 **Remote access:** the daemon binds localhost by default; front it with `tailscale serve`

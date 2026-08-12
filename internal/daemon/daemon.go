@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/aiguy110/tandem/internal/languagemodel"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
+	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/aiguy110/tandem/internal/wsserver"
@@ -135,7 +137,15 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	}
 	wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
 	factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id, cwd string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id, cwd) }}
-	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker})
+	audioCache := newMessageAudioCache(ctx, db, voiceRenderer)
+	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker,
+		OnSession: audioCache.watch,
+		OnAudioPreference: func(s *session.Session, enabled bool) {
+			if enabled {
+				audioCache.prepare(s)
+			}
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -228,6 +238,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		MessageText: func(agentID string, seq int64) (string, error) {
 			return transcriptMessageText(db, agentID, seq)
 		},
+		RenderMessageAudio: audioCache.render,
 		AgentExists: func(id string) bool {
 			agent, lookupErr := db.Agent(id)
 			return lookupErr == nil && agent != nil
@@ -351,6 +362,118 @@ func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, 
 		return "", httpserver.ErrMessageNotFound
 	}
 	return text.String(), nil
+}
+
+// messageAudioCache owns all provider work and retained clips. The browser
+// never receives provider credentials or performs provider requests; it only
+// asks Tandem for a message's already-cached (or manually requested) audio.
+type messageAudioCache struct {
+	ctx      context.Context
+	db       *store.Store
+	renderer voice.Renderer
+	mu       sync.Mutex
+	flights  map[string]chan struct{}
+}
+
+func newMessageAudioCache(ctx context.Context, db *store.Store, renderer voice.Renderer) *messageAudioCache {
+	return &messageAudioCache{ctx: ctx, db: db, renderer: renderer, flights: make(map[string]chan struct{})}
+}
+
+func audioKey(agentID string, seq int64) string { return agentID + "/" + strconv.FormatInt(seq, 10) }
+
+func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int64) (voice.Audio, error) {
+	if c.renderer == nil {
+		return voice.Audio{}, errors.New("voice rendering is not configured; run tandem setup")
+	}
+	if cached, err := c.db.MessageAudio(agentID, seq); err != nil {
+		return voice.Audio{}, err
+	} else if cached != nil {
+		return voice.Audio{Data: cached.Data, MIMEType: cached.MIMEType}, nil
+	}
+	key := audioKey(agentID, seq)
+	c.mu.Lock()
+	if done := c.flights[key]; done != nil {
+		c.mu.Unlock()
+		select {
+		case <-done:
+			return c.render(ctx, agentID, seq)
+		case <-ctx.Done():
+			return voice.Audio{}, ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	c.flights[key] = done
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); delete(c.flights, key); close(done); c.mu.Unlock() }()
+	text, err := transcriptMessageText(c.db, agentID, seq)
+	if err != nil {
+		return voice.Audio{}, err
+	}
+	audio, err := c.renderer.Render(ctx, text)
+	if err != nil {
+		return voice.Audio{}, err
+	}
+	if err := c.db.PutMessageAudio(store.MessageAudio{AgentID: agentID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data}); err != nil {
+		return voice.Audio{}, err
+	}
+	return audio, nil
+}
+
+func (c *messageAudioCache) watch(s *session.Session) {
+	s.OnEvent(func(le eventlog.LoggedEvent) {
+		if le.Event.Kind == "status" && s.Status() == session.Idle {
+			c.prepare(s)
+		}
+	})
+	c.prepare(s)
+}
+
+func (c *messageAudioCache) prepare(s *session.Session) {
+	if c.renderer == nil {
+		return
+	}
+	enabled, err := c.db.AgentAudioEnabled(s.ID)
+	if err != nil || !enabled {
+		return
+	}
+	seq, err := latestMessageSeq(s)
+	if err != nil || seq == 0 {
+		return
+	}
+	if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
+		emitAudioState(s, "ready", seq, "")
+		return
+	}
+	emitAudioState(s, "rendering", seq, "")
+	go func() {
+		if _, err := c.render(c.ctx, s.ID, seq); err != nil {
+			emitAudioState(s, "error", seq, err.Error())
+			return
+		}
+		emitAudioState(s, "ready", seq, "")
+	}()
+}
+
+func latestMessageSeq(s *session.Session) (int64, error) {
+	history, err := s.Log.FullHistory()
+	if err != nil {
+		return 0, err
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Event.Kind != "message_chunk" {
+			continue
+		}
+		for i > 0 && history[i-1].Event.Kind == "message_chunk" {
+			i--
+		}
+		return history[i].Seq, nil
+	}
+	return 0, nil
+}
+
+func emitAudioState(s *session.Session, state string, seq int64, message string) {
+	payload, _ := json.Marshal(map[string]any{"kind": "audio_state", "state": state, "seq": seq, "message": message})
+	s.PushEvent(eventlog.Event{Kind: "audio_state", Payload: payload})
 }
 
 // reattachBrowsers re-connects to externalized (Steel) browser sessions that

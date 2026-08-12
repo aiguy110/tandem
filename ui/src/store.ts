@@ -8,7 +8,6 @@ import { WsClient, resolveToken, type ConnState } from './ws/client';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
-import { lastAgentReply, renderMessageAudio } from './audio';
 import type {
   AgentStatus,
   AgentSummary,
@@ -156,13 +155,11 @@ export interface AgentView {
   // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
-  // A local per-thread preference: completed replies are pre-rendered by this
-  // browser using the same API as the transcript's Listen control.
+  // Daemon-owned preference and render state, replayed to every client.
   audioOnTurnEnd: boolean;
   audioState: ThreadAudioState;
   audioError: string | null;
-  audioRun: number;
-  audioClip: { seq: number; url: string } | null;
+  audioSeq: number | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -334,29 +331,6 @@ const saveAgentOrder = (order: string[]) => {
   }
 };
 
-const THREAD_AUDIO_STORAGE_KEY = 'tandem.threadAudio';
-
-function readStoredThreadAudio(agentId: string): boolean {
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(THREAD_AUDIO_STORAGE_KEY) ?? '{}');
-    return !!stored && typeof stored === 'object' && (stored as Record<string, unknown>)[agentId] === true;
-  } catch {
-    return false;
-  }
-}
-
-function writeStoredThreadAudio(agentId: string, enabled: boolean): void {
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(THREAD_AUDIO_STORAGE_KEY) ?? '{}');
-    const all = stored && typeof stored === 'object' ? stored as Record<string, boolean> : {};
-    if (enabled) all[agentId] = true;
-    else delete all[agentId];
-    localStorage.setItem(THREAD_AUDIO_STORAGE_KEY, JSON.stringify(all));
-  } catch {
-    // The toggle remains usable for this page when storage is unavailable.
-  }
-}
-
 const USAGE_STORAGE_KEY = 'tandem.agentUsage';
 type StoredUsage = NonNullable<AgentView['usage']>;
 
@@ -419,41 +393,6 @@ export const useStore = create<StoreState>((set, get) => {
     ptyHub.clear(id);
     shellHub.clear(id);
     subscribeAgent(id, true);
-  }
-
-  function renderCompletedReply(agentId: string, seq: number): void {
-    let run = 0;
-    set((st) => {
-      const target = st.agents[agentId];
-      if (!target || !target.audioOnTurnEnd) return st;
-      if (target.audioClip?.seq === seq) return st;
-      run = target.audioRun + 1;
-      return { agents: { ...st.agents, [agentId]: { ...target, audioState: 'rendering', audioError: null, audioRun: run } } };
-    });
-    if (run === 0) return;
-    void renderMessageAudio(agentId, seq).then((url) => {
-      set((st) => {
-        const agent = st.agents[agentId];
-        if (!agent || agent.audioRun !== run || !agent.audioOnTurnEnd) {
-          URL.revokeObjectURL(url);
-          return st;
-        }
-        if (agent.audioClip) URL.revokeObjectURL(agent.audioClip.url);
-        return {
-          agents: {
-            ...st.agents,
-            [agentId]: { ...agent, audioState: 'ready', audioError: null, audioClip: { seq, url } },
-          },
-        };
-      });
-    }).catch((cause) => {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      set((st) => {
-        const agent = st.agents[agentId];
-        if (!agent || agent.audioRun !== run) return st;
-        return { agents: { ...st.agents, [agentId]: { ...agent, audioState: 'error', audioError: message } } };
-      });
-    });
   }
 
   // Apply one server message. This is the ONLY place agent state is mutated by
@@ -662,6 +601,19 @@ export const useStore = create<StoreState>((set, get) => {
           const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
+          const audioEvents = transcript.filter((e) => e.event.kind === 'audio_preference' || e.event.kind === 'audio_state');
+          let audioOnTurnEnd = prev.audioOnTurnEnd;
+          let audioState = prev.audioState;
+          let audioError = prev.audioError;
+          let audioSeq = prev.audioSeq;
+          for (const entry of audioEvents) {
+            if (entry.event.kind === 'audio_preference') audioOnTurnEnd = entry.event.enabled;
+            if (entry.event.kind === 'audio_state') {
+              audioState = entry.event.state;
+              audioError = entry.event.state === 'error' ? entry.event.message ?? 'Speech rendering failed' : null;
+              audioSeq = entry.event.seq;
+            }
+          }
           // Takeovers are daemon-owned durable events rather than part of the
           // session snapshot fields. Rebuild the pending set from the complete
           // transcript so reconnecting cannot erase a prompt while its MCP call
@@ -699,6 +651,10 @@ export const useStore = create<StoreState>((set, get) => {
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
+            audioOnTurnEnd,
+            audioState,
+            audioError,
+            audioSeq,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -742,7 +698,6 @@ export const useStore = create<StoreState>((set, get) => {
           return;
         }
         const usageReceivedAt = event.kind === 'usage' ? Date.now() : undefined;
-        let completedReplySeq = 0;
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
@@ -759,16 +714,10 @@ export const useStore = create<StoreState>((set, get) => {
             next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now(), severity }];
           }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
-          // This branch handles live daemon events only. Snapshots/replay use a
-          // separate reducer path above, so reconnecting never repeats speech.
-          if (prevStatus === 'working' && next.status === 'idle' && next.audioOnTurnEnd) {
-            completedReplySeq = lastAgentReply(next.events)?.seq ?? 0;
-          }
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
         });
-        if (completedReplySeq > 0) renderCompletedReply(agentId, completedReplySeq);
         return;
       }
       case 'prompt_queue':
@@ -922,31 +871,8 @@ export const useStore = create<StoreState>((set, get) => {
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
     toggleThreadAudio: (agentId) => {
-      let completedReplySeq = 0;
-      set((st) => {
-        const agent = st.agents[agentId];
-        if (!agent) return st;
-        const audioOnTurnEnd = !agent.audioOnTurnEnd;
-        writeStoredThreadAudio(agentId, audioOnTurnEnd);
-        // Enabling audio after a turn completes should be useful immediately,
-        // not make the user wait for the next agent response.
-        if (audioOnTurnEnd && agent.status !== 'working') completedReplySeq = lastAgentReply(agent.events)?.seq ?? 0;
-        if (!audioOnTurnEnd && agent.audioClip) URL.revokeObjectURL(agent.audioClip.url);
-        return {
-          agents: {
-            ...st.agents,
-            [agentId]: {
-              ...agent,
-              audioOnTurnEnd,
-              audioState: audioOnTurnEnd ? agent.audioState : 'idle',
-              audioError: audioOnTurnEnd ? agent.audioError : null,
-              audioRun: audioOnTurnEnd ? agent.audioRun : agent.audioRun + 1,
-              audioClip: audioOnTurnEnd ? agent.audioClip : null,
-            },
-          },
-        };
-      });
-      if (completedReplySeq > 0) renderCompletedReply(agentId, completedReplySeq);
+      const agent = get().agents[agentId];
+      if (agent) client.send({ t: 'set_audio_enabled', agentId, enabled: !agent.audioOnTurnEnd });
     },
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
@@ -1294,11 +1220,10 @@ function shell(id: string): AgentView {
     controlMode: 'transcript',
     adapter: 'acp',
     canHandoff: false,
-    audioOnTurnEnd: readStoredThreadAudio(id),
+    audioOnTurnEnd: false,
     audioState: 'idle',
     audioError: null,
-    audioRun: 0,
-    audioClip: null,
+    audioSeq: null,
   };
 }
 
@@ -1330,6 +1255,15 @@ function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now(
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
   if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: receivedAt };
   if (event.kind === 'control_state') v.controlMode = event.mode;
+  if (event.kind === 'audio_preference') {
+    v.audioOnTurnEnd = event.enabled;
+    if (!event.enabled) { v.audioState = 'idle'; v.audioError = null; v.audioSeq = null; }
+  }
+  if (event.kind === 'audio_state') {
+    v.audioState = event.state;
+    v.audioError = event.state === 'error' ? event.message ?? 'Speech rendering failed' : null;
+    v.audioSeq = event.seq;
+  }
   if (event.kind === 'prompt_queued' && !v.queuedPrompts.some((prompt) => prompt.id === event.promptId)) {
     v.queuedPrompts = [...v.queuedPrompts, { id: event.promptId, blocks: event.blocks, queuedAt: event.queuedAt }];
   }

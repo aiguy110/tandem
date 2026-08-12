@@ -48,19 +48,21 @@ var nameWords = []string{
 }
 
 type Registry struct {
-	mu        sync.RWMutex
-	store     *store.Store
-	config    config.Config
-	workspace *workspace.Manager
-	factory   agentadapter.Factory
-	browser   *browser.Broker
-	ring      int
-	sessions  map[string]*session.Session
-	cwds      map[string]string
-	known     map[string]bool
-	counter   int
-	handoffs  map[string]*sync.Mutex
-	external  *externalCache
+	mu                sync.RWMutex
+	store             *store.Store
+	config            config.Config
+	workspace         *workspace.Manager
+	factory           agentadapter.Factory
+	browser           *browser.Broker
+	ring              int
+	sessions          map[string]*session.Session
+	cwds              map[string]string
+	known             map[string]bool
+	counter           int
+	handoffs          map[string]*sync.Mutex
+	external          *externalCache
+	onSession         func(*session.Session)
+	onAudioPreference func(*session.Session, bool)
 }
 
 type externalCache struct {
@@ -171,13 +173,15 @@ type SessionSearchResult struct {
 	Hits    []SessionSearchHit `json:"hits"`
 }
 type Options struct {
-	Store        *store.Store
-	Config       config.Config
-	Workspace    *workspace.Manager
-	Factory      agentadapter.Factory
-	Assets       *assets.Store
-	Browser      *browser.Broker
-	RingCapacity int
+	Store             *store.Store
+	Config            config.Config
+	Workspace         *workspace.Manager
+	Factory           agentadapter.Factory
+	Assets            *assets.Store
+	Browser           *browser.Broker
+	RingCapacity      int
+	OnSession         func(*session.Session)
+	OnAudioPreference func(*session.Session, bool)
 }
 
 func New(o Options) (*Registry, error) {
@@ -214,7 +218,23 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference}, nil
+}
+
+func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
+	s := r.Get(id)
+	if s == nil {
+		return errors.New("no such live agent")
+	}
+	if err := r.store.SetAgentAudioEnabled(id, enabled); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{"kind": "audio_preference", "enabled": enabled})
+	s.PushEvent(eventlog.Event{Kind: "audio_preference", Payload: payload})
+	if enabled && r.onAudioPreference != nil {
+		r.onAudioPreference(s, true)
+	}
+	return nil
 }
 
 func (r *Registry) Get(id string) *session.Session {
@@ -632,6 +652,9 @@ func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter
 	r.cwds[rec.ID] = rec.CWD
 	r.known[rec.ID] = true
 	r.mu.Unlock()
+	if r.onSession != nil {
+		r.onSession(s)
+	}
 	if sid := s.SessionID(); sid != "" {
 		_ = r.store.SetSessionID(rec.ID, sid)
 	}
