@@ -810,7 +810,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudioURL }: { agentId: stri
   };
 
   return (
-    <div className="message-audio">
+    <div className={`message-audio${audioURL || cachedAudioURL ? '' : ' message-listen'}`}>
       {audioURL || cachedAudioURL ? <audio controls preload="metadata" src={audioURL ?? cachedAudioURL ?? undefined} aria-label="Spoken version of agent response" /> : (
         <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           {loading ? 'Rendering speech…' : 'Listen'}

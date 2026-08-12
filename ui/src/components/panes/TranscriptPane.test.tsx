@@ -62,6 +62,7 @@ describe('TranscriptPane voice rendering', () => {
     }, true);
 
     const view = render(<TranscriptPane />);
+    expect(view.getByRole('button', { name: 'Listen' }).closest('.message-audio')?.classList.contains('message-listen')).toBe(true);
     fireEvent.click(view.getByRole('button', { name: 'Listen' }));
     const player = await waitFor(() => view.getByLabelText('Spoken version of agent response'));
     expect(player.getAttribute('src')).toBe('blob:voice');
