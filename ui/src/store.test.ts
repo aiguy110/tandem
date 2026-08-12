@@ -25,6 +25,7 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 afterEach(() => {
   useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null });
   localStorage.removeItem('tandem.agentOrder');
+  localStorage.removeItem('tandem.threadAudio');
 });
 
 describe('agent ordering', () => {
@@ -37,6 +38,23 @@ describe('agent ordering', () => {
     useStore.getState().reorderAgent('three', 'two', true);
     expect(useStore.getState().order).toEqual(['two', 'three', 'one']);
     expect(JSON.parse(localStorage.getItem('tandem.agentOrder') ?? '[]')).toEqual(['two', 'three', 'one']);
+  });
+});
+
+describe('thread audio preference', () => {
+  it('toggles and persists audio for only the selected thread', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+
+    useStore.getState().toggleThreadAudio('agent-1');
+
+    expect(useStore.getState().agents['agent-1'].audioOnTurnEnd).toBe(true);
+    expect(useStore.getState().agents['agent-2'].audioOnTurnEnd).toBe(false);
+    expect(JSON.parse(localStorage.getItem('tandem.threadAudio') ?? '{}')).toEqual({ 'agent-1': true });
   });
 });
 
