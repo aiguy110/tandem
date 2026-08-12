@@ -31,6 +31,7 @@ function agent(): AgentView {
     controlMode: 'transcript',
     adapter: 'acp',
     canHandoff: false,
+    audioOnTurnEnd: false,
   };
 }
 
