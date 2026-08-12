@@ -3,6 +3,7 @@ import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import type { AckResult, AgentView } from '../../store';
 import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import { renderMessageAudio } from '../../audio';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
@@ -456,6 +457,7 @@ export function TranscriptPane() {
                 onJumpToLinkedBlock={jumpToLinkedBlock}
                 agentId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
+                cachedAudioURL={it.kind === 'message' && agent.audioClip?.seq === it.seq ? agent.audioClip.url : null}
               />
             ))}
           </div>
@@ -688,6 +690,7 @@ function Row({
   item,
   agentId,
   canRenderAudio,
+  cachedAudioURL,
   quoteLinks,
   onRespond,
   onJumpToQuote,
@@ -696,6 +699,7 @@ function Row({
   item: Item;
   agentId: string;
   canRenderAudio: boolean;
+  cachedAudioURL: string | null;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -740,7 +744,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudioURL={cachedAudioURL} />
         </div>
       );
     case 'thought':
@@ -780,7 +784,7 @@ function Row({
   }
 }
 
-function MessageAudio({ agentId, seq, enabled }: { agentId: string; seq: number; enabled: boolean }) {
+function MessageAudio({ agentId, seq, enabled, cachedAudioURL }: { agentId: string; seq: number; enabled: boolean; cachedAudioURL: string | null }) {
   const [loading, setLoading] = useState(false);
   const [audioURL, setAudioURL] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -793,23 +797,10 @@ function MessageAudio({ agentId, seq, enabled }: { agentId: string; seq: number;
     setLoading(true);
     setError(null);
     try {
-      const token = storedToken();
-      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages/${seq}/audio`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!response.ok) {
-        let message = `Voice rendering failed (${response.status})`;
-        try {
-          const body = await response.json() as { error?: string };
-          if (body.error) message = body.error;
-        } catch { /* retain the status message for non-JSON provider failures */ }
-        throw new Error(message);
-      }
-      const blob = await response.blob();
+      const url = await renderMessageAudio(agentId, seq);
       setAudioURL((previous) => {
         if (previous) URL.revokeObjectURL(previous);
-        return URL.createObjectURL(blob);
+        return url;
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -820,7 +811,7 @@ function MessageAudio({ agentId, seq, enabled }: { agentId: string; seq: number;
 
   return (
     <div className="message-audio">
-      {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : (
+      {audioURL || cachedAudioURL ? <audio controls preload="metadata" src={audioURL ?? cachedAudioURL ?? undefined} aria-label="Spoken version of agent response" /> : (
         <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           {loading ? 'Rendering speech…' : 'Listen'}
         </button>

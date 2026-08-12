@@ -1,9 +1,15 @@
 import type { WireEvent } from './wire';
+import { storedToken } from './ws/client';
 
-// Browser speech is deliberately a UI-only preference: it is tied to the
-// browser/device playing the audio and must never be triggered by transcript
-// replay in another client.
+// Automatic audio is browser-local: only this client pre-renders it, and
+// transcript replay in another client never initiates provider work.
 export function lastAgentMessage(events: { seq: number; event: WireEvent }[]): string | null {
+  return lastAgentReply(events)?.text ?? null;
+}
+
+// The sequence is the first chunk in the contiguous reply, which is also the
+// transcript row's sequence and the audio API's message identifier.
+export function lastAgentReply(events: { seq: number; event: WireEvent }[]): { seq: number; text: string } | null {
   let end = -1;
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].event.kind === 'message_chunk') {
@@ -14,55 +20,33 @@ export function lastAgentMessage(events: { seq: number; event: WireEvent }[]): s
   if (end === -1) return null;
 
   const chunks: string[] = [];
+  let seq = events[end].seq;
   for (let i = end; i >= 0; i--) {
     const event = events[i].event;
     if (event.kind !== 'message_chunk') break;
     chunks.unshift(event.text);
+    seq = events[i].seq;
   }
   const message = chunks.join('').trim();
-  return message || null;
+  return message ? { seq, text: message } : null;
 }
 
-// Keep the spoken result natural without changing the response's meaning.
-// Code itself is retained; only common Markdown delimiters are removed.
-export function speechText(message: string): string {
-  return message
-    .replace(/!?(\[[^\]]*\])\([^\s)]+(?:\s+[^)]*)?\)/g, '$1')
-    .replace(/[`*_~>#]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export interface SpeechCallbacks {
-  onStart?: () => void;
-  onEnd?: () => void;
-  onError?: (message: string) => void;
-  onUnavailable?: () => void;
-}
-
-// Use the browser's device-local speech engine for automatic replies. Unlike
-// the transcript's explicit Listen control this does not create a server-side
-// audio file, so report its lifecycle to the UI rather than leaving a silent
-// best-effort call with no indication of what happened.
-export function speak(message: string, callbacks: SpeechCallbacks = {}): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-    callbacks.onUnavailable?.();
-    return;
+// Render the exact same provider-backed clip used by the transcript's Listen
+// control. The caller owns the returned object URL and must revoke it when it
+// replaces or discards the clip.
+export async function renderMessageAudio(agentId: string, seq: number): Promise<string> {
+  const token = storedToken();
+  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages/${seq}/audio`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    let message = `Voice rendering failed (${response.status})`;
+    try {
+      const body = await response.json() as { error?: string };
+      if (body.error) message = body.error;
+    } catch { /* retain the status message for non-JSON provider failures */ }
+    throw new Error(message);
   }
-  const text = speechText(message);
-  if (!text) {
-    callbacks.onError?.('The completed reply has no text to speak.');
-    return;
-  }
-  // Avoid a backlog when multiple agents finish close together.
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.onstart = () => callbacks.onStart?.();
-  utterance.onend = () => callbacks.onEnd?.();
-  utterance.onerror = (event) => callbacks.onError?.(event.error || 'The browser could not play this reply.');
-  try {
-    window.speechSynthesis.speak(utterance);
-  } catch (cause) {
-    callbacks.onError?.(cause instanceof Error ? cause.message : 'The browser could not start speech.');
-  }
+  return URL.createObjectURL(await response.blob());
 }

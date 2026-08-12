@@ -8,7 +8,7 @@ import { WsClient, resolveToken, type ConnState } from './ws/client';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
-import { lastAgentMessage, speak } from './audio';
+import { lastAgentReply, renderMessageAudio } from './audio';
 import type {
   AgentStatus,
   AgentSummary,
@@ -57,7 +57,7 @@ export interface Takeover {
 // user input, e.g. a pending approval or browser takeover (yellow); failure =
 // the turn errored out (red).
 export type NotifSeverity = 'success' | 'attention' | 'failure';
-export type ThreadAudioState = 'idle' | 'queued' | 'speaking' | 'unavailable' | 'error';
+export type ThreadAudioState = 'idle' | 'rendering' | 'ready' | 'error';
 
 const SEVERITY_RANK: Record<NotifSeverity, number> = { success: 1, attention: 2, failure: 3 };
 
@@ -156,13 +156,13 @@ export interface AgentView {
   // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
-  // A local per-thread preference: automatic audio is rendered by this
-  // browser, never by the daemon, so it cannot interrupt another collaborator's
-  // session. The state gives a visible outcome for the browser speech request.
+  // A local per-thread preference: completed replies are pre-rendered by this
+  // browser using the same API as the transcript's Listen control.
   audioOnTurnEnd: boolean;
   audioState: ThreadAudioState;
   audioError: string | null;
   audioRun: number;
+  audioClip: { seq: number; url: string } | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -421,55 +421,38 @@ export const useStore = create<StoreState>((set, get) => {
     subscribeAgent(id, true);
   }
 
-  function playCompletedReply(agentId: string, reply: string): void {
+  function renderCompletedReply(agentId: string, seq: number): void {
     let run = 0;
     set((st) => {
       const target = st.agents[agentId];
       if (!target || !target.audioOnTurnEnd) return st;
-      const agents = { ...st.agents };
-      // The browser has one speech queue. Starting a reply supersedes any
-      // earlier automatic reply and must clear its stale "Speaking" indicator.
-      for (const [id, agent] of Object.entries(agents)) {
-        if (id !== agentId && (agent.audioState === 'queued' || agent.audioState === 'speaking')) {
-          agents[id] = { ...agent, audioState: 'idle', audioError: null, audioRun: agent.audioRun + 1 };
-        }
-      }
+      if (target.audioClip?.seq === seq) return st;
       run = target.audioRun + 1;
-      agents[agentId] = { ...target, audioState: 'queued', audioError: null, audioRun: run };
-      return { agents };
+      return { agents: { ...st.agents, [agentId]: { ...target, audioState: 'rendering', audioError: null, audioRun: run } } };
     });
     if (run === 0) return;
-    const update = (audioState: ThreadAudioState, audioError: string | null = null) => {
+    void renderMessageAudio(agentId, seq).then((url) => {
       set((st) => {
         const agent = st.agents[agentId];
-        if (!agent || agent.audioRun !== run) return st;
-        return { agents: { ...st.agents, [agentId]: { ...agent, audioState, audioError } } };
-      });
-    };
-    // Some browsers reject delayed speech without an error event (usually an
-    // autoplay or output-device policy). Do not leave the UI claiming it is
-    // queued forever in that case.
-    window.setTimeout(() => {
-      set((st) => {
-        const agent = st.agents[agentId];
-        if (!agent || agent.audioRun !== run || agent.audioState !== 'queued') return st;
+        if (!agent || agent.audioRun !== run || !agent.audioOnTurnEnd) {
+          URL.revokeObjectURL(url);
+          return st;
+        }
+        if (agent.audioClip) URL.revokeObjectURL(agent.audioClip.url);
         return {
           agents: {
             ...st.agents,
-            [agentId]: {
-              ...agent,
-              audioState: 'error',
-              audioError: 'Speech did not start. Check the browser’s autoplay and sound permissions.',
-            },
+            [agentId]: { ...agent, audioState: 'ready', audioError: null, audioClip: { seq, url } },
           },
         };
       });
-    }, 3_000);
-    speak(reply, {
-      onStart: () => update('speaking'),
-      onEnd: () => update('idle'),
-      onUnavailable: () => update('unavailable', 'Speech synthesis is not available in this browser.'),
-      onError: (message) => update('error', message),
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      set((st) => {
+        const agent = st.agents[agentId];
+        if (!agent || agent.audioRun !== run) return st;
+        return { agents: { ...st.agents, [agentId]: { ...agent, audioState: 'error', audioError: message } } };
+      });
     });
   }
 
@@ -759,7 +742,7 @@ export const useStore = create<StoreState>((set, get) => {
           return;
         }
         const usageReceivedAt = event.kind === 'usage' ? Date.now() : undefined;
-        let completedReply: string | null = null;
+        let completedReplySeq = 0;
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
@@ -779,13 +762,13 @@ export const useStore = create<StoreState>((set, get) => {
           // This branch handles live daemon events only. Snapshots/replay use a
           // separate reducer path above, so reconnecting never repeats speech.
           if (prevStatus === 'working' && next.status === 'idle' && next.audioOnTurnEnd) {
-            completedReply = lastAgentMessage(next.events);
+            completedReplySeq = lastAgentReply(next.events)?.seq ?? 0;
           }
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
         });
-        if (completedReply) playCompletedReply(agentId, completedReply);
+        if (completedReplySeq > 0) renderCompletedReply(agentId, completedReplySeq);
         return;
       }
       case 'prompt_queue':
@@ -939,17 +922,16 @@ export const useStore = create<StoreState>((set, get) => {
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
     toggleThreadAudio: (agentId) => {
-      let completedReply: string | null = null;
-      let disabling = false;
+      let completedReplySeq = 0;
       set((st) => {
         const agent = st.agents[agentId];
         if (!agent) return st;
         const audioOnTurnEnd = !agent.audioOnTurnEnd;
         writeStoredThreadAudio(agentId, audioOnTurnEnd);
-        disabling = !audioOnTurnEnd;
         // Enabling audio after a turn completes should be useful immediately,
         // not make the user wait for the next agent response.
-        if (audioOnTurnEnd && agent.status !== 'working') completedReply = lastAgentMessage(agent.events);
+        if (audioOnTurnEnd && agent.status !== 'working') completedReplySeq = lastAgentReply(agent.events)?.seq ?? 0;
+        if (!audioOnTurnEnd && agent.audioClip) URL.revokeObjectURL(agent.audioClip.url);
         return {
           agents: {
             ...st.agents,
@@ -959,12 +941,12 @@ export const useStore = create<StoreState>((set, get) => {
               audioState: audioOnTurnEnd ? agent.audioState : 'idle',
               audioError: audioOnTurnEnd ? agent.audioError : null,
               audioRun: audioOnTurnEnd ? agent.audioRun : agent.audioRun + 1,
+              audioClip: audioOnTurnEnd ? agent.audioClip : null,
             },
           },
         };
       });
-      if (disabling && typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
-      if (completedReply) playCompletedReply(agentId, completedReply);
+      if (completedReplySeq > 0) renderCompletedReply(agentId, completedReplySeq);
     },
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
@@ -1316,6 +1298,7 @@ function shell(id: string): AgentView {
     audioState: 'idle',
     audioError: null,
     audioRun: 0,
+    audioClip: null,
   };
 }
 

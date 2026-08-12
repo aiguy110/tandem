@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lastAgentMessage, speak, speechText } from './audio';
+import { lastAgentMessage, lastAgentReply, renderMessageAudio } from './audio';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -13,45 +13,26 @@ describe('lastAgentMessage', () => {
       { seq: 5, event: { kind: 'status', status: 'idle' } },
     ])).toBe('Final reply.');
   });
-});
 
-describe('speechText', () => {
-  it('keeps readable content while removing common markdown decoration', () => {
-    expect(speechText('See [the docs](https://example.com), then `run it`.')).toBe('See [the docs], then run it.');
+  it('keeps the first message chunk sequence for the audio endpoint', () => {
+    expect(lastAgentReply([
+      { seq: 3, event: { kind: 'message_chunk', text: 'Final ' } },
+      { seq: 4, event: { kind: 'message_chunk', text: 'reply.' } },
+      { seq: 5, event: { kind: 'status', status: 'idle' } },
+    ])).toEqual({ seq: 3, text: 'Final reply.' });
   });
 });
 
-describe('speak', () => {
-  it('reports the browser speech lifecycle', () => {
-    class FakeUtterance {
-      onstart: (() => void) | null = null;
-      onend: (() => void) | null = null;
-      onerror: ((event: { error: string }) => void) | null = null;
-      constructor(_text: string) {}
-    }
-    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
-    vi.stubGlobal('window', {
-      speechSynthesis: {
-        cancel: vi.fn(),
-        speak: (utterance: FakeUtterance) => {
-          utterance.onstart?.();
-          utterance.onend?.();
-        },
-      },
+describe('renderMessageAudio', () => {
+  it('uses the same authenticated audio endpoint as Listen', async () => {
+    localStorage.setItem('tandem.token', 'test-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:voice');
+
+    await expect(renderMessageAudio('agent one', 42)).resolves.toBe('blob:voice');
+    expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent%20one/messages/42/audio', {
+      method: 'POST', headers: { Authorization: 'Bearer test-token' },
     });
-    const events: string[] = [];
-
-    speak('Hello!', { onStart: () => events.push('start'), onEnd: () => events.push('end') });
-
-    expect(events).toEqual(['start', 'end']);
-  });
-
-  it('reports unavailable speech instead of failing silently', () => {
-    vi.stubGlobal('window', {});
-    const unavailable = vi.fn();
-
-    speak('Hello!', { onUnavailable: unavailable });
-
-    expect(unavailable).toHaveBeenCalledOnce();
   });
 });

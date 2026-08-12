@@ -35,6 +35,7 @@ function agent(): AgentView {
     audioState: 'idle',
     audioError: null,
     audioRun: 0,
+    audioClip: null,
   };
 }
 
@@ -67,6 +68,20 @@ describe('TranscriptPane voice rendering', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent-1/messages/1/audio', {
       method: 'POST', headers: { Authorization: 'Bearer test-token' },
     });
+  });
+
+  it('uses a background-rendered clip when the chat is opened', () => {
+    const ready = agent();
+    ready.audioClip = { seq: 1, url: 'blob:ready-voice' };
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+
+    expect(view.getByLabelText('Spoken version of agent response').getAttribute('src')).toBe('blob:ready-voice');
+    expect(view.queryByRole('button', { name: 'Listen' })).toBeNull();
   });
 });
 

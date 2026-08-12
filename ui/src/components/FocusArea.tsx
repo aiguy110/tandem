@@ -19,9 +19,9 @@ function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
 
 function audioStatus(agent: { audioOnTurnEnd: boolean; audioState: string; audioError: string | null }): string | null {
   if (!agent.audioOnTurnEnd || agent.audioState === 'idle') return null;
-  if (agent.audioState === 'queued') return 'Speech queued…';
-  if (agent.audioState === 'speaking') return 'Speaking…';
-  return agent.audioError ?? (agent.audioState === 'unavailable' ? 'Speech is unavailable' : 'Speech failed');
+  if (agent.audioState === 'rendering') return 'Rendering speech…';
+  if (agent.audioState === 'ready') return 'Speech ready';
+  return agent.audioError ?? 'Speech rendering failed';
 }
 
 export function FocusArea() {
@@ -85,7 +85,7 @@ export function FocusArea() {
             className={`audio-toggle${agent.audioOnTurnEnd ? ' active' : ''}`}
             aria-pressed={agent.audioOnTurnEnd}
             onClick={() => toggleThreadAudio(agent.id)}
-            title={agent.audioOnTurnEnd ? 'Read this thread’s completed replies aloud — on' : 'Read this thread’s completed replies aloud — off'}
+            title={agent.audioOnTurnEnd ? 'Prepare this thread’s completed replies as audio — on' : 'Prepare this thread’s completed replies as audio — off'}
           >
             <ThreadAudioIcon enabled={agent.audioOnTurnEnd} />
             <span className="sr-only">{agent.audioOnTurnEnd ? 'Disable' : 'Enable'} completed-reply audio</span>
