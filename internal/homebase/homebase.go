@@ -66,6 +66,9 @@ func Ensure(ctx context.Context, cfg config.Config, out io.Writer) error {
 	if err := ensureStarterTree(dir); err != nil {
 		return err
 	}
+	if err := ensureSkillBridges(dir, out); err != nil {
+		return err
+	}
 
 	if created {
 		fmt.Fprintf(out, "tandem: scaffolded home base at %s\n", dir)
@@ -170,6 +173,9 @@ func renderGenerated(cfg config.Config) string {
 	b.WriteString("guidance and automations that accumulate with git history so a bad change can ")
 	b.WriteString("be reviewed and reverted. When you learn something reusable about operating ")
 	b.WriteString("Tandem or the user's environment, capture it here.\n\n")
+	b.WriteString("Tandem bridges `skills/` into Claude Code, Codex, OpenCode, and Pi. Codex ")
+	b.WriteString("requires a current build with repo-local skill support; Pi loads project-local ")
+	b.WriteString("skills only after this project is trusted.\n\n")
 
 	b.WriteString("**Invariant:** a skill or script may *propose* new capabilities, but a human ")
 	b.WriteString("approves any new MCP grant — agents can request grants, never self-approve.\n")
@@ -246,6 +252,71 @@ func ensureStarterTree(dir string) error {
 			return err
 		}
 		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureSkillBridges makes the canonical skills/ directory discoverable by the
+// supported coding-agent harnesses. Existing user-authored bridge files are
+// never overwritten; conflicting entries are reported so their owner can
+// reconcile them with the canonical skills directory.
+func ensureSkillBridges(dir string, out io.Writer) error {
+	if err := ensureSkillSymlink(dir, filepath.Join(".claude", "skills"), out); err != nil {
+		return err
+	}
+	if err := ensureSkillSymlink(dir, filepath.Join(".codex", "skills"), out); err != nil {
+		return err
+	}
+
+	return ensureBridgeFiles(dir, out)
+}
+
+func ensureSkillSymlink(dir, rel string, out io.Writer) error {
+	path := filepath.Join(dir, rel)
+	if target, err := os.Readlink(path); err == nil {
+		if target != "../skills" {
+			fmt.Fprintf(out, "tandem: home base skill bridge %s points to %q; leaving it unchanged\n", rel, target)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		if _, statErr := os.Lstat(path); statErr == nil {
+			fmt.Fprintf(out, "tandem: home base skill bridge %s already exists; leaving it unchanged\n", rel)
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.Symlink("../skills", path)
+}
+
+func ensureBridgeFiles(dir string, out io.Writer) error {
+	entries := map[string]string{
+		"opencode.json": "{\n" +
+			"  \"$schema\": \"https://opencode.ai/config.json\",\n" +
+			"  \"skills\": { \"paths\": [\"./skills\"] }\n" +
+			"}\n",
+		filepath.Join(".pi", "settings.json"): "{ \"skills\": [\"../skills\"] }\n",
+	}
+	for rel, body := range entries {
+		path := filepath.Join(dir, rel)
+		existing, err := os.ReadFile(path)
+		if err == nil {
+			if string(existing) != body {
+				fmt.Fprintf(out, "tandem: home base skill bridge %s already exists; leaving it unchanged\n", rel)
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			return err
 		}
 	}
