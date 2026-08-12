@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
+import { UnifiedDiff } from '../diff/UnifiedDiff';
 import type { AckResult, AgentView } from '../../store';
 import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
 import { storedToken } from '../../ws/client';
@@ -902,11 +903,14 @@ type ToolImage =
   | ({ type: 'image' } & ImageAssetRef)
   | { type: 'image'; data: string; mimeType: string; name?: string };
 
-function parseToolContent(content: unknown): { text: string | null; images: ToolImage[] } {
-  if (content == null) return { text: null, images: [] };
-  if (typeof content === 'string') return { text: content || null, images: [] };
+type ToolDiff = { path: string; oldText: string; newText: string };
+
+function parseToolContent(content: unknown): { text: string | null; images: ToolImage[]; diffs: ToolDiff[] } {
+  if (content == null) return { text: null, images: [], diffs: [] };
+  if (typeof content === 'string') return { text: content || null, images: [], diffs: [] };
   if (Array.isArray(content)) {
     const images: ToolImage[] = [];
+    const diffs: ToolDiff[] = [];
     const parts = content
       .map((block: any) => {
         if (block?.type === 'content' && block.content?.type === 'text') return block.content.text ?? '';
@@ -924,13 +928,45 @@ function parseToolContent(content: unknown): { text: string | null; images: Tool
         // Older events may still contain uncaptured local resource links. Keep
         // them legible even though browsers cannot load local paths directly.
         if (block?.type === 'content' && block.content?.type === 'resource_link') return block.content.name ?? block.content.uri ?? null;
-        if (block?.type === 'diff') return `--- ${block.path}\n${block.newText ?? ''}`;
+        if (block?.type === 'diff' && typeof block.path === 'string') {
+          diffs.push({ path: block.path, oldText: typeof block.oldText === 'string' ? block.oldText : '', newText: typeof block.newText === 'string' ? block.newText : '' });
+        }
         return null;
       })
       .filter((s): s is string => !!s);
-    return { text: parts.length ? parts.join('\n') : null, images };
+    return { text: parts.length ? parts.join('\n') : null, images, diffs };
   }
-  return { text: JSON.stringify(content, null, 2), images: [] };
+  return { text: JSON.stringify(content, null, 2), images: [], diffs: [] };
+}
+
+function lineCount(text: string): number {
+  if (!text) return 0;
+  return text.endsWith('\n') ? text.slice(0, -1).split('\n').length : text.split('\n').length;
+}
+
+function diffLines(text: string, prefix: '+' | '-'): string[] {
+  if (!text) return [];
+  const lines = text.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.map((line) => `${prefix}${line}`);
+}
+
+// ACP diff content holds the complete before/after text instead of a unified
+// patch. Synthesize one so tool results use the same readable renderer as the
+// workspace Diff tab.
+function toolDiffPatch({ path, oldText, newText }: ToolDiff): string {
+  const oldCount = lineCount(oldText);
+  const newCount = lineCount(newText);
+  const oldRange = oldCount ? `1,${oldCount}` : '0,0';
+  const newRange = newCount ? `1,${newCount}` : '0,0';
+  return [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${oldRange} +${newRange} @@`,
+    ...diffLines(oldText, '-'),
+    ...diffLines(newText, '+'),
+  ].join('\n');
 }
 
 // rawInput is the ACP tool_call's arguments (e.g. { path, content } for a
@@ -963,14 +999,14 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
 
 function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   const [open, setOpen] = useState(false);
-  const { text: body, images } = parseToolContent(item.content);
+  const { text: body, images, diffs } = parseToolContent(item.content);
   const args = formatArgs(item.rawInput);
   const isExecute = item.toolKind === 'execute';
   const command = isExecute ? terminalCommand(item) : null;
   // For a plain execute call, the command *is* the args — showing it again as
   // a raw JSON "Arguments" blob under a terminal prompt line is noise.
   const showArgs = args != null && !(isExecute && command != null);
-  const hasBody = body != null || showArgs || images.length > 0 || command != null;
+  const hasBody = body != null || showArgs || images.length > 0 || diffs.length > 0 || command != null;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
@@ -996,7 +1032,10 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
               <div className="tool-terminal-empty">(no output)</div>
             )
           ) : (
-            body != null && <div className="tool-output">{body}</div>
+            <>
+              {diffs.map((diff, index) => <UnifiedDiff key={`${diff.path}-${index}`} patch={toolDiffPatch(diff)} />)}
+              {body != null && <div className="tool-output">{body}</div>}
+            </>
           )}
           {showArgs && (
             <div className="tool-args">

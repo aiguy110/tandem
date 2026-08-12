@@ -67,6 +67,30 @@ describe('TranscriptPane voice rendering', () => {
   });
 });
 
+describe('TranscriptPane tool diffs', () => {
+  it('renders ACP edit content with the shared colored unified diff', () => {
+    const edited = agent();
+    edited.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'edit-1', title: 'Edit README.md', status: 'done',
+        content: [{ type: 'diff', path: 'README.md', oldText: 'before\n', newText: 'after\n' }],
+      },
+    }];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': edited }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByText('Edit README.md'));
+
+    expect(view.container.querySelector('.diff-file')).not.toBeNull();
+    expect(view.container.querySelector('.diff-line.remove .diff-text')?.textContent).toBe('-before');
+    expect(view.container.querySelector('.diff-line.add .diff-text')?.textContent).toBe('+after');
+  });
+});
+
 describe('TranscriptPane annotations', () => {
   it('offers the comment action when native selection emits selectionchange', async () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
