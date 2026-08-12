@@ -33,6 +33,7 @@ type AutomationJob struct {
 	BrowserSnapshotID   string `json:"browserSnapshotId"`
 	DefaultAgentProfile string `json:"defaultAgentProfile"`
 	WakePrompt          string `json:"wakePrompt"`
+	WakeSuppression     string `json:"wakeSuppression"`
 	Concurrency         string `json:"concurrency"`
 	ManifestHash        string `json:"manifestHash"`
 	Enabled             bool   `json:"enabled"`
@@ -168,15 +169,18 @@ func (s *Store) UpsertAutomationJob(job AutomationJob) error {
 	if job.Concurrency == "" {
 		job.Concurrency = "skip"
 	}
+	if job.WakeSuppression == "" {
+		job.WakeSuppression = "until_closed"
+	}
 	_, err := s.db.Exec(`INSERT INTO automation_jobs
-(id, repositoryId, scriptPath, name, cron, timezone, browserSnapshotId, defaultAgentProfile, wakePrompt, concurrency, manifestHash, enabled, createdAt, updatedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+(id, repositoryId, scriptPath, name, cron, timezone, browserSnapshotId, defaultAgentProfile, wakePrompt, wakeSuppression, concurrency, manifestHash, enabled, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET repositoryId=excluded.repositoryId, scriptPath=excluded.scriptPath,
 name=excluded.name, cron=excluded.cron, timezone=excluded.timezone, browserSnapshotId=excluded.browserSnapshotId,
-defaultAgentProfile=excluded.defaultAgentProfile, wakePrompt=excluded.wakePrompt, concurrency=excluded.concurrency,
+defaultAgentProfile=excluded.defaultAgentProfile, wakePrompt=excluded.wakePrompt, wakeSuppression=excluded.wakeSuppression, concurrency=excluded.concurrency,
 manifestHash=excluded.manifestHash, enabled=excluded.enabled, updatedAt=excluded.updatedAt`,
 		job.ID, job.RepositoryID, job.ScriptPath, job.Name, job.Cron, job.Timezone, job.BrowserSnapshotID,
-		job.DefaultAgentProfile, job.WakePrompt, job.Concurrency, job.ManifestHash, boolToInt(job.Enabled), job.CreatedAt, job.UpdatedAt)
+		job.DefaultAgentProfile, job.WakePrompt, job.WakeSuppression, job.Concurrency, job.ManifestHash, boolToInt(job.Enabled), job.CreatedAt, job.UpdatedAt)
 	return err
 }
 
@@ -219,13 +223,13 @@ func (s *Store) DeleteAutomationJob(id string) error {
 }
 
 const automationJobSelect = `SELECT id, repositoryId, scriptPath, name, cron, timezone, browserSnapshotId,
-defaultAgentProfile, wakePrompt, concurrency, manifestHash, enabled, createdAt, updatedAt FROM automation_jobs`
+defaultAgentProfile, wakePrompt, wakeSuppression, concurrency, manifestHash, enabled, createdAt, updatedAt FROM automation_jobs`
 
 func scanAutomationJob(row scanner) (*AutomationJob, error) {
 	var job AutomationJob
 	var enabled int
 	if err := row.Scan(&job.ID, &job.RepositoryID, &job.ScriptPath, &job.Name, &job.Cron, &job.Timezone,
-		&job.BrowserSnapshotID, &job.DefaultAgentProfile, &job.WakePrompt, &job.Concurrency, &job.ManifestHash,
+		&job.BrowserSnapshotID, &job.DefaultAgentProfile, &job.WakePrompt, &job.WakeSuppression, &job.Concurrency, &job.ManifestHash,
 		&enabled, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

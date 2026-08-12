@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -60,5 +61,54 @@ func TestSchedulerReconcilesInterruptedRuns(t *testing.T) {
 	}
 	if run.Outcome != "runner_failed" || run.Reason != "daemon_restart" || run.CompletedAt == nil || run.Error == nil {
 		t.Fatalf("run=%+v", run)
+	}
+}
+
+func TestSchedulerWakeSuppressionUntilClosed(t *testing.T) {
+	service, repo := testAutomationService(t)
+	job := storepkg.AutomationJob{ID: "job-1", RepositoryID: repo.ID, ScriptPath: ".tandem/scripts/check.ts", Cron: "every 5m", Enabled: true}
+	if err := service.Store.UpsertAutomationJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Store.UpsertAgent(storepkg.Agent{ID: "agent-1", Name: "wake", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	jobID, agentID := job.ID, "agent-1"
+	if err := service.Store.SaveAutomationRun(storepkg.AutomationRun{ID: "run-1", JobID: &jobID, RepositoryID: repo.ID, ScriptPath: job.ScriptPath, Trigger: "scheduled", StartedAt: 1, Outcome: "succeeded_wake_requested"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Store.SaveAutomationWakeup(storepkg.AutomationWakeup{RunID: "run-1", JobID: &jobID, AgentID: &agentID, Status: "working", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &Scheduler{Service: service}
+	if !scheduler.activeWakeup(job) {
+		t.Fatal("an idle but open wake agent must suppress later ticks")
+	}
+	if err := service.Store.CloseAgent(agentID); err != nil {
+		t.Fatal(err)
+	}
+	if scheduler.activeWakeup(job) {
+		t.Fatal("a closed wake agent must no longer suppress later ticks")
+	}
+}
+
+func TestSchedulerWakeSuppressionWhileActiveAllowsIdleAgent(t *testing.T) {
+	service, repo := testAutomationService(t)
+	job := storepkg.AutomationJob{ID: "job-1", RepositoryID: repo.ID, ScriptPath: ".tandem/scripts/check.ts", Cron: "every 5m", WakeSuppression: WakeSuppressionWhileActive, Enabled: true}
+	if err := service.Store.UpsertAutomationJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Store.UpsertAgent(storepkg.Agent{ID: "agent-1", Name: "wake", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	jobID, agentID := job.ID, "agent-1"
+	if err := service.Store.SaveAutomationRun(storepkg.AutomationRun{ID: "run-1", JobID: &jobID, RepositoryID: repo.ID, ScriptPath: job.ScriptPath, Trigger: "scheduled", StartedAt: 1, Outcome: "succeeded_wake_requested"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Store.SaveAutomationWakeup(storepkg.AutomationWakeup{RunID: "run-1", JobID: &jobID, AgentID: &agentID, Status: "working", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if (&Scheduler{Service: service}).activeWakeup(job) {
+		t.Fatal("while_active must not suppress an idle wake agent")
 	}
 }

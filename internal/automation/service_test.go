@@ -70,6 +70,25 @@ process.exit(7);
 	}
 }
 
+func TestRegisterJobPersistsWakeSuppression(t *testing.T) {
+	service, repo := testAutomationService(t)
+	job, err := service.registerJob(repo, Script{Path: ".tandem/scripts/check.ts", Manifest: Manifest{
+		Name:     "check",
+		Schedule: &ScheduleSpec{Cron: "every 5m"},
+		Wake:     &WakeSpec{AgentProfile: "triage", Suppression: WakeSuppressionWhileActive},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.WakeSuppression != WakeSuppressionWhileActive {
+		t.Fatalf("job=%+v", job)
+	}
+	stored, err := service.Store.AutomationJob(job.ID)
+	if err != nil || stored == nil || stored.WakeSuppression != WakeSuppressionWhileActive {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+}
+
 func TestServiceHTTPRequiresBearerToken(t *testing.T) {
 	service := &Service{Token: "secret"}
 	request := httptest.NewRequest(http.MethodPost, "/internal/automation/run", nil)

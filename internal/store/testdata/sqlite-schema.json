@@ -142,7 +142,7 @@
       "type": "table",
       "name": "automation_jobs",
       "tableName": "automation_jobs",
-      "sql": "CREATE TABLE automation_jobs (\n        id                  TEXT PRIMARY KEY,\n        repositoryId        TEXT NOT NULL,\n        scriptPath          TEXT NOT NULL,\n        name                TEXT NOT NULL DEFAULT '',\n        cron                TEXT NOT NULL,\n        timezone            TEXT NOT NULL DEFAULT '',\n        browserSnapshotId   TEXT NOT NULL DEFAULT '',\n        defaultAgentProfile TEXT NOT NULL DEFAULT '',\n        wakePrompt          TEXT NOT NULL DEFAULT '',\n        concurrency         TEXT NOT NULL DEFAULT 'skip',\n        manifestHash        TEXT NOT NULL DEFAULT '',\n        enabled             INTEGER NOT NULL DEFAULT 1,\n        createdAt           INTEGER NOT NULL,\n        updatedAt           INTEGER NOT NULL\n      )"
+      "sql": "CREATE TABLE automation_jobs (\n        id                  TEXT PRIMARY KEY,\n        repositoryId        TEXT NOT NULL,\n        scriptPath          TEXT NOT NULL,\n        name                TEXT NOT NULL DEFAULT '',\n        cron                TEXT NOT NULL,\n        timezone            TEXT NOT NULL DEFAULT '',\n        browserSnapshotId   TEXT NOT NULL DEFAULT '',\n        defaultAgentProfile TEXT NOT NULL DEFAULT '',\n        wakePrompt          TEXT NOT NULL DEFAULT '',\n        wakeSuppression     TEXT NOT NULL DEFAULT 'until_closed',\n        concurrency         TEXT NOT NULL DEFAULT 'skip',\n        manifestHash        TEXT NOT NULL DEFAULT '',\n        enabled             INTEGER NOT NULL DEFAULT 1,\n        createdAt           INTEGER NOT NULL,\n        updatedAt           INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",

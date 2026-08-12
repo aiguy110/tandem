@@ -54,7 +54,7 @@ func TestAutomationJobLifecycle(t *testing.T) {
 	job := AutomationJob{
 		ID: "job-1", RepositoryID: "repo-a", ScriptPath: ".tandem/scripts/check.ts", Name: "check",
 		Cron: "*/5 * * * *", Timezone: "America/New_York", BrowserSnapshotID: "snap-1",
-		DefaultAgentProfile: "triage", WakePrompt: "Review the result", ManifestHash: "abc", Enabled: true,
+		DefaultAgentProfile: "triage", WakePrompt: "Review the result", WakeSuppression: "while_active", ManifestHash: "abc", Enabled: true,
 	}
 	if err := s.UpsertAutomationJob(job); err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestAutomationJobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.CreatedAt != 100 || got.UpdatedAt != 100 || got.Concurrency != "skip" || !got.Enabled {
+	if got == nil || got.CreatedAt != 100 || got.UpdatedAt != 100 || got.Concurrency != "skip" || got.WakeSuppression != "while_active" || !got.Enabled {
 		t.Fatalf("job=%#v", got)
 	}
 	s.now = func() time.Time { return time.UnixMilli(200) }

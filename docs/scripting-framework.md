@@ -106,6 +106,7 @@ A saved script may begin with YAML in a leading `@tandem` documentation block:
  * wake:
  *   agentProfile: inbox-triage
  *   prompt: Review the detected message and decide what to do next.
+ *   suppression: until_closed
  */
 ```
 
@@ -118,6 +119,10 @@ The fields are:
 - `wake.agentProfile`: the default profile for intentional wakeups and failure
   recovery.
 - `wake.prompt`: the base prompt supplied to a woken agent.
+- `wake.suppression`: controls when a prior wake stops suppressing scheduled
+  ticks. `until_closed` (the default) waits until the agent is explicitly
+  closed; `while_active` preserves the older behavior and only suppresses while
+  the agent is working or blocked.
 
 Reasons are explanatory, untrusted script text. The approval UI separately
 shows Tandem's normalized description of each capability. Frontmatter does not
@@ -304,11 +309,13 @@ then.
 - `skip` (default): record and skip a tick while the prior run is active.
 - `queue`: retain one pending occurrence to run after the active run finishes.
 
-After a successful wake or a failure recovery, later ticks are skipped while
-the linked agent is in a nonterminal state. This prevents a polling script from
-creating a new agent for the same condition on every tick. The scheduler does
-not replay missed occurrences after daemon downtime; it computes the next
-future cron occurrence.
+After a successful wake or a failure recovery, later ticks follow the job's
+durable `wake.suppression` policy. The default, `until_closed`, suppresses
+ticks while the linked agent remains open—even after it becomes idle—so a
+polling script does not create another agent for the same unresolved condition.
+Set `while_active` when a new tick should be allowed as soon as the prior agent
+is no longer working or blocked. The scheduler does not replay missed
+occurrences after daemon downtime; it computes the next future cron occurrence.
 
 ## Immutable browser snapshots
 
@@ -331,8 +338,9 @@ Add these SQLite tables or equivalent store records:
 - `repository_tool_grants`: repository, MCP tool capability, approval actor and
   timestamps, source approval request, and revocation state.
 - `automation_jobs`: repository, script path, registered schedule, timezone,
-  concurrency, browser snapshot, wake specification, enabled state, and parsed
-  source metadata used to detect pending synchronization.
+  concurrency, browser snapshot, wake specification and suppression policy,
+  enabled state, and parsed source metadata used to detect pending
+  synchronization.
 - `automation_runs`: job or direct invocation, scheduled/start/end timestamps,
   source hash for audit, process and runner outcomes, stdout, stderr, exit code,
   report payload, browser clone, and skip/approval reason.

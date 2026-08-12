@@ -269,6 +269,7 @@ export interface AutomationJob {
   browserSnapshotId: string;
   defaultAgentProfile: string;
   wakePrompt: string;
+  wakeSuppression: string;
   concurrency: string;
   manifestHash: string;
   enabled: boolean;

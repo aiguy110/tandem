@@ -24,6 +24,7 @@ func TestParseManifest(t *testing.T) {
  * wake:
  *   agentProfile: inbox-triage
  *   prompt: Review the matching message.
+ *   suppression: until_closed
  */
 import { report } from "tandem:runtime";
 `)
@@ -40,7 +41,7 @@ import { report } from "tandem:runtime";
 	if m.Schedule == nil || m.Schedule.Cron != "every 5m" || m.Schedule.Concurrency != "skip" {
 		t.Fatalf("unexpected schedule: %+v", m.Schedule)
 	}
-	if m.Wake == nil || m.Wake.AgentProfile != "inbox-triage" {
+	if m.Wake == nil || m.Wake.AgentProfile != "inbox-triage" || m.Wake.Suppression != WakeSuppressionUntilClosed {
 		t.Fatalf("unexpected wake: %+v", m.Wake)
 	}
 }
@@ -66,6 +67,7 @@ func TestParseManifestRejectsUnknownAndInvalidFields(t *testing.T) {
 		{"missing cron", "name: x\nschedule:\n  timezone: UTC", "schedule.cron is required"},
 		{"bad concurrency", "name: x\nschedule:\n  cron: daily\n  concurrency: replace", "must be skip or queue"},
 		{"missing agent", "name: x\nwake:\n  prompt: help", "wake.agentProfile is required"},
+		{"bad wake suppression", "name: x\nwake:\n  agentProfile: triage\n  suppression: forever", "wake.suppression must be"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

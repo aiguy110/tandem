@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS automation_jobs (
         browserSnapshotId   TEXT NOT NULL DEFAULT '',
         defaultAgentProfile TEXT NOT NULL DEFAULT '',
         wakePrompt          TEXT NOT NULL DEFAULT '',
+        wakeSuppression     TEXT NOT NULL DEFAULT 'until_closed',
         concurrency         TEXT NOT NULL DEFAULT 'skip',
         manifestHash        TEXT NOT NULL DEFAULT '',
         enabled             INTEGER NOT NULL DEFAULT 1,
@@ -340,6 +341,7 @@ func Open(path string) (*Store, error) {
 		{"ALTER TABLE history_sessions ADD COLUMN importerId TEXT NOT NULL DEFAULT ''", "history_sessions.importerId"},
 		{"ALTER TABLE history_sessions ADD COLUMN importerVersion INTEGER NOT NULL DEFAULT 0", "history_sessions.importerVersion"},
 		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
+		{"ALTER TABLE automation_jobs ADD COLUMN wakeSuppression TEXT NOT NULL DEFAULT 'until_closed'", "automation_jobs.wakeSuppression"},
 		{`CREATE TABLE IF NOT EXISTS annotations (
         id        TEXT PRIMARY KEY,
         agentId   TEXT NOT NULL,

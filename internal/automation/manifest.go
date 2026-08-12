@@ -40,7 +40,17 @@ type ScheduleSpec struct {
 type WakeSpec struct {
 	AgentProfile string `yaml:"agentProfile" json:"agentProfile"`
 	Prompt       string `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Suppression  string `yaml:"suppression,omitempty" json:"suppression,omitempty"`
 }
+
+const (
+	// WakeSuppressionUntilClosed prevents repeat wakeups until the prior wake
+	// agent is explicitly closed. This is the durable default.
+	WakeSuppressionUntilClosed = "until_closed"
+	// WakeSuppressionWhileActive preserves the legacy behavior: only a wake
+	// agent that is currently working or blocked suppresses another tick.
+	WakeSuppressionWhileActive = "while_active"
+)
 
 var ErrNoFrontmatter = errors.New("script has no leading @tandem frontmatter")
 
@@ -121,8 +131,15 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("@tandem schedule.concurrency must be skip or queue, got %q", m.Schedule.Concurrency)
 		}
 	}
-	if m.Wake != nil && strings.TrimSpace(m.Wake.AgentProfile) == "" {
-		return errors.New("@tandem wake.agentProfile is required when wake is present")
+	if m.Wake != nil {
+		if strings.TrimSpace(m.Wake.AgentProfile) == "" {
+			return errors.New("@tandem wake.agentProfile is required when wake is present")
+		}
+		switch m.Wake.Suppression {
+		case "", WakeSuppressionUntilClosed, WakeSuppressionWhileActive:
+		default:
+			return fmt.Errorf("@tandem wake.suppression must be %q or %q, got %q", WakeSuppressionUntilClosed, WakeSuppressionWhileActive, m.Wake.Suppression)
+		}
 	}
 	return nil
 }

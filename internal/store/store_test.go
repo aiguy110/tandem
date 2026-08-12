@@ -343,6 +343,39 @@ INSERT INTO agents VALUES ('legacy-1','legacy-1','{}',NULL,'idle',123,NULL)`)
 	}
 }
 
+func TestMigratesAutomationWakeSuppression(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE automation_jobs (
+        id TEXT PRIMARY KEY, repositoryId TEXT NOT NULL, scriptPath TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '', cron TEXT NOT NULL, timezone TEXT NOT NULL DEFAULT '',
+        browserSnapshotId TEXT NOT NULL DEFAULT '', defaultAgentProfile TEXT NOT NULL DEFAULT '',
+        wakePrompt TEXT NOT NULL DEFAULT '', concurrency TEXT NOT NULL DEFAULT 'skip',
+        manifestHash TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+      );
+INSERT INTO automation_jobs (id, repositoryId, scriptPath, cron, createdAt, updatedAt)
+VALUES ('legacy-job', 'repo', 'watch.ts', 'every 5m', 1, 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	job, err := s.AutomationJob("legacy-job")
+	if err != nil || job == nil || job.WakeSuppression != "until_closed" {
+		t.Fatalf("legacy job=%#v err=%v", job, err)
+	}
+}
+
 func TestMalformedRowsAreReported(t *testing.T) {
 	s, _ := openTestStore(t)
 	if _, err := s.db.Exec("INSERT INTO agents VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {

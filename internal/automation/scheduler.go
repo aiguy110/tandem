@@ -120,8 +120,8 @@ func (s *Scheduler) tick(ctx context.Context) {
 			s.recordSkip(job, scheduled, "skipped_concurrency", "previous script execution is active")
 			continue
 		}
-		if s.activeWakeup(job.ID) {
-			s.recordSkip(job, scheduled, "skipped_agent_active", "a linked wake agent is working or blocked")
+		if s.activeWakeup(job) {
+			s.recordSkip(job, scheduled, "skipped_agent_active", s.wakeSuppressionReason(job))
 			continue
 		}
 		s.startRun(ctx, job, scheduled)
@@ -148,7 +148,7 @@ func (s *Scheduler) startRun(ctx context.Context, job storepkg.AutomationJob, sc
 			queued := s.pending[job.ID]
 			delete(s.pending, job.ID)
 			s.mu.Unlock()
-			if queued && !s.activeWakeup(job.ID) {
+			if queued && !s.activeWakeup(job) {
 				s.startRun(ctx, job, s.now())
 			}
 		}()
@@ -212,11 +212,8 @@ func (s *Scheduler) recordSkip(job storepkg.AutomationJob, scheduled time.Time, 
 		Outcome: outcome, Reason: reason, Error: &message})
 }
 
-func (s *Scheduler) activeWakeup(jobID string) bool {
-	if s.Service.Agents == nil {
-		return false
-	}
-	wakeups, err := s.Service.Store.AutomationWakeups(jobID)
+func (s *Scheduler) activeWakeup(job storepkg.AutomationJob) bool {
+	wakeups, err := s.Service.Store.AutomationWakeups(job.ID)
 	if err != nil {
 		return false
 	}
@@ -224,16 +221,34 @@ func (s *Scheduler) activeWakeup(jobID string) bool {
 		if wakeup.AgentID == nil {
 			continue
 		}
-		agent := s.Service.Agents.Get(*wakeup.AgentID)
-		if agent == nil {
-			continue
-		}
-		status := string(agent.Status())
-		if status == "working" || status == "blocked" {
-			return true
+		switch job.WakeSuppression {
+		case "", WakeSuppressionUntilClosed:
+			agent, agentErr := s.Service.Store.Agent(*wakeup.AgentID)
+			if agentErr == nil && agent != nil && agent.ClosedAt == nil {
+				return true
+			}
+		case WakeSuppressionWhileActive:
+			if s.Service.Agents == nil {
+				continue
+			}
+			agent := s.Service.Agents.Get(*wakeup.AgentID)
+			if agent == nil {
+				continue
+			}
+			status := string(agent.Status())
+			if status == "working" || status == "blocked" {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func (s *Scheduler) wakeSuppressionReason(job storepkg.AutomationJob) string {
+	if job.WakeSuppression == WakeSuppressionWhileActive {
+		return "a linked wake agent is working or blocked"
+	}
+	return "a linked wake agent remains open"
 }
 
 func repositoryRootFromID(repositoryID string) (string, error) {

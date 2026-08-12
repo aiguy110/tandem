@@ -470,6 +470,10 @@ func (s *Service) registerJob(repo repository, script Script) (storepkg.Automati
 	}
 	if script.Manifest.Wake != nil {
 		job.DefaultAgentProfile, job.WakePrompt = script.Manifest.Wake.AgentProfile, script.Manifest.Wake.Prompt
+		job.WakeSuppression = script.Manifest.Wake.Suppression
+	}
+	if job.WakeSuppression == "" {
+		job.WakeSuppression = WakeSuppressionUntilClosed
 	}
 	if err := s.Store.UpsertAutomationJob(job); err != nil {
 		return storepkg.AutomationJob{}, err
