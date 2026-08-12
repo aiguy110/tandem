@@ -303,6 +303,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .ev.msg table { border-collapse: collapse; margin: 0 0 8px; font-size: var(--fs-sm); }
 .ev.msg th, .ev.msg td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 .ev.msg th { background: var(--surface-2); font-weight: 600; }
+.message-audio { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.message-audio button { appearance: none; border: 0; background: none; color: var(--text-faint); padding: 2px 0; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.message-audio button:hover:not(:disabled) { color: var(--agent); }
+.message-audio button:disabled { cursor: default; opacity: .55; }
+.message-audio audio { width: min(100%, 360px); height: 32px; }
+.message-audio-error { width: 100%; color: var(--err); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .ev.thought { color: var(--text-faint); font-size: var(--fs-sm); font-style: italic; border-left: 2px solid var(--border); padding-left: 10px; }
 .ev.thought summary { cursor: pointer; }
 

@@ -116,6 +116,22 @@ type Config struct {
 	DefaultHarness string                  `json:"defaultHarness,omitempty"`
 	Browser        BrowserConfig           `json:"browser"`
 	Node           NodeConfig              `json:"node"`
+	Voice          VoiceConfig             `json:"voice"`
+}
+
+// VoiceConfig configures the daemon-side, two-stage spoken-response pipeline.
+// Credentials never cross the HTTP/WS boundary to the browser.
+type VoiceConfig struct {
+	Enabled             bool   `json:"enabled"`
+	CleanupEndpoint     string `json:"cleanupEndpoint"`
+	CleanupAPIKey       string `json:"cleanupApiKey,omitempty"`
+	CleanupModel        string `json:"cleanupModel"`
+	CleanupInstructions string `json:"cleanupInstructions"`
+	TTSEndpoint         string `json:"ttsEndpoint"`
+	TTSAPIKey           string `json:"ttsApiKey,omitempty"`
+	TTSModel            string `json:"ttsModel"`
+	TTSVoice            string `json:"ttsVoice"`
+	TTSFormat           string `json:"ttsFormat"`
 }
 
 // NodeConfig is the resolved Node runtime Tandem uses to launch ACP servers and
@@ -149,14 +165,30 @@ const DefaultManagedNodeVersion = "22.11.0"
 // built-in defaults fill any gaps. It is distinct from the agent catalog
 // (`agents:`/`harnesses:`), which the wizard never touches.
 type Settings struct {
-	ProjectRoots  []string     `yaml:"projectRoots,omitempty"`
-	Bind          string       `yaml:"bind,omitempty"`
-	Port          int          `yaml:"port,omitempty"`
-	BrowserDriver string       `yaml:"browserDriver,omitempty"`
-	SteelBaseURL  string       `yaml:"steelBaseUrl,omitempty"`
-	SteelAPIKey   string       `yaml:"steelApiKey,omitempty"`
-	Node          NodeSettings `yaml:"node,omitempty"`
+	ProjectRoots  []string      `yaml:"projectRoots,omitempty"`
+	Bind          string        `yaml:"bind,omitempty"`
+	Port          int           `yaml:"port,omitempty"`
+	BrowserDriver string        `yaml:"browserDriver,omitempty"`
+	SteelBaseURL  string        `yaml:"steelBaseUrl,omitempty"`
+	SteelAPIKey   string        `yaml:"steelApiKey,omitempty"`
+	Node          NodeSettings  `yaml:"node,omitempty"`
+	Voice         VoiceSettings `yaml:"voice,omitempty"`
 }
+
+type VoiceSettings struct {
+	Enabled             bool   `yaml:"enabled,omitempty"`
+	CleanupEndpoint     string `yaml:"cleanupEndpoint,omitempty"`
+	CleanupAPIKey       string `yaml:"cleanupApiKey,omitempty"`
+	CleanupModel        string `yaml:"cleanupModel,omitempty"`
+	CleanupInstructions string `yaml:"cleanupInstructions,omitempty"`
+	TTSEndpoint         string `yaml:"ttsEndpoint,omitempty"`
+	TTSAPIKey           string `yaml:"ttsApiKey,omitempty"`
+	TTSModel            string `yaml:"ttsModel,omitempty"`
+	TTSVoice            string `yaml:"ttsVoice,omitempty"`
+	TTSFormat           string `yaml:"ttsFormat,omitempty"`
+}
+
+const DefaultVoiceCleanupInstructions = "Rewrite the assistant response as clear, natural speech. Remove markdown, URLs, citation syntax, and formatting artifacts. Briefly describe code or tables instead of reading them verbatim. Preserve the important facts and conclusions. Return only the words to speak, with no preamble."
 
 // NodeSettings records the operator's Node runtime choice. Mode is "system"
 // (use Command / PATH) or "managed" (download+own the pinned Version).
@@ -342,7 +374,39 @@ func LoadWithOptions(o Options) (Config, error) {
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
 		Browser: BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 		Node:    node,
+		Voice:   resolveVoice(env, settings.Voice),
 	}, nil
+}
+
+func resolveVoice(env map[string]string, s VoiceSettings) VoiceConfig {
+	enabled := s.Enabled
+	if raw, ok := env["TANDEM_VOICE_ENABLED"]; ok {
+		enabled = raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "on")
+	}
+	instructions := s.CleanupInstructions
+	if instructions == "" {
+		instructions = DefaultVoiceCleanupInstructions
+	}
+	voice := s.TTSVoice
+	if voice == "" {
+		voice = "alloy"
+	}
+	format := s.TTSFormat
+	if format == "" {
+		format = "mp3"
+	}
+	return VoiceConfig{
+		Enabled:             enabled,
+		CleanupEndpoint:     value(env, "TANDEM_VOICE_CLEANUP_ENDPOINT", s.CleanupEndpoint),
+		CleanupAPIKey:       value(env, "TANDEM_VOICE_CLEANUP_API_KEY", s.CleanupAPIKey),
+		CleanupModel:        value(env, "TANDEM_VOICE_CLEANUP_MODEL", s.CleanupModel),
+		CleanupInstructions: value(env, "TANDEM_VOICE_CLEANUP_INSTRUCTIONS", instructions),
+		TTSEndpoint:         value(env, "TANDEM_VOICE_TTS_ENDPOINT", s.TTSEndpoint),
+		TTSAPIKey:           value(env, "TANDEM_VOICE_TTS_API_KEY", s.TTSAPIKey),
+		TTSModel:            value(env, "TANDEM_VOICE_TTS_MODEL", s.TTSModel),
+		TTSVoice:            value(env, "TANDEM_VOICE_TTS_VOICE", voice),
+		TTSFormat:           value(env, "TANDEM_VOICE_TTS_FORMAT", format),
+	}
 }
 
 // resolveNode picks the effective Node runtime. An explicit TANDEM_NODE_CMD env
@@ -730,6 +794,12 @@ func Redacted(c Config) Config {
 		out.Agents[k] = a
 	}
 	out.Browser.SteelSessionOptions = redactObject(c.Browser.SteelSessionOptions)
+	if out.Voice.CleanupAPIKey != "" {
+		out.Voice.CleanupAPIKey = "[REDACTED]"
+	}
+	if out.Voice.TTSAPIKey != "" {
+		out.Voice.TTSAPIKey = "[REDACTED]"
+	}
 	return out
 }
 

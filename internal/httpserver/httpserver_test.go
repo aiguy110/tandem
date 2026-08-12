@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -12,7 +13,19 @@ import (
 	"testing/fstest"
 
 	"github.com/aiguy110/tandem/internal/assets"
+	"github.com/aiguy110/tandem/internal/voice"
 )
+
+type fakeVoice struct {
+	text  string
+	audio voice.Audio
+	err   error
+}
+
+func (f *fakeVoice) Render(_ context.Context, text string) (voice.Audio, error) {
+	f.text = text
+	return f.audio, f.err
+}
 
 type fakeAssets struct {
 	put      assets.Stored
@@ -178,5 +191,42 @@ func TestAssetUploadLimitsAndValidationStatus(t *testing.T) {
 	w = request(t, h, http.MethodPost, "/api/agents/a/assets", strings.NewReader("x"), headers)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("storage failure response=%d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestMessageAudioRendering(t *testing.T) {
+	renderer := &fakeVoice{audio: voice.Audio{Data: []byte("mp3-data"), MIMEType: "audio/mpeg"}}
+	h := New(Options{
+		Token: "token", Voice: renderer, AgentExists: func(id string) bool { return id == "agent one" }, UI: fstest.MapFS{},
+		MessageText: func(agentID string, seq int64) (string, error) {
+			if agentID != "agent one" || seq != 42 {
+				t.Fatalf("message lookup = %q/%d", agentID, seq)
+			}
+			return "Agent answer", nil
+		},
+	})
+	headers := map[string]string{"Authorization": "Bearer token"}
+	w := request(t, h, http.MethodPost, "/api/agents/agent%20one/messages/42/audio", nil, headers)
+	if w.Code != http.StatusOK || w.Body.String() != "mp3-data" || w.Header().Get("Content-Type") != "audio/mpeg" || w.Header().Get("Cache-Control") != "no-store" || renderer.text != "Agent answer" {
+		t.Fatalf("audio response=%d headers=%v body=%q text=%q", w.Code, w.Header(), w.Body.String(), renderer.text)
+	}
+
+	w = request(t, h, http.MethodPost, "/api/agents/agent%20one/messages/nope/audio", nil, headers)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("invalid seq response=%d", w.Code)
+	}
+
+	renderer.err = errors.New("provider unavailable")
+	w = request(t, h, http.MethodPost, "/api/agents/agent%20one/messages/42/audio", nil, headers)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "provider unavailable") {
+		t.Fatalf("provider failure=%d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestMessageAudioRequiresConfiguration(t *testing.T) {
+	h := New(Options{Token: "token", AgentExists: func(string) bool { return true }, UI: fstest.MapFS{}})
+	w := request(t, h, http.MethodPost, "/api/agents/a/messages/1/audio", nil, map[string]string{"Authorization": "Bearer token"})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "tandem setup") {
+		t.Fatalf("unconfigured response=%d %q", w.Code, w.Body.String())
 	}
 }

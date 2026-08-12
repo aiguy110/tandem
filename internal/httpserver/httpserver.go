@@ -15,11 +15,13 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/ui"
+	"github.com/aiguy110/tandem/internal/voice"
 )
 
 const noCache = "no-cache, no-store, must-revalidate"
@@ -36,7 +38,11 @@ type Options struct {
 	UI           fs.FS
 	Assets       AssetStore
 	AgentExists  func(string) bool
+	Voice        voice.Renderer
+	MessageText  func(agentID string, seq int64) (string, error)
 }
+
+var ErrMessageNotFound = errors.New("transcript message not found")
 
 type Handler struct{ opts Options }
 
@@ -57,7 +63,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		h.serveAsset(w, r)
+		h.serveAPI(w, r)
 		return
 	}
 	h.serveUI(w, r)
@@ -72,30 +78,66 @@ func unsafePath(p string) bool {
 	return false
 }
 
-func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 	if !bearerMatches(r.Header.Get("Authorization"), h.opts.Token) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 4 || len(parts) > 5 || parts[0] != "api" || parts[1] != "agents" || parts[3] != "assets" {
+	if len(parts) < 4 || len(parts) > 6 || parts[0] != "api" || parts[1] != "agents" {
 		http.NotFound(w, r)
 		return
 	}
 	agentID, err := url.PathUnescape(parts[2])
-	if err != nil || agentID == "" || h.opts.Assets == nil || h.opts.AgentExists == nil || !h.opts.AgentExists(agentID) {
+	if err != nil || agentID == "" || h.opts.AgentExists == nil || !h.opts.AgentExists(agentID) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method == http.MethodPost && len(parts) == 4 {
+	if h.opts.Assets != nil && parts[3] == "assets" && r.Method == http.MethodPost && len(parts) == 4 {
 		h.upload(w, r, agentID)
 		return
 	}
-	if r.Method == http.MethodGet && len(parts) == 5 {
+	if h.opts.Assets != nil && parts[3] == "assets" && r.Method == http.MethodGet && len(parts) == 5 {
 		h.download(w, r, agentID, parts[4])
 		return
 	}
+	if parts[3] == "messages" && len(parts) == 6 && parts[5] == "audio" && r.Method == http.MethodPost {
+		seq, parseErr := strconv.ParseInt(parts[4], 10, 64)
+		if parseErr != nil || seq < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		h.renderAudio(w, r, agentID, seq)
+		return
+	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, agentID string, seq int64) {
+	if h.opts.Voice == nil || h.opts.MessageText == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "voice rendering is not configured; run tandem setup"})
+		return
+	}
+	text, err := h.opts.MessageText(agentID, seq)
+	if err != nil {
+		if errors.Is(err, ErrMessageNotFound) {
+			http.NotFound(w, r)
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load transcript message: " + err.Error()})
+		}
+		return
+	}
+	audio, err := h.opts.Voice.Render(r.Context(), text)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", audio.MIMEType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(audio.Data)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(audio.Data)
 }
 
 func bearerMatches(header, token string) bool {

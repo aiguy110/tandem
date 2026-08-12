@@ -39,6 +39,31 @@ afterEach(() => {
   window.getSelection()?.removeAllRanges();
   useStore.setState(initialState, true);
   vi.restoreAllMocks();
+  localStorage.clear();
+  delete (URL as unknown as Record<string, unknown>).createObjectURL;
+  delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
+});
+
+describe('TranscriptPane voice rendering', () => {
+  it('requests and exposes audio controls for a completed agent message', async () => {
+    localStorage.setItem('tandem.token', 'test-token');
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:voice');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByRole('button', { name: 'Listen' }));
+    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response'));
+    expect(player.getAttribute('src')).toBe('blob:voice');
+    expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent-1/messages/1/audio', {
+      method: 'POST', headers: { Authorization: 'Bearer test-token' },
+    });
+  });
 });
 
 describe('TranscriptPane annotations', () => {
