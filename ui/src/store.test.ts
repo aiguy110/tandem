@@ -56,6 +56,18 @@ describe('thread audio preference', () => {
     expect(useStore.getState().agents['agent-2'].audioOnTurnEnd).toBe(false);
     expect(JSON.parse(localStorage.getItem('tandem.threadAudio') ?? '{}')).toEqual({ 'agent-1': true });
   });
+
+  it('keeps a focused agent’s completed turn in Notifications', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ focusedId: 'agent-1' });
+
+    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+
+    expect(useStore.getState().agents['agent-1'].turnNotifications).toHaveLength(1);
+    expect(useStore.getState().agents['agent-1'].turnNotifications[0].severity).toBe('success');
+  });
 });
 
 describe('annotations store reducer', () => {

@@ -57,6 +57,7 @@ export interface Takeover {
 // user input, e.g. a pending approval or browser takeover (yellow); failure =
 // the turn errored out (red).
 export type NotifSeverity = 'success' | 'attention' | 'failure';
+export type ThreadAudioState = 'idle' | 'queued' | 'speaking' | 'unavailable' | 'error';
 
 const SEVERITY_RANK: Record<NotifSeverity, number> = { success: 1, attention: 2, failure: 3 };
 
@@ -155,9 +156,13 @@ export interface AgentView {
   // Stable adapter kind + whether the Chat tab offers the ACP/CLI switch.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
-  // A local per-thread preference: audio is rendered by this browser, never by
-  // the daemon, so it cannot interrupt another collaborator's session.
+  // A local per-thread preference: automatic audio is rendered by this
+  // browser, never by the daemon, so it cannot interrupt another collaborator's
+  // session. The state gives a visible outcome for the browser speech request.
   audioOnTurnEnd: boolean;
+  audioState: ThreadAudioState;
+  audioError: string | null;
+  audioRun: number;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -414,6 +419,58 @@ export const useStore = create<StoreState>((set, get) => {
     ptyHub.clear(id);
     shellHub.clear(id);
     subscribeAgent(id, true);
+  }
+
+  function playCompletedReply(agentId: string, reply: string): void {
+    let run = 0;
+    set((st) => {
+      const target = st.agents[agentId];
+      if (!target || !target.audioOnTurnEnd) return st;
+      const agents = { ...st.agents };
+      // The browser has one speech queue. Starting a reply supersedes any
+      // earlier automatic reply and must clear its stale "Speaking" indicator.
+      for (const [id, agent] of Object.entries(agents)) {
+        if (id !== agentId && (agent.audioState === 'queued' || agent.audioState === 'speaking')) {
+          agents[id] = { ...agent, audioState: 'idle', audioError: null, audioRun: agent.audioRun + 1 };
+        }
+      }
+      run = target.audioRun + 1;
+      agents[agentId] = { ...target, audioState: 'queued', audioError: null, audioRun: run };
+      return { agents };
+    });
+    if (run === 0) return;
+    const update = (audioState: ThreadAudioState, audioError: string | null = null) => {
+      set((st) => {
+        const agent = st.agents[agentId];
+        if (!agent || agent.audioRun !== run) return st;
+        return { agents: { ...st.agents, [agentId]: { ...agent, audioState, audioError } } };
+      });
+    };
+    // Some browsers reject delayed speech without an error event (usually an
+    // autoplay or output-device policy). Do not leave the UI claiming it is
+    // queued forever in that case.
+    window.setTimeout(() => {
+      set((st) => {
+        const agent = st.agents[agentId];
+        if (!agent || agent.audioRun !== run || agent.audioState !== 'queued') return st;
+        return {
+          agents: {
+            ...st.agents,
+            [agentId]: {
+              ...agent,
+              audioState: 'error',
+              audioError: 'Speech did not start. Check the browser’s autoplay and sound permissions.',
+            },
+          },
+        };
+      });
+    }, 3_000);
+    speak(reply, {
+      onStart: () => update('speaking'),
+      onEnd: () => update('idle'),
+      onUnavailable: () => update('unavailable', 'Speech synthesis is not available in this browser.'),
+      onError: (message) => update('error', message),
+    });
   }
 
   // Apply one server message. This is the ONLY place agent state is mutated by
@@ -712,10 +769,10 @@ export const useStore = create<StoreState>((set, get) => {
           // Raise a completed-turn notification on the resulting status
           // transition (green on a clean finish, red on a failure). Only for
           // live events, so snapshot replay never resurrects notifications that
-          // have already been read, and never while the user is already looking
-          // at this agent's tab — there's nothing to notify them about.
+          // have already been read. A focused thread still records its finish:
+          // users may be reading older output or waiting on an audible cue.
           const severity = turnNotificationSeverity(prevStatus, next.status);
-          if (severity && st.focusedId !== agentId) {
+          if (severity) {
             next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now(), severity }];
           }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
@@ -728,7 +785,7 @@ export const useStore = create<StoreState>((set, get) => {
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
         });
-        if (completedReply) speak(completedReply);
+        if (completedReply) playCompletedReply(agentId, completedReply);
         return;
       }
       case 'prompt_queue':
@@ -881,13 +938,34 @@ export const useStore = create<StoreState>((set, get) => {
       set({ modal: m });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
-    toggleThreadAudio: (agentId) => set((st) => {
-      const agent = st.agents[agentId];
-      if (!agent) return st;
-      const audioOnTurnEnd = !agent.audioOnTurnEnd;
-      writeStoredThreadAudio(agentId, audioOnTurnEnd);
-      return { agents: { ...st.agents, [agentId]: { ...agent, audioOnTurnEnd } } };
-    }),
+    toggleThreadAudio: (agentId) => {
+      let completedReply: string | null = null;
+      let disabling = false;
+      set((st) => {
+        const agent = st.agents[agentId];
+        if (!agent) return st;
+        const audioOnTurnEnd = !agent.audioOnTurnEnd;
+        writeStoredThreadAudio(agentId, audioOnTurnEnd);
+        disabling = !audioOnTurnEnd;
+        // Enabling audio after a turn completes should be useful immediately,
+        // not make the user wait for the next agent response.
+        if (audioOnTurnEnd && agent.status !== 'working') completedReply = lastAgentMessage(agent.events);
+        return {
+          agents: {
+            ...st.agents,
+            [agentId]: {
+              ...agent,
+              audioOnTurnEnd,
+              audioState: audioOnTurnEnd ? agent.audioState : 'idle',
+              audioError: audioOnTurnEnd ? agent.audioError : null,
+              audioRun: audioOnTurnEnd ? agent.audioRun : agent.audioRun + 1,
+            },
+          },
+        };
+      });
+      if (disabling && typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+      if (completedReply) playCompletedReply(agentId, completedReply);
+    },
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
     refreshSessions: () => {
@@ -1235,6 +1313,9 @@ function shell(id: string): AgentView {
     adapter: 'acp',
     canHandoff: false,
     audioOnTurnEnd: readStoredThreadAudio(id),
+    audioState: 'idle',
+    audioError: null,
+    audioRun: 0,
   };
 }
 
