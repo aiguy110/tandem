@@ -166,4 +166,43 @@ describe('TranscriptPane annotations', () => {
       'Please clarify.',
     );
   });
+
+  it('adds a comment on Enter and preserves a newline on Shift+Enter', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    const addAnnotation = vi.fn().mockResolvedValue({});
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() },
+      order: ['agent-1'],
+      focusedId: 'agent-1',
+      annotations: { 'agent-1': [] },
+      addAnnotation,
+    }, true);
+    const view = render(<TranscriptPane />);
+    const text = view.container.querySelector('.ev.msg p')?.firstChild;
+    const range = document.createRange();
+    range.setStart(text!, 0);
+    range.setEnd(text!, 18);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({ top: 100, left: 20, width: 140, height: 20, right: 160, bottom: 120, x: 20, y: 100, toJSON: () => ({}) }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+
+    fireEvent.click(await waitFor(() => view.getByRole('button', { name: /comment/i })));
+    const input = view.getByPlaceholderText('Add a comment…');
+    fireEvent.change(input, { target: { value: 'First line' } });
+    expect(fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(addAnnotation).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: 'First line\nSecond line' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(addAnnotation).toHaveBeenCalledWith(
+      'agent-1',
+      { seq: 1, role: 'assistant', quote: 'Select these words' },
+      'First line\nSecond line',
+    );
+  });
 });

@@ -531,6 +531,11 @@ export function TranscriptPane() {
                   if (e.key === 'Escape') {
                     e.preventDefault();
                     clearSelectionUi();
+                  } else if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void addAnnotation(agent.id, { seq: selAnchor.seq, role: selAnchor.role, quote: selAnchor.quote }, popoverText.trim());
+                    window.getSelection()?.removeAllRanges();
+                    clearSelectionUi();
                   }
                 }}
               />
