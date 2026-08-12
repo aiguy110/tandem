@@ -425,7 +425,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    TranscriptPane puts this action below it on touch devices, so keep a generous
    touch target without changing desktop's compact floating control. */
 @media (hover: none) and (pointer: coarse) {
-  .annotation-comment-btn { min-height: 40px; padding: 8px 15px; touch-action: manipulation; }
+  /* A fixed bottom action remains reachable when the native selection toolbar,
+     prompt bar, or viewport edge would cover a control adjacent to the range. */
+  .annotation-comment-btn {
+    top: auto !important; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px !important;
+    min-height: 44px; justify-content: center; padding: 8px 15px;
+    transform: none; touch-action: manipulation;
+  }
 }
 .annotation-popover {
   position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 7px;
@@ -440,6 +446,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .annotation-popover-actions button:last-child { color: var(--text); background: var(--agent); border: 1px solid var(--agent); border-radius: var(--r-sm); padding: 4px 12px; cursor: pointer; }
 .annotation-popover-actions button:first-child { appearance: none; border: 0; background: none; color: var(--text-faint); font: inherit; cursor: pointer; }
 .annotation-popover-actions button:first-child:hover { color: var(--text); }
+@media (hover: none) and (pointer: coarse) {
+  .annotation-popover {
+    top: auto !important; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px !important;
+    width: auto; max-height: calc(100dvh - 24px - env(safe-area-inset-bottom));
+  }
+  /* Prevent iOS from zooming the viewport when the comment field receives
+     focus; the compact desktop size remains unchanged. */
+  .annotation-popover textarea { font-size: 16px; }
+}
 
 /* Review tray — reuses the .prompt-queue visual pattern, rendered above the
    prompt bar. */

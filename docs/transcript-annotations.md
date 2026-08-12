@@ -156,13 +156,14 @@ free-text block.
   `Item`, and in `Row()` stamp `data-seq`, `data-role`, `data-key` on the wrapper
   `div` so a DOM selection can be resolved to an anchor. Skip `permission` and
   `plan` rows (not annotatable).
-- **Selection capture.** On `mouseup` or `touchend` within `.transcript`, read
-  `window.getSelection()`; if non-empty, walk from `anchorNode` to the nearest
-  `[data-seq]`, build the anchor `{seq, role, quote}`, and show a floating
-  **Comment** button at `range.getBoundingClientRect()` (same pattern as the
-  existing `scroll-latest` button). On touch devices it is placed below the
-  selection so Android/iOS's native selection toolbar does not cover it. Don't
-  offer it on the actively-streaming last message row.
+- **Selection capture.** Follow the document's `selectionchange` event (with
+  `mouseup` / delayed `touchend` fallbacks), read `window.getSelection()`, and,
+  if non-empty, walk from `anchorNode` to the nearest `[data-seq]`. Build the
+  anchor `{seq, role, quote}` and show a floating **Comment** button at
+  `range.getBoundingClientRect()`. On coarse-pointer devices the button is a
+  fixed bottom action so Android/iOS's native selection toolbar, the prompt bar,
+  and viewport edges cannot cover it. Don't offer it on the actively-streaming
+  last message row.
 - **Comment popover.** Clicking the button opens a small popover with a textarea +
   "Add". On Add → `store.addAnnotation(agentId, anchor, comment)` → `add_annotation`
   message; clear the DOM selection.

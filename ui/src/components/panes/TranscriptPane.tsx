@@ -239,6 +239,7 @@ export function TranscriptPane() {
   const [popoverText, setPopoverText] = useState('');
   const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
   const popoverDragOffset = useRef<{ x: number; y: number } | null>(null);
+  const captureSelectionRef = useRef<() => void>(() => {});
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
@@ -339,10 +340,15 @@ export function TranscriptPane() {
     flash(target, 'annotation-link-flash', 1700);
   };
 
-  // Android/iOS selection handles complete with touchend rather than mouseup.
-  // Read on the next task so the browser has finished updating Selection after
-  // its native selection toolbar is displayed.
+  // Native long-press selection is not tied reliably to a touchend event. iOS
+  // may omit it while its edit menu owns the gesture, and both iOS and Android
+  // can update the selection after touchend as the handles move. The document
+  // selectionchange listener below is therefore the primary mobile path;
+  // mouseup/touchend remain useful fast-paths and compatibility fallbacks.
   const captureSelection = () => {
+    // Focusing the comment textarea collapses the native selection. Keep the
+    // already-captured anchor while the popover is being used.
+    if (popoverOpen) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
       clearSelectionUi();
@@ -354,7 +360,7 @@ export function TranscriptPane() {
       return;
     }
     const rowEl = closestRow(sel.anchorNode);
-    if (!rowEl || !rowEl.dataset.seq) {
+    if (!rowEl || !rowEl.dataset.seq || !scrollRef.current?.contains(rowEl)) {
       clearSelectionUi();
       return;
     }
@@ -379,6 +385,22 @@ export function TranscriptPane() {
     setPopoverOpen(false);
     setPopoverText('');
   };
+  captureSelectionRef.current = captureSelection;
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const onSelectionChange = () => {
+      window.clearTimeout(timer);
+      // Let WebKit/Chromium finish laying out the native selection before
+      // asking its Range for geometry.
+      timer = window.setTimeout(() => captureSelectionRef.current(), 40);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, []);
 
   // Dismiss the floating button/popover on any click outside them (including
   // the start of a fresh selection drag).
@@ -404,7 +426,7 @@ export function TranscriptPane() {
             ref={scrollRef}
             onScroll={onScroll}
             onMouseUp={captureSelection}
-            onTouchEnd={() => window.setTimeout(captureSelection, 0)}
+            onTouchEnd={() => window.setTimeout(() => captureSelectionRef.current(), 80)}
           >
             {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
             {transcriptItems.map((it) => (
@@ -433,7 +455,8 @@ export function TranscriptPane() {
               }}
               onClick={() => {
                 // On touch devices the action is below the selection, outside
-                // Android's native copy/share toolbar; keep the popover nearby.
+                // Android's native copy/share toolbar. CSS turns both controls
+                // into viewport-bottom actions on coarse-pointer devices.
                 setPopoverPosition({
                   top: usesSoftKeyboard() ? selAnchor.rect.top + selAnchor.rect.height + 44 : selAnchor.rect.top - 34,
                   left: selAnchor.rect.left,
