@@ -8,6 +8,15 @@ import { BrowserPane } from './panes/BrowserPane';
 
 const LABEL: Record<PaneId, string> = { chat: 'Chat', shell: 'Terminal', diff: 'Diff', browser: 'Browser' };
 
+function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
+  return (
+    <svg className="audio-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 10v4h4l5 4V6l-5 4H4Z" />
+      {enabled && <><path d="M16 9.5a4 4 0 0 1 0 5" /><path d="M19 7a7.5 7.5 0 0 1 0 10" /></>}
+    </svg>
+  );
+}
+
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
@@ -70,7 +79,7 @@ export function FocusArea() {
             onClick={() => toggleThreadAudio(agent.id)}
             title={agent.audioOnTurnEnd ? 'Read this thread’s completed replies aloud — on' : 'Read this thread’s completed replies aloud — off'}
           >
-            <span aria-hidden="true">{agent.audioOnTurnEnd ? '🔊' : '🔈'}</span>
+            <ThreadAudioIcon enabled={agent.audioOnTurnEnd} />
             <span className="sr-only">{agent.audioOnTurnEnd ? 'Disable' : 'Enable'} completed-reply audio</span>
           </button>
           {agent.controlMode === 'switching' && pane === 'chat' && (
