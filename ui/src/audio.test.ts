@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lastAgentMessage, lastAgentReply, renderMessageAudio } from './audio';
+import { lastAgentReply, renderMessageAudio } from './audio';
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('lastAgentMessage', () => {
+describe('lastAgentReply', () => {
   it('returns only the final contiguous assistant message', () => {
-    expect(lastAgentMessage([
+    expect(lastAgentReply([
       { seq: 1, event: { kind: 'message_chunk', text: 'Earlier reply.' } },
       { seq: 2, event: { kind: 'tool_call', id: 'tool-1', title: 'Run check', status: 'done' } },
       { seq: 3, event: { kind: 'message_chunk', text: 'Final ' } },
       { seq: 4, event: { kind: 'message_chunk', text: 'reply.' } },
       { seq: 5, event: { kind: 'status', status: 'idle' } },
-    ])).toBe('Final reply.');
+    ])).toEqual({ seq: 3, text: 'Final reply.' });
   });
 
   it('keeps the first message chunk sequence for the audio endpoint', () => {

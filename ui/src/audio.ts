@@ -1,14 +1,10 @@
 import type { WireEvent } from './wire';
 import { storedToken } from './ws/client';
 
-// Automatic audio is browser-local: only this client pre-renders it, and
-// transcript replay in another client never initiates provider work.
-export function lastAgentMessage(events: { seq: number; event: WireEvent }[]): string | null {
-  return lastAgentReply(events)?.text ?? null;
-}
-
 // The sequence is the first chunk in the contiguous reply, which is also the
-// transcript row's sequence and the audio API's message identifier.
+// transcript row's sequence and the audio API's message identifier. Automatic
+// audio is browser-local: only this client pre-renders it, and transcript
+// replay in another client never initiates provider work.
 export function lastAgentReply(events: { seq: number; event: WireEvent }[]): { seq: number; text: string } | null {
   let end = -1;
   for (let i = events.length - 1; i >= 0; i--) {

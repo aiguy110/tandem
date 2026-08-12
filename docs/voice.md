@@ -4,6 +4,13 @@ Tandem can render any completed assistant message as audio. Click **Listen** ben
 message; the browser asks the daemon to produce audio and then displays native playback
 controls. In-progress messages are disabled until their text is stable.
 
+The per-thread speaker button in the chat header is an opt-in background version of the
+same action: when an agent finishes, this browser immediately requests the same clip and
+keeps it ready in memory. Opening the chat then shows the usual player without another
+request. It never starts playback automatically, it does not generate clips from transcript
+replay, and a browser refresh discards the cached clip (the **Listen** control can render it
+again). The header reports rendering, ready, or error status.
+
 ## Pipeline and privacy
 
 The daemon reconstructs the selected message from its durable event log, then performs two
