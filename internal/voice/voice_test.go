@@ -66,6 +66,73 @@ func TestRenderUsesSharedLanguageModelAndSpeechRequests(t *testing.T) {
 	}
 }
 
+func TestRenderSplitsPreparedSpeechAtDelimiter(t *testing.T) {
+	var instructions string
+	var speechInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			var body struct {
+				Messages []struct{ Role, Content string }
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			instructions = body.Messages[0].Content
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "First part." + speechChunkDelimiter + "Second part."}}}})
+		case "/v1/audio/speech":
+			var body struct{ Input string }
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			speechInputs = append(speechInputs, body.Input)
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte(body.Input))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	language, err := languagemodel.New(config.LanguageModelConfig{Endpoint: server.URL + "/v1/chat/completions", Model: "cleaner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(config.VoiceConfig{Enabled: true, Instructions: "Make it natural.", TTSEndpoint: server.URL + "/v1/audio/speech", TTSModel: "speaker", TTSVoice: "sky"}, language)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, err := svc.Render(context.Background(), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(instructions, speechChunkDelimiter) || !strings.Contains(instructions, "3500") {
+		t.Fatalf("speech instructions = %q", instructions)
+	}
+	if got, want := strings.Join(speechInputs, ","), "First part.,Second part."; got != want {
+		t.Fatalf("speech inputs = %q, want %q", got, want)
+	}
+	if got, want := string(audio.Data), "First part.Second part."; got != want {
+		t.Fatalf("audio data = %q, want %q", got, want)
+	}
+}
+
+func TestSplitSpeechChunksSplitsOversizedPartAtWhitespace(t *testing.T) {
+	input := strings.Repeat("word ", 900)
+	chunks, err := splitSpeechChunks(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("chunks = %d, want multiple chunks", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if len([]rune(chunk)) > maxSpeechChunkCharacters {
+			t.Fatalf("chunk length = %d, want <= %d", len([]rune(chunk)), maxSpeechChunkCharacters)
+		}
+	}
+}
+
 func TestRenderSurfacesProviderProblem(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
