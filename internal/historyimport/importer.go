@@ -216,8 +216,8 @@ func (r *Runner) importWithOptions(ctx context.Context, agentID string, history 
 	}
 	if err != nil {
 		_ = cmd.Cancel()
-		_ = cmd.Wait()
 		stderrWG.Wait()
+		_ = cmd.Wait()
 		return result, fmt.Errorf("send history import request: %w", err)
 	}
 
@@ -225,8 +225,10 @@ func (r *Runner) importWithOptions(ctx context.Context, agentID string, history 
 	if readErr != nil {
 		_ = cmd.Cancel()
 	}
-	waitErr := cmd.Wait()
+	// Drain stderr before Wait. Wait closes the pipes it owns, so calling it
+	// first can race the stderr reader and lose a diagnostic emitted at exit.
 	stderrWG.Wait()
+	waitErr := cmd.Wait()
 	diagnostic := strings.TrimSpace(stderrBuf.String())
 	if runCtx.Err() != nil {
 		return result, withDiagnostic(fmt.Errorf("history importer: %w", runCtx.Err()), diagnostic)
