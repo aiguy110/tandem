@@ -5,11 +5,11 @@ message; the browser asks the daemon to produce audio and then displays native p
 controls. In-progress messages are disabled until their text is stable.
 
 The per-thread speaker button in the chat header is an opt-in background version of the
-same action: when an agent finishes, this browser immediately requests the same clip and
-keeps it ready in memory. Opening the chat then shows the usual player without another
-request. It never starts playback automatically, it does not generate clips from transcript
-replay, and a browser refresh discards the cached clip (the **Listen** control can render it
-again). The header reports rendering, ready, or error status.
+same action: when an agent finishes, the daemon renders and retains the same clip. Opening
+the chat then loads the usual player without another provider request. It never starts
+playback automatically. The preference, render state, and generated clips survive browser
+refreshes and daemon restarts, sync across clients, and every generated clip is retained
+until the agent is deleted. The header reports rendering, ready, or error status.
 
 ## Pipeline and privacy
 
@@ -24,10 +24,10 @@ requests:
 
 Both requests originate from the Tandem daemon. Provider API keys remain in the owner-only
 `$TANDEM_HOME/config.yml` (or daemon environment), are redacted by `tandem debug config`, and
-are never sent to the browser. Generated audio is returned with `Cache-Control: no-store`
-and is kept only as an in-memory browser object URL; requesting it again calls the providers
-again. The original message is sent to the shared language-model provider and its rewritten
-form to the speech provider, so choose local endpoints when the transcript must stay on the host.
+are never sent to the browser. Generated audio is retained in Tandem's local SQLite database
+until its agent is deleted; the browser receives it only from Tandem's authenticated API.
+The original message is sent to the shared language-model provider and its rewritten form to
+the speech provider, so choose local endpoints when the transcript must stay on the host.
 
 ## Setup
 

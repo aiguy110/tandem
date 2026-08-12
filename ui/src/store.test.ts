@@ -25,7 +25,6 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 afterEach(() => {
   useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null });
   localStorage.removeItem('tandem.agentOrder');
-  localStorage.removeItem('tandem.threadAudio');
 });
 
 describe('agent ordering', () => {
@@ -42,7 +41,7 @@ describe('agent ordering', () => {
 });
 
 describe('thread audio preference', () => {
-  it('toggles and persists audio for only the selected thread', () => {
+  it('defaults thread audio to daemon-owned disabled state', () => {
     __testApplyServerMsg({
       t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
@@ -50,11 +49,8 @@ describe('thread audio preference', () => {
       t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    useStore.getState().toggleThreadAudio('agent-1');
-
-    expect(useStore.getState().agents['agent-1'].audioOnTurnEnd).toBe(true);
+    expect(useStore.getState().agents['agent-1'].audioOnTurnEnd).toBe(false);
     expect(useStore.getState().agents['agent-2'].audioOnTurnEnd).toBe(false);
-    expect(JSON.parse(localStorage.getItem('tandem.threadAudio') ?? '{}')).toEqual({ 'agent-1': true });
   });
 
   it('keeps a focused agent’s completed turn in Notifications', () => {
@@ -67,6 +63,21 @@ describe('thread audio preference', () => {
 
     expect(useStore.getState().agents['agent-1'].turnNotifications).toHaveLength(1);
     expect(useStore.getState().agents['agent-1'].turnNotifications[0].severity).toBe('success');
+  });
+
+  it('hydrates daemon-owned audio preference and ready state from transcript events', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 3, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      transcript: [
+        { seq: 1, event: { kind: 'audio_preference', enabled: true } },
+        { seq: 2, event: { kind: 'audio_state', state: 'rendering', seq: 9 } },
+        { seq: 3, event: { kind: 'audio_state', state: 'ready', seq: 9 } },
+      ],
+    });
+    const agent = useStore.getState().agents['agent-1'];
+    expect(agent.audioOnTurnEnd).toBe(true);
+    expect(agent.audioState).toBe('ready');
+    expect(agent.audioSeq).toBe(9);
   });
 });
 

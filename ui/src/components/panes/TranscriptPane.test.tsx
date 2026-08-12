@@ -34,8 +34,7 @@ function agent(): AgentView {
     audioOnTurnEnd: false,
     audioState: 'idle',
     audioError: null,
-    audioRun: 0,
-    audioClip: null,
+    audioSeq: null,
   };
 }
 
@@ -70,9 +69,14 @@ describe('TranscriptPane voice rendering', () => {
     });
   });
 
-  it('uses a background-rendered clip when the chat is opened', () => {
+  it('loads a daemon-cached clip when the chat is opened', async () => {
     const ready = agent();
-    ready.audioClip = { seq: 1, url: 'blob:ready-voice' };
+    ready.audioState = 'ready';
+    ready.audioSeq = 1;
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:ready-voice');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     useStore.setState({
       ...initialState,
       agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
@@ -80,8 +84,8 @@ describe('TranscriptPane voice rendering', () => {
 
     const view = render(<TranscriptPane />);
 
-    expect(view.getByLabelText('Spoken version of agent response').getAttribute('src')).toBe('blob:ready-voice');
-    expect(view.queryByRole('button', { name: 'Listen' })).toBeNull();
+    expect((await waitFor(() => view.getByLabelText('Spoken version of agent response'))).getAttribute('src')).toBe('blob:ready-voice');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

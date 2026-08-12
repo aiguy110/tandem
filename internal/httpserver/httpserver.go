@@ -4,6 +4,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -32,14 +33,15 @@ type AssetStore interface {
 }
 
 type Options struct {
-	Token        string
-	BootstrapURL string
-	UIDir        string
-	UI           fs.FS
-	Assets       AssetStore
-	AgentExists  func(string) bool
-	Voice        voice.Renderer
-	MessageText  func(agentID string, seq int64) (string, error)
+	Token              string
+	BootstrapURL       string
+	UIDir              string
+	UI                 fs.FS
+	Assets             AssetStore
+	AgentExists        func(string) bool
+	Voice              voice.Renderer
+	MessageText        func(agentID string, seq int64) (string, error)
+	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
 }
 
 var ErrMessageNotFound = errors.New("transcript message not found")
@@ -114,6 +116,15 @@ func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, agentID string, seq int64) {
+	if h.opts.RenderMessageAudio != nil {
+		audio, err := h.opts.RenderMessageAudio(r.Context(), agentID, seq)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		h.writeAudio(w, audio)
+		return
+	}
 	if h.opts.Voice == nil || h.opts.MessageText == nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "voice rendering is not configured; run tandem setup"})
 		return
@@ -132,6 +143,10 @@ func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, agentID st
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	h.writeAudio(w, audio)
+}
+
+func (h *Handler) writeAudio(w http.ResponseWriter, audio voice.Audio) {
 	w.Header().Set("Content-Type", audio.MIMEType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(audio.Data)))
 	w.Header().Set("Cache-Control", "no-store")

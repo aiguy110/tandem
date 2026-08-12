@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agents", "annotations", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -149,6 +149,19 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 		}
 		got = append(got, r)
 	}
+	// Audio cache tables are Go-daemon-owned rather than part of the historical
+	// Node schema contract captured by this fixture.
+	keep := func(rows []schemaRow) []schemaRow {
+		out := make([]schemaRow, 0, len(rows))
+		for _, row := range rows {
+			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" {
+				continue
+			}
+			out = append(out, row)
+		}
+		return out
+	}
+	got, fixture.Schema = keep(got), keep(fixture.Schema)
 	if !reflect.DeepEqual(got, fixture.Schema) {
 		text := func(v *string) string {
 			if v == nil {
@@ -194,6 +207,32 @@ func TestAssetAssociationsAndDeleteAgent(t *testing.T) {
 	}
 	if got, err := s.AgentAsset("api-2", asset.ID); err != nil || got == nil {
 		t.Fatalf("shared physical asset removed: %#v %v", got, err)
+	}
+}
+
+func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "audio-1", Name: "audio", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := s.AgentAudioEnabled("audio-1"); err != nil || enabled {
+		t.Fatalf("default enabled=%v err=%v", enabled, err)
+	}
+	if err := s.SetAgentAudioEnabled("audio-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MessageAudio("audio-1", 7)
+	if err != nil || got == nil || string(got.Data) != "clip" {
+		t.Fatalf("audio=%#v err=%v", got, err)
+	}
+	if err := s.DeleteAgent("audio-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MessageAudio("audio-1", 7); err != nil || got != nil {
+		t.Fatalf("audio survived delete: %#v err=%v", got, err)
 	}
 }
 

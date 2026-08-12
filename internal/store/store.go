@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS events (
         ts      INTEGER NOT NULL,
         PRIMARY KEY (agentId, seq)
       );
+CREATE TABLE IF NOT EXISTS agent_audio_settings (
+        agentId  TEXT PRIMARY KEY,
+        enabled  INTEGER NOT NULL DEFAULT 0
+      );
+CREATE TABLE IF NOT EXISTS message_audio (
+        agentId   TEXT NOT NULL,
+        seq       INTEGER NOT NULL,
+        mimeType  TEXT NOT NULL,
+        data      BLOB NOT NULL,
+        createdAt INTEGER NOT NULL,
+        PRIMARY KEY (agentId, seq)
+      );
 CREATE TABLE IF NOT EXISTS assets (
         id        TEXT PRIMARY KEY,
         mimeType  TEXT NOT NULL,
@@ -227,6 +239,59 @@ type Store struct {
 	db      *sql.DB
 	now     func() time.Time
 	eventMu sync.Mutex
+}
+
+// MessageAudio is a durable daemon-owned clip for one completed message.
+type MessageAudio struct {
+	AgentID   string
+	Seq       int64
+	MIMEType  string
+	Data      []byte
+	CreatedAt int64
+}
+
+func (s *Store) SetAgentAudioEnabled(agentID string, enabled bool) error {
+	value := 0
+	if enabled {
+		value = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO agent_audio_settings (agentId, enabled) VALUES (?, ?)
+ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled`, agentID, value)
+	return err
+}
+
+func (s *Store) AgentAudioEnabled(agentID string) (bool, error) {
+	var value int
+	err := s.db.QueryRow(`SELECT enabled FROM agent_audio_settings WHERE agentId = ?`, agentID).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return value != 0, err
+}
+
+func (s *Store) PutMessageAudio(audio MessageAudio) error {
+	if audio.AgentID == "" || audio.Seq < 1 || audio.MIMEType == "" || len(audio.Data) == 0 {
+		return errors.New("invalid message audio")
+	}
+	if audio.CreatedAt == 0 {
+		audio.CreatedAt = s.now().UnixMilli()
+	}
+	_, err := s.db.Exec(`INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, createdAt=excluded.createdAt`, audio.AgentID, audio.Seq, audio.MIMEType, audio.Data, audio.CreatedAt)
+	return err
+}
+
+func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
+	var audio MessageAudio
+	err := s.db.QueryRow(`SELECT mimeType, data, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, agentID, seq).Scan(&audio.MIMEType, &audio.Data, &audio.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	audio.AgentID, audio.Seq = agentID, seq
+	return &audio, nil
 }
 
 // StoredEvent is the store-level representation of a normalized event.
@@ -459,7 +524,7 @@ func (s *Store) DeleteAgent(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM agent_audio_settings WHERE agentId = ?", "DELETE FROM message_audio WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}

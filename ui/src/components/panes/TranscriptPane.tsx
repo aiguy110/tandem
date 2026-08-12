@@ -457,7 +457,7 @@ export function TranscriptPane() {
                 onJumpToLinkedBlock={jumpToLinkedBlock}
                 agentId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
-                cachedAudioURL={it.kind === 'message' && agent.audioClip?.seq === it.seq ? agent.audioClip.url : null}
+                cachedAudio={it.kind === 'message' && agent.audioState === 'ready' && agent.audioSeq === it.seq}
               />
             ))}
           </div>
@@ -690,7 +690,7 @@ function Row({
   item,
   agentId,
   canRenderAudio,
-  cachedAudioURL,
+  cachedAudio,
   quoteLinks,
   onRespond,
   onJumpToQuote,
@@ -699,7 +699,7 @@ function Row({
   item: Item;
   agentId: string;
   canRenderAudio: boolean;
-  cachedAudioURL: string | null;
+  cachedAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -744,7 +744,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudioURL={cachedAudioURL} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} />
         </div>
       );
     case 'thought':
@@ -784,7 +784,7 @@ function Row({
   }
 }
 
-function MessageAudio({ agentId, seq, enabled, cachedAudioURL }: { agentId: string; seq: number; enabled: boolean; cachedAudioURL: string | null }) {
+function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean }) {
   const [loading, setLoading] = useState(false);
   const [audioURL, setAudioURL] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -809,9 +809,16 @@ function MessageAudio({ agentId, seq, enabled, cachedAudioURL }: { agentId: stri
     }
   };
 
+  useEffect(() => {
+    if (cachedAudio && !audioURL && !loading) void render();
+  // The cached clip is daemon-owned; fetching it here uses the normal Listen
+  // endpoint but returns the retained bytes without another provider request.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedAudio]);
+
   return (
     <div className="message-audio">
-      {audioURL || cachedAudioURL ? <audio controls preload="metadata" src={audioURL ?? cachedAudioURL ?? undefined} aria-label="Spoken version of agent response" /> : (
+      {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : (
         <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           {loading ? 'Rendering speech…' : 'Listen'}
         </button>
