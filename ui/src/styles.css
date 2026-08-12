@@ -425,12 +425,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    Keep a generous touch target without changing desktop's compact control. */
 @media (hover: none) and (pointer: coarse) {
   /* Android can add its own contextual-search bottom sheet without resizing
-     the visual viewport. Pin this action to the top-right instead of the bottom
-     or selected range so neither browser overlay can cover it. */
+     the visual viewport. Pin this action to the top-center instead of the
+     bottom or selected range so neither browser overlay can cover it. */
   .annotation-comment-btn {
-    top: calc(8px + env(safe-area-inset-top)) !important; right: 12px; bottom: auto; left: auto !important;
+    top: calc(8px + env(safe-area-inset-top)) !important; right: auto; bottom: auto; left: 50% !important;
     min-width: 168px; min-height: 44px; justify-content: center; padding: 8px 15px;
-    transform: none; touch-action: manipulation;
+    transform: translateX(-50%); touch-action: manipulation;
   }
 }
 .annotation-popover {

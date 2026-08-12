@@ -161,7 +161,7 @@ free-text block.
   if non-empty, walk from `anchorNode` to the nearest `[data-seq]`. Build the
   anchor `{seq, role, quote}` and show a floating **Comment** button at
   `range.getBoundingClientRect()`. On coarse-pointer devices the button and
-  composer are fixed at the viewport's top-right so Android/iOS's native
+  composer are fixed at the viewport's top-center so Android/iOS's native
   selection toolbar, Android's contextual-search bottom sheet, the soft
   keyboard, and viewport edges cannot cover them. Don't offer it on the
   actively-streaming last message row.
