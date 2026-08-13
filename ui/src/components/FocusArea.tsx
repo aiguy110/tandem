@@ -17,13 +17,6 @@ function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
   );
 }
 
-function audioStatus(agent: { audioOnTurnEnd: boolean; audioState: string; audioError: string | null }): string | null {
-  if (!agent.audioOnTurnEnd || agent.audioState === 'idle') return null;
-  if (agent.audioState === 'rendering') return 'Rendering speech…';
-  if (agent.audioState === 'ready') return 'Speech ready';
-  return agent.audioError ?? 'Speech rendering failed';
-}
-
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
   const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
@@ -66,8 +59,6 @@ export function FocusArea() {
     setHandoffError(null);
     setConfirm('to-acp');
   };
-  const speakingStatus = audioStatus(agent);
-
   return (
     <div className="focus">
       <div className="focus-head">
@@ -90,7 +81,6 @@ export function FocusArea() {
             <ThreadAudioIcon enabled={agent.audioOnTurnEnd} />
             <span className="sr-only">{agent.audioOnTurnEnd ? 'Disable' : 'Enable'} completed-reply audio</span>
           </button>
-          {speakingStatus && <span className={`audio-status ${agent.audioState}`} role="status" title={speakingStatus}>{speakingStatus}</span>}
           {agent.controlMode === 'switching' && pane === 'chat' && (
             <span className="chat-switch-note">switching…</span>
           )}

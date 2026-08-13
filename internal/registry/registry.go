@@ -63,6 +63,7 @@ type Registry struct {
 	external          *externalCache
 	onSession         func(*session.Session)
 	onAudioPreference func(*session.Session, bool)
+	onAudioFocus      func(*session.Session, string, bool)
 }
 
 type externalCache struct {
@@ -182,6 +183,7 @@ type Options struct {
 	RingCapacity      int
 	OnSession         func(*session.Session)
 	OnAudioPreference func(*session.Session, bool)
+	OnAudioFocus      func(*session.Session, string, bool)
 }
 
 func New(o Options) (*Registry, error) {
@@ -218,7 +220,7 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
 }
 
 func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
@@ -233,6 +235,19 @@ func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
 	s.PushEvent(eventlog.Event{Kind: "audio_preference", Payload: payload})
 	if enabled && r.onAudioPreference != nil {
 		r.onAudioPreference(s, true)
+	}
+	return nil
+}
+
+// SetAudioFocus marks whether one connected browser is actively viewing an
+// agent's chat. Focus is intentionally connection-scoped and never persisted.
+func (r *Registry) SetAudioFocus(id, clientID string, focused bool) error {
+	s := r.Get(id)
+	if s == nil {
+		return errors.New("no such live agent")
+	}
+	if r.onAudioFocus != nil {
+		r.onAudioFocus(s, clientID, focused)
 	}
 	return nil
 }

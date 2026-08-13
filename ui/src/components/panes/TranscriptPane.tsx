@@ -437,6 +437,7 @@ export function TranscriptPane() {
 
   return (
     <div className="pane">
+      <AutoPlayAudio agentId={agent.id} seq={agent.audioSeq} revision={agent.audioReadyRevision} />
       <div className="transcript-wrap">
         <div className="transcript-history">
           <div
@@ -457,7 +458,7 @@ export function TranscriptPane() {
                 onJumpToLinkedBlock={jumpToLinkedBlock}
                 agentId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
-                cachedAudio={it.kind === 'message' && agent.audioState === 'ready' && agent.audioSeq === it.seq}
+                cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
               />
             ))}
           </div>
@@ -572,6 +573,61 @@ export function TranscriptPane() {
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
     </div>
   );
+}
+
+// A focused chat receives live ready events in message order. Keep one audio
+// element active at a time so separate agent replies never overlap. Snapshot
+// hydration deliberately establishes the baseline without replaying old audio.
+function AutoPlayAudio({ agentId, seq, revision }: { agentId: string; seq: number | null; revision: number }) {
+  const baseline = useRef<number | null>(null);
+  const queue = useRef<number[]>([]);
+  const playing = useRef(false);
+  const activeAudio = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => () => {
+    activeAudio.current?.pause();
+    activeAudio.current = null;
+    queue.current = [];
+  }, [agentId]);
+
+  useEffect(() => {
+    if (baseline.current === null) {
+      baseline.current = revision;
+      return;
+    }
+    if (revision === baseline.current || seq === null) return;
+    baseline.current = revision;
+    queue.current.push(seq);
+    if (playing.current) return;
+    const drain = async () => {
+      playing.current = true;
+      while (queue.current.length) {
+        const next = queue.current.shift()!;
+        let url: string | null = null;
+        try {
+          url = await renderMessageAudio(agentId, next);
+          const audio = new Audio(url);
+          activeAudio.current = audio;
+          await new Promise<void>((resolve) => {
+            const done = () => resolve();
+            audio.addEventListener('ended', done, { once: true });
+            audio.addEventListener('error', done, { once: true });
+            void audio.play().catch(done);
+          });
+        } catch {
+          // The inline player exposes errors for intentional Listen requests;
+          // automatic playback should quietly continue to the next reply.
+        } finally {
+          activeAudio.current = null;
+          if (url) URL.revokeObjectURL(url);
+        }
+      }
+      playing.current = false;
+    };
+    void drain();
+  }, [agentId, revision, seq]);
+
+  return null;
 }
 
 // The pending-annotation review tray, rendered above PromptBar (visual

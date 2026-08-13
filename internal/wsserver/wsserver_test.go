@@ -95,7 +95,8 @@ func (b *testBackend) SetConfigOption(ctx context.Context, id, configID string, 
 	}
 	return s.SetConfigOption(ctx, configID, value)
 }
-func (*testBackend) SetAudioEnabled(string, bool) error { return nil }
+func (*testBackend) SetAudioEnabled(string, bool) error       { return nil }
+func (*testBackend) SetAudioFocus(string, string, bool) error { return nil }
 
 func (b *testBackend) CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error) {
 	return store.BrowserSnapshot{}, nil

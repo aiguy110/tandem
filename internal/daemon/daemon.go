@@ -145,6 +145,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 				audioCache.prepare(s)
 			}
 		},
+		OnAudioFocus: audioCache.setFocus,
 	})
 	if err != nil {
 		return err
@@ -294,7 +295,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, AudioReadySeqs: audioCache.readySeqs})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
@@ -373,10 +374,11 @@ type messageAudioCache struct {
 	renderer voice.Renderer
 	mu       sync.Mutex
 	flights  map[string]chan struct{}
+	focuses  map[string]map[string]struct{}
 }
 
 func newMessageAudioCache(ctx context.Context, db *store.Store, renderer voice.Renderer) *messageAudioCache {
-	return &messageAudioCache{ctx: ctx, db: db, renderer: renderer, flights: make(map[string]chan struct{})}
+	return &messageAudioCache{ctx: ctx, db: db, renderer: renderer, flights: make(map[string]chan struct{}), focuses: make(map[string]map[string]struct{})}
 }
 
 func audioKey(agentID string, seq int64) string { return agentID + "/" + strconv.FormatInt(seq, 10) }
@@ -428,6 +430,41 @@ func (c *messageAudioCache) watch(s *session.Session) {
 	c.prepare(s)
 }
 
+func (c *messageAudioCache) setFocus(s *session.Session, clientID string, focused bool) {
+	c.mu.Lock()
+	if focused {
+		clients := c.focuses[s.ID]
+		if clients == nil {
+			clients = make(map[string]struct{})
+			c.focuses[s.ID] = clients
+		}
+		clients[clientID] = struct{}{}
+	} else if clients := c.focuses[s.ID]; clients != nil {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(c.focuses, s.ID)
+		}
+	}
+	c.mu.Unlock()
+	if focused {
+		c.prepare(s)
+	}
+}
+
+func (c *messageAudioCache) focused(agentID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.focuses[agentID]) > 0
+}
+
+func (c *messageAudioCache) readySeqs(agentID string) []int64 {
+	seqs, err := c.db.MessageAudioSeqs(agentID)
+	if err != nil {
+		return nil
+	}
+	return seqs
+}
+
 func (c *messageAudioCache) prepare(s *session.Session) {
 	if c.renderer == nil {
 		return
@@ -436,39 +473,49 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	if err != nil || !enabled {
 		return
 	}
-	seq, err := latestMessageSeq(s)
-	if err != nil || seq == 0 {
+	seqs, err := turnMessageSeqs(s, c.focused(s.ID))
+	if err != nil || len(seqs) == 0 {
 		return
 	}
-	if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
-		emitAudioState(s, "ready", seq, "")
-		return
-	}
-	emitAudioState(s, "rendering", seq, "")
-	go func() {
-		if _, err := c.render(c.ctx, s.ID, seq); err != nil {
-			emitAudioState(s, "error", seq, err.Error())
-			return
+	go func(seqs []int64) {
+		for _, seq := range seqs {
+			if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
+				emitAudioState(s, "ready", seq, "")
+				continue
+			}
+			emitAudioState(s, "rendering", seq, "")
+			if _, err := c.render(c.ctx, s.ID, seq); err != nil {
+				emitAudioState(s, "error", seq, err.Error())
+				continue
+			}
+			emitAudioState(s, "ready", seq, "")
 		}
-		emitAudioState(s, "ready", seq, "")
-	}()
+	}(seqs)
 }
 
-func latestMessageSeq(s *session.Session) (int64, error) {
+func turnMessageSeqs(s *session.Session, all bool) ([]int64, error) {
 	history, err := s.Log.FullHistory()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
+	start := 0
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Event.Kind != "message_chunk" {
+		if history[i].Event.Kind == "user_message" {
+			start = i + 1
+			break
+		}
+	}
+	var seqs []int64
+	for i := start; i < len(history); i++ {
+		if history[i].Event.Kind != "message_chunk" || (i > start && history[i-1].Event.Kind == "message_chunk") {
 			continue
 		}
-		for i > 0 && history[i-1].Event.Kind == "message_chunk" {
-			i--
-		}
-		return history[i].Seq, nil
+		seqs = append(seqs, history[i].Seq)
 	}
-	return 0, nil
+	if !all && len(seqs) > 1 {
+		return seqs[len(seqs)-1:], nil
+	}
+	return seqs, nil
 }
 
 func emitAudioState(s *session.Session, state string, seq int64, message string) {

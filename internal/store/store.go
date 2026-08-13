@@ -294,6 +294,27 @@ func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
 	return &audio, nil
 }
 
+// MessageAudioSeqs lists the transcript messages that already have durable
+// rendered audio. The bytes remain private to the authenticated audio route;
+// this is just the metadata needed to rehydrate player controls on another
+// client.
+func (s *Store) MessageAudioSeqs(agentID string) ([]int64, error) {
+	rows, err := s.db.Query(`SELECT seq FROM message_audio WHERE agentId = ? ORDER BY seq`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var seqs []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			return nil, err
+		}
+		seqs = append(seqs, seq)
+	}
+	return seqs, rows.Err()
+}
+
 // StoredEvent is the store-level representation of a normalized event.
 type StoredEvent struct {
 	Seq     int64
