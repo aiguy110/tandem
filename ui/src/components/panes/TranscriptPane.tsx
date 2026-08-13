@@ -877,8 +877,13 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedAudio]);
 
+  // Reserve the player's eventual footprint as soon as a cached clip starts
+  // loading. Without this, each completed fetch expands its transcript row and
+  // nudges the reader away from the newest message.
+  const reservePlayerSpace = cachedAudio || loading || !!audioURL;
+
   return (
-    <div className={`message-audio${audioURL ? '' : ' message-listen'}`}>
+    <div className={`message-audio${reservePlayerSpace ? ' message-audio-reserved' : ''}${audioURL ? '' : ' message-listen'}`}>
       {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : (
         <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           {loading ? 'Rendering speech…' : 'Listen'}
