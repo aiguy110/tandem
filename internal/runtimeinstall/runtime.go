@@ -116,14 +116,14 @@ func EnsureHistory(ctx context.Context, cfg config.Config, log io.Writer) error 
 		return err
 	}
 	files := map[string][]byte{
-		filepath.Join("history", "sdk.ts"):    tandem.RuntimeHistorySDK,
-		filepath.Join("history", "runner.ts"): tandem.RuntimeHistoryRunner,
-		filepath.Join("history", "importers", "common.ts"): tandem.RuntimeHistoryImporterCommon,
-		filepath.Join("history", "importers", "claude.ts"): tandem.RuntimeHistoryImporterClaude,
-		filepath.Join("history", "importers", "codex.ts"): tandem.RuntimeHistoryImporterCodex,
-		filepath.Join("history", "importers", "pi.ts"): tandem.RuntimeHistoryImporterPi,
+		filepath.Join("history", "sdk.ts"):                   tandem.RuntimeHistorySDK,
+		filepath.Join("history", "runner.ts"):                tandem.RuntimeHistoryRunner,
+		filepath.Join("history", "importers", "common.ts"):   tandem.RuntimeHistoryImporterCommon,
+		filepath.Join("history", "importers", "claude.ts"):   tandem.RuntimeHistoryImporterClaude,
+		filepath.Join("history", "importers", "codex.ts"):    tandem.RuntimeHistoryImporterCodex,
+		filepath.Join("history", "importers", "pi.ts"):       tandem.RuntimeHistoryImporterPi,
 		filepath.Join("history", "importers", "opencode.ts"): tandem.RuntimeHistoryImporterOpenCode,
-		"tsconfig.json":                       tandem.RuntimeTSConfig,
+		"tsconfig.json": tandem.RuntimeTSConfig,
 	}
 	for rel, contents := range files {
 		path := filepath.Join(cfg.RuntimeRoot, rel)

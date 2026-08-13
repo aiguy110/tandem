@@ -32,7 +32,7 @@ trap cleanup EXIT INT TERM
   TANDEM_PROJECT_ROOTS="$home/projects" \
   TANDEM_UI_DIR= \
   TANDEM_BROWSER_MCP=off \
-    "$binary" daemon >"$log" 2>&1
+    "$binary" >"$log" 2>&1
 ) &
 pid=$!
 

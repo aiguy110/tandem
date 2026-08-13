@@ -33,6 +33,7 @@ func newFake() *fakeAdapter {
 func (f *fakeAdapter) Capabilities() agentadapter.Capabilities {
 	return agentadapter.Capabilities{Structured: true, Image: f.image}
 }
+
 // ValidatePrompt mirrors the real ACP adapter: it only understands text/image
 // blocks and rejects anything else, so quote blocks must be flattened before
 // they reach it.
