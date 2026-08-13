@@ -160,6 +160,12 @@ export interface AgentView {
   audioState: ThreadAudioState;
   audioError: string | null;
   audioSeq: number | null;
+  // Every persisted clip, supplied by daemon snapshots so a second device can
+  // reconstruct each message player without re-rendering speech.
+  audioReadySeqs: number[];
+  // Advances only for a live ready event. It lets the focused chat autoplay
+  // newly completed clips without replaying historical audio on reconnect.
+  audioReadyRevision: number;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -362,6 +368,15 @@ const isNarrowViewport = (): boolean =>
   typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(MOBILE_BREAKPOINT).matches;
 
 export const useStore = create<StoreState>((set, get) => {
+  let audioFocusAgent: string | null = null;
+  function syncAudioFocus(): void {
+    const state = get();
+    const next = document.visibilityState === 'visible' && state.pane === 'chat' ? state.focusedId : null;
+    if (next === audioFocusAgent) return;
+    if (audioFocusAgent) client.send({ t: 'set_audio_focus', agentId: audioFocusAgent, focused: false });
+    audioFocusAgent = next;
+    if (next) client.send({ t: 'set_audio_focus', agentId: next, focused: true });
+  }
   // Channels to subscribe for an agent: base always; browser only for the
   // focused Browser pane; and terminal bytes only when the user is looking at
   // the agent CLI or worktree Terminal. raw_pty and shell_pty share the daemon
@@ -655,6 +670,7 @@ export const useStore = create<StoreState>((set, get) => {
             audioState,
             audioError,
             audioSeq,
+            audioReadySeqs: msg.audioReadySeqs ?? [],
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -664,6 +680,7 @@ export const useStore = create<StoreState>((set, get) => {
             annotations: { ...st.annotations, [msg.agentId]: msg.annotations ?? [] },
           };
         });
+        syncAudioFocus();
         return;
       }
       case 'event': {
@@ -704,6 +721,10 @@ export const useStore = create<StoreState>((set, get) => {
           const prevStatus = a.status;
           const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
           applyEventToView(next, event, usageReceivedAt);
+          if (event.kind === 'audio_state' && event.state === 'ready') {
+            next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
+            next.audioReadyRevision++;
+          }
           // Raise a completed-turn notification on the resulting status
           // transition (green on a clean finish, red on a failure). Only for
           // live events, so snapshot replay never resurrects notifications that
@@ -738,6 +759,10 @@ export const useStore = create<StoreState>((set, get) => {
     onMessage: apply,
     onState: (conn) => set({ conn }),
     onOpen: () => {
+      // The daemon drops connection-scoped audio focus on a socket close, so
+      // always re-announce the active chat after reconnecting.
+      audioFocusAgent = null;
+      syncAudioFocus();
       // Rediscover agents (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
       client.send({ t: 'list_agent_catalog' });
@@ -793,6 +818,7 @@ export const useStore = create<StoreState>((set, get) => {
           }
         };
         document.addEventListener('visibilitychange', refreshVisibleAgents);
+        document.addEventListener('visibilitychange', syncAudioFocus);
         window.addEventListener('focus', refreshVisibleAgents);
         setInterval(refreshVisibleAgents, GIT_REFRESH_INTERVAL_MS);
       }
@@ -808,6 +834,7 @@ export const useStore = create<StoreState>((set, get) => {
         if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
         return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
       });
+      syncAudioFocus();
       if (previous && previous !== id && previousHadPty) subscribeAgent(previous);
       if (wantsPty(id)) replayPtyFor(id);
     },
@@ -848,6 +875,7 @@ export const useStore = create<StoreState>((set, get) => {
       const id = get().focusedId;
       const hadPty = id ? wantsPty(id) : false;
       set({ pane: p });
+      syncAudioFocus();
       if (!id) return;
       if (wantsPty(id) && !hadPty) replayPtyFor(id);
       else if (hadPty && !wantsPty(id)) subscribeAgent(id);
@@ -1154,6 +1182,7 @@ export const useStore = create<StoreState>((set, get) => {
       const next = get().focusedId;
       if (previous && previous !== next && previousHadPty) subscribeAgent(previous);
       if (next && wantsPty(next)) replayPtyFor(next);
+      syncAudioFocus();
     },
   };
 });
@@ -1224,6 +1253,8 @@ function shell(id: string): AgentView {
     audioState: 'idle',
     audioError: null,
     audioSeq: null,
+    audioReadySeqs: [],
+    audioReadyRevision: 0,
   };
 }
 

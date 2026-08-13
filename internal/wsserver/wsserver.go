@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,7 @@ type Backend interface {
 	DeleteAnnotation(string) error
 	ClearAnnotations(string) (int, error)
 	SetAudioEnabled(string, bool) error
+	SetAudioFocus(string, string, bool) error
 }
 
 type Options struct {
@@ -62,6 +64,9 @@ type Options struct {
 	Browser    *browser.Broker
 	History    HistoryLifecycle
 	Automation AutomationStore
+	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
+	// hydration. Audio bytes are still fetched from the authenticated API.
+	AudioReadySeqs func(string) []int64
 }
 
 type AutomationStore interface {
@@ -176,6 +181,7 @@ type clientMessage struct {
 	Project        string                     `json:"project"`
 	RepositoryID   string                     `json:"repositoryId"`
 	Enabled        bool                       `json:"enabled"`
+	Focused        bool                       `json:"focused"`
 	Seq            int64                      `json:"seq"`
 	Role           string                     `json:"role"`
 	Quote          string                     `json:"quote"`
@@ -193,6 +199,7 @@ type connection struct {
 	closeOnce    sync.Once
 	mu           sync.Mutex
 	subs         map[string]*subscription
+	audioFocusID string
 }
 
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
@@ -265,13 +272,38 @@ func (c *connection) close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		c.mu.Lock()
+		focused := c.audioFocusID
+		c.audioFocusID = ""
 		for _, s := range c.subs {
 			s.stop()
 		}
 		c.subs = map[string]*subscription{}
 		c.mu.Unlock()
+		if focused != "" {
+			_ = c.server.opts.Registry.SetAudioFocus(focused, fmt.Sprintf("%p", c), false)
+		}
 		_ = c.ws.Close()
 	})
+}
+
+func (c *connection) setAudioFocus(m clientMessage) {
+	clientID := fmt.Sprintf("%p", c)
+	c.mu.Lock()
+	previous := c.audioFocusID
+	if m.Focused {
+		c.audioFocusID = m.AgentID
+	} else if previous == m.AgentID {
+		c.audioFocusID = ""
+	}
+	c.mu.Unlock()
+	if previous != "" && previous != m.AgentID {
+		_ = c.server.opts.Registry.SetAudioFocus(previous, clientID, false)
+	}
+	if err := c.server.opts.Registry.SetAudioFocus(m.AgentID, clientID, m.Focused); err != nil {
+		c.commandError(m, err)
+		return
+	}
+	c.commandAck(m, m.AgentID)
 }
 
 func (c *connection) send(value any) bool {
@@ -731,6 +763,8 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.commandAck(m, m.AgentID)
+	case "set_audio_focus":
+		c.setAudioFocus(m)
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
@@ -1123,7 +1157,11 @@ func (c *connection) subscribe(m clientMessage) {
 		if err != nil || annotations == nil {
 			annotations = []store.Annotation{}
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations})
+		readySeqs := []int64{}
+		if c.server.opts.AudioReadySeqs != nil {
+			readySeqs = c.server.opts.AudioReadySeqs(sess.ID)
+		}
+		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs})
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {

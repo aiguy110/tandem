@@ -35,6 +35,8 @@ function agent(): AgentView {
     audioState: 'idle',
     audioError: null,
     audioSeq: null,
+    audioReadySeqs: [],
+    audioReadyRevision: 0,
   };
 }
 

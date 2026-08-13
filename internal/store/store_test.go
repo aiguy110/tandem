@@ -224,6 +224,12 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 9, MIMEType: "audio/mpeg", Data: []byte("later")}); err != nil {
+		t.Fatal(err)
+	}
+	if seqs, err := s.MessageAudioSeqs("audio-1"); err != nil || !reflect.DeepEqual(seqs, []int64{7, 9}) {
+		t.Fatalf("audio seqs=%v err=%v", seqs, err)
+	}
 	got, err := s.MessageAudio("audio-1", 7)
 	if err != nil || got == nil || string(got.Data) != "clip" {
 		t.Fatalf("audio=%#v err=%v", got, err)
