@@ -469,11 +469,11 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	if c.renderer == nil {
 		return
 	}
-	enabled, err := c.db.AgentAudioEnabled(s.ID)
+	enabled, enabledAfterSeq, err := c.db.AgentAudioEnabled(s.ID)
 	if err != nil || !enabled {
 		return
 	}
-	seqs, err := turnMessageSeqs(s, c.focused(s.ID))
+	seqs, err := turnMessageSeqs(s, c.focused(s.ID), enabledAfterSeq)
 	if err != nil || len(seqs) == 0 {
 		return
 	}
@@ -493,7 +493,7 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	}(seqs)
 }
 
-func turnMessageSeqs(s *session.Session, all bool) ([]int64, error) {
+func turnMessageSeqs(s *session.Session, all bool, enabledAfterSeq int64) ([]int64, error) {
 	history, err := s.Log.FullHistory()
 	if err != nil {
 		return nil, err
@@ -507,7 +507,7 @@ func turnMessageSeqs(s *session.Session, all bool) ([]int64, error) {
 	}
 	var seqs []int64
 	for i := start; i < len(history); i++ {
-		if history[i].Event.Kind != "message_chunk" || (i > start && history[i-1].Event.Kind == "message_chunk") {
+		if history[i].Seq <= enabledAfterSeq || history[i].Event.Kind != "message_chunk" || (i > start && history[i-1].Event.Kind == "message_chunk") {
 			continue
 		}
 		seqs = append(seqs, history[i].Seq)

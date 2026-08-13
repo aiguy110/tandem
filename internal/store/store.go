@@ -36,8 +36,9 @@ CREATE TABLE IF NOT EXISTS events (
         PRIMARY KEY (agentId, seq)
       );
 CREATE TABLE IF NOT EXISTS agent_audio_settings (
-        agentId  TEXT PRIMARY KEY,
-        enabled  INTEGER NOT NULL DEFAULT 0
+        agentId         TEXT PRIMARY KEY,
+        enabled         INTEGER NOT NULL DEFAULT 0,
+        enabledAfterSeq INTEGER NOT NULL DEFAULT 0
       );
 CREATE TABLE IF NOT EXISTS message_audio (
         agentId   TEXT NOT NULL,
@@ -250,23 +251,25 @@ type MessageAudio struct {
 	CreatedAt int64
 }
 
-func (s *Store) SetAgentAudioEnabled(agentID string, enabled bool) error {
+// SetAgentAudioEnabled records the transcript boundary after which automatic
+// speech is allowed. A toggle must never retroactively render older replies.
+func (s *Store) SetAgentAudioEnabled(agentID string, enabled bool, enabledAfterSeq int64) error {
 	value := 0
 	if enabled {
 		value = 1
 	}
-	_, err := s.db.Exec(`INSERT INTO agent_audio_settings (agentId, enabled) VALUES (?, ?)
-ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled`, agentID, value)
+	_, err := s.db.Exec(`INSERT INTO agent_audio_settings (agentId, enabled, enabledAfterSeq) VALUES (?, ?, ?)
+ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled, enabledAfterSeq=excluded.enabledAfterSeq`, agentID, value, enabledAfterSeq)
 	return err
 }
 
-func (s *Store) AgentAudioEnabled(agentID string) (bool, error) {
+func (s *Store) AgentAudioEnabled(agentID string) (enabled bool, enabledAfterSeq int64, err error) {
 	var value int
-	err := s.db.QueryRow(`SELECT enabled FROM agent_audio_settings WHERE agentId = ?`, agentID).Scan(&value)
+	err = s.db.QueryRow(`SELECT enabled, enabledAfterSeq FROM agent_audio_settings WHERE agentId = ?`, agentID).Scan(&value, &enabledAfterSeq)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return false, 0, nil
 	}
-	return value != 0, err
+	return value != 0, enabledAfterSeq, err
 }
 
 func (s *Store) PutMessageAudio(audio MessageAudio) error {
@@ -444,6 +447,20 @@ CREATE INDEX IF NOT EXISTS annotations_agent ON annotations(agentId);`, "annotat
 			db.Close()
 			return nil, fmt.Errorf("migrate %s: %w", migration.name, err)
 		}
+	}
+	// Existing enabled threads predate the boundary. Treat their current event
+	// head as the cutoff so upgrading does not unexpectedly synthesize speech
+	// for old transcript messages.
+	if _, err := db.Exec("ALTER TABLE agent_audio_settings ADD COLUMN enabledAfterSeq INTEGER NOT NULL DEFAULT 0"); err == nil {
+		if _, err := db.Exec(`UPDATE agent_audio_settings
+SET enabledAfterSeq = COALESCE((SELECT MAX(seq) FROM events WHERE events.agentId = agent_audio_settings.agentId), 0)
+WHERE enabled != 0`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate agent_audio_settings.enabledAfterSeq: %w", err)
+		}
+	} else if !isDuplicateColumn(err) {
+		db.Close()
+		return nil, fmt.Errorf("migrate agent_audio_settings.enabledAfterSeq: %w", err)
 	}
 	// Phase-6 ownership columns can be reconstructed from the atomically
 	// persisted source checkpoints, avoiding a needless rewrite (and later

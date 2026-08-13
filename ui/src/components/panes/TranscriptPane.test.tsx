@@ -87,7 +87,7 @@ describe('TranscriptPane voice rendering', () => {
 
     const view = render(<TranscriptPane />);
 
-    expect(view.getByRole('status').textContent).toBe('Rendering speech…');
+    expect(view.getByRole('status').textContent).toBe('Loading speech…');
     expect(view.container.querySelector('.message-audio')?.classList.contains('message-listen')).toBe(false);
 
     expect((await waitFor(() => view.getByLabelText('Spoken version of agent response'))).getAttribute('src')).toBe('blob:ready-voice');

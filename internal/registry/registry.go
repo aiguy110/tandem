@@ -228,7 +228,7 @@ func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
 	if s == nil {
 		return errors.New("no such live agent")
 	}
-	if err := r.store.SetAgentAudioEnabled(id, enabled); err != nil {
+	if err := r.store.SetAgentAudioEnabled(id, enabled, s.Log.Head()); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{"kind": "audio_preference", "enabled": enabled})
