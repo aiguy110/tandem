@@ -268,6 +268,7 @@ export function TranscriptPane() {
     () => [...transcriptItems].reverse().find((it): it is Extract<Item, { kind: 'message' }> => it.kind === 'message'),
     [transcriptItems],
   );
+  const loadCachedAudio = useCachedAudioLoader(agent?.id ?? '');
   // Which annotation anchors still resolve to a rendered row (vs. "context
   // unavailable" — compaction, etc.).
   const knownSeqs = useMemo(() => {
@@ -459,6 +460,8 @@ export function TranscriptPane() {
                 agentId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
                 cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
+                renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
+                loadCachedAudio={loadCachedAudio}
               />
             ))}
           </div>
@@ -630,6 +633,32 @@ function AutoPlayAudio({ agentId, seq, revision }: { agentId: string; seq: numbe
   return null;
 }
 
+// Snapshot rows mount oldest first. Batch their retained-byte requests into a
+// single per-chat queue so the newest message at the bottom becomes playable
+// first, without issuing a burst of competing requests.
+function useCachedAudioLoader(agentId: string): (seq: number) => Promise<string> {
+  const jobs = useRef<{ seq: number; resolve: (url: string) => void; reject: (reason: unknown) => void }[]>([]);
+  const draining = useRef(false);
+
+  return useMemo(() => (seq: number) => new Promise<string>((resolve, reject) => {
+    jobs.current.push({ seq, resolve, reject });
+    if (draining.current) return;
+    draining.current = true;
+    void Promise.resolve().then(async () => {
+      while (jobs.current.length) {
+        jobs.current.sort((a, b) => b.seq - a.seq);
+        const job = jobs.current.shift()!;
+        try {
+          job.resolve(await renderMessageAudio(agentId, job.seq));
+        } catch (cause) {
+          job.reject(cause);
+        }
+      }
+      draining.current = false;
+    });
+  }), [agentId]);
+}
+
 // The pending-annotation review tray, rendered above PromptBar (visual
 // precedent: the queued-prompts tray in PromptBar below). Annotations are
 // daemon-owned; edits/removes just send the WS message and wait for the
@@ -752,6 +781,8 @@ function Row({
   agentId,
   canRenderAudio,
   cachedAudio,
+  renderingAudio,
+  loadCachedAudio,
   quoteLinks,
   onRespond,
   onJumpToQuote,
@@ -761,6 +792,8 @@ function Row({
   agentId: string;
   canRenderAudio: boolean;
   cachedAudio: boolean;
+  renderingAudio: boolean;
+  loadCachedAudio: (seq: number) => Promise<string>;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -805,7 +838,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} loadCachedAudio={loadCachedAudio} />
         </div>
       );
     case 'thought':
@@ -845,8 +878,8 @@ function Row({
   }
 }
 
-function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean }) {
-  const [loading, setLoading] = useState(false);
+function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, loadCachedAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean; loadCachedAudio: (seq: number) => Promise<string> }) {
+  const [loading, setLoading] = useState<'idle' | 'loading' | 'rendering'>('idle');
   const [audioURL, setAudioURL] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -854,11 +887,11 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string;
     if (audioURL) URL.revokeObjectURL(audioURL);
   }, [audioURL]);
 
-  const render = async () => {
-    setLoading(true);
+  const render = async (kind: 'loading' | 'rendering') => {
+    setLoading(kind);
     setError(null);
     try {
-      const url = await renderMessageAudio(agentId, seq);
+      const url = kind === 'loading' ? await loadCachedAudio(seq) : await renderMessageAudio(agentId, seq);
       setAudioURL((previous) => {
         if (previous) URL.revokeObjectURL(previous);
         return url;
@@ -866,12 +899,12 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      setLoading('idle');
     }
   };
 
   useEffect(() => {
-    if (cachedAudio && !audioURL && !loading) void render();
+    if (cachedAudio && !audioURL && loading === 'idle' && !error) void render('loading');
   // The cached clip is daemon-owned; fetching it here uses the normal Listen
   // endpoint but returns the retained bytes without another provider request.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -880,14 +913,14 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio }: { agentId: string;
   // A cached clip is known to become a player, so render its full in-flow
   // placeholder immediately. This keeps its row at the final player height
   // while the browser fetches the retained daemon bytes.
-  const playerPending = cachedAudio || loading;
+  const playerPending = renderingAudio || loading !== 'idle' || (cachedAudio && !audioURL && !error);
 
   return (
     <div className={`message-audio${audioURL || playerPending ? '' : ' message-listen'}`}>
       {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : playerPending ? (
-        <div className="message-audio-placeholder" role="status">Rendering speech…</div>
+        <div className="message-audio-placeholder" role="status">{renderingAudio || loading === 'rendering' ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
-        <button type="button" onClick={() => void render()} disabled={!enabled || loading} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
+        <button type="button" onClick={() => void render('rendering')} disabled={!enabled || loading !== 'idle'} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           Listen
         </button>
       )}

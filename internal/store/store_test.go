@@ -215,11 +215,14 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 	if err := s.UpsertAgent(Agent{ID: "audio-1", Name: "audio", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, err := s.AgentAudioEnabled("audio-1"); err != nil || enabled {
-		t.Fatalf("default enabled=%v err=%v", enabled, err)
+	if enabled, after, err := s.AgentAudioEnabled("audio-1"); err != nil || enabled || after != 0 {
+		t.Fatalf("default enabled=%v after=%d err=%v", enabled, after, err)
 	}
-	if err := s.SetAgentAudioEnabled("audio-1", true); err != nil {
+	if err := s.SetAgentAudioEnabled("audio-1", true, 6); err != nil {
 		t.Fatal(err)
+	}
+	if enabled, after, err := s.AgentAudioEnabled("audio-1"); err != nil || !enabled || after != 6 {
+		t.Fatalf("saved enabled=%v after=%d err=%v", enabled, after, err)
 	}
 	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
 		t.Fatal(err)
