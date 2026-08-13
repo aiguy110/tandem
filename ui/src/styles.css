@@ -297,7 +297,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .transcript-image { display: block; max-width: min(520px, 100%); max-height: 440px; margin-top: 7px; border-radius: var(--r-sm); object-fit: contain; }
 .transcript-image-loading, .transcript-image-failed { margin-top: 7px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); color: var(--text-faint); font-size: var(--fs-xs); }
 .transcript-image-failed { color: var(--err); }
-.ev.msg { position: relative; line-height: 1.62; }
+.ev.msg { position: relative; align-self: stretch; max-width: none; line-height: 1.62; }
+.message-content { max-width: 860px; }
 .ev.msg p { margin: 0 0 8px; }
 .ev.msg pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
 .ev.msg code { font-family: var(--font-mono); font-size: .92em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
