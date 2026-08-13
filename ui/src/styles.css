@@ -28,6 +28,25 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Keep every scrollable surface visually consistent. These follow the compact,
+   rounded treatment commonly used by Tailwind scrollbar plugins without adding
+   a utility framework or per-component classes. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 html, body, #root { height: 100%; margin: 0; }
 html {
   /* Lock the whole document to the visual viewport so nothing rubber-bands
