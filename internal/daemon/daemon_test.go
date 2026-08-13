@@ -108,6 +108,23 @@ func TestTranscriptMessageTextCollectsOnlySelectedContiguousMessage(t *testing.T
 	}
 }
 
+func TestMessageAudioPreparationClaimDeduplicatesAndAllowsRetry(t *testing.T) {
+	cache := newMessageAudioCache(context.Background(), nil, nil)
+	if !cache.claimPreparation("agent", 7) {
+		t.Fatal("first preparation claim was rejected")
+	}
+	if cache.claimPreparation("agent", 7) {
+		t.Fatal("duplicate preparation claim was accepted")
+	}
+	if !cache.claimPreparation("agent", 8) || !cache.claimPreparation("other", 7) {
+		t.Fatal("claim key did not include both agent and message sequence")
+	}
+	cache.releasePreparation("agent", 7)
+	if !cache.claimPreparation("agent", 7) {
+		t.Fatal("released failed preparation could not be retried")
+	}
+}
+
 func availablePort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

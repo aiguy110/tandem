@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
@@ -92,6 +92,47 @@ describe('TranscriptPane voice rendering', () => {
 
     expect((await waitFor(() => view.getByLabelText('Spoken version of agent response'))).getAttribute('src')).toBe('blob:ready-voice');
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('autoplays through the visible player and ignores duplicate ready events', async () => {
+    const ready = agent();
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:auto-voice');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    act(() => {
+      useStore.setState((state) => ({
+        agents: {
+          ...state.agents,
+          'agent-1': {
+            ...state.agents['agent-1'],
+            audioState: 'ready', audioSeq: 1, audioReadySeqs: [1], audioReadyRevision: 1,
+          },
+        },
+      }));
+    });
+
+    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response'));
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(play.mock.instances[0]).toBe(player);
+
+    act(() => {
+      useStore.setState((state) => ({
+        agents: {
+          ...state.agents,
+          'agent-1': { ...state.agents['agent-1'], audioReadyRevision: 2 },
+        },
+      }));
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(play).toHaveBeenCalledOnce();
   });
 });
 

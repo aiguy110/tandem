@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import type { AckResult, AgentView } from '../../store';
@@ -269,6 +269,7 @@ export function TranscriptPane() {
     [transcriptItems],
   );
   const loadCachedAudio = useCachedAudioLoader(agent?.id ?? '');
+  const autoplay = useAutoPlayQueue(agent?.id ?? '', agent?.audioSeq ?? null, agent?.audioReadyRevision ?? 0);
   // Which annotation anchors still resolve to a rendered row (vs. "context
   // unavailable" — compaction, etc.).
   const knownSeqs = useMemo(() => {
@@ -438,7 +439,6 @@ export function TranscriptPane() {
 
   return (
     <div className="pane">
-      <AutoPlayAudio agentId={agent.id} seq={agent.audioSeq} revision={agent.audioReadyRevision} />
       <div className="transcript-wrap">
         <div className="transcript-history">
           <div
@@ -451,7 +451,7 @@ export function TranscriptPane() {
             {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
             {transcriptItems.map((it) => (
               <Row
-                key={it.key}
+                key={`${agent.id}:${it.key}`}
                 item={it}
                 quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
@@ -462,6 +462,8 @@ export function TranscriptPane() {
                 cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
                 renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
                 loadCachedAudio={loadCachedAudio}
+                autoplaying={it.kind === 'message' && autoplay.seq === it.seq}
+                onAutoplayFinished={autoplay.finish}
               />
             ))}
           </div>
@@ -578,59 +580,36 @@ export function TranscriptPane() {
   );
 }
 
-// A focused chat receives live ready events in message order. Keep one audio
-// element active at a time so separate agent replies never overlap. Snapshot
-// hydration deliberately establishes the baseline without replaying old audio.
-function AutoPlayAudio({ agentId, seq, revision }: { agentId: string; seq: number | null; revision: number }) {
-  const baseline = useRef<number | null>(null);
-  const queue = useRef<number[]>([]);
-  const playing = useRef(false);
-  const activeAudio = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => () => {
-    activeAudio.current?.pause();
-    activeAudio.current = null;
-    queue.current = [];
-  }, [agentId]);
+// A focused chat receives live ready events in message order. Queue each
+// message once and let that row's visible native <audio> element do the actual
+// playback, so its play button and scrubber always describe what is audible.
+function useAutoPlayQueue(agentId: string, seq: number | null, revision: number): { seq: number | null; finish: (seq: number) => void } {
+  const baseline = useRef({ agentId, revision });
+  const seen = useRef(new Set<number>());
+  const [queue, setQueue] = useState<number[]>([]);
 
   useEffect(() => {
-    if (baseline.current === null) {
-      baseline.current = revision;
+    if (baseline.current.agentId !== agentId) {
+      baseline.current = { agentId, revision };
+      seen.current.clear();
+      setQueue([]);
       return;
     }
-    if (revision === baseline.current || seq === null) return;
-    baseline.current = revision;
-    queue.current.push(seq);
-    if (playing.current) return;
-    const drain = async () => {
-      playing.current = true;
-      while (queue.current.length) {
-        const next = queue.current.shift()!;
-        let url: string | null = null;
-        try {
-          url = await renderMessageAudio(agentId, next);
-          const audio = new Audio(url);
-          activeAudio.current = audio;
-          await new Promise<void>((resolve) => {
-            const done = () => resolve();
-            audio.addEventListener('ended', done, { once: true });
-            audio.addEventListener('error', done, { once: true });
-            void audio.play().catch(done);
-          });
-        } catch {
-          // The inline player exposes errors for intentional Listen requests;
-          // automatic playback should quietly continue to the next reply.
-        } finally {
-          activeAudio.current = null;
-          if (url) URL.revokeObjectURL(url);
-        }
-      }
-      playing.current = false;
-    };
-    void drain();
+    if (baseline.current.revision === revision) return;
+    baseline.current.revision = revision;
+    if (seq === null || seen.current.has(seq)) return;
+    seen.current.add(seq);
+    setQueue((current) => [...current, seq]);
   }, [agentId, revision, seq]);
 
-  return null;
+  const finish = useCallback((finishedSeq: number) => {
+    setQueue((current) => current[0] === finishedSeq ? current.slice(1) : current.filter((queuedSeq) => queuedSeq !== finishedSeq));
+  }, []);
+
+  return {
+    seq: baseline.current.agentId === agentId ? queue[0] ?? null : null,
+    finish,
+  };
 }
 
 // Snapshot rows mount oldest first. Batch their retained-byte requests into a
@@ -783,6 +762,8 @@ function Row({
   cachedAudio,
   renderingAudio,
   loadCachedAudio,
+  autoplaying,
+  onAutoplayFinished,
   quoteLinks,
   onRespond,
   onJumpToQuote,
@@ -794,6 +775,8 @@ function Row({
   cachedAudio: boolean;
   renderingAudio: boolean;
   loadCachedAudio: (seq: number) => Promise<string>;
+  autoplaying: boolean;
+  onAutoplayFinished: (seq: number) => void;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -838,7 +821,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} loadCachedAudio={loadCachedAudio} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} loadCachedAudio={loadCachedAudio} autoplaying={autoplaying} onAutoplayFinished={onAutoplayFinished} />
         </div>
       );
     case 'thought':
@@ -878,10 +861,11 @@ function Row({
   }
 }
 
-function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, loadCachedAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean; loadCachedAudio: (seq: number) => Promise<string> }) {
+function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, loadCachedAudio, autoplaying, onAutoplayFinished }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean; loadCachedAudio: (seq: number) => Promise<string>; autoplaying: boolean; onAutoplayFinished: (seq: number) => void }) {
   const [loading, setLoading] = useState<'idle' | 'loading' | 'rendering'>('idle');
   const [audioURL, setAudioURL] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => () => {
     if (audioURL) URL.revokeObjectURL(audioURL);
@@ -910,6 +894,18 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedAudio]);
 
+  useEffect(() => {
+    if (!autoplaying || !audioURL || !audioRef.current) return;
+    let active = true;
+    void audioRef.current.play().catch(() => {
+      if (active) onAutoplayFinished(seq);
+    });
+    return () => {
+      active = false;
+      audioRef.current?.pause();
+    };
+  }, [audioURL, autoplaying, onAutoplayFinished, seq]);
+
   // A cached clip is known to become a player, so render its full in-flow
   // placeholder immediately. This keeps its row at the final player height
   // while the browser fetches the retained daemon bytes.
@@ -917,7 +913,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
 
   return (
     <div className={`message-audio${audioURL || playerPending ? '' : ' message-listen'}`}>
-      {audioURL ? <audio controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" /> : playerPending ? (
+      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onEnded={() => autoplaying && onAutoplayFinished(seq)} onError={() => autoplaying && onAutoplayFinished(seq)} /> : playerPending ? (
         <div className="message-audio-placeholder" role="status">{renderingAudio || loading === 'rendering' ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
         <button type="button" onClick={() => void render('rendering')} disabled={!enabled || loading !== 'idle'} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>

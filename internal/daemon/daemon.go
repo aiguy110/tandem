@@ -375,10 +375,14 @@ type messageAudioCache struct {
 	mu       sync.Mutex
 	flights  map[string]chan struct{}
 	focuses  map[string]map[string]struct{}
+	prepared map[string]struct{}
 }
 
 func newMessageAudioCache(ctx context.Context, db *store.Store, renderer voice.Renderer) *messageAudioCache {
-	return &messageAudioCache{ctx: ctx, db: db, renderer: renderer, flights: make(map[string]chan struct{}), focuses: make(map[string]map[string]struct{})}
+	return &messageAudioCache{
+		ctx: ctx, db: db, renderer: renderer,
+		flights: make(map[string]chan struct{}), focuses: make(map[string]map[string]struct{}), prepared: make(map[string]struct{}),
+	}
 }
 
 func audioKey(agentID string, seq int64) string { return agentID + "/" + strconv.FormatInt(seq, 10) }
@@ -465,6 +469,29 @@ func (c *messageAudioCache) readySeqs(agentID string) []int64 {
 	return seqs
 }
 
+// claimPreparation makes automatic rendering and its ready notification a
+// once-per-process operation for each message. Turn completion, focus changes,
+// reconnects, and multiple browser clients can all request preparation at the
+// same time; render's flight map deduplicates provider work, but without this
+// claim every caller would still emit a separate ready event and autoplay the
+// same clip again.
+func (c *messageAudioCache) claimPreparation(agentID string, seq int64) bool {
+	key := audioKey(agentID, seq)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.prepared[key]; exists {
+		return false
+	}
+	c.prepared[key] = struct{}{}
+	return true
+}
+
+func (c *messageAudioCache) releasePreparation(agentID string, seq int64) {
+	c.mu.Lock()
+	delete(c.prepared, audioKey(agentID, seq))
+	c.mu.Unlock()
+}
+
 func (c *messageAudioCache) prepare(s *session.Session) {
 	if c.renderer == nil {
 		return
@@ -477,6 +504,15 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	if err != nil || len(seqs) == 0 {
 		return
 	}
+	pending := make([]int64, 0, len(seqs))
+	for _, seq := range seqs {
+		if c.claimPreparation(s.ID, seq) {
+			pending = append(pending, seq)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
 	go func(seqs []int64) {
 		for _, seq := range seqs {
 			if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
@@ -485,12 +521,13 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 			}
 			emitAudioState(s, "rendering", seq, "")
 			if _, err := c.render(c.ctx, s.ID, seq); err != nil {
+				c.releasePreparation(s.ID, seq)
 				emitAudioState(s, "error", seq, err.Error())
 				continue
 			}
 			emitAudioState(s, "ready", seq, "")
 		}
-	}(seqs)
+	}(pending)
 }
 
 func turnMessageSeqs(s *session.Session, all bool, enabledAfterSeq int64) ([]int64, error) {
