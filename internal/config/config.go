@@ -172,6 +172,11 @@ const DefaultManagedNodeVersion = "22.11.0"
 // built-in defaults fill any gaps. It is distinct from the agent catalog
 // (`agents:`/`harnesses:`), which the wizard never touches.
 type Settings struct {
+	// ConfigVersion records the last configuration compatibility version the
+	// operator completed with tandem setup. It is intentionally independent of
+	// the Tandem release version: releases only advance it when configuration
+	// compatibility changes.
+	ConfigVersion int                   `yaml:"configVersion,omitempty"`
 	ProjectRoots  []string              `yaml:"projectRoots,omitempty"`
 	Bind          string                `yaml:"bind,omitempty"`
 	Port          int                   `yaml:"port,omitempty"`
@@ -181,6 +186,42 @@ type Settings struct {
 	Node          NodeSettings          `yaml:"node,omitempty"`
 	LanguageModel LanguageModelSettings `yaml:"languageModel,omitempty"`
 	Voice         VoiceSettings         `yaml:"voice,omitempty"`
+}
+
+// CurrentConfigVersion is written by the current setup wizard. The initial
+// tracked version accepts untracked legacy configurations so existing installs
+// can bootstrap without being locked out after upgrading.
+const CurrentConfigVersion = 1
+
+// OldestCompatibleConfigVersion is the lowest configuration version this
+// release can safely run. Raise it only at a deliberate compatibility
+// boundary. A configuration below it must be completed through tandem setup.
+const OldestCompatibleConfigVersion = 0
+
+// CompatibilityError explains why the daemon will not start with an outdated
+// configuration.
+type CompatibilityError struct {
+	Have int
+	Need int
+}
+
+func (e *CompatibilityError) Error() string {
+	return fmt.Sprintf("configuration compatibility version %d is no longer supported (need %d or newer); run 'tandem setup'", e.Have, e.Need)
+}
+
+// CheckCompatibility rejects configurations older than this release's stated
+// compatibility floor.
+func CheckCompatibility(s Settings) error {
+	return CheckCompatibilityAt(s, OldestCompatibleConfigVersion)
+}
+
+// CheckCompatibilityAt is the testable form of CheckCompatibility and is also
+// useful to callers evaluating a future release's stated compatibility floor.
+func CheckCompatibilityAt(s Settings, oldest int) error {
+	if s.ConfigVersion < oldest {
+		return &CompatibilityError{Have: s.ConfigVersion, Need: oldest}
+	}
+	return nil
 }
 
 type LanguageModelSettings struct {
@@ -335,6 +376,9 @@ func LoadWithOptions(o Options) (Config, error) {
 	}
 	settings, err := LoadSettings(home)
 	if err != nil {
+		return Config{}, err
+	}
+	if err := CheckCompatibility(settings); err != nil {
 		return Config{}, err
 	}
 	port, err := settingInt(env, "TANDEM_PORT", settings.Port, 7717)

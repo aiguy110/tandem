@@ -157,3 +157,25 @@ func TestPromptBrowserLocal(t *testing.T) {
 		t.Fatalf("missing readiness summary:\n%s", out.String())
 	}
 }
+
+func TestCompleteRecordsCompatibilityVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TANDEM_HOME", home)
+	if err := config.SaveSettings(home, config.Settings{Bind: "0.0.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Complete(&out); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := config.LoadSettings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ConfigVersion != config.CurrentConfigVersion || settings.Bind != "0.0.0.0" {
+		t.Fatalf("settings after completion = %+v", settings)
+	}
+	if !strings.Contains(out.String(), "compatibility version") {
+		t.Fatalf("completion output = %q", out.String())
+	}
+}

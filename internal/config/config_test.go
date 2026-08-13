@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -417,5 +418,19 @@ func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
 	}
 	if !bytes.Equal(actual, want) {
 		t.Fatalf("normalized catalog differs from golden\nactual:\n%s\nwant:\n%s", actual, want)
+	}
+}
+
+func TestCheckCompatibilityAt(t *testing.T) {
+	err := CheckCompatibilityAt(Settings{ConfigVersion: 0}, 1)
+	var compatibilityErr *CompatibilityError
+	if !errors.As(err, &compatibilityErr) {
+		t.Fatalf("CheckCompatibilityAt error = %v, want CompatibilityError", err)
+	}
+	if compatibilityErr.Have != 0 || compatibilityErr.Need != 1 {
+		t.Fatalf("CompatibilityError = %+v", compatibilityErr)
+	}
+	if err := CheckCompatibilityAt(Settings{ConfigVersion: 1}, 1); err != nil {
+		t.Fatalf("current config rejected: %v", err)
 	}
 }

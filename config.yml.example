@@ -92,6 +92,7 @@ harnesses: {}
 # override it, and built-in defaults fill any gaps.
 #
 # settings:
+#   configVersion: 1        # written by tandem setup; tracks config compatibility
 #   projectRoots:          # dirs scanned for repos in the spawn palette
 #     - /home/you/Projects
 #   bind: 127.0.0.1        # HTTP + WS listen address

@@ -17,7 +17,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [setup|update|version|debug config]"
+const usage = "usage: tandem [setup [--agent|--complete]|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -65,6 +65,24 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return runDaemon(stdout, stderr)
 	}
+	if len(args) == 2 && args[0] == "setup" && args[1] == "--complete" {
+		if err := setup.Complete(stdout); err != nil {
+			fmt.Fprintf(stderr, "setup: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) == 2 && args[0] == "setup" && args[1] == "--agent" {
+		if !stdinIsTerminal() {
+			fmt.Fprintln(stderr, "tandem setup --agent requires an interactive terminal")
+			return 2
+		}
+		if err := setup.RunClaudeGuide(context.Background(), stdout); err != nil {
+			fmt.Fprintf(stderr, "setup: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -89,6 +107,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "update tandem: %v\n", err)
 			return 1
 		}
+		fmt.Fprintln(stdout, "tandem: run 'tandem setup' to review configuration changes after an update.")
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
