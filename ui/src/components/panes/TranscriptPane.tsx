@@ -1358,6 +1358,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const aborts = useRef(new Map<string, AbortController>());
   const attachmentRef = useRef<DraftAttachment[]>([]);
@@ -1425,6 +1426,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     const height = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${height}px`;
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    if (highlightRef.current) {
+      highlightRef.current.scrollTop = el.scrollTop;
+      highlightRef.current.scrollLeft = el.scrollLeft;
+    }
   }, [text]);
 
   // Re-arm the popup (and reset the highlighted row) whenever the token itself
@@ -1734,57 +1739,66 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             e.target.value = '';
           }}
         />
-        <textarea
-          ref={textRef}
-          data-prompt-agent={agentId}
-          placeholder={usesSoftKeyboard()
-            ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentId}…  (use the button to send)`)
-            : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`)}
-          value={text}
-          onPaste={(e) => {
-            const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
-            if (images.length) {
-              e.preventDefault();
-              addFiles(images);
-            }
-          }}
-          onChange={(e) => {
-            setDraft(agentId, e.target.value);
-            updateCaret(e.target);
-          }}
-          onClick={(e) => updateCaret(e.currentTarget)}
-          onKeyUp={(e) => updateCaret(e.currentTarget)}
-          onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            setDismissed(true);
-            e.currentTarget.blur();
-            return;
-          }
-          if (showPopup) {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setSel((i) => Math.min(completionMatches.length - 1, i + 1));
-              return;
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setSel((i) => Math.max(0, i - 1));
-              return;
-            }
-            if (e.key === 'Enter' || e.key === 'Tab') {
-              e.preventDefault();
-              applyCompletion(completionMatches[sel]);
-              return;
-            }
-          }
-          if (e.key === 'Enter' && !e.shiftKey && !usesSoftKeyboard()) {
-            e.preventDefault();
-            void send();
-          }
-          }}
-          rows={1}
-        />
+        <div className="prompt-text-wrap">
+          <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} /></div>
+          <textarea
+            ref={textRef}
+            data-prompt-agent={agentId}
+            placeholder={usesSoftKeyboard()
+              ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentId}…  (use the button to send)`)
+              : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`)}
+            value={text}
+            onPaste={(e) => {
+              const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+              if (images.length) {
+                e.preventDefault();
+                addFiles(images);
+              }
+            }}
+            onChange={(e) => {
+              setDraft(agentId, e.target.value);
+              updateCaret(e.target);
+            }}
+            onClick={(e) => updateCaret(e.currentTarget)}
+            onKeyUp={(e) => updateCaret(e.currentTarget)}
+            onScroll={(e) => {
+              if (highlightRef.current) {
+                highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setDismissed(true);
+                e.currentTarget.blur();
+                return;
+              }
+              if (showPopup) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSel((i) => Math.min(completionMatches.length - 1, i + 1));
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSel((i) => Math.max(0, i - 1));
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  applyCompletion(completionMatches[sel]);
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey && !usesSoftKeyboard()) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            rows={1}
+          />
+        </div>
         <div className="prompt-actions">
           <button
             type="button"
