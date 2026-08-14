@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import type { AckResult, AgentView } from '../../store';
-import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent } from '../../wire';
+import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { renderMessageAudio } from '../../audio';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
@@ -453,6 +453,7 @@ export function TranscriptPane() {
               <Row
                 key={`${agent.id}:${it.key}`}
                 item={it}
+                commands={agent.commands}
                 quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
                 onJumpToQuote={jumpToQuote}
@@ -757,6 +758,7 @@ function QuoteChip({
 
 function Row({
   item,
+  commands,
   agentId,
   canRenderAudio,
   cachedAudio,
@@ -770,6 +772,7 @@ function Row({
   onJumpToLinkedBlock,
 }: {
   item: Item;
+  commands: SlashCommand[];
   agentId: string;
   canRenderAudio: boolean;
   cachedAudio: boolean;
@@ -801,7 +804,7 @@ function Row({
       return (
         <div ref={sourceRef as React.RefObject<HTMLDivElement>} className="ev user" data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
           {item.blocks.map((block, i) => {
-            if (block.type === 'text') return <div key={i}>{block.text}</div>;
+            if (block.type === 'text') return <div key={i}><SkillText text={block.text} commands={commands} /></div>;
             if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
             return <QuoteChip key={i} block={block} targetId={citationTargetId(item.seq, i)} onJump={onJumpToQuote} />;
           })}
@@ -1270,18 +1273,58 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
   );
 }
 
-// Finds a slash-command token ending at `caret`: a run of alphanumeric/-/_
-// chars immediately preceded by "/", anywhere in the text (not just at the
-// start of a line). Returns null once nothing has been typed after the "/"
-// yet, so the popup only appears once there's something to fuzzy-match.
-function findSlashToken(text: string, caret: number): { start: number; end: number; query: string } | null {
+type CompletionToken = { start: number; end: number; query: string };
+
+function isMentionBoundary(text: string, index: number): boolean {
+  return index === 0 || /\s/.test(text[index - 1]);
+}
+
+// Finds a slash command only at the beginning of a message or after
+// whitespace. This prevents ordinary paths such as src/foo from opening the
+// command picker while still allowing slash commands on later lines.
+export function findSlashToken(text: string, caret: number): CompletionToken | null {
   if (caret <= 0 || caret > text.length) return null;
   let i = caret;
   while (i > 0 && /[A-Za-z0-9_-]/.test(text[i - 1])) i--;
-  if (i === 0 || text[i - 1] !== '/') return null;
+  if (i === 0 || text[i - 1] !== '/' || !isMentionBoundary(text, i - 1)) return null;
   const query = text.slice(i, caret);
   if (!query) return null;
   return { start: i - 1, end: caret, query };
+}
+
+// File mentions are intentionally workspace-relative. A token may be empty so
+// typing "@" opens the root picker, and a trailing slash lists that directory.
+export function findFileToken(text: string, caret: number): CompletionToken | null {
+  if (caret <= 0 || caret > text.length) return null;
+  let i = caret;
+  while (i > 0 && /[A-Za-z0-9_./-]/.test(text[i - 1])) i--;
+  if (i === 0 || text[i - 1] !== '@' || !isMentionBoundary(text, i - 1)) return null;
+  return { start: i - 1, end: caret, query: text.slice(i, caret) };
+}
+
+function fileCompletionRequest(query: string): { dir: string; filter: string } | null {
+  if (query.startsWith('/') || query.split('/').some((segment) => segment === '..')) return null;
+  const slash = query.lastIndexOf('/');
+  return slash < 0
+    ? { dir: '', filter: query }
+    : { dir: query.slice(0, slash) || '.', filter: query.slice(slash + 1) };
+}
+
+function SkillText({ text, commands }: { text: string; commands: SlashCommand[] }) {
+  const names = new Set(commands.map((command) => command.name));
+  const parts: React.ReactNode[] = [];
+  const pattern = /\/[A-Za-z0-9_-]+/g;
+  let previous = 0;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const start = match.index;
+    const name = match[0].slice(1);
+    if (!isMentionBoundary(text, start) || !names.has(name)) continue;
+    if (start > previous) parts.push(text.slice(previous, start));
+    parts.push(<span className="skill-mention" key={start}>{match[0]}</span>);
+    previous = start + match[0].length;
+  }
+  if (previous < text.length) parts.push(text.slice(previous));
+  return <>{parts}</>;
 }
 
 const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -1311,6 +1354,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const text = useStore((s) => s.drafts[agentId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
+  const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -1325,6 +1369,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const [queuedFlash, setQueuedFlash] = useState(false);
+  const [fileEntries, setFileEntries] = useState<WorkspaceEntry[]>([]);
+  const [fileEntriesDir, setFileEntriesDir] = useState<string | null>(null);
 
   useEffect(() => {
     attachmentRef.current = attachments;
@@ -1336,8 +1382,39 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   }, []);
 
   const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
-  const matches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
-  const showPopup = !!slash && matches.length > 0 && !dismissed;
+  const file = useMemo(() => findFileToken(text, caret), [text, caret]);
+  const fileRequest = useMemo(() => file ? fileCompletionRequest(file.query) : null, [file]);
+  const commandMatches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
+  const fileMatches = useMemo(() => (fileRequest && fileEntriesDir === fileRequest.dir
+    ? fuzzyFilter(fileRequest.filter, fileEntries, (entry) => entry.path).slice(0, 8)
+    : []), [fileEntries, fileEntriesDir, fileRequest]);
+  const completionMatches = slash
+    ? commandMatches.map((command) => ({ kind: 'command' as const, command }))
+    : file
+      ? fileMatches.map((entry) => ({ kind: 'file' as const, entry }))
+      : [];
+  const showPopup = completionMatches.length > 0 && !dismissed;
+
+  useEffect(() => {
+    if (!file || !fileRequest) {
+      setFileEntries([]);
+      setFileEntriesDir(null);
+      return;
+    }
+    let current = true;
+    setFileEntries([]);
+    setFileEntriesDir(fileRequest.dir);
+    const timer = window.setTimeout(() => {
+      void listWorkspaceEntries(agentId, fileRequest.dir).then(
+        (entries) => { if (current) setFileEntries(entries); },
+        () => { if (current) setFileEntries([]); },
+      );
+    }, 75);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [agentId, file?.start, fileRequest?.dir, listWorkspaceEntries]);
 
   useLayoutEffect(() => {
     const el = textRef.current;
@@ -1357,7 +1434,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     setSel(0);
     setDismissed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slash?.start, slash?.query]);
+  }, [slash?.start, slash?.query, file?.start, file?.query]);
 
   const updateCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart ?? 0);
 
@@ -1375,6 +1452,28 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         el.setSelectionRange(pos, pos);
       }
     });
+  };
+
+  const applyFile = (entry: WorkspaceEntry | undefined) => {
+    if (!file || !entry) return;
+    const insertion = `@${entry.path}${entry.isDir ? '/' : ' '}`;
+    const next = text.slice(0, file.start) + insertion + text.slice(file.end);
+    setDraft(agentId, next);
+    const pos = file.start + insertion.length;
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const el = textRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
+  const applyCompletion = (completion: typeof completionMatches[number] | undefined) => {
+    if (!completion) return;
+    if (completion.kind === 'command') applyCommand(completion.command);
+    else applyFile(completion.entry);
   };
 
   const upload = async (attachment: DraftAttachment) => {
@@ -1563,19 +1662,24 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     >
       {showPopup && (
         <div className="slash-popup">
-          {matches.map((c, i) => (
+          {completionMatches.map((completion, i) => (
             <div
-              key={c.name}
+              key={completion.kind === 'command' ? completion.command.name : completion.entry.path}
               className={`slash-row${i === sel ? ' sel' : ''}`}
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => {
                 e.preventDefault();
-                applyCommand(c);
+                applyCompletion(completion);
               }}
             >
-              <span className="name">/{c.name}</span>
-              {c.input && <span className="hint">{c.input}</span>}
-              {c.description && <span className="desc">{c.description}</span>}
+              {completion.kind === 'command' ? <>
+                <span className="name">/{completion.command.name}</span>
+                {completion.command.input && <span className="hint">{completion.command.input}</span>}
+                {completion.command.description && <span className="desc">{completion.command.description}</span>}
+              </> : <>
+                <span className="name">@{completion.entry.path}{completion.entry.isDir ? '/' : ''}</span>
+                <span className="desc">{completion.entry.isDir ? 'folder' : 'file'}</span>
+              </>}
             </div>
           ))}
         </div>
@@ -1660,7 +1764,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           if (showPopup) {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
-              setSel((i) => Math.min(matches.length - 1, i + 1));
+              setSel((i) => Math.min(completionMatches.length - 1, i + 1));
               return;
             }
             if (e.key === 'ArrowUp') {
@@ -1670,7 +1774,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             }
             if (e.key === 'Enter' || e.key === 'Tab') {
               e.preventDefault();
-              applyCommand(matches[sel]);
+              applyCompletion(completionMatches[sel]);
               return;
             }
           }

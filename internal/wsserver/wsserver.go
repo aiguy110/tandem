@@ -34,6 +34,7 @@ type Backend interface {
 	Close(context.Context, string, bool, bool) (bool, error)
 	Summaries(context.Context) []registry.Summary
 	ListDirs(context.Context) ([]workspace.RepoInfo, error)
+	ListWorkspaceEntries(context.Context, string, string) ([]registry.WorkspaceEntry, error)
 	ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error)
 	ClosePreview(context.Context, string) (*workspace.ClosePreview, error)
 	Diff(context.Context, string) (*workspace.Diff, error)
@@ -186,6 +187,7 @@ type clientMessage struct {
 	Role           string                     `json:"role"`
 	Quote          string                     `json:"quote"`
 	Comment        string                     `json:"comment"`
+	Path           string                     `json:"path"`
 }
 
 type connection struct {
@@ -400,6 +402,20 @@ func (c *connection) handle(m clientMessage) {
 			dirs = []workspace.RepoInfo{}
 		}
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
+	case "list_workspace_entries":
+		if m.AgentID == "" {
+			c.send(withCorr(map[string]any{"t": "workspace_entries", "error": "agentId is required"}, m.CorrID))
+			return
+		}
+		entries, err := c.server.opts.Registry.ListWorkspaceEntries(context.Background(), m.AgentID, m.Path)
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "workspace_entries", "error": err.Error()}, m.CorrID))
+			return
+		}
+		if entries == nil {
+			entries = []registry.WorkspaceEntry{}
+		}
+		c.send(withCorr(map[string]any{"t": "workspace_entries", "entries": entries}, m.CorrID))
 	case "list_automation":
 		c.sendAutomation(m.RepositoryID, m.CorrID)
 	case "set_automation_enabled":

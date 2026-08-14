@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
-import { TranscriptPane } from './TranscriptPane';
+import { findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
 
 const initialState = useStore.getState();
 
@@ -157,6 +157,51 @@ describe('TranscriptPane tool diffs', () => {
     expect(view.container.querySelector('.diff-file')).not.toBeNull();
     expect(view.container.querySelector('.diff-line.remove .diff-text')?.textContent).toBe('-before');
     expect(view.container.querySelector('.diff-line.add .diff-text')?.textContent).toBe('+after');
+  });
+});
+
+describe('TranscriptPane composer completions', () => {
+  it('only recognizes slash commands at a message or whitespace boundary', () => {
+    expect(findSlashToken('/help', 5)).toMatchObject({ start: 0, query: 'help' });
+    expect(findSlashToken('ask /help', 9)).toMatchObject({ start: 4, query: 'help' });
+    expect(findSlashToken('src/help', 8)).toBeNull();
+    expect(findSlashToken('email/help', 10)).toBeNull();
+  });
+
+  it('recognizes workspace-relative @ file mentions', () => {
+    expect(findFileToken('@src/index', 10)).toMatchObject({ start: 0, query: 'src/index' });
+    expect(findFileToken('check @src/', 11)).toMatchObject({ start: 6, query: 'src/' });
+    expect(findFileToken('person@example', 14)).toBeNull();
+  });
+
+  it('renders matching slash commands in the picker color after sending', () => {
+    const withCommand = agent();
+    withCommand.commands = [{ name: 'help', description: 'Show help' }];
+    withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Run /help then src/help.' } }];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.skill-mention')?.textContent).toBe('/help');
+    expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(1);
+  });
+
+  it('lists and inserts workspace file mentions', async () => {
+    const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: 'src/index.ts', isDir: false }]);
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+    }, true);
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@src/in', selectionStart: 7 } });
+
+    const option = await waitFor(() => view.getByText('@src/index.ts'));
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', 'src');
+    fireEvent.mouseDown(option);
+    expect(composer.value).toBe('@src/index.ts ');
   });
 });
 

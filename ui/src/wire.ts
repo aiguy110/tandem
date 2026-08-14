@@ -356,6 +356,11 @@ export interface WorkspaceDiff {
   targetRef?: string;
 }
 
+export interface WorkspaceEntry {
+  path: string;
+  isDir: boolean;
+}
+
 export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
@@ -392,6 +397,7 @@ export type ClientMsg =
   | { t: 'restart_browser'; agentId: string; snapshotId?: string; corrId?: string }
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; corrId?: string }
+  | { t: 'list_workspace_entries'; agentId: string; path: string; corrId?: string }
   | { t: 'list_git_refs'; repo: string; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; corrId?: string }
@@ -435,6 +441,7 @@ export type ServerMsg =
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
+  | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
   | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string }
