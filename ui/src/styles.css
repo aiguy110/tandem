@@ -562,7 +562,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .slash-row .name { font-family: var(--font-mono); color: var(--agent); font-weight: 600; white-space: nowrap; }
 .slash-row .hint { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
 .slash-row .desc { color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.skill-mention { color: var(--agent); font-weight: 600; }
+.skill-mention { color: var(--agent); }
 .prompt-text-wrap { flex: 1; min-width: 0; position: relative; }
 .prompt-text-highlight {
   position: absolute; inset: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
