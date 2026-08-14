@@ -37,6 +37,7 @@ import type {
   QueuedPrompt,
   WireEvent,
   WorkspaceDiff,
+  WorkspaceEntry,
 } from './wire';
 
 // The focus/bandwidth rules: browser frames stream only for the focused Browser
@@ -245,6 +246,7 @@ interface StoreState {
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string, harness?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
+  listWorkspaceEntries: (agentId: string, path: string) => Promise<WorkspaceEntry[]>;
   // Browser snapshots + agent profiles.
   captureSnapshot: (agentId: string, name: string) => Promise<BrowserSnapshot[]>;
   listSnapshots: () => Promise<BrowserSnapshot[]>;
@@ -285,6 +287,7 @@ const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
 const pendingGitRefs = new Map<string, { resolve: (refs: GitRefInfo[]) => void; reject: (error: Error) => void }>();
+const pendingWorkspaceEntries = new Map<string, { resolve: (entries: WorkspaceEntry[]) => void; reject: (error: Error) => void }>();
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
 const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
@@ -451,6 +454,15 @@ export const useStore = create<StoreState>((set, get) => {
           pendingGitRefs.delete(msg.corrId);
           if (msg.error || !msg.refs) pending.reject(new Error(msg.error ?? 'Git refs unavailable'));
           else pending.resolve(msg.refs);
+        }
+        return;
+      }
+      case 'workspace_entries': {
+        const pending = msg.corrId ? pendingWorkspaceEntries.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingWorkspaceEntries.delete(msg.corrId);
+          if (msg.error || !msg.entries) pending.reject(new Error(msg.error ?? 'Workspace entries unavailable'));
+          else pending.resolve(msg.entries);
         }
         return;
       }
@@ -1011,6 +1023,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingGitRefs.set(corrId, { resolve, reject });
         client.send({ t: 'list_git_refs', repo, corrId });
+      }),
+    listWorkspaceEntries: (agentId, path) =>
+      new Promise<WorkspaceEntry[]>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingWorkspaceEntries.set(corrId, { resolve, reject });
+        client.send({ t: 'list_workspace_entries', agentId, path, corrId });
       }),
     captureSnapshot: (agentId, name) =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {

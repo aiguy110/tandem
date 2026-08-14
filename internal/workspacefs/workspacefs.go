@@ -167,3 +167,25 @@ func (f *FS) WriteTextFile(requested, content string) error {
 	}
 	return closeErr
 }
+
+// ReadDir returns the immediate entries of requested, while preserving the
+// same descriptor-relative containment guarantees as the ACP file services.
+func (f *FS) ReadDir(requested string) ([]fs.DirEntry, error) {
+	rel, err := f.relative(requested)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := f.root.Open(rel)
+	if err != nil {
+		return nil, f.pathError(requested, err)
+	}
+	entries, readErr := dir.ReadDir(-1)
+	closeErr := dir.Close()
+	if readErr != nil {
+		return nil, f.pathError(requested, readErr)
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return entries, nil
+}

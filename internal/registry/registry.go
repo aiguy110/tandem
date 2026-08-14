@@ -22,6 +22,7 @@ import (
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/workspace"
+	"github.com/aiguy110/tandem/internal/workspacefs"
 )
 
 var nameWords = []string{
@@ -99,6 +100,14 @@ type Summary struct {
 	// supports swapping to its resumable CLI (the Chat tab's ACP/CLI switch).
 	Adapter    string `json:"adapter"`
 	CanHandoff bool   `json:"canHandoff"`
+}
+
+// WorkspaceEntry is one immediate, workspace-relative file-system completion
+// candidate. Directory paths are distinguished so the UI can continue into
+// them without having to infer their type from a trailing slash.
+type WorkspaceEntry struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"isDir"`
 }
 
 type CatalogAgent struct {
@@ -326,6 +335,65 @@ func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
 	}
 	r.mu.RUnlock()
 	return workspace.ListRepos(ctx, r.config.ProjectRoots, r.config.DirScanDepth, func(p string) bool { abs, _ := filepath.Abs(p); return repos[abs] })
+}
+
+// ListWorkspaceEntries returns the direct children of dir in a live agent's
+// actual workspace. The workspacefs boundary protects worktrees from path and
+// symlink escapes even though this is a browser-facing convenience API.
+func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]WorkspaceEntry, error) {
+	// This browser protocol is deliberately relative even though workspacefs can
+	// safely accept an absolute path within the root. Keeping the public result
+	// relative makes it directly insertable as an @ mention and prevents a
+	// malformed client request from changing that contract.
+	if filepath.IsAbs(dir) {
+		return nil, errors.New("workspace path must be relative")
+	}
+	dir = filepath.Clean(dir)
+	if dir == "." {
+		dir = ""
+	}
+	if dir == ".." || strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
+		return nil, errors.New("workspace path escapes its root")
+	}
+	r.mu.RLock()
+	_, found := r.sessions[id]
+	cwd := r.cwds[id]
+	r.mu.RUnlock()
+	if !found || cwd == "" {
+		return nil, errors.New("no such live agent")
+	}
+	fsys, err := workspacefs.Open(cwd)
+	if err != nil {
+		return nil, err
+	}
+	defer fsys.Close()
+	entries, err := fsys.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]WorkspaceEntry, 0, len(entries))
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		// Git internals are not useful prompt references and can be enormous.
+		if entry.Name() == ".git" {
+			continue
+		}
+		result = append(result, WorkspaceEntry{
+			Path:  filepath.ToSlash(filepath.Join(dir, entry.Name())),
+			IsDir: entry.IsDir(),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].IsDir != result[j].IsDir {
+			return result[i].IsDir
+		}
+		return strings.ToLower(result[i].Path) < strings.ToLower(result[j].Path)
+	})
+	return result, nil
 }
 
 func (r *Registry) ListGitRefs(ctx context.Context, repo string) ([]workspace.GitRefInfo, error) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -123,6 +124,35 @@ func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {
 	summaries := r.Summaries(context.Background())
 	if len(summaries) != 1 || summaries[0].ID != s.ID || summaries[0].Workspace.GitState != "unknown" {
 		t.Fatalf("summaries=%+v", summaries)
+	}
+}
+
+func TestListWorkspaceEntriesIsRelativeSortedAndContained(t *testing.T) {
+	r, _, _ := setup(t, &fakeFactory{})
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("readme"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Spawn(context.Background(), existing(cwd))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := r.ListWorkspaceEntries(context.Background(), s.ID, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []WorkspaceEntry{{Path: "src", IsDir: true}, {Path: "README.md"}}
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("entries=%+v want=%+v", entries, want)
+	}
+	if _, err := r.ListWorkspaceEntries(context.Background(), s.ID, "../outside"); err == nil {
+		t.Fatal("expected escaping path to be rejected")
 	}
 }
 

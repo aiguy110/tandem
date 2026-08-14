@@ -52,6 +52,9 @@ func (*testBackend) Summaries(context.Context) []registry.Summary {
 func (*testBackend) ListDirs(context.Context) ([]workspace.RepoInfo, error) {
 	return []workspace.RepoInfo{{Path: "/repo", Name: "repo"}}, nil
 }
+func (*testBackend) ListWorkspaceEntries(context.Context, string, string) ([]registry.WorkspaceEntry, error) {
+	return []registry.WorkspaceEntry{{Path: "src", IsDir: true}, {Path: "README.md"}}, nil
+}
 func (*testBackend) ListGitRefs(context.Context, string) ([]workspace.GitRefInfo, error) {
 	return []workspace.GitRefInfo{{Ref: "refs/heads/main", DisplayName: "main", Kind: workspace.RefLocalBranch, Commit: "abc", IsCurrent: true, IsDefault: true}}, nil
 }
@@ -378,7 +381,7 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		t.Fatalf("close=%v", err)
 	}
 	c := dial(t, url)
-	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_agent_catalog", "corrId": "3"}, {"t": "list_git_refs", "repo": "/repo", "corrId": "4"}, {"t": "get_close_preview", "agentId": "a", "corrId": "5"}, {"t": "get_diff", "agentId": "a", "corrId": "6"}} {
+	for _, req := range []map[string]any{{"t": "list_agents", "corrId": "1"}, {"t": "list_dirs", "corrId": "2"}, {"t": "list_workspace_entries", "agentId": "a", "path": "", "corrId": "entries"}, {"t": "list_agent_catalog", "corrId": "3"}, {"t": "list_git_refs", "repo": "/repo", "corrId": "4"}, {"t": "get_close_preview", "agentId": "a", "corrId": "5"}, {"t": "get_diff", "agentId": "a", "corrId": "6"}} {
 		send(t, c, req)
 		got := recv(t, c)
 		if got["corrId"] != req["corrId"] {
@@ -386,6 +389,9 @@ func TestAuthReadOperationsAndCorrelation(t *testing.T) {
 		}
 		if req["t"] == "list_git_refs" && (got["t"] != "git_refs" || len(got["refs"].([]any)) != 1) {
 			t.Fatalf("refs %#v", got)
+		}
+		if req["t"] == "list_workspace_entries" && (got["t"] != "workspace_entries" || len(got["entries"].([]any)) != 2) {
+			t.Fatalf("workspace entries %#v", got)
 		}
 		if req["t"] == "get_close_preview" && (got["t"] != "close_preview" || got["preview"] == nil) {
 			t.Fatalf("preview %#v", got)

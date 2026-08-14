@@ -113,3 +113,17 @@ func TestContainedRelativeSymlinkWorks(t *testing.T) {
 		t.Fatalf("contained symlink=%q err=%v", data, err)
 	}
 }
+
+func TestReadDirStaysContained(t *testing.T) {
+	f, root := openTestFS(t)
+	if err := os.WriteFile(filepath.Join(root, "visible.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := f.ReadDir(".")
+	if err != nil || len(entries) != 1 || entries[0].Name() != "visible.txt" {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	if _, err := f.ReadDir("../outside"); !IsPathEscape(err) {
+		t.Fatalf("escape error=%T %v", err, err)
+	}
+}
