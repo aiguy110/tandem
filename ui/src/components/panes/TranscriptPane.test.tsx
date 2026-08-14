@@ -206,6 +206,31 @@ describe('TranscriptPane composer completions', () => {
 });
 
 describe('TranscriptPane annotations', () => {
+  it('renders annotations above the task list', () => {
+    const withPlan = agent();
+    withPlan.events = [
+      ...withPlan.events,
+      { seq: 2, event: { kind: 'plan', entries: [{ label: 'Implement the change', status: 'in_progress' }] } },
+    ];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withPlan },
+      order: ['agent-1'],
+      focusedId: 'agent-1',
+      annotations: {
+        'agent-1': [{ id: 'annotation-1', agentId: 'agent-1', seq: 1, role: 'assistant', quote: 'Select these words', comment: 'Clarify this.', createdAt: 1, updatedAt: 1 }],
+      },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const tray = view.container.querySelector('.annotation-tray');
+    const taskList = view.container.querySelector('.task-list');
+
+    expect(tray).not.toBeNull();
+    expect(taskList).not.toBeNull();
+    expect(tray!.compareDocumentPosition(taskList!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('offers the comment action when native selection emits selectionchange', async () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
     vi.stubGlobal('PointerEvent', MouseEvent);

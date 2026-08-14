@@ -563,18 +563,18 @@ export function TranscriptPane() {
             </div>
           )}
         </div>
+        {annotations.length > 0 && (
+          <AnnotationTray
+            agentId={agent.id}
+            annotations={annotations}
+            knownSeqs={knownSeqs}
+            onJump={jumpToQuote}
+            onUpdate={updateAnnotation}
+            onRemove={removeAnnotation}
+          />
+        )}
         {taskList && <TaskList item={taskList} />}
       </div>
-      {annotations.length > 0 && (
-        <AnnotationTray
-          agentId={agent.id}
-          annotations={annotations}
-          knownSeqs={knownSeqs}
-          onJump={jumpToQuote}
-          onUpdate={updateAnnotation}
-          onRemove={removeAnnotation}
-        />
-      )}
       <PromptBar agentId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
     </div>
