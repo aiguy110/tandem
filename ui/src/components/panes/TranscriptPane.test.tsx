@@ -188,6 +188,21 @@ describe('TranscriptPane composer completions', () => {
     expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(1);
   });
 
+  it('renders matching slash commands in the composer highlight layer', () => {
+    const withCommand = agent();
+    withCommand.commands = [{ name: 'help', description: 'Show help' }];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      drafts: { 'agent-1': 'Run /help then src/help.' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const highlight = view.container.querySelector('.prompt-text-highlight');
+    expect(highlight?.querySelector('.skill-mention')?.textContent).toBe('/help');
+    expect(highlight?.querySelectorAll('.skill-mention')).toHaveLength(1);
+  });
+
   it('lists and inserts workspace file mentions', async () => {
     const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: 'src/index.ts', isDir: false }]);
     useStore.setState({

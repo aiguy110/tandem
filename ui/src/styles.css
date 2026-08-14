@@ -563,12 +563,21 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .slash-row .hint { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
 .slash-row .desc { color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .skill-mention { color: var(--agent); font-weight: 600; }
-.prompt-bar textarea {
-  flex: 1; resize: none; min-height: calc(1.4em + 20px); max-height: calc(5.6em + 20px);
-  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+.prompt-text-wrap { flex: 1; min-width: 0; position: relative; }
+.prompt-text-highlight {
+  position: absolute; inset: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
+  border: 1px solid transparent; border-radius: var(--r-sm); padding: 9px 11px;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.4;
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+.prompt-text-wrap textarea {
+  position: relative; z-index: 1; display: block; width: 100%; box-sizing: border-box;
+  resize: none; min-height: calc(1.4em + 20px); max-height: calc(5.6em + 20px);
+  background: transparent; color: transparent; caret-color: var(--text); border: 1px solid var(--border);
   border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.4;
 }
-.prompt-bar textarea:focus { outline: none; border-color: var(--agent); }
+.prompt-text-wrap textarea:focus { outline: none; border-color: var(--agent); }
+.prompt-text-wrap textarea::placeholder { color: var(--text-faint); opacity: 1; }
 
 /* Keep the compact composer controls reachable on narrow screens: attachment
    and stop share the top row, while the primary action sits beneath them. */
