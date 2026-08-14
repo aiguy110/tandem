@@ -312,6 +312,10 @@ func (s *Session) runPromptQueue() {
 		s.promptMu.Unlock()
 		s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
 		stopReason, err := s.executePrompt(prompt.ctx, prompt.Blocks)
+		if err != nil {
+			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": err.Error(), "promptId": prompt.ID})
+			s.emit(eventlog.Event{Kind: "error", Payload: payload})
+		}
 		prompt.done <- promptResult{stopReason: stopReason, err: err}
 		close(prompt.done)
 

@@ -502,3 +502,33 @@ func TestACPEnvironmentInheritsDaemonAndAppliesLaunchOverlay(t *testing.T) {
 		t.Fatalf("merged environment = %#v", got)
 	}
 }
+
+func TestCloseForceRemovesDurableOrphanWithoutLiveSession(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	cwd := filepath.Join(cfg.WorktreesDir, "missing-parent", "orphan")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := json.Marshal(agentadapter.Spec{Adapter: "acp", Workspace: workspace.Workspace{
+		Kind: workspace.KindWorktree,
+		Repo: filepath.Join(t.TempDir(), "missing-parent"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAgent(store.Agent{ID: "orphan", Name: "orphan", Spec: spec, CWD: cwd, Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := r.Close(context.Background(), "orphan", true, true)
+	if err != nil || !closed {
+		t.Fatalf("closed=%v err=%v", closed, err)
+	}
+	if _, err := os.Stat(cwd); !os.IsNotExist(err) {
+		t.Fatalf("orphaned worktree remains: %v", err)
+	}
+	rec, err := db.Agent("orphan")
+	if err != nil || rec == nil || rec.ClosedAt == nil {
+		t.Fatalf("record=%+v err=%v", rec, err)
+	}
+}

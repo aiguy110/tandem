@@ -131,6 +131,26 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	}
 }
 
+func TestTeardownForceRemovesOrphanedManagedWorktree(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "worktrees")
+	orphan := filepath.Join(managed, "repo", "agent")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := workspace.New(workspace.Config{WorktreesDir: managed})
+	ws := workspace.Workspace{Kind: workspace.KindWorktree, Repo: filepath.Join(root, "missing-repo")}
+	if err := m.Teardown(context.Background(), ws, orphan, false); !workspace.IsCode(err, "orphaned_worktree") {
+		t.Fatalf("expected orphaned_worktree, got %v", err)
+	}
+	if err := m.Teardown(context.Background(), ws, orphan, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan still exists: %v", err)
+	}
+}
+
 func TestDiffSeparatesUncommittedAndCommittedChanges(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

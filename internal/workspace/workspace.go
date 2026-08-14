@@ -422,6 +422,16 @@ func (m *Manager) Teardown(ctx context.Context, ws Workspace, cwd string, force 
 		_, _ = m.git.Run(ctx, ws.Repo, "worktree", "prune")
 		return nil
 	}
+	// A child worktree can outlive the worktree from which it was spawned. In
+	// that case its recorded repository is gone, so Git cannot unregister it.
+	// Never recursively remove an arbitrary path: only a forced close of a
+	// directory under Tandem's managed worktree root may use this fallback.
+	if _, err := os.Stat(ws.Repo); os.IsNotExist(err) {
+		if !force {
+			return &Error{"orphaned_worktree", fmt.Sprintf("repository for %s no longer exists; close with force:true to remove the orphaned worktree", cwd)}
+		}
+		return m.removeOrphanedWorktree(cwd)
+	}
 	if !force {
 		dirty, err := m.IsDirty(ctx, cwd)
 		if err != nil {
@@ -437,6 +447,25 @@ func (m *Manager) Teardown(ctx context.Context, ws Workspace, cwd string, force 
 	}
 	_, err := m.git.Run(ctx, ws.Repo, args...)
 	return err
+}
+
+func (m *Manager) removeOrphanedWorktree(cwd string) error {
+	root, err := filepath.Abs(m.worktreesDir)
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(cwd)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return &Error{"unmanaged_worktree", fmt.Sprintf("refusing to remove orphaned worktree outside managed root: %s", target)}
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("remove orphaned worktree %s: %w", target, err)
+	}
+	return nil
 }
 
 func (m *Manager) Reattach(ctx context.Context, ws Workspace, cwd string) (string, error) {

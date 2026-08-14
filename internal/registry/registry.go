@@ -1494,7 +1494,32 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree b
 	cwd := r.cwds[id]
 	r.mu.RUnlock()
 	if s == nil {
-		return false, nil
+		// A durable row may survive a daemon restart even when its ACP child
+		// could not be restored. Let force-close clean up that orphan instead
+		// of leaving an undeletable agent in the UI.
+		rec, err := r.store.Agent(id)
+		if err != nil {
+			return false, err
+		}
+		if rec == nil || rec.ClosedAt != nil {
+			return false, nil
+		}
+		var spec agentadapter.Spec
+		if err := json.Unmarshal(rec.Spec, &spec); err != nil {
+			return false, fmt.Errorf("decode orphaned agent workspace: %w", err)
+		}
+		if deleteWorktree {
+			if err := r.workspace.Teardown(ctx, spec.Workspace, rec.CWD, force); err != nil {
+				return false, err
+			}
+		}
+		if r.browser != nil {
+			_ = r.browser.Teardown(ctx, id)
+		}
+		if err := r.store.CloseAgent(id); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if deleteWorktree {
 		if err := r.workspace.Teardown(ctx, s.Spec.Workspace, cwd, force); err != nil {

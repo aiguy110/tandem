@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type fakeAdapter struct {
 	image                 bool
 	validateCalls         int
 	validatedTypes        []string
+	promptErr             error
 }
 
 func newFake() *fakeAdapter {
@@ -75,7 +77,11 @@ func (f *fakeAdapter) Prompt(ctx context.Context, blocks []agentadapter.PromptBl
 	}
 	f.mu.Lock()
 	f.inflight--
+	err := f.promptErr
 	f.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
 	return "end_turn", nil
 }
 func (f *fakeAdapter) SendInput([]byte) error                 { return nil }
@@ -144,6 +150,29 @@ func TestPromptSerializationAndIndependentDurableEvents(t *testing.T) {
 	if userMessages != 2 {
 		t.Fatalf("user messages=%d history=%+v", userMessages, history)
 	}
+}
+
+func TestPromptFailureIsRecordedInTranscript(t *testing.T) {
+	s, a, _ := testSession(t)
+	a.promptErr = errors.New("ACP transport unavailable")
+	a.gate <- struct{}{}
+	if _, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "hello"}}); err == nil {
+		t.Fatal("expected prompt failure")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		history, historyErr := s.Log.FullHistory()
+		if historyErr != nil {
+			t.Fatal(historyErr)
+		}
+		for _, event := range history {
+			if event.Event.Kind == "error" && strings.Contains(string(event.Event.Payload), "ACP transport unavailable") {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("prompt failure was not logged")
 }
 
 func TestFlattenQuoteBlocks(t *testing.T) {
