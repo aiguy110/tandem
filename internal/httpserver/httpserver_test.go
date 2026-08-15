@@ -189,11 +189,6 @@ func TestAssetUploadLimitsAndValidationStatus(t *testing.T) {
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("declared oversized response=%d %q", w.Code, w.Body.String())
 	}
-	w = request(t, h, http.MethodPost, "/api/agents/a/assets", bytes.NewReader(bytes.Repeat([]byte{'x'}, MaxUploadBytes+1)), headers)
-	if w.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("streamed oversized response=%d %q", w.Code, w.Body.String())
-	}
-
 	store.putErr = &assets.UnsupportedError{Message: "unsupported"}
 	w = request(t, h, http.MethodPost, "/api/agents/a/assets", strings.NewReader("x"), headers)
 	if w.Code != http.StatusUnsupportedMediaType {

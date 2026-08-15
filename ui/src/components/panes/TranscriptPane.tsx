@@ -1362,6 +1362,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
   const aborts = useRef(new Map<string, AbortController>());
   const attachmentRef = useRef<DraftAttachment[]>([]);
   const [caret, setCaret] = useState(0);
@@ -1369,6 +1370,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const [dismissed, setDismissed] = useState(false);
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const [queuedFlash, setQueuedFlash] = useState(false);
@@ -1738,6 +1740,17 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             e.target.value = '';
           }}
         />
+        <input
+          ref={photoRef}
+          className="visually-hidden"
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(e) => {
+            addFiles(Array.from(e.target.files ?? []));
+            e.target.value = '';
+          }}
+        />
         <div className="prompt-text-wrap">
           <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} /></div>
           <textarea
@@ -1799,18 +1812,32 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           />
         </div>
         <div className="prompt-actions">
-          <button
-            type="button"
-            className="btn attach-btn"
-            disabled={imageSupport !== true}
-            onClick={() => fileRef.current?.click()}
-            title="Attach files (or paste/drop images)"
-            aria-label="Attach files"
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 3v10M3 8h10" />
-            </svg>
-          </button>
+          <div className="attachment-menu-wrap">
+            <button
+              type="button"
+              className="btn attach-btn"
+              disabled={imageSupport !== true}
+              onClick={() => setAttachmentMenuOpen((open) => !open)}
+              title="Add an attachment"
+              aria-label="Add an attachment"
+              aria-expanded={attachmentMenuOpen}
+              aria-haspopup="menu"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+            </button>
+            {attachmentMenuOpen && (
+              <div className="attachment-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); photoRef.current?.click(); }}>
+                  Photo gallery
+                </button>
+                <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); fileRef.current?.click(); }}>
+                  Files
+                </button>
+              </div>
+            )}
+          </div>
           {working && (
             <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
               <span className="stop-btn-icon" aria-hidden="true" />
