@@ -218,6 +218,22 @@ describe('TranscriptPane composer completions', () => {
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@src/index.ts ');
   });
+
+  it('lists and inserts file mentions from the workspace parent', async () => {
+    const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: '../sibling', isDir: true }]);
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+    }, true);
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@../', selectionStart: 4 } });
+
+    const option = await waitFor(() => view.getByText('@../sibling/'));
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', '..');
+    fireEvent.mouseDown(option);
+    expect(composer.value).toBe('@../sibling/');
+  });
 });
 
 describe('TranscriptPane annotations', () => {

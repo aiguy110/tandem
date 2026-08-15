@@ -129,7 +129,11 @@ func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {
 
 func TestListWorkspaceEntriesIsRelativeSortedAndContained(t *testing.T) {
 	r, _, _ := setup(t, &fakeFactory{})
-	cwd := t.TempDir()
+	parent := t.TempDir()
+	cwd := filepath.Join(parent, "workspace")
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(cwd, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +155,18 @@ func TestListWorkspaceEntriesIsRelativeSortedAndContained(t *testing.T) {
 	if !reflect.DeepEqual(entries, want) {
 		t.Fatalf("entries=%+v want=%+v", entries, want)
 	}
-	if _, err := r.ListWorkspaceEntries(context.Background(), s.ID, "../outside"); err == nil {
-		t.Fatal("expected escaping path to be rejected")
+	if err := os.Mkdir(filepath.Join(parent, "sibling"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parentEntries, err := r.ListWorkspaceEntries(context.Background(), s.ID, "..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parentEntries, []WorkspaceEntry{{Path: "../sibling", IsDir: true}, {Path: "../workspace", IsDir: true}}) {
+		t.Fatalf("parent entries=%+v", parentEntries)
+	}
+	if _, err := r.ListWorkspaceEntries(context.Background(), s.ID, "../../outside"); err == nil {
+		t.Fatal("expected path escaping the workspace parent to be rejected")
 	}
 }
 

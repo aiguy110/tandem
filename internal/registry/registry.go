@@ -115,9 +115,10 @@ type Summary struct {
 	CanHandoff bool   `json:"canHandoff"`
 }
 
-// WorkspaceEntry is one immediate, workspace-relative file-system completion
-// candidate. Directory paths are distinguished so the UI can continue into
-// them without having to infer their type from a trailing slash.
+// WorkspaceEntry is one immediate file-system completion candidate. Paths are
+// relative to an agent workspace, or begin with ../ when browsing its parent.
+// Directory paths are distinguished so the UI can continue into them without
+// having to infer their type from a trailing slash.
 type WorkspaceEntry struct {
 	Path  string `json:"path"`
 	IsDir bool   `json:"isDir"`
@@ -351,22 +352,21 @@ func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
 }
 
 // ListWorkspaceEntries returns the direct children of dir in a live agent's
-// actual workspace. The workspacefs boundary protects worktrees from path and
-// symlink escapes even though this is a browser-facing convenience API.
+// workspace or its immediate parent. The workspacefs boundary protects both
+// roots from path and symlink escapes even though this is a browser-facing
+// convenience API.
 func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]WorkspaceEntry, error) {
 	// This browser protocol is deliberately relative even though workspacefs can
 	// safely accept an absolute path within the root. Keeping the public result
 	// relative makes it directly insertable as an @ mention and prevents a
-	// malformed client request from changing that contract.
+	// malformed client request from changing that contract. A single leading
+	// "../" opts into the workspace's immediate parent, but cannot escape it.
 	if filepath.IsAbs(dir) {
 		return nil, errors.New("workspace path must be relative")
 	}
 	dir = filepath.Clean(dir)
 	if dir == "." {
 		dir = ""
-	}
-	if dir == ".." || strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
-		return nil, errors.New("workspace path escapes its root")
 	}
 	r.mu.RLock()
 	_, found := r.sessions[id]
@@ -375,12 +375,21 @@ func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]
 	if !found || cwd == "" {
 		return nil, errors.New("no such live agent")
 	}
-	fsys, err := workspacefs.Open(cwd)
+	root, fsDir := cwd, dir
+	if dir == ".." {
+		root, fsDir = filepath.Dir(cwd), ""
+	} else if strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
+		root, fsDir = filepath.Dir(cwd), strings.TrimPrefix(dir, ".."+string(filepath.Separator))
+		if fsDir == ".." || strings.HasPrefix(fsDir, ".."+string(filepath.Separator)) {
+			return nil, errors.New("workspace path escapes its parent")
+		}
+	}
+	fsys, err := workspacefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
 	defer fsys.Close()
-	entries, err := fsys.ReadDir(dir)
+	entries, err := fsys.ReadDir(fsDir)
 	if err != nil {
 		return nil, err
 	}
