@@ -25,7 +25,8 @@ import (
 	"github.com/aiguy110/tandem/internal/voice"
 )
 
-const MaxUploadBytes = 100 * 1024 * 1024
+// MaxUploadBytes is deliberately generous for video and other workspace files.
+const MaxUploadBytes = 1000 * 1024 * 1024
 
 const noCache = "no-cache, no-store, must-revalidate"
 
