@@ -423,6 +423,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-attachment { display: flex; align-items: center; gap: 7px; min-width: 180px; max-width: 300px; padding: 5px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
 .prompt-attachment.error { border-color: var(--err); }
 .prompt-attachment img { width: 42px; height: 42px; border-radius: 4px; object-fit: cover; }
+.attachment-file-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 4px; background: var(--surface-3); color: var(--text-dim); font-size: 20px; }
 .attachment-meta { display: flex; flex: 1; min-width: 0; flex-direction: column; }
 .attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
 .attachment-meta small { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

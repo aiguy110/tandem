@@ -39,6 +39,18 @@ type fakeAssets struct {
 	getAsset string
 }
 
+type fakeUploads struct {
+	agent, name string
+	data        []byte
+	path        string
+	err         error
+}
+
+func (f *fakeUploads) Save(agent, name string, data []byte) (string, error) {
+	f.agent, f.name, f.data = agent, name, append([]byte(nil), data...)
+	return f.path, f.err
+}
+
 func (f *fakeAssets) Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error) {
 	f.putAgent, f.putData, f.putMIME = agentID, append([]byte(nil), data...), declaredMIME
 	return f.put, f.putErr
@@ -168,16 +180,16 @@ func TestAssetBearerAuthenticationAndRoutes(t *testing.T) {
 func TestAssetUploadLimitsAndValidationStatus(t *testing.T) {
 	store := &fakeAssets{}
 	h := New(Options{Token: "token", Assets: store, AgentExists: func(string) bool { return true }, UI: fstest.MapFS{}})
-	headers := map[string]string{"Authorization": "Bearer token"}
+	headers := map[string]string{"Authorization": "Bearer token", "Content-Type": "image/png"}
 	r := httptest.NewRequest(http.MethodPost, "/api/agents/a/assets", strings.NewReader("x"))
-	r.ContentLength = assets.MaxAssetBytes + 1
+	r.ContentLength = MaxUploadBytes + 1
 	r.Header.Set("Authorization", headers["Authorization"])
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("declared oversized response=%d %q", w.Code, w.Body.String())
 	}
-	w = request(t, h, http.MethodPost, "/api/agents/a/assets", bytes.NewReader(bytes.Repeat([]byte{'x'}, assets.MaxAssetBytes+1)), headers)
+	w = request(t, h, http.MethodPost, "/api/agents/a/assets", bytes.NewReader(bytes.Repeat([]byte{'x'}, MaxUploadBytes+1)), headers)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("streamed oversized response=%d %q", w.Code, w.Body.String())
 	}
@@ -191,6 +203,19 @@ func TestAssetUploadLimitsAndValidationStatus(t *testing.T) {
 	w = request(t, h, http.MethodPost, "/api/agents/a/assets", strings.NewReader("x"), headers)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("storage failure response=%d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestFileUploadWritesWorkspaceWithoutCreatingImageAsset(t *testing.T) {
+	uploads := &fakeUploads{path: "incoming/report.pdf"}
+	store := &fakeAssets{}
+	h := New(Options{Token: "token", Assets: store, Uploads: uploads, AgentExists: func(string) bool { return true }, UI: fstest.MapFS{}})
+	w := request(t, h, http.MethodPost, "/api/agents/a/assets", strings.NewReader("pdf"), map[string]string{"Authorization": "Bearer token", "Content-Type": "application/pdf", "X-File-Name": "report.pdf"})
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"path":"incoming/report.pdf"`) || strings.Contains(w.Body.String(), `"asset"`) {
+		t.Fatalf("response=%d %q", w.Code, w.Body.String())
+	}
+	if uploads.agent != "a" || uploads.name != "report.pdf" || string(uploads.data) != "pdf" || store.putAgent != "" {
+		t.Fatalf("upload=%#v asset=%#v", uploads, store)
 	}
 }
 

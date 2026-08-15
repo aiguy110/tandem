@@ -1335,9 +1335,10 @@ const MAX_IMAGES = 4;
 type DraftAttachment = {
   localId: string;
   file: File;
-  previewUrl: string;
+  previewUrl?: string;
   status: 'uploading' | 'ready' | 'error';
   asset?: Extract<PromptBlock, { type: 'image' }>;
+  uploadPath?: string;
   error?: string;
 };
 
@@ -1379,7 +1380,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
 
   useEffect(() => () => {
     for (const controller of aborts.current.values()) controller.abort();
-    for (const attachment of attachmentRef.current) URL.revokeObjectURL(attachment.previewUrl);
+    for (const attachment of attachmentRef.current) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
   }, []);
 
   const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
@@ -1491,18 +1492,19 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         headers: {
           'Content-Type': attachment.file.type,
           'X-File-Name': encodeURIComponent(attachment.file.name),
+          ...(attachment.file.type.startsWith('image/') && imageSupport === true ? { 'X-Store-Image-Asset': 'true' } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: attachment.file,
         signal: controller.signal,
       });
       const body = (await response.json().catch(() => null)) as
-        | { asset?: { assetId: string; mimeType: string; name?: string }; error?: string }
+        | { asset?: { assetId: string; mimeType: string; name?: string }; upload?: { path: string }; error?: string }
         | null;
-      if (!response.ok || !body?.asset) throw new Error(body?.error ?? `Upload failed (${response.status})`);
-      const asset: Extract<PromptBlock, { type: 'image' }> = { type: 'image', ...body.asset };
+      if (!response.ok || !body?.upload) throw new Error(body?.error ?? `Upload failed (${response.status})`);
+      const asset = body.asset && imageSupport === true ? { type: 'image' as const, ...body.asset } : undefined;
       setAttachments((current) => current.map((item) => item.localId === attachment.localId
-        ? { ...item, status: 'ready', asset, error: undefined }
+        ? { ...item, status: 'ready', asset, uploadPath: body.upload!.path, error: undefined }
         : item));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -1517,12 +1519,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
 
   const addFiles = (files: File[]) => {
     setAttachmentError(null);
-    if (imageSupport !== true) {
-      setAttachmentError(imageSupport === false ? 'This agent does not accept image prompts.' : 'Image support is not available yet.');
-      return;
-    }
-    const images = files.filter((file) => file.type.startsWith('image/'));
-    if (!images.length) return;
+    if (!files.length) return;
+    const images = files.filter((file) => file.type.startsWith('image/') && imageSupport === true);
     const invalid = images.find((file) => !ACCEPTED_IMAGE_TYPES.has(file.type));
     if (invalid) {
       setAttachmentError(`${invalid.name}: use PNG, JPEG, GIF, or WebP.`);
@@ -1533,19 +1531,19 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError(`${oversized.name} exceeds the 10 MiB per-image limit.`);
       return;
     }
-    if (attachments.length + images.length > MAX_IMAGES) {
+    if (attachments.filter((attachment) => attachment.asset || (attachment.file.type.startsWith('image/') && imageSupport === true)).length + images.length > MAX_IMAGES) {
       setAttachmentError(`A prompt can contain at most ${MAX_IMAGES} images.`);
       return;
     }
-    const total = attachments.reduce((sum, item) => sum + item.file.size, 0) + images.reduce((sum, file) => sum + file.size, 0);
+    const total = attachments.filter((item) => item.file.type.startsWith('image/') && imageSupport === true).reduce((sum, item) => sum + item.file.size, 0) + images.reduce((sum, file) => sum + file.size, 0);
     if (total > MAX_TURN_IMAGE_BYTES) {
       setAttachmentError('Images exceed the 20 MiB per-prompt limit.');
       return;
     }
-    const added: DraftAttachment[] = images.map((file) => ({
+    const added: DraftAttachment[] = files.map((file) => ({
       localId: crypto.randomUUID(),
       file,
-      previewUrl: URL.createObjectURL(file),
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
       status: 'uploading',
     }));
     setAttachments((current) => [...current, ...added]);
@@ -1555,7 +1553,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const removeAttachment = (localId: string) => {
     const attachment = attachments.find((item) => item.localId === localId);
     aborts.current.get(localId)?.abort();
-    if (attachment) URL.revokeObjectURL(attachment.previewUrl);
+    if (attachment?.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments((current) => current.filter((item) => item.localId !== localId));
     setAttachmentError(null);
   };
@@ -1576,8 +1574,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError('Wait for image uploads to finish.');
       return;
     }
-    if (attachments.some((attachment) => attachment.status === 'error' || !attachment.asset)) {
-      setAttachmentError('Remove or retry failed images before sending.');
+    if (attachments.some((attachment) => attachment.status === 'error' || !attachment.uploadPath || (attachment.file.type.startsWith('image/') && imageSupport === true && !attachment.asset))) {
+      setAttachmentError('Remove or retry failed uploads before sending.');
       return;
     }
     if (attachments.length === 0 && !hasAnnotations) {
@@ -1598,7 +1596,9 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       .sort((a, b) => a.seq - b.seq)
       .map((a) => ({ type: 'quote', refSeq: a.seq, role: a.role, quote: a.quote, comment: a.comment }));
     if (t) blocks.push({ type: 'text', text: t });
-    blocks.push(...attachments.map((attachment) => attachment.asset!));
+    blocks.push(...attachments.flatMap((attachment) => attachment.asset ? [attachment.asset] : []));
+    const uploaded = attachments.map((attachment) => attachment.uploadPath!).join(', ');
+    blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
     setSending(true);
     const result = await prompt(agentId, blocks);
     setSending(false);
@@ -1606,7 +1606,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError(result.error);
       return;
     }
-    for (const attachment of attachments) URL.revokeObjectURL(attachment.previewUrl);
+    for (const attachment of attachments) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments([]);
     setAttachmentError(null);
     if (hasAnnotations) void clearAnnotations(agentId);
@@ -1693,7 +1693,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
         <div className="prompt-attachments">
           {attachments.map((attachment) => (
             <div className={`prompt-attachment ${attachment.status}`} key={attachment.localId}>
-              <img src={attachment.previewUrl} alt="" />
+              {attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}
               <div className="attachment-meta">
                 <span title={attachment.file.name}>{attachment.file.name}</span>
                 <small>{attachment.status === 'uploading' ? 'Uploading…' : attachment.status === 'error' ? attachment.error : 'Ready'}</small>
@@ -1731,9 +1731,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           ref={fileRef}
           className="visually-hidden"
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
           multiple
-          disabled={imageSupport !== true}
           onChange={(e) => {
             addFiles(Array.from(e.target.files ?? []));
             e.target.value = '';
@@ -1805,8 +1803,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             className="btn attach-btn"
             disabled={imageSupport !== true}
             onClick={() => fileRef.current?.click()}
-            title={imageSupport === true ? 'Attach images (or paste/drop)' : imageSupport === false ? 'This agent does not support image prompts' : 'Waiting for agent image capabilities'}
-            aria-label="Attach images"
+            title="Attach files (or paste/drop images)"
+            aria-label="Attach files"
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M8 3v10M3 8h10" />
@@ -1827,7 +1825,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           </button>
         </div>
       </div>
-      {dragging && <div className="prompt-drop-hint">Drop images to attach</div>}
+      {dragging && <div className="prompt-drop-hint">Drop files to attach</div>}
     </div>
   );
 }

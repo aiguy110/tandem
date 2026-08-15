@@ -21,6 +21,7 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/uploads"
 	"github.com/aiguy110/tandem/internal/workspace"
 	"github.com/aiguy110/tandem/internal/workspacefs"
 )
@@ -46,6 +47,18 @@ var nameWords = []string{
 	"chandrasekhar",
 	"bell",
 	"hubble",
+}
+
+// Save stores a browser-selected file in the live agent's workspace.
+func (r *Registry) Save(id, name string, data []byte) (string, error) {
+	r.mu.RLock()
+	_, found := r.sessions[id]
+	cwd := r.cwds[id]
+	r.mu.RUnlock()
+	if !found || cwd == "" {
+		return "", errors.New("no such live agent")
+	}
+	return uploads.Save(cwd, name, data)
 }
 
 type Registry struct {

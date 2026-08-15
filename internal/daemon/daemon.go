@@ -235,7 +235,8 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	}()
 	httpHandler := httpserver.New(httpserver.Options{
 		Token: token, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
-		Voice: voiceRenderer,
+		Uploads: agents,
+		Voice:   voiceRenderer,
 		MessageText: func(agentID string, seq int64) (string, error) {
 			return transcriptMessageText(db, agentID, seq)
 		},

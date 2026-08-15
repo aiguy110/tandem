@@ -142,6 +142,14 @@ func (f *FS) ReadTextFile(requested string, line, limit *int) (string, error) {
 }
 
 func (f *FS) WriteTextFile(requested, content string) error {
+	return f.WriteFile(requested, []byte(content), false)
+}
+
+// WriteFile writes data below the workspace root. When exclusive is true it
+// refuses to replace an existing file. Parent directories are created through
+// the descriptor-relative root, so neither symlinks nor concurrent renames can
+// redirect the write outside the workspace.
+func (f *FS) WriteFile(requested string, data []byte, exclusive bool) error {
 	rel, err := f.relative(requested)
 	if err != nil {
 		return err
@@ -156,11 +164,15 @@ func (f *FS) WriteTextFile(requested, content string) error {
 			}
 		}
 	}
-	file, err := f.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if exclusive {
+		flags |= os.O_EXCL
+	}
+	file, err := f.root.OpenFile(rel, flags, 0o666)
 	if err != nil {
 		return f.pathError(requested, err)
 	}
-	_, writeErr := file.WriteString(content)
+	_, writeErr := file.Write(data)
 	closeErr := file.Close()
 	if writeErr != nil {
 		return writeErr

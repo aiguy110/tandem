@@ -18,22 +18,28 @@ the UI reads once and stores. The native daemon serves its embedded UI by defaul
 `TANDEM_UI_DIR` optionally overrides those assets for frontend development. A build made
 with the `tandem_dev` tag has no embedded assets and shows a placeholder without an override.
 
-### Transcript image assets
+### Transcript attachments
 
-Image bytes are uploaded before prompting. Both routes require
+Files are uploaded before prompting. Both routes require
 `Authorization: Bearer <token>`:
 
 ```text
 POST /api/agents/:agentId/assets
-Content-Type: image/png | image/jpeg | image/gif | image/webp
+Content-Type: <file MIME type>
 X-File-Name: <percent-encoded original name>
+X-Store-Image-Asset: true (when the client needs an image prompt asset)
 
-201 { "asset": { "assetId": "<sha256>", "mimeType": "image/png", "name": "shot.png", "size": 1234 } }
+201 { "upload": { "path": "report.pdf", "name": "report.pdf", "size": 1234 }, "asset": { "assetId": "<sha256>", "mimeType": "image/png", "name": "shot.png", "size": 1234 } }
 
 GET /api/agents/:agentId/assets/:assetId
 ```
 
-Assets are content-addressed under `$TANDEM_HOME/assets`; SQLite records their
+Every upload is also saved into the live agent's repository root by default. Set
+`{"uploads":{"directory":".tandem/uploads"}}` in `.tandem/settings.json` to
+choose a repository-relative destination. Tandem avoids overwriting an existing
+filename by adding ` (1)`, ` (2)`, and so on. Agents are told the resulting paths
+with the prompt and are asked to gitignore a dedicated upload directory unless
+the user wants uploaded files committed. Image assets are content-addressed under `$TANDEM_HOME/assets`; SQLite records their
 per-agent ownership. Physical deduplication never grants cross-agent access.
 Bytes are signature-sniffed, declared MIME must agree, malformed or excessive
 decoded dimensions are rejected, and SVG is not accepted. Limits are 10 MiB per

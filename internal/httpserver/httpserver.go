@@ -25,11 +25,17 @@ import (
 	"github.com/aiguy110/tandem/internal/voice"
 )
 
+const MaxUploadBytes = 100 * 1024 * 1024
+
 const noCache = "no-cache, no-store, must-revalidate"
 
 type AssetStore interface {
 	Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error)
 	Get(agentID, assetID string) (assets.Stored, error)
+}
+
+type UploadStore interface {
+	Save(agentID, name string, data []byte) (string, error)
 }
 
 type Options struct {
@@ -38,6 +44,7 @@ type Options struct {
 	UIDir              string
 	UI                 fs.FS
 	Assets             AssetStore
+	Uploads            UploadStore
 	AgentExists        func(string) bool
 	Voice              voice.Renderer
 	MessageText        func(agentID string, seq int64) (string, error)
@@ -95,7 +102,7 @@ func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if h.opts.Assets != nil && parts[3] == "assets" && r.Method == http.MethodPost && len(parts) == 4 {
+	if (h.opts.Assets != nil || h.opts.Uploads != nil) && parts[3] == "assets" && r.Method == http.MethodPost && len(parts) == 4 {
 		h.upload(w, r, agentID)
 		return
 	}
@@ -161,11 +168,11 @@ func bearerMatches(header, token string) bool {
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string) {
-	if r.ContentLength > assets.MaxAssetBytes {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("image exceeds %d byte limit", assets.MaxAssetBytes)})
+	if r.ContentLength > MaxUploadBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("file exceeds %d byte limit", MaxUploadBytes)})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxAssetBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadBytes)
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -176,24 +183,39 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
-	stored, err := h.opts.Assets.Put(agentID, data, r.Header.Get("Content-Type"))
-	if err != nil {
-		status := http.StatusInternalServerError
-		var tooLarge *assets.TooLargeError
-		var unsupported *assets.UnsupportedError
-		switch {
-		case errors.As(err, &tooLarge):
-			status = http.StatusRequestEntityTooLarge
-		case errors.As(err, &unsupported):
-			status = http.StatusUnsupportedMediaType
-		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
-		return
-	}
 	name := uploadName(r.Header.Get("X-File-Name"))
-	writeJSON(w, http.StatusCreated, map[string]any{"asset": map[string]any{
-		"assetId": stored.AssetID, "mimeType": stored.MIMEType, "size": stored.Size, "name": name,
-	}})
+	result := map[string]any{}
+	if h.opts.Uploads != nil {
+		path, err := h.opts.Uploads.Save(agentID, name, data)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		result["upload"] = map[string]any{"path": path, "name": name, "size": len(data)}
+	}
+	if h.opts.Assets != nil && isImageMIME(r.Header.Get("Content-Type")) && (h.opts.Uploads == nil || r.Header.Get("X-Store-Image-Asset") == "true") {
+		stored, err := h.opts.Assets.Put(agentID, data, r.Header.Get("Content-Type"))
+		if err != nil {
+			status := http.StatusInternalServerError
+			var tooLarge *assets.TooLargeError
+			var unsupported *assets.UnsupportedError
+			switch {
+			case errors.As(err, &tooLarge):
+				status = http.StatusRequestEntityTooLarge
+			case errors.As(err, &unsupported):
+				status = http.StatusUnsupportedMediaType
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		result["asset"] = map[string]any{"assetId": stored.AssetID, "mimeType": stored.MIMEType, "size": stored.Size, "name": name}
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func isImageMIME(raw string) bool {
+	value := strings.ToLower(strings.TrimSpace(strings.SplitN(raw, ";", 2)[0]))
+	return value == "image/png" || value == "image/jpeg" || value == "image/gif" || value == "image/webp"
 }
 
 func uploadName(raw string) string {
