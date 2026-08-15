@@ -340,6 +340,24 @@ const saveAgentOrder = (order: string[]) => {
   }
 };
 
+const FOCUSED_AGENT_STORAGE_KEY = 'tandem.focusedAgent';
+const initialFocusedAgent = (): string | null => {
+  try {
+    const saved = localStorage.getItem(FOCUSED_AGENT_STORAGE_KEY);
+    return saved && saved.trim() ? saved : null;
+  } catch {
+    return null;
+  }
+};
+const saveFocusedAgent = (agentId: string | null): void => {
+  try {
+    if (agentId) localStorage.setItem(FOCUSED_AGENT_STORAGE_KEY, agentId);
+    else localStorage.removeItem(FOCUSED_AGENT_STORAGE_KEY);
+  } catch {
+    // Focusing still works when browser storage is unavailable.
+  }
+};
+
 const USAGE_STORAGE_KEY = 'tandem.agentUsage';
 type StoredUsage = NonNullable<AgentView['usage']>;
 
@@ -438,6 +456,7 @@ export const useStore = create<StoreState>((set, get) => {
             }
           }
           const focusedId = st.focusedId && agents[st.focusedId] ? st.focusedId : order[0] ?? null;
+          if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
           return { agents, order, focusedId };
         });
         // The reconnect path already re-subscribes tracked agents. Summary
@@ -593,6 +612,7 @@ export const useStore = create<StoreState>((set, get) => {
           delete agents[msg.agentId];
           const order = st.order.filter((id) => id !== msg.agentId);
           const focusedId = st.focusedId === msg.agentId ? order[0] ?? null : st.focusedId;
+          if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
           const annotations = { ...st.annotations };
           delete annotations[msg.agentId];
           return { agents, order, focusedId, annotations };
@@ -737,14 +757,13 @@ export const useStore = create<StoreState>((set, get) => {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
             next.audioReadyRevision++;
           }
-          // Raise a completed-turn notification on the resulting status
-          // transition (green on a clean finish, red on a failure). Only for
-          // live events, so snapshot replay never resurrects notifications that
-          // have already been read. A focused thread still records its finish:
-          // users may be reading older output or waiting on an audible cue.
+          // Raise at most one completed-turn notification for each background
+          // agent. Only live events create these browser-local notifications;
+          // snapshot replay never resurrects ones the user has already read.
+          // The focused thread is already visible, so it does not need a card.
           const severity = turnNotificationSeverity(prevStatus, next.status);
-          if (severity) {
-            next.turnNotifications = [...next.turnNotifications, { seq, createdAt: Date.now(), severity }];
+          if (severity && st.focusedId !== agentId) {
+            next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
           }
           if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
           const agents = { ...st.agents, [agentId]: next };
@@ -788,7 +807,7 @@ export const useStore = create<StoreState>((set, get) => {
     theme: initialTheme(),
     agents: {},
     order: initialAgentOrder(),
-    focusedId: null,
+    focusedId: initialFocusedAgent(),
     pane: 'chat',
     modal: 'none',
     inspectorOpen: false,
@@ -846,6 +865,7 @@ export const useStore = create<StoreState>((set, get) => {
         if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
         return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
       });
+      if (get().agents[id]) saveFocusedAgent(id);
       syncAudioFocus();
       if (previous && previous !== id && previousHadPty) subscribeAgent(previous);
       if (wantsPty(id)) replayPtyFor(id);

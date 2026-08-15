@@ -25,6 +25,7 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 afterEach(() => {
   useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null });
   localStorage.removeItem('tandem.agentOrder');
+  localStorage.removeItem('tandem.focusedAgent');
 });
 
 describe('agent ordering', () => {
@@ -53,7 +54,7 @@ describe('thread audio preference', () => {
     expect(useStore.getState().agents['agent-2'].audioOnTurnEnd).toBe(false);
   });
 
-  it('keeps a focused agent’s completed turn in Notifications', () => {
+  it('does not notify when a focused agent completes its turn', () => {
     __testApplyServerMsg({
       t: 'snapshot', agentId: 'agent-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
@@ -61,8 +62,34 @@ describe('thread audio preference', () => {
 
     __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 2, event: { kind: 'status', status: 'idle' } });
 
-    expect(useStore.getState().agents['agent-1'].turnNotifications).toHaveLength(1);
-    expect(useStore.getState().agents['agent-1'].turnNotifications[0].severity).toBe('success');
+    expect(useStore.getState().agents['agent-1'].turnNotifications).toHaveLength(0);
+  });
+
+  it('keeps only the latest completed-turn notification for a background agent', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+
+    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 3, event: { kind: 'status', status: 'working' } });
+    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 4, event: { kind: 'status', status: 'error' } });
+
+    const notifications = useStore.getState().agents['agent-1'].turnNotifications;
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({ seq: 4, severity: 'failure' });
+  });
+
+  it('persists the focused agent', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+
+    useStore.getState().focus('agent-1');
+
+    expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-1');
   });
 
   it('hydrates daemon-owned audio preference and ready state from transcript events', () => {
