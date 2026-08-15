@@ -431,6 +431,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .attachment-meta { display: flex; flex: 1; min-width: 0; flex-direction: column; }
 .attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
 .attachment-meta small { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-meta progress { width: 100%; height: 4px; margin-top: 4px; accent-color: var(--accent); }
 .prompt-attachment.error .attachment-meta small, .prompt-attachment-error { color: var(--err); }
 .prompt-attachment button { appearance: none; border: 0; background: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; font-size: 16px; }
 .prompt-attachment button:hover { color: var(--text); }

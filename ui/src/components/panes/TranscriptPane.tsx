@@ -1338,6 +1338,7 @@ type DraftAttachment = {
   file: File;
   previewUrl?: string;
   status: 'uploading' | 'ready' | 'error';
+  uploadProgress?: number;
   asset?: Extract<PromptBlock, { type: 'image' }>;
   uploadPath?: string;
   error?: string;
@@ -1490,24 +1491,38 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     aborts.current.set(attachment.localId, controller);
     try {
       const token = storedToken();
-      const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/assets`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': attachment.file.type,
-          'X-File-Name': encodeURIComponent(attachment.file.name),
-          ...(attachment.file.type.startsWith('image/') && imageSupport === true ? { 'X-Store-Image-Asset': 'true' } : {}),
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: attachment.file,
-        signal: controller.signal,
+      const { status, body } = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', `/api/agents/${encodeURIComponent(agentId)}/assets`);
+        request.setRequestHeader('Content-Type', attachment.file.type);
+        request.setRequestHeader('X-File-Name', encodeURIComponent(attachment.file.name));
+        if (attachment.file.type.startsWith('image/') && imageSupport === true) request.setRequestHeader('X-Store-Image-Asset', 'true');
+        if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const uploadProgress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          setAttachments((current) => current.map((item) => item.localId === attachment.localId
+            ? { ...item, uploadProgress }
+            : item));
+        };
+        request.onload = () => {
+          let responseBody: unknown = null;
+          try { responseBody = JSON.parse(request.responseText); } catch { /* response error handled below */ }
+          resolve({ status: request.status, body: responseBody });
+        };
+        request.onerror = () => reject(new Error('Upload failed: network error'));
+        request.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+        controller.signal.addEventListener('abort', () => request.abort(), { once: true });
+        request.send(attachment.file);
       });
-      const body = (await response.json().catch(() => null)) as
+      const response = { ok: status >= 200 && status < 300, status };
+      const parsedBody = body as
         | { asset?: { assetId: string; mimeType: string; name?: string }; upload?: { path: string }; error?: string }
         | null;
-      if (!response.ok || (!body?.upload && !body?.asset)) throw new Error(body?.error ?? `Upload failed (${response.status})`);
-      const asset = body.asset && imageSupport === true ? { type: 'image' as const, ...body.asset } : undefined;
+      if (!response.ok || (!parsedBody?.upload && !parsedBody?.asset)) throw new Error(parsedBody?.error ?? `Upload failed (${response.status})`);
+      const asset = parsedBody.asset && imageSupport === true ? { type: 'image' as const, ...parsedBody.asset } : undefined;
       setAttachments((current) => current.map((item) => item.localId === attachment.localId
-        ? { ...item, status: 'ready', asset, uploadPath: body.upload?.path, error: undefined }
+        ? { ...item, status: 'ready', uploadProgress: 100, asset, uploadPath: parsedBody.upload?.path, error: undefined }
         : item));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -1548,6 +1563,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       file,
       previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
       status: 'uploading',
+      uploadProgress: 0,
     }));
     setAttachments((current) => [...current, ...added]);
     for (const attachment of added) void upload(attachment);
@@ -1563,7 +1579,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
 
   const retryAttachment = (attachment: DraftAttachment) => {
     setAttachments((current) => current.map((item) => item.localId === attachment.localId
-      ? { ...item, status: 'uploading', error: undefined }
+      ? { ...item, status: 'uploading', uploadProgress: 0, error: undefined }
       : item));
     void upload(attachment);
   };
@@ -1699,7 +1715,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               {attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <span className="attachment-file-icon" aria-hidden="true">▤</span>}
               <div className="attachment-meta">
                 <span title={attachment.file.name}>{attachment.file.name}</span>
-                <small>{attachment.status === 'uploading' ? 'Uploading…' : attachment.status === 'error' ? attachment.error : 'Ready'}</small>
+                {attachment.status === 'uploading' ? <>
+                  <small>Uploading… {attachment.uploadProgress ?? 0}%</small>
+                  <progress value={attachment.uploadProgress ?? 0} max="100" aria-label={`Uploading ${attachment.file.name}: ${attachment.uploadProgress ?? 0}%`} />
+                </> : <small>{attachment.status === 'error' ? attachment.error : 'Ready'}</small>}
               </div>
               {attachment.status === 'error' && <button type="button" onClick={() => retryAttachment(attachment)} title="Retry upload">↻</button>}
               <button type="button" onClick={() => removeAttachment(attachment.localId)} title={`Remove ${attachment.file.name}`}>×</button>
