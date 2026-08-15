@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -365,21 +366,18 @@ func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
 }
 
 // ListWorkspaceEntries returns the direct children of dir in a live agent's
-// workspace or its immediate parent. The workspacefs boundary protects both
-// roots from path and symlink escapes even though this is a browser-facing
-// convenience API.
+// workspace, its immediate parent, or the daemon user's home directory. The
+// workspacefs boundary protects each root from path and symlink escapes even
+// though this is a browser-facing convenience API.
 func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]WorkspaceEntry, error) {
 	// This browser protocol is deliberately relative even though workspacefs can
 	// safely accept an absolute path within the root. Keeping the public result
 	// relative makes it directly insertable as an @ mention and prevents a
 	// malformed client request from changing that contract. A single leading
-	// "../" opts into the workspace's immediate parent, but cannot escape it.
+	// "../" opts into the workspace's immediate parent, and "~/" opts into the
+	// daemon user's home directory; neither can escape its selected root.
 	if filepath.IsAbs(dir) {
 		return nil, errors.New("workspace path must be relative")
-	}
-	dir = filepath.Clean(dir)
-	if dir == "." {
-		dir = ""
 	}
 	r.mu.RLock()
 	_, found := r.sessions[id]
@@ -388,7 +386,33 @@ func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]
 	if !found || cwd == "" {
 		return nil, errors.New("no such live agent")
 	}
-	root, fsDir := cwd, dir
+	root, fsDir := cwd, ""
+	if dir == "~" || strings.HasPrefix(dir, "~"+string(filepath.Separator)) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("find user home directory: %w", err)
+		}
+		root = home
+		fsDir = strings.TrimPrefix(dir, "~")
+		fsDir = strings.TrimPrefix(fsDir, string(filepath.Separator))
+		fsDir = filepath.Clean(fsDir)
+		if fsDir == "." {
+			fsDir = ""
+		}
+		if fsDir == ".." || strings.HasPrefix(fsDir, ".."+string(filepath.Separator)) {
+			return nil, errors.New("home path escapes its root")
+		}
+		dir = "~"
+		if fsDir != "" {
+			dir = filepath.Join(dir, fsDir)
+		}
+	} else {
+		dir = filepath.Clean(dir)
+		if dir == "." {
+			dir = ""
+		}
+		fsDir = dir
+	}
 	if dir == ".." {
 		root, fsDir = filepath.Dir(cwd), ""
 	} else if strings.HasPrefix(dir, ".."+string(filepath.Separator)) {

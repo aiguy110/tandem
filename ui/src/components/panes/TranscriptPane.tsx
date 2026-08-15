@@ -1292,19 +1292,19 @@ export function findSlashToken(text: string, caret: number): CompletionToken | n
   return { start: i - 1, end: caret, query };
 }
 
-// File mentions are relative to the workspace, with ../ available to browse its
-// immediate parent. A token may be empty so typing "@" opens the root picker,
-// and a trailing slash lists that directory.
+// File mentions are relative to the workspace, with ../ for its immediate
+// parent and ~/ for the user's home directory. A token may be empty so typing
+// "@" opens the root picker, and a trailing slash lists that directory.
 export function findFileToken(text: string, caret: number): CompletionToken | null {
   if (caret <= 0 || caret > text.length) return null;
   let i = caret;
-  while (i > 0 && /[A-Za-z0-9_./-]/.test(text[i - 1])) i--;
+  while (i > 0 && /[A-Za-z0-9_./~-]/.test(text[i - 1])) i--;
   if (i === 0 || text[i - 1] !== '@' || !isMentionBoundary(text, i - 1)) return null;
   return { start: i - 1, end: caret, query: text.slice(i, caret) };
 }
 
 function fileCompletionRequest(query: string): { dir: string; filter: string } | null {
-  if (query.startsWith('/') || query.startsWith('../../') || query === '../..' || query.split('/').slice(1).some((segment) => segment === '..')) return null;
+  if (query.startsWith('/') || (query.startsWith('~') && query !== '~' && !query.startsWith('~/')) || (!query.startsWith('~/') && query !== '~' && (query.startsWith('../../') || query === '../..' || query.split('/').slice(1).some((segment) => segment === '..')))) return null;
   const slash = query.lastIndexOf('/');
   return slash < 0
     ? { dir: '', filter: query }

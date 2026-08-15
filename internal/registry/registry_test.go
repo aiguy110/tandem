@@ -168,6 +168,18 @@ func TestListWorkspaceEntriesIsRelativeSortedAndContained(t *testing.T) {
 	if _, err := r.ListWorkspaceEntries(context.Background(), s.ID, "../../outside"); err == nil {
 		t.Fatal("expected path escaping the workspace parent to be rejected")
 	}
+	homeEntries, err := r.ListWorkspaceEntries(context.Background(), s.ID, "~")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range homeEntries {
+		if !strings.HasPrefix(entry.Path, "~/") {
+			t.Fatalf("home entry path=%q, want ~/ prefix", entry.Path)
+		}
+	}
+	if _, err := r.ListWorkspaceEntries(context.Background(), s.ID, "~/.."); err == nil {
+		t.Fatal("expected path escaping the home directory to be rejected")
+	}
 }
 
 func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {

@@ -171,6 +171,7 @@ describe('TranscriptPane composer completions', () => {
   it('recognizes workspace-relative @ file mentions', () => {
     expect(findFileToken('@src/index', 10)).toMatchObject({ start: 0, query: 'src/index' });
     expect(findFileToken('check @src/', 11)).toMatchObject({ start: 6, query: 'src/' });
+	    expect(findFileToken('@~/Projects', 11)).toMatchObject({ start: 0, query: '~/Projects' });
     expect(findFileToken('person@example', 14)).toBeNull();
   });
 
@@ -233,6 +234,22 @@ describe('TranscriptPane composer completions', () => {
     expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', '..');
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@../sibling/');
+  });
+
+  it('lists and inserts file mentions from the home directory', async () => {
+    const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: '~/Projects', isDir: true }]);
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+    }, true);
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@~/Projects', selectionStart: 11 } });
+
+    const option = await waitFor(() => view.getByText('@~/Projects/'));
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', '~');
+    fireEvent.mouseDown(option);
+    expect(composer.value).toBe('@~/Projects/');
   });
 });
 
