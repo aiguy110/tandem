@@ -34,12 +34,13 @@ X-Store-Image-Asset: true (when the client needs an image prompt asset)
 GET /api/agents/:agentId/assets/:assetId
 ```
 
-Every upload is also saved into the live agent's repository root by default. Set
-`{"uploads":{"directory":".tandem/uploads"}}` in `.tandem/settings.json` to
-choose a repository-relative destination. Tandem avoids overwriting an existing
-filename by adding ` (1)`, ` (2)`, and so on. Agents are told the resulting paths
-with the prompt and are asked to gitignore a dedicated upload directory unless
-the user wants uploaded files committed. Image assets are content-addressed under `$TANDEM_HOME/assets`; SQLite records their
+Images are stored outside the repository as content-addressed assets under
+`$TANDEM_HOME/assets` by default. Set `{"uploads":{"directory":".tandem/uploads"}}`
+in `.tandem/settings.json` to also retain uploaded images in a repository-relative
+directory. Other file uploads are saved to the repository root by default. Tandem
+avoids overwriting an existing filename by adding ` (1)`, ` (2)`, and so on. Agents
+are told the resulting paths with the prompt and are asked to gitignore a dedicated
+upload directory unless the user wants uploaded files committed. SQLite records their
 per-agent ownership. Physical deduplication never grants cross-agent access.
 Bytes are signature-sniffed, declared MIME must agree, malformed or excessive
 decoded dimensions are rejected, and SVG is not accepted. Limits are 10 MiB per

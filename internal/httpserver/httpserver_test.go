@@ -46,6 +46,13 @@ type fakeUploads struct {
 	err         error
 }
 
+type configuredUploads struct {
+	fakeUploads
+	configured bool
+}
+
+func (f *configuredUploads) HasConfiguredDirectory(string) (bool, error) { return f.configured, nil }
+
 func (f *fakeUploads) Save(agent, name string, data []byte) (string, error) {
 	f.agent, f.name, f.data = agent, name, append([]byte(nil), data...)
 	return f.path, f.err
@@ -210,6 +217,21 @@ func TestFileUploadWritesWorkspaceWithoutCreatingImageAsset(t *testing.T) {
 		t.Fatalf("response=%d %q", w.Code, w.Body.String())
 	}
 	if uploads.agent != "a" || uploads.name != "report.pdf" || string(uploads.data) != "pdf" || store.putAgent != "" {
+		t.Fatalf("upload=%#v asset=%#v", uploads, store)
+	}
+}
+
+func TestImageUploadStaysOutOfWorkspaceWithoutConfiguredDirectory(t *testing.T) {
+	uploads := &configuredUploads{fakeUploads: fakeUploads{path: "incoming/photo.png"}}
+	store := &fakeAssets{put: assets.Stored{AssetID: strings.Repeat("a", 64), MIMEType: "image/png", Size: 3}}
+	h := New(Options{Token: "token", Assets: store, Uploads: uploads, AgentExists: func(string) bool { return true }, UI: fstest.MapFS{}})
+	w := request(t, h, http.MethodPost, "/api/agents/a/assets", strings.NewReader("png"), map[string]string{
+		"Authorization": "Bearer token", "Content-Type": "image/png", "X-File-Name": "photo.png", "X-Store-Image-Asset": "true",
+	})
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"asset"`) || strings.Contains(w.Body.String(), `"upload"`) {
+		t.Fatalf("response=%d %q", w.Code, w.Body.String())
+	}
+	if uploads.data != nil || store.putAgent != "a" {
 		t.Fatalf("upload=%#v asset=%#v", uploads, store)
 	}
 }

@@ -1504,10 +1504,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       const body = (await response.json().catch(() => null)) as
         | { asset?: { assetId: string; mimeType: string; name?: string }; upload?: { path: string }; error?: string }
         | null;
-      if (!response.ok || !body?.upload) throw new Error(body?.error ?? `Upload failed (${response.status})`);
+      if (!response.ok || (!body?.upload && !body?.asset)) throw new Error(body?.error ?? `Upload failed (${response.status})`);
       const asset = body.asset && imageSupport === true ? { type: 'image' as const, ...body.asset } : undefined;
       setAttachments((current) => current.map((item) => item.localId === attachment.localId
-        ? { ...item, status: 'ready', asset, uploadPath: body.upload!.path, error: undefined }
+        ? { ...item, status: 'ready', asset, uploadPath: body.upload?.path, error: undefined }
         : item));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -1577,7 +1577,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError('Wait for image uploads to finish.');
       return;
     }
-    if (attachments.some((attachment) => attachment.status === 'error' || !attachment.uploadPath || (attachment.file.type.startsWith('image/') && imageSupport === true && !attachment.asset))) {
+    if (attachments.some((attachment) => attachment.status === 'error' || (!attachment.uploadPath && !attachment.asset) || (attachment.file.type.startsWith('image/') && imageSupport === true && !attachment.asset))) {
       setAttachmentError('Remove or retry failed uploads before sending.');
       return;
     }
@@ -1600,8 +1600,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       .map((a) => ({ type: 'quote', refSeq: a.seq, role: a.role, quote: a.quote, comment: a.comment }));
     if (t) blocks.push({ type: 'text', text: t });
     blocks.push(...attachments.flatMap((attachment) => attachment.asset ? [attachment.asset] : []));
-    const uploaded = attachments.map((attachment) => attachment.uploadPath!).join(', ');
-    blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
+    const uploaded = attachments.flatMap((attachment) => attachment.uploadPath ? [attachment.uploadPath] : []);
+    if (uploaded.length > 0) blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded.join(', ')}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
     setSending(true);
     const result = await prompt(agentId, blocks);
     setSending(false);
