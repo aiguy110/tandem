@@ -61,6 +61,19 @@ func (r *Registry) Save(id, name string, data []byte) (string, error) {
 	return uploads.Save(cwd, name, data)
 }
 
+// HasConfiguredDirectory reports whether an agent's workspace opted into
+// retaining uploads in a repository-relative directory.
+func (r *Registry) HasConfiguredDirectory(id string) (bool, error) {
+	r.mu.RLock()
+	_, found := r.sessions[id]
+	cwd := r.cwds[id]
+	r.mu.RUnlock()
+	if !found || cwd == "" {
+		return false, errors.New("no such live agent")
+	}
+	return uploads.HasConfiguredDirectory(cwd)
+}
+
 type Registry struct {
 	mu                sync.RWMutex
 	store             *store.Store

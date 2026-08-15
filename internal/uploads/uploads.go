@@ -24,7 +24,7 @@ type settings struct {
 // to the repository root and can be changed with
 // {"uploads":{"directory":"relative/path"}} in .tandem/settings.json.
 func Save(workspace, name string, data []byte) (string, error) {
-	dir, err := directory(workspace)
+	dir, _, err := directory(workspace)
 	if err != nil {
 		return "", err
 	}
@@ -48,35 +48,42 @@ func Save(workspace, name string, data []byte) (string, error) {
 	return "", errors.New("could not find an unused upload filename")
 }
 
-func directory(workspace string) (string, error) {
+// HasConfiguredDirectory reports whether this workspace explicitly opts into
+// retaining uploads inside the repository.
+func HasConfiguredDirectory(workspace string) (bool, error) {
+	_, configured, err := directory(workspace)
+	return configured, err
+}
+
+func directory(workspace string) (string, bool, error) {
 	data, err := workspacefs.Open(workspace)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer data.Close()
 	text, err := data.ReadTextFile(SettingsPath, nil, nil)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return ".", nil
+			return ".", false, nil
 		}
-		return "", fmt.Errorf("read %s: %w", SettingsPath, err)
+		return "", false, fmt.Errorf("read %s: %w", SettingsPath, err)
 	}
 	var config settings
 	if err := json.Unmarshal([]byte(text), &config); err != nil {
-		return "", fmt.Errorf("parse %s: %w", SettingsPath, err)
+		return "", false, fmt.Errorf("parse %s: %w", SettingsPath, err)
 	}
 	dir := strings.TrimSpace(config.Uploads.Directory)
 	if dir == "" {
-		return ".", nil
+		return ".", false, nil
 	}
 	if filepath.IsAbs(dir) {
-		return "", errors.New("upload directory must be repository-relative")
+		return "", false, errors.New("upload directory must be repository-relative")
 	}
 	dir = filepath.Clean(dir)
 	if dir == ".." || strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
-		return "", errors.New("upload directory escapes repository")
+		return "", false, errors.New("upload directory escapes repository")
 	}
-	return dir, nil
+	return dir, true, nil
 }
 
 func safeName(name string) string {

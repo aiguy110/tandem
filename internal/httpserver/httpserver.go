@@ -39,6 +39,10 @@ type UploadStore interface {
 	Save(agentID, name string, data []byte) (string, error)
 }
 
+type configuredUploadStore interface {
+	HasConfiguredDirectory(agentID string) (bool, error)
+}
+
 type Options struct {
 	Token              string
 	BootstrapURL       string
@@ -186,7 +190,20 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 	}
 	name := uploadName(r.Header.Get("X-File-Name"))
 	result := map[string]any{}
-	if h.opts.Uploads != nil {
+	isImage := isImageMIME(r.Header.Get("Content-Type"))
+	storeImage := h.opts.Assets != nil && isImage && (h.opts.Uploads == nil || r.Header.Get("X-Store-Image-Asset") == "true")
+	saveUpload := h.opts.Uploads != nil
+	if storeImage {
+		if configured, ok := h.opts.Uploads.(configuredUploadStore); ok {
+			keepInWorkspace, err := configured.HasConfiguredDirectory(agentID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			saveUpload = keepInWorkspace
+		}
+	}
+	if saveUpload {
 		path, err := h.opts.Uploads.Save(agentID, name, data)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -194,7 +211,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 		}
 		result["upload"] = map[string]any{"path": path, "name": name, "size": len(data)}
 	}
-	if h.opts.Assets != nil && isImageMIME(r.Header.Get("Content-Type")) && (h.opts.Uploads == nil || r.Header.Get("X-Store-Image-Asset") == "true") {
+	if storeImage {
 		stored, err := h.opts.Assets.Put(agentID, data, r.Header.Get("Content-Type"))
 		if err != nil {
 			status := http.StatusInternalServerError

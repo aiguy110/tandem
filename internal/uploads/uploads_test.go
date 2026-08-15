@@ -8,6 +8,10 @@ import (
 
 func TestSaveDefaultsToWorkspaceAndAvoidsOverwrite(t *testing.T) {
 	root := t.TempDir()
+	configured, err := HasConfiguredDirectory(root)
+	if err != nil || configured {
+		t.Fatalf("HasConfiguredDirectory = %t, %v", configured, err)
+	}
 	path, err := Save(root, "report.txt", []byte("first"))
 	if err != nil || path != "report.txt" {
 		t.Fatalf("Save = %q, %v", path, err)
@@ -29,6 +33,10 @@ func TestSaveUsesConfiguredDirectory(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(root, SettingsPath), []byte(`{"uploads":{"directory":".tandem/uploads"}}`), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	configured, err := HasConfiguredDirectory(root)
+	if err != nil || !configured {
+		t.Fatalf("HasConfiguredDirectory = %t, %v", configured, err)
 	}
 	path, err := Save(root, "photo.png", []byte("data"))
 	if err != nil || path != ".tandem/uploads/photo.png" {
