@@ -315,6 +315,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .transcript-image-failed { color: var(--err); }
 .ev.msg { position: relative; align-self: stretch; max-width: none; line-height: 1.62; }
 .message-content { max-width: 860px; }
+.message-content .math-display { margin: 10px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.message-content .katex-display { margin: 0; min-width: max-content; text-align: left; }
 .ev.msg p { margin: 0 0 8px; }
 .ev.msg pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
 .ev.msg code { font-family: var(--font-mono); font-size: .92em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
