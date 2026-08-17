@@ -428,11 +428,25 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 
 func (c *messageAudioCache) watch(s *session.Session) {
 	s.OnEvent(func(le eventlog.LoggedEvent) {
-		if le.Event.Kind == "status" && s.Status() == session.Idle {
+		// An assistant message is a contiguous run of message_chunk events. It
+		// becomes safe to render as soon as the agent moves on to another output
+		// block; waiting for status=idle makes speech lag behind tool work (and
+		// sometimes an entire long-running turn). The trailing run still waits
+		// for idle, because it may continue streaming.
+		if messageBlockBoundary(le.Event.Kind) || (le.Event.Kind == "status" && s.Status() == session.Idle) {
 			c.prepare(s)
 		}
 	})
 	c.prepare(s)
+}
+
+func messageBlockBoundary(kind string) bool {
+	switch kind {
+	case "thought_chunk", "tool_call", "tool_call_update", "plan", "terminal_output", "permission_request", "error", "user_message":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *messageAudioCache) setFocus(s *session.Session, clientID string, focused bool) {
@@ -536,6 +550,13 @@ func turnMessageSeqs(s *session.Session, all bool, enabledAfterSeq int64) ([]int
 	if err != nil {
 		return nil, err
 	}
+	return completedMessageSeqs(history, all, enabledAfterSeq, s.Status() == session.Idle), nil
+}
+
+// completedMessageSeqs returns the first sequence number of each finished
+// contiguous message_chunk block. A trailing block is only finished when the
+// session is idle; otherwise it is still receiving streamed text.
+func completedMessageSeqs(history []eventlog.LoggedEvent, all bool, enabledAfterSeq int64, includeTrailing bool) []int64 {
 	start := 0
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Event.Kind == "user_message" {
@@ -548,12 +569,21 @@ func turnMessageSeqs(s *session.Session, all bool, enabledAfterSeq int64) ([]int
 		if history[i].Seq <= enabledAfterSeq || history[i].Event.Kind != "message_chunk" || (i > start && history[i-1].Event.Kind == "message_chunk") {
 			continue
 		}
+		// A following event closes this block. If there isn't one, the caller
+		// must explicitly know the agent is idle before we speak it.
+		end := i + 1
+		for end < len(history) && history[end].Event.Kind == "message_chunk" {
+			end++
+		}
+		if end == len(history) && !includeTrailing {
+			continue
+		}
 		seqs = append(seqs, history[i].Seq)
 	}
 	if !all && len(seqs) > 1 {
-		return seqs[len(seqs)-1:], nil
+		return seqs[len(seqs)-1:]
 	}
-	return seqs, nil
+	return seqs
 }
 
 func emitAudioState(s *session.Session, state string, seq int64, message string) {

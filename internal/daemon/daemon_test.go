@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/config"
+	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/gorilla/websocket"
@@ -122,6 +123,35 @@ func TestMessageAudioPreparationClaimDeduplicatesAndAllowsRetry(t *testing.T) {
 	cache.releasePreparation("agent", 7)
 	if !cache.claimPreparation("agent", 7) {
 		t.Fatal("released failed preparation could not be retried")
+	}
+}
+
+func TestCompletedMessageSeqsPreparesClosedBlocksBeforeTurnCompletion(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		{Seq: 1, Event: eventlog.Event{Kind: "user_message"}},
+		{Seq: 2, Event: eventlog.Event{Kind: "message_chunk"}},
+		{Seq: 3, Event: eventlog.Event{Kind: "message_chunk"}},
+		{Seq: 4, Event: eventlog.Event{Kind: "tool_call"}},
+		{Seq: 5, Event: eventlog.Event{Kind: "message_chunk"}},
+	}
+
+	if got := completedMessageSeqs(history, true, 0, false); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("working turn message seqs = %v, want [2]", got)
+	}
+	if got := completedMessageSeqs(history, true, 0, true); len(got) != 2 || got[0] != 2 || got[1] != 5 {
+		t.Fatalf("idle turn message seqs = %v, want [2 5]", got)
+	}
+	if got := completedMessageSeqs(history, false, 0, false); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("unfocused working turn message seqs = %v, want [2]", got)
+	}
+}
+
+func TestMessageBlockBoundaryRecognizesAgentOutputTransitions(t *testing.T) {
+	if !messageBlockBoundary("tool_call") || !messageBlockBoundary("thought_chunk") {
+		t.Fatal("agent output transitions did not close a message block")
+	}
+	if messageBlockBoundary("audio_state") || messageBlockBoundary("message_chunk") {
+		t.Fatal("auxiliary or streaming events unexpectedly closed a message block")
 	}
 }
 
