@@ -349,6 +349,12 @@ func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, 
 	}
 	var text strings.Builder
 	for _, row := range rows[start:] {
+		// Audio state changes are emitted asynchronously while an agent may
+		// still be streaming its reply. They do not create a new transcript
+		// row in the UI, so they must not split the text supplied to speech.
+		if row.Kind == "audio_state" {
+			continue
+		}
 		if row.Kind != "message_chunk" {
 			break
 		}
@@ -566,13 +572,13 @@ func completedMessageSeqs(history []eventlog.LoggedEvent, all bool, enabledAfter
 	}
 	var seqs []int64
 	for i := start; i < len(history); i++ {
-		if history[i].Seq <= enabledAfterSeq || history[i].Event.Kind != "message_chunk" || (i > start && history[i-1].Event.Kind == "message_chunk") {
+		if history[i].Seq <= enabledAfterSeq || history[i].Event.Kind != "message_chunk" || (i > start && messageBlockContinuation(history[i-1].Event.Kind)) {
 			continue
 		}
 		// A following event closes this block. If there isn't one, the caller
 		// must explicitly know the agent is idle before we speak it.
 		end := i + 1
-		for end < len(history) && history[end].Event.Kind == "message_chunk" {
+		for end < len(history) && messageBlockContinuation(history[end].Event.Kind) {
 			end++
 		}
 		if end == len(history) && !includeTrailing {
@@ -584,6 +590,13 @@ func completedMessageSeqs(history []eventlog.LoggedEvent, all bool, enabledAfter
 		return seqs[len(seqs)-1:]
 	}
 	return seqs
+}
+
+// messageBlockContinuation identifies events that are transparent inside a
+// streamed assistant message. In particular, audio_state can arrive from an
+// earlier clip while the agent is still writing the current reply.
+func messageBlockContinuation(kind string) bool {
+	return kind == "message_chunk" || kind == "audio_state"
 }
 
 func emitAudioState(s *session.Session, state string, seq int64, message string) {

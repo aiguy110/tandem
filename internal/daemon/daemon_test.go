@@ -89,6 +89,8 @@ func TestTranscriptMessageTextCollectsOnlySelectedContiguousMessage(t *testing.T
 	for _, event := range []struct{ kind, payload string }{
 		{"message_chunk", `{"kind":"message_chunk","text":"Hello "}`},
 		{"message_chunk", `{"kind":"message_chunk","text":"world"}`},
+		{"audio_state", `{"kind":"audio_state","state":"ready","seq":1}`},
+		{"message_chunk", `{"kind":"message_chunk","text":" again"}`},
 		{"tool_call", `{"kind":"tool_call","id":"one","title":"tool","status":"done"}`},
 		{"message_chunk", `{"kind":"message_chunk","text":"Second message"}`},
 	} {
@@ -97,10 +99,10 @@ func TestTranscriptMessageTextCollectsOnlySelectedContiguousMessage(t *testing.T
 		}
 	}
 	got, err := transcriptMessageText(db, "agent", 1)
-	if err != nil || got != "Hello world" {
+	if err != nil || got != "Hello world again" {
 		t.Fatalf("first message = %q, %v", got, err)
 	}
-	got, err = transcriptMessageText(db, "agent", 4)
+	got, err = transcriptMessageText(db, "agent", 6)
 	if err != nil || got != "Second message" {
 		t.Fatalf("second message = %q, %v", got, err)
 	}
@@ -143,6 +145,20 @@ func TestCompletedMessageSeqsPreparesClosedBlocksBeforeTurnCompletion(t *testing
 	}
 	if got := completedMessageSeqs(history, false, 0, false); len(got) != 1 || got[0] != 2 {
 		t.Fatalf("unfocused working turn message seqs = %v, want [2]", got)
+	}
+}
+
+func TestCompletedMessageSeqsDoesNotSplitOnAudioState(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		{Seq: 1, Event: eventlog.Event{Kind: "user_message"}},
+		{Seq: 2, Event: eventlog.Event{Kind: "message_chunk"}},
+		{Seq: 3, Event: eventlog.Event{Kind: "audio_state"}},
+		{Seq: 4, Event: eventlog.Event{Kind: "message_chunk"}},
+		{Seq: 5, Event: eventlog.Event{Kind: "tool_call"}},
+	}
+
+	if got := completedMessageSeqs(history, true, 0, false); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("message seqs = %v, want [2]", got)
 	}
 }
 
