@@ -1314,15 +1314,20 @@ function fileCompletionRequest(query: string): { dir: string; filter: string } |
 function SkillText({ text, commands }: { text: string; commands: SlashCommand[] }) {
   const names = new Set(commands.map((command) => command.name));
   const parts: React.ReactNode[] = [];
-  const pattern = /\/[A-Za-z0-9_-]+/g;
+  // Keep the highlight layer in sync with the two kinds of composer tokens:
+  // known slash commands and workspace file mentions.
+  const pattern = /\/[A-Za-z0-9_-]+|@[A-Za-z0-9_./~-]+/g;
   let previous = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const start = match.index;
-    const name = match[0].slice(1);
-    if (!isMentionBoundary(text, start) || !names.has(name)) continue;
+    const token = match[0];
+    const isCommand = token[0] === '/';
+    const isKnownCommand = isCommand && names.has(token.slice(1));
+    const isFileMention = token[0] === '@';
+    if (!isMentionBoundary(text, start) || (!isKnownCommand && !isFileMention)) continue;
     if (start > previous) parts.push(text.slice(previous, start));
-    parts.push(<span className="skill-mention" key={start}>{match[0]}</span>);
-    previous = start + match[0].length;
+    parts.push(<span className="skill-mention" key={start}>{token}</span>);
+    previous = start + token.length;
   }
   if (previous < text.length) parts.push(text.slice(previous));
   return <>{parts}</>;

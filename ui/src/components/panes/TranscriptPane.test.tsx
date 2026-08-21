@@ -204,6 +204,22 @@ describe('TranscriptPane composer completions', () => {
     expect(highlight?.querySelectorAll('.skill-mention')).toHaveLength(1);
   });
 
+  it('renders workspace file mentions like slash commands', () => {
+    const withCommand = agent();
+    withCommand.commands = [{ name: 'help', description: 'Show help' }];
+    withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Read @FIX_ME.md then /help.' } }];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      drafts: { 'agent-1': 'Read @FIX_ME.md then /help.' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(4);
+    expect(Array.from(view.container.querySelectorAll('.skill-mention')).map((node) => node.textContent))
+      .toEqual(['@FIX_ME.md', '/help', '@FIX_ME.md', '/help']);
+  });
+
   it('lists and inserts workspace file mentions', async () => {
     const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: 'src/index.ts', isDir: false }]);
     useStore.setState({
