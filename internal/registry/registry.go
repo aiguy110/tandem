@@ -114,6 +114,17 @@ type SummaryWorkspace struct {
 	StartCommit string            `json:"startCommit,omitempty"`
 }
 
+// SummaryProfile is the launch profile resolved for an agent. It is included
+// in agent summaries so views outside the spawn flow can identify the exact
+// settings the running session was created with.
+type SummaryProfile struct {
+	ID         string `json:"id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	Permission string `json:"permission,omitempty"`
+	Snapshot   string `json:"snapshot,omitempty"`
+}
+
 type Summary struct {
 	ID               string           `json:"id"`
 	Name             string           `json:"name"`
@@ -125,8 +136,9 @@ type Summary struct {
 	// Adapter is the agent's stable adapter kind ("acp" or "pty"); it does not
 	// change across an ACP↔CLI handoff. CanHandoff is true when the agent
 	// supports swapping to its resumable CLI (the Chat tab's ACP/CLI switch).
-	Adapter    string `json:"adapter"`
-	CanHandoff bool   `json:"canHandoff"`
+	Adapter    string          `json:"adapter"`
+	CanHandoff bool            `json:"canHandoff"`
+	Profile    *SummaryProfile `json:"profile,omitempty"`
 }
 
 // WorkspaceEntry is one immediate file-system completion candidate. Paths are
@@ -333,6 +345,9 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 			agent = r.config.ACP.Default
 		}
 		summary := Summary{ID: s.ID, Name: s.DisplayName(), Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode(), Adapter: s.Spec.Adapter, CanHandoff: canHandoff(s.Spec)}
+		if p := s.Spec.Profile; p != nil {
+			summary.Profile = &SummaryProfile{ID: p.ID, Model: p.Model, Effort: p.Effort, Permission: p.Permission, Snapshot: p.Snapshot}
+		}
 		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
 		if ws.Integration != nil {
 			summary.Workspace.TargetKind = ws.Integration.Kind

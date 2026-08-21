@@ -204,6 +204,32 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-context-menu button:hover { background: var(--surface-2); }
 .agent-context-menu button.danger { color: var(--err); }
 .agent-context-menu button.danger:hover { background: var(--err-soft); }
+.agent-details-popover {
+  position: fixed; z-index: 21; width: min(390px, calc(100vw - 16px)); max-height: min(430px, calc(100vh - 16px));
+  overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, .38); transform-origin: top left;
+  animation: agent-details-in .16s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes agent-details-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: scale(1); } }
+.agent-details-head {
+  position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: grab; user-select: none;
+}
+.agent-details-head:active { cursor: grabbing; }
+.agent-details-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-details-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.agent-details-head button { border: 0; background: transparent; color: var(--text-faint); font-size: 20px; line-height: 1; padding: 0 3px; cursor: pointer; }
+.agent-details-head button:hover { color: var(--text); }
+.agent-details-status { padding: 2px 6px; border-radius: 999px; color: var(--text); background: var(--surface-3); font-size: var(--fs-xs); text-transform: capitalize; }
+.agent-details-status.working { color: var(--working); }
+.agent-details-status.blocked { color: var(--warn); }
+.agent-details-status.error { color: var(--err); }
+.agent-details-body { padding: 5px 12px 12px; }
+.agent-detail { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.agent-detail:last-child { border-bottom: 0; }
+.agent-detail > span { color: var(--text-faint); }
+.agent-detail code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font: var(--fs-xs)/1.45 var(--font-mono); }
+.agent-detail code.plain { font-family: inherit; font-size: var(--fs-sm); }
 .dot.idle { background: var(--ok); }
 .dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 1.4s infinite; }
 .dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }

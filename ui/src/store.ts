@@ -109,6 +109,13 @@ export interface AgentView {
   id: string;
   name: string;
   agent?: string;
+  profile?: {
+    id?: string;
+    model?: string;
+    effort?: string;
+    permission?: string;
+    snapshot?: string;
+  };
   workspace: {
     kind: 'worktree' | 'existing';
     repo: string;
@@ -1298,7 +1305,7 @@ function shell(id: string): AgentView {
 
 function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
+  return { ...base, name: s.name, agent: s.agent, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

@@ -170,6 +170,13 @@ export interface AgentSummary {
   // the Chat tab should offer the ACP/CLI switch for this agent.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
+  profile?: {
+    id?: string;
+    model?: string;
+    effort?: string;
+    permission?: string;
+    snapshot?: string;
+  };
 }
 
 // A resumable coding-agent session for the Resume picker — either a session

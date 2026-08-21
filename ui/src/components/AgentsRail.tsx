@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
@@ -214,6 +214,7 @@ function Row({
   const [renameError, setRenameError] = useState('');
   const [mouseHovered, setMouseHovered] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [details, setDetails] = useState<{ x: number; y: number } | null>(null);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -263,6 +264,30 @@ function Row({
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [contextMenu]);
+  useEffect(() => {
+    if (!details) return;
+    const dismiss = () => setDetails(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss();
+    };
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [details]);
+  const openDetails = (origin: { x: number; y: number }) => {
+    // Keep the initial panel near its invocation point without letting it spill
+    // outside the viewport. The user can subsequently reposition it by dragging.
+    const width = 390;
+    const height = 430;
+    setDetails({
+      x: Math.max(8, Math.min(origin.x, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(origin.y, window.innerHeight - height - 8)),
+    });
+    setContextMenu(null);
+  };
   return (
     <div
       className={`agent-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
@@ -377,11 +402,86 @@ function Row({
           <button type="button" role="menuitem" onClick={() => { beginRename(); setContextMenu(null); }}>
             Edit name
           </button>
+          <button type="button" role="menuitem" onClick={() => openDetails(contextMenu)}>
+            View details
+          </button>
           <button type="button" className="danger" role="menuitem" onClick={() => { onDelete(); setContextMenu(null); }}>
             Delete
           </button>
         </div>
       )}
+      {details && <AgentDetails agent={agent} position={details} onClose={() => setDetails(null)} onMove={setDetails} />}
     </div>
   );
+}
+
+function AgentDetails({
+  agent,
+  position,
+  onClose,
+  onMove,
+}: {
+  agent: AgentView;
+  position: { x: number; y: number };
+  onClose: () => void;
+  onMove: (position: { x: number; y: number }) => void;
+}) {
+  const drag = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const ws = agent.workspace;
+  const profile = agent.profile;
+  const gitState = ws.gitState === 'unknown' ? 'Unavailable' : (ws.gitState ?? 'Unavailable').replace(/_/g, ' ');
+  const beginDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    drag.current = { offsetX: event.clientX - position.x, offsetY: event.clientY - position.y };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    onMove({
+      x: Math.max(8, Math.min(event.clientX - drag.current.offsetX, window.innerWidth - 80)),
+      y: Math.max(8, Math.min(event.clientY - drag.current.offsetY, window.innerHeight - 42)),
+    });
+  };
+  const endDrag = () => { drag.current = null; };
+  const profileBits = [profile?.model, profile?.effort, profile?.permission].filter(Boolean);
+
+  return (
+    <section
+      className="agent-details-popover"
+      style={{ left: position.x, top: position.y }}
+      role="dialog"
+      aria-label={`Details for ${agent.name}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="agent-details-head" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
+        <div>
+          <strong>{agent.name}</strong>
+          <span className={`agent-details-status ${agent.status}`}>{agent.status}</span>
+        </div>
+        <button type="button" aria-label="Close details" title="Close details" onPointerDown={(event) => event.stopPropagation()} onClick={onClose}>×</button>
+      </div>
+      <div className="agent-details-body">
+        <Detail label="Agent" value={agent.agent || 'Default agent'} />
+        <Detail label="Profile" value={profileBits.join(' · ') || (profile?.id ? 'Saved profile' : 'No profile settings')} />
+        {profile?.id && <Detail label="Profile ID" value={profile.id} mono />}
+        {profile?.snapshot && <Detail label="Browser snapshot" value={profile.snapshot} mono />}
+        <Detail label="Adapter" value={`${agent.adapter.toUpperCase()}${agent.canHandoff ? ' · CLI handoff available' : ''}`} />
+        <Detail label="Workspace" value={ws.kind === 'worktree' ? 'Isolated worktree' : 'Existing directory'} />
+        <Detail label="Worktree path" value={ws.cwd} mono />
+        <Detail label="Repository root" value={ws.repoPath || 'Unavailable'} mono />
+        <Detail label="Branch" value={ws.branch || 'Detached / not a branch'} mono />
+        {ws.targetRef && <Detail label="Integration target" value={ws.targetRef.replace(/^refs\/(heads|remotes)\//, '')} mono />}
+        <Detail label="Git status" value={`${gitState}${typeof ws.ahead === 'number' || typeof ws.behind === 'number' ? ` · ${ws.ahead ?? 0} ahead, ${ws.behind ?? 0} behind` : ''}`} />
+        {ws.startCommit && <Detail label="Starting commit" value={ws.startCommit} mono />}
+        <Detail label="Browser" value={agent.browserActive ? `${agent.browserOwner} has control` : 'Not started'} />
+        {agent.pendingApprovals.length > 0 && <Detail label="Pending approvals" value={String(agent.pendingApprovals.length)} />}
+      </div>
+    </section>
+  );
+}
+
+function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return <div className="agent-detail"><span>{label}</span><code className={mono ? '' : 'plain'} title={value}>{value}</code></div>;
 }

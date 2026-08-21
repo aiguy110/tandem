@@ -127,6 +127,24 @@ func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestSummariesIncludeResolvedLaunchProfile(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	spec := existing(t.TempDir())
+	spec.Profile = &agentadapter.ProfileSpec{ID: "profile-1", Model: "sonnet", Effort: "high", Permission: "acceptEdits", Snapshot: "snapshot-1"}
+	s, err := r.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := r.Summaries(context.Background())
+	if len(summaries) != 1 || summaries[0].ID != s.ID || summaries[0].Profile == nil {
+		t.Fatalf("summaries=%+v", summaries)
+	}
+	if got := summaries[0].Profile; got.ID == "" || got.Model != "sonnet" || got.Effort != "high" || got.Permission != "acceptEdits" || got.Snapshot != "snapshot-1" {
+		t.Fatalf("profile=%+v", got)
+	}
+}
+
 func TestListWorkspaceEntriesIsRelativeSortedAndContained(t *testing.T) {
 	r, _, _ := setup(t, &fakeFactory{})
 	parent := t.TempDir()
