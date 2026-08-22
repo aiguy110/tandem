@@ -434,3 +434,43 @@ func TestCheckCompatibilityAt(t *testing.T) {
 		t.Fatalf("current config rejected: %v", err)
 	}
 }
+
+// A recorded system-node path can go stale (fnm's per-shell shim directory is
+// deleted when that shell exits). Spawns must fall back to PATH, not fail.
+func TestStaleSystemNodePathFallsBackToPath(t *testing.T) {
+	bin := t.TempDir()
+	nodePath := filepath.Join(bin, "node")
+	if err := os.WriteFile(nodePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := options(t, map[string]string{"PATH": bin})
+	settings := "version: 1\nsettings:\n  node:\n    mode: system\n    command: /run/user/1000/fnm_multishells/gone/bin/node\n"
+	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Node.Command != nodePath {
+		t.Fatalf("stale node path should fall back to PATH node, got %q", c.Node.Command)
+	}
+}
+
+func TestStableExecutablePathResolvesEphemeralShims(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := StableExecutablePath(real); got != real {
+		t.Fatalf("durable path should be left alone, got %q", got)
+	}
+	shim := filepath.Join(t.TempDir(), "node")
+	if err := os.Symlink(real, shim); err != nil {
+		t.Fatal(err)
+	}
+	// t.TempDir() lives under /tmp, which counts as ephemeral.
+	if got := StableExecutablePath(shim); got != real {
+		t.Fatalf("ephemeral shim should resolve to %q, got %q", real, got)
+	}
+}

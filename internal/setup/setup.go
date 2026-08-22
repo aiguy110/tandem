@@ -746,6 +746,7 @@ func splitRoots(answer string) []string {
 func promptNode(r *bufio.Reader, out io.Writer, existing config.NodeSettings, atEOF bool) (config.NodeSettings, error) {
 	nodePath, lookErr := exec.LookPath("node")
 	detected := lookErr == nil
+	nodePath = config.StableExecutablePath(nodePath)
 	var version string
 	if detected {
 		if v, err := exec.Command(nodePath, "--version").Output(); err == nil {

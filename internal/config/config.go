@@ -511,10 +511,53 @@ func resolveNode(env map[string]string, s Settings, home string, o Options) Node
 		return NodeConfig{Managed: true, Command: nodePath, Npm: npmPath, Root: root, Version: version}
 	}
 	cmd := s.Node.Command
-	if cmd == "" {
+	if cmd == "" || !executableExists(cmd) {
+		// A recorded absolute path can go stale (a version manager's
+		// per-shell shim directory, an uninstalled toolchain). Fall back to
+		// whatever `node` PATH offers now rather than failing every spawn.
 		cmd = "node"
 	}
 	return NodeConfig{Command: resolveExecutable(cmd, o), Npm: resolveExecutable("npm", o)}
+}
+
+// executableExists reports whether an explicit path (one containing a
+// separator) still points at an executable file. Bare command names are left
+// to PATH resolution, so they always pass.
+func executableExists(cmd string) bool {
+	if !strings.ContainsRune(cmd, filepath.Separator) {
+		return true
+	}
+	info, err := os.Stat(cmd)
+	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+}
+
+// ephemeralRoots are directories whose contents do not survive a reboot or a
+// shell exiting; a Node path under one of them is not safe to persist.
+var ephemeralRoots = []string{"/run", "/var/run", "/tmp", "/var/tmp", "/proc"}
+
+// StableExecutablePath returns a path safe to record in config.yml. When the
+// detected executable lives under an ephemeral directory (for example fnm's
+// per-shell /run/user/<uid>/fnm_multishells shims) it resolves symlinks to the
+// durable install location instead.
+func StableExecutablePath(path string) string {
+	if path == "" || !filepath.IsAbs(path) {
+		return path
+	}
+	ephemeral := false
+	for _, root := range ephemeralRoots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			ephemeral = true
+			break
+		}
+	}
+	if !ephemeral {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || resolved == "" {
+		return path
+	}
+	return resolved
 }
 
 // resolveRoots resolves project scan roots with env > settings > default.
