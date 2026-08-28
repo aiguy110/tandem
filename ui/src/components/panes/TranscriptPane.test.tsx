@@ -27,6 +27,7 @@ function agent(): AgentView {
     usage: null,
     commands: [],
     imagePromptSupport: null,
+    asideSupport: null,
     queuedPrompts: [],
     controlMode: 'transcript',
     adapter: 'acp',
@@ -161,6 +162,28 @@ describe('TranscriptPane tool diffs', () => {
 });
 
 describe('TranscriptPane composer completions', () => {
+  it('sends /btw through the aside path and renders its durable answer card', async () => {
+    const withAside = agent();
+    withAside.asideSupport = true;
+    withAside.events = [
+      { seq: 1, event: { kind: 'aside_started', asideId: 'aside-1', question: 'Why SQLite?' } },
+      { seq: 2, event: { kind: 'aside_event', asideId: 'aside-1', event: { kind: 'message_chunk', text: 'It keeps deployment self-contained.' } } },
+      { seq: 3, event: { kind: 'aside_completed', asideId: 'aside-1', stopReason: 'end_turn' } },
+    ];
+    const sendAside = vi.fn().mockResolvedValue({});
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      drafts: { 'agent-1': '/btw Why SQLite?' }, aside: sendAside,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getByText('Aside · excluded from future turns')).toBeTruthy();
+    expect(view.getByText('It keeps deployment self-contained.')).toBeTruthy();
+    fireEvent.keyDown(view.getByRole('textbox'), { key: 'Enter' });
+    await waitFor(() => expect(sendAside).toHaveBeenCalledWith('agent-1', 'Why SQLite?'));
+  });
+
   it('only recognizes slash commands at a message or whitespace boundary', () => {
     expect(findSlashToken('/help', 5)).toMatchObject({ start: 0, query: 'help' });
     expect(findSlashToken('ask /help', 9)).toMatchObject({ start: 4, query: 'help' });

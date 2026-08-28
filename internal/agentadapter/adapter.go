@@ -10,7 +10,13 @@ import (
 )
 
 type Capabilities struct {
-	Structured, Terminals, LoadSession, FS, Image bool
+	Structured, Terminals, LoadSession, ForkSession, FS, Image bool
+}
+
+// AsideAdapter is the optional ACP draft session/fork surface. The returned
+// events are emitted by the adapter as durable aside_event wrappers.
+type AsideAdapter interface {
+	Aside(context.Context, string, []PromptBlock) (string, error)
 }
 
 type PromptBlock struct {

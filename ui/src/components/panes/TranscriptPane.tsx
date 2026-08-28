@@ -28,7 +28,8 @@ type Item =
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
-  | { kind: 'error'; key: string; message: string };
+  | { kind: 'error'; key: string; message: string }
+  | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
   const items: Item[] = [];
@@ -36,6 +37,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const terms = new Map<string, Extract<Item, { kind: 'terminal' }>>();
   let plan: Extract<Item, { kind: 'plan' }> | undefined;
   const pendingIds = new Set(pending.map((p) => p.reqId));
+  const asides = new Map<string, Extract<Item, { kind: 'aside' }>>();
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
@@ -116,6 +118,24 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       case 'error':
         items.push({ kind: 'error', key: `err${seq}`, message: ev.message });
         break;
+      case 'aside_started': {
+        const item: Extract<Item, { kind: 'aside' }> = { kind: 'aside', key: `aside-${ev.asideId}`, id: ev.asideId, question: ev.question, answer: '', thought: '', complete: false };
+        asides.set(ev.asideId, item);
+        items.push(item);
+        break;
+      }
+      case 'aside_event': {
+        const aside = asides.get(ev.asideId);
+        if (!aside) break;
+        if (ev.event.kind === 'message_chunk') aside.answer += ev.event.text;
+        if (ev.event.kind === 'thought_chunk') aside.thought += ev.event.text;
+        break;
+      }
+      case 'aside_completed': {
+        const aside = asides.get(ev.asideId);
+        if (aside) { aside.complete = true; aside.error = ev.error; }
+        break;
+      }
     }
   }
   // Keep only still-pending permission cards inline (answered ones fall away).
@@ -861,6 +881,17 @@ function Row({
       );
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
+    case 'aside':
+      return (
+        <section className="aside-card" aria-label="Context-isolated aside">
+          <div className="aside-label">Aside · excluded from future turns</div>
+          <div className="aside-question"><SkillText text={item.question} commands={commands} /></div>
+          {item.thought && <details className="aside-thought"><summary>thinking…</summary>{item.thought}</details>}
+          {item.answer && <div className="aside-answer" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.answer) }} onClick={handleCodeCopyClick} />}
+          {!item.complete && !item.answer && <div className="aside-pending">Asking in existing context…</div>}
+          {item.error && <div className="aside-error">{item.error}</div>}
+        </section>
+      );
   }
 }
 
@@ -1351,6 +1382,7 @@ type DraftAttachment = {
 
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
+  const aside = useStore((s) => s.aside);
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
@@ -1364,6 +1396,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
+  const asideSupport = useStore((s) => s.agents[agentId]?.asideSupport ?? null);
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -1395,7 +1428,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
   const file = useMemo(() => findFileToken(text, caret), [text, caret]);
   const fileRequest = useMemo(() => file ? fileCompletionRequest(file.query) : null, [file]);
-  const commandMatches = useMemo(() => (slash ? fuzzyFilter(slash.query, commands, (c) => c.name).slice(0, 8) : []), [slash, commands]);
+  const commandsWithBtw = useMemo(() => asideSupport ? [{ name: 'btw', description: 'Ask without adding to future context', input: 'question' }, ...commands.filter((c) => c.name !== 'btw')] : commands, [asideSupport, commands]);
+  const commandMatches = useMemo(() => (slash ? fuzzyFilter(slash.query, commandsWithBtw, (c) => c.name).slice(0, 8) : []), [slash, commandsWithBtw]);
   const fileMatches = useMemo(() => (fileRequest && fileEntriesDir === fileRequest.dir
     ? fuzzyFilter(fileRequest.filter, fileEntries, (entry) => entry.path).slice(0, 8)
     : []), [fileEntries, fileEntriesDir, fileRequest]);
@@ -1604,7 +1638,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     }
     if (attachments.length === 0 && !hasAnnotations) {
       setSending(true);
-      const result = await prompt(agentId, t);
+      const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
+      const result = btw ? await aside(agentId, btw[1].trim()) : await prompt(agentId, t);
       setSending(false);
       if (result.error) setAttachmentError(result.error);
       if (result.disposition === 'queued') {

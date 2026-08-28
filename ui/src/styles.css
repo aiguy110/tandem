@@ -319,6 +319,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    per spec, so once content overflows the container the flexbox shrink
    algorithm squishes them toward 0 instead of letting the container scroll. */
 .transcript > * { flex-shrink: 0; }
+.aside-card { margin: 2px 22px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--agent) 42%, var(--border)); border-left: 3px solid var(--agent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--agent) 6%, var(--surface-2)); }
+.aside-label { margin-bottom: 8px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.aside-question { margin-bottom: 9px; color: var(--text); font-weight: 600; }
+.aside-answer { color: var(--text); }
+.aside-answer > :first-child { margin-top: 0; }
+.aside-answer > :last-child { margin-bottom: 0; }
+.aside-thought, .aside-pending { color: var(--text-faint); font-size: var(--fs-sm); }
+.aside-error { margin-top: 8px; color: var(--err); font-size: var(--fs-sm); }
 /* Floating "jump to newest" affordance, shown only when scrolled up off the tail. */
 .scroll-latest {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);

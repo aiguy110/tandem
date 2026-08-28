@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/acp"
 	"github.com/aiguy110/tandem/internal/assets"
@@ -58,6 +59,7 @@ type AdapterConfig struct {
 type Capabilities struct {
 	Structured  bool
 	LoadSession bool
+	ForkSession bool
 	Image       bool
 }
 
@@ -114,21 +116,25 @@ type Adapter struct {
 	// replayBarrier flushes replayed session/load notifications through readLoop
 	// before the replaying gate is cleared (see endReplay).
 	replayBarrier chan chan struct{}
+	asideBarrier  chan chan struct{}
 
-	mu          sync.RWMutex
-	caps        Capabilities
-	sessionID   string
-	state       SessionState
-	replaying   bool
-	permissions map[string]pendingPermission
-	liveTools   map[string]struct{}
-	toolFiles   map[string]string
-	serviceCtx  context.Context
-	serviceStop context.CancelFunc
-	serviceWG   sync.WaitGroup
-	serviceDone bool
-	fatal       error
-	closeOnce   sync.Once
+	mu             sync.RWMutex
+	caps           Capabilities
+	sessionID      string
+	state          SessionState
+	replaying      bool
+	permissions    map[string]pendingPermission
+	liveTools      map[string]struct{}
+	toolFiles      map[string]string
+	serviceCtx     context.Context
+	serviceStop    context.CancelFunc
+	serviceWG      sync.WaitGroup
+	serviceDone    bool
+	turnSessionID  string
+	asideID        string
+	asideSessionID string
+	fatal          error
+	closeOnce      sync.Once
 	// parentPath is cfg.ParentToolCallIDPath pre-split on "." (nil when unset),
 	// used to pull a normalized parentId out of each update's `_meta`.
 	parentPath []string
@@ -160,12 +166,16 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	a.promptGate = make(chan struct{}, 1)
 	a.promptGate <- struct{}{}
 	a.replayBarrier = make(chan chan struct{})
+	a.asideBarrier = make(chan chan struct{})
 	go a.readLoop()
 
 	var init struct {
 		ProtocolVersion   int `json:"protocolVersion"`
 		AgentCapabilities struct {
-			LoadSession        bool `json:"loadSession"`
+			LoadSession         bool `json:"loadSession"`
+			SessionCapabilities struct {
+				Fork *struct{} `json:"fork"`
+			} `json:"sessionCapabilities"`
 			PromptCapabilities struct {
 				Image bool `json:"image"`
 			} `json:"promptCapabilities"`
@@ -184,9 +194,10 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		return nil, fmt.Errorf("acp initialize: unsupported or missing protocolVersion %d", init.ProtocolVersion)
 	}
 	a.mu.Lock()
-	a.caps = Capabilities{Structured: true, LoadSession: init.AgentCapabilities.LoadSession, Image: init.AgentCapabilities.PromptCapabilities.Image}
+	a.caps = Capabilities{Structured: true, LoadSession: init.AgentCapabilities.LoadSession, ForkSession: init.AgentCapabilities.SessionCapabilities.Fork != nil, Image: init.AgentCapabilities.PromptCapabilities.Image}
 	a.mu.Unlock()
 	a.emit(map[string]any{"kind": "prompt_capabilities", "image": init.AgentCapabilities.PromptCapabilities.Image})
+	a.emit(map[string]any{"kind": "aside_capabilities", "fork": init.AgentCapabilities.SessionCapabilities.Fork != nil})
 
 	if cfg.ResumeSessionID != "" && init.AgentCapabilities.LoadSession {
 		a.mu.Lock()
@@ -319,6 +330,64 @@ func (a *Adapter) endReplay() {
 }
 
 func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, error) {
+	return a.promptSession(ctx, a.SessionID(), blocks, true)
+}
+
+// Aside forks the current session, runs one isolated prompt, and leaves the
+// original session untouched. Updates from the fork are wrapped as aside_event
+// records so Tandem can persist and render them inline without treating them as
+// parent conversation history.
+func (a *Adapter) Aside(ctx context.Context, asideID string, blocks []PromptBlock) (string, error) {
+	if !a.Capabilities().ForkSession {
+		return "", errors.New("this agent does not support context-isolated asides")
+	}
+	if asideID == "" {
+		return "", errors.New("aside id is required")
+	}
+	var fork struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := a.tr.Call(ctx, "session/fork", map[string]any{
+		"sessionId": a.SessionID(), "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers,
+	}, &fork); err != nil {
+		return "", fmt.Errorf("acp session/fork: %w", err)
+	}
+	if fork.SessionID == "" {
+		return "", errors.New("acp session/fork: response is missing sessionId")
+	}
+	a.mu.Lock()
+	a.asideID, a.asideSessionID = asideID, fork.SessionID
+	a.mu.Unlock()
+	defer func() {
+		a.flushAsideUpdates()
+		a.mu.Lock()
+		a.asideID, a.asideSessionID = "", ""
+		a.mu.Unlock()
+		// session/close is stable in newer agents but may be absent in runtimes
+		// that only implemented the fork draft. Best-effort cleanup must not turn
+		// a successfully answered aside into an error.
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = a.tr.Call(closeCtx, "session/close", map[string]any{"sessionId": fork.SessionID}, nil)
+	}()
+	return a.promptSession(ctx, fork.SessionID, blocks, true)
+}
+
+func (a *Adapter) flushAsideUpdates() {
+	done := make(chan struct{})
+	select {
+	case a.asideBarrier <- done:
+		select {
+		case <-done:
+		case <-a.done:
+		case <-a.ctx.Done():
+		}
+	case <-a.done:
+	case <-a.ctx.Done():
+	}
+}
+
+func (a *Adapter) promptSession(ctx context.Context, sessionID string, blocks []PromptBlock, emitStatus bool) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -335,19 +404,27 @@ func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, err
 	}
 	stopServices := a.resetServiceContext(ctx)
 	defer stopServices()
+	a.mu.Lock()
+	a.turnSessionID = sessionID
+	a.mu.Unlock()
+	defer func() { a.mu.Lock(); a.turnSessionID = ""; a.mu.Unlock() }()
 	wire, err := a.resolvePrompt(blocks)
 	if err != nil {
 		return "", err
 	}
-	a.emit(map[string]any{"kind": "status", "status": "working"})
+	if emitStatus {
+		a.emit(map[string]any{"kind": "status", "status": "working"})
+	}
 	// Always balance the working transition. Transport failures and cancelled
 	// prompt contexts return before a normal ACP response, but the adapter
 	// process can remain healthy and accept another turn.
-	defer a.emit(map[string]any{"kind": "status", "status": "idle"})
+	if emitStatus {
+		defer a.emit(map[string]any{"kind": "status", "status": "idle"})
+	}
 	var response struct {
 		StopReason string `json:"stopReason"`
 	}
-	if err := a.tr.Call(ctx, "session/prompt", map[string]any{"sessionId": a.SessionID(), "prompt": wire}, &response); err != nil {
+	if err := a.tr.Call(ctx, "session/prompt", map[string]any{"sessionId": sessionID, "prompt": wire}, &response); err != nil {
 		return "", fmt.Errorf("acp session/prompt: %w", err)
 	}
 	if response.StopReason == "" {
@@ -559,6 +636,25 @@ func (a *Adapter) readLoop() {
 			a.replaying = false
 			a.mu.Unlock()
 			close(done)
+		case done := <-a.asideBarrier:
+			for draining := true; draining; {
+				select {
+				case note, ok := <-notifications:
+					if !ok {
+						notifications = nil
+						draining = false
+						break
+					}
+					if err := a.dispatchNote(note); err != nil {
+						a.fail(err)
+						close(done)
+						return
+					}
+				default:
+					draining = false
+				}
+			}
+			close(done)
 		case err, ok := <-transportErrors:
 			if !ok {
 				transportErrors = nil
@@ -684,7 +780,13 @@ func (a *Adapter) validateServiceSession(method, sessionID string) error {
 	if sessionID == "" {
 		return &invalidServiceParams{message: "malformed " + method + ": sessionId is required"}
 	}
-	if sessionID != a.SessionID() {
+	a.mu.RLock()
+	active := a.turnSessionID
+	a.mu.RUnlock()
+	if active == "" {
+		active = a.SessionID()
+	}
+	if sessionID != active {
 		return &invalidServiceParams{message: "malformed " + method + ": sessionId does not match the active session"}
 	}
 	return nil
@@ -908,7 +1010,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		}
 		ev := map[string]any{"kind": kind, "text": text}
 		attachParentID(ev, parentID)
-		a.push(ev)
+		a.pushUpdate(note.SessionID, ev)
 	case "tool_call":
 		id, err := requiredString(u, "toolCallId")
 		if err != nil {
@@ -938,7 +1040,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		copyJSONField(ev, "rawInput", u["rawInput"])
 		copyJSONField(ev, "toolKind", u["kind"])
 		attachParentID(ev, parentID)
-		a.push(ev)
+		a.pushUpdate(note.SessionID, ev)
 	case "tool_call_update":
 		id, err := requiredString(u, "toolCallId")
 		if err != nil {
@@ -971,7 +1073,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			ev["content"] = content
 		}
 		attachParentID(ev, parentID)
-		a.push(ev)
+		a.pushUpdate(note.SessionID, ev)
 	case "plan", "plan_update":
 		var entries []struct {
 			Content string `json:"content"`
@@ -987,7 +1089,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			}
 			norm[i] = map[string]string{"label": e.Content, "status": planStatus(e.Status)}
 		}
-		a.push(map[string]any{"kind": "plan", "entries": norm})
+		a.pushUpdate(note.SessionID, map[string]any{"kind": "plan", "entries": norm})
 	case "current_mode_update":
 		mode, err := requiredString(u, "currentModeId")
 		if err != nil {
@@ -1026,7 +1128,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			}
 			norm = append(norm, out)
 		}
-		a.push(map[string]any{"kind": "available_commands", "commands": norm})
+		a.pushUpdate(note.SessionID, map[string]any{"kind": "available_commands", "commands": norm})
 	case "usage_update":
 		var usage struct {
 			Used float64         `json:"used"`
@@ -1048,7 +1150,7 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 				ev["cost"] = map[string]any{"amount": cost.Amount, "currency": cost.Currency}
 			}
 		}
-		a.push(ev)
+		a.pushUpdate(note.SessionID, ev)
 	case "user_message_chunk", "plan_removed", "session_info_update":
 		// Known optional updates have no normalized Tandem event yet.
 	default:
@@ -1219,6 +1321,17 @@ func (a *Adapter) push(value map[string]any) {
 	if !replaying {
 		a.emit(value)
 	}
+}
+
+func (a *Adapter) pushUpdate(sessionID string, value map[string]any) {
+	a.mu.RLock()
+	asideID, asideSessionID := a.asideID, a.asideSessionID
+	a.mu.RUnlock()
+	if asideID != "" && sessionID == asideSessionID {
+		a.push(map[string]any{"kind": "aside_event", "asideId": asideID, "event": value})
+		return
+	}
+	a.push(value)
 }
 func (a *Adapter) emit(value map[string]any) {
 	b, err := json.Marshal(value)

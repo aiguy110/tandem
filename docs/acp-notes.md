@@ -2,9 +2,9 @@
 
 Reference for wiring the [`AcpAdapter`](../internal/acpadapter/adapter.go). Pinned against:
 
-- **`@agentclientprotocol/sdk` 1.2.1** (protocol version **`1`**) — the schema is at
+- **`@agentclientprotocol/sdk` 1.4.0** (protocol version **`1`**) — the schema is at
   `node_modules/@agentclientprotocol/sdk/schema/schema.json`.
-- **`@agentclientprotocol/claude-agent-acp` 0.59.0** — the real Claude agent used for the
+- **`@agentclientprotocol/claude-agent-acp` 0.70.0** — the real Claude agent used for the
   Claude ACP bridge. Bin: `claude-agent-acp` → `dist/index.js`.
 
 > Note: this is **not** `@zed-industries/claude-code-acp` (a different, older adapter on
@@ -32,7 +32,7 @@ is a **plain boolean** in `ClientCapabilities` (not an object) — "the Client s
 `terminal/*` methods". See the fs/terminal sections below for the pinned request/response
 shapes.
 
-> **Real-agent note (pinned):** `@agentclientprotocol/claude-agent-acp` 0.59.0 issues **no**
+> **Historical real-agent note:** `@agentclientprotocol/claude-agent-acp` 0.59.0 issued **no**
 > `fs/*` or `terminal/*` client requests at all — its dist contains no `terminal/create` or
 > `fs/read_text_file` call sites; it does its own file I/O and runs shell commands with an
 > internal tool. It *accepts* our advertised fs/terminal capabilities (initialize succeeds,
@@ -127,6 +127,16 @@ This maps 1:1 to Tandem's `permission_request` event → approvals queue → `re
 `session/cancel` is a **notification** `{ sessionId }` (no id). The agent halts and answers
 the outstanding `session/prompt` with `stopReason: "cancelled"`; the client must resolve any
 pending permission requests as `cancelled` and mark unfinished tool calls cancelled.
+
+## Context-isolated asides (`session/fork`, unstable)
+
+Agents advertise the draft method with `agentCapabilities.sessionCapabilities.fork: {}`.
+Tandem uses it for `/btw`: call `session/fork` with the parent `sessionId`, `cwd`, and MCP
+servers; send one `session/prompt` to the returned session; then best-effort `session/close`.
+Fork updates are persisted as `aside_event` wrappers in the parent Tandem event log, but are
+never sent back through the parent's ACP session, so the question and answer do not enter
+future parent turns. Claude ACP 0.70.0 and Codex ACP 1.7.0 advertise the capability; Pi ACP
+0.0.31 does not, so the UI hides `/btw` there.
 
 ## stopReason values
 

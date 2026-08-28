@@ -611,6 +611,17 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+	case "aside":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		receipt, err := sess.EnqueueAside(context.Background(), m.Text)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
 	case "remove_queued_prompt":
 		sess, ok := c.requireSession(m)
 		if !ok {

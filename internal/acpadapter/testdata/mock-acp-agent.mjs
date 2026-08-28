@@ -35,6 +35,7 @@ let sessionId = 'sess_mock';
 let tick = 0;
 let inbuf = '';
 let pendingPromptId = null;
+let promptSessionId = null;
 const PERM_REQ_ID = 1000; // high, to avoid colliding with the client's request ids
 
 // ---- client-request plumbing (agent -> client JSON-RPC calls) ----
@@ -45,7 +46,7 @@ function send(o) {
   process.stdout.write(JSON.stringify(o) + '\n');
 }
 function note(update) {
-  send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
+  send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: promptSessionId ?? sessionId, update } });
 }
 // Call a client method (fs/*, terminal/*) and await its response.
 function call(method, params) {
@@ -59,6 +60,7 @@ function finish(stopReason) {
   if (pendingPromptId != null) {
     send({ jsonrpc: '2.0', id: pendingPromptId, result: { stopReason } });
     pendingPromptId = null;
+    promptSessionId = null;
   }
 }
 
@@ -97,7 +99,7 @@ function handle(msg) {
         protocolVersion: 1,
         agentCapabilities: {
           loadSession: true,
-          sessionCapabilities: { list: true },
+          sessionCapabilities: { list: true, fork: {} },
           promptCapabilities: { image: process.env.TANDEM_MOCK_IMAGE_CAPABILITY !== 'false' },
         },
       },
@@ -151,6 +153,14 @@ function handle(msg) {
     send({ jsonrpc: '2.0', id: msg.id, result: { loaded: true, sessionId } });
     return;
   }
+  if (msg.method === 'session/fork') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: `fork_${crypto.randomUUID()}` } });
+    return;
+  }
+  if (msg.method === 'session/close') {
+    send({ jsonrpc: '2.0', id: msg.id, result: {} });
+    return;
+  }
   // Cancellation (notification, no id): resolve the in-flight prompt as cancelled.
   // The client has already answered our permission request as cancelled.
   if (msg.method === 'session/cancel') {
@@ -160,8 +170,14 @@ function handle(msg) {
   }
   if (msg.method === 'session/prompt') {
     pendingPromptId = msg.id;
+    promptSessionId = msg.params?.sessionId ?? sessionId;
     const blocks = msg.params?.prompt ?? [];
     const text = blocks.map((b) => b?.text ?? '').join(' ');
+    if (text.includes('DERISK_ASIDE')) {
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Aside answer.' } });
+      finish('end_turn');
+      return;
+    }
     if (text.includes('DERISK_IMAGE')) return void runImagePrompt(blocks);
     if (text.includes('DERISK_UNKNOWN_UPDATE')) {
       note({ sessionUpdate: 'mock_future_optional_update', value: 1 });

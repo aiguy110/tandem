@@ -90,6 +90,10 @@ export type AgentEvent =
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
   | { kind: 'available_commands'; commands: SlashCommand[] }
   | { kind: 'prompt_capabilities'; image: boolean }
+  | { kind: 'aside_capabilities'; fork: boolean }
+  | { kind: 'aside_started'; asideId: string; question: string }
+  | { kind: 'aside_event'; asideId: string; event: AgentEvent }
+  | { kind: 'aside_completed'; asideId: string; stopReason?: string; error?: string }
   | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
   | { kind: 'control_state'; mode: ControlMode }
   | { kind: 'prompt_queued'; promptId: string; blocks: PromptBlock[]; queuedAt: string; position: number }
@@ -372,6 +376,7 @@ export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'aside'; agentId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; agentId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; agentId: string; corrId?: string }
   | { t: 'add_annotation'; agentId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }

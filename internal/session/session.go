@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,8 +86,9 @@ type QueuedPrompt struct {
 
 type queuedPrompt struct {
 	QueuedPrompt
-	ctx  context.Context
-	done chan promptResult
+	ctx   context.Context
+	done  chan promptResult
+	aside bool
 }
 
 type promptResult struct {
@@ -305,13 +307,53 @@ func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.Promp
 	return PromptReceipt{ID: prompt.ID, Disposition: disposition, Position: position, done: prompt.done}, nil
 }
 
+// EnqueueAside serializes an ACP session/fork question with ordinary turns.
+// The question and fork output are durable aside events, never user/message
+// events in the parent agent conversation.
+func (s *Session) EnqueueAside(ctx context.Context, text string) (PromptReceipt, error) {
+	if s.ControlMode() != "transcript" {
+		return PromptReceipt{}, errors.New("agent session is controlled by the terminal")
+	}
+	if !s.Capabilities().ForkSession {
+		return PromptReceipt{}, errors.New("this agent does not support context-isolated asides")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return PromptReceipt{}, errors.New("aside question is required")
+	}
+	prompt := &queuedPrompt{
+		QueuedPrompt: QueuedPrompt{ID: newPromptID(), Blocks: []agentadapter.PromptBlock{{Type: "text", Text: text}}, QueuedAt: time.Now().UTC()},
+		ctx:          ctx, done: make(chan promptResult, 1), aside: true,
+	}
+	s.promptMu.Lock()
+	disposition, position := "queued", len(s.promptQueue)+1
+	startRunner := !s.promptRunning
+	if startRunner {
+		disposition, position = "started", 0
+		s.promptRunning, s.promptCurrent = true, prompt
+	} else {
+		s.promptQueue = append(s.promptQueue, prompt)
+	}
+	s.promptMu.Unlock()
+	if startRunner {
+		go s.runPromptQueue()
+	}
+	return PromptReceipt{ID: prompt.ID, Disposition: disposition, Position: position, done: prompt.done}, nil
+}
+
 func (s *Session) runPromptQueue() {
 	for {
 		s.promptMu.Lock()
 		prompt := s.promptCurrent
 		s.promptMu.Unlock()
-		s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
-		stopReason, err := s.executePrompt(prompt.ctx, prompt.Blocks)
+		var stopReason string
+		var err error
+		if prompt.aside {
+			stopReason, err = s.executeAside(prompt.ctx, prompt.ID, prompt.Blocks)
+		} else {
+			s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
+			stopReason, err = s.executePrompt(prompt.ctx, prompt.Blocks)
+		}
 		if err != nil {
 			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": err.Error(), "promptId": prompt.ID})
 			s.emit(eventlog.Event{Kind: "error", Payload: payload})
@@ -330,6 +372,24 @@ func (s *Session) runPromptQueue() {
 		s.promptQueue = s.promptQueue[1:]
 		s.promptMu.Unlock()
 	}
+}
+
+func (s *Session) executeAside(ctx context.Context, id string, blocks []agentadapter.PromptBlock) (string, error) {
+	asides, ok := s.adapter.(agentadapter.AsideAdapter)
+	if !ok {
+		return "", errors.New("this agent does not support context-isolated asides")
+	}
+	question := blocks[0].Text
+	payload, _ := json.Marshal(map[string]any{"kind": "aside_started", "asideId": id, "question": question})
+	s.emit(eventlog.Event{Kind: "aside_started", Payload: payload})
+	stopReason, err := asides.Aside(ctx, id, blocks)
+	completed := map[string]any{"kind": "aside_completed", "asideId": id, "stopReason": stopReason}
+	if err != nil {
+		completed["error"] = err.Error()
+	}
+	payload, _ = json.Marshal(completed)
+	s.emit(eventlog.Event{Kind: "aside_completed", Payload: payload})
+	return stopReason, err
 }
 
 func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {

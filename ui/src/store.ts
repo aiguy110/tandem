@@ -157,6 +157,7 @@ export interface AgentView {
   commands: SlashCommand[];
   // null until the adapter reports ACP prompt capabilities.
   imagePromptSupport: boolean | null;
+  asideSupport: boolean | null;
   // Daemon-owned FIFO entries waiting behind the active turn.
   queuedPrompts: QueuedPrompt[];
   controlMode: 'transcript' | 'switching' | 'terminal';
@@ -263,6 +264,7 @@ interface StoreState {
   renameAgent: (agentId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  aside: (agentId: string, question: string) => Promise<AckResult>;
   removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (agentId: string) => Promise<AckResult>;
   interruptAndClearQueue: (agentId: string) => Promise<AckResult>;
@@ -655,6 +657,7 @@ export const useStore = create<StoreState>((set, get) => {
           const lastConfig = [...transcript].reverse().find((e) => e.event.kind === 'session_config');
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
+          const lastAsideCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'aside_capabilities');
           const audioEvents = transcript.filter((e) => e.event.kind === 'audio_preference' || e.event.kind === 'audio_state');
           let audioOnTurnEnd = prev.audioOnTurnEnd;
           let audioState = prev.audioState;
@@ -699,6 +702,10 @@ export const useStore = create<StoreState>((set, get) => {
               lastPromptCapabilities && lastPromptCapabilities.event.kind === 'prompt_capabilities'
                 ? lastPromptCapabilities.event.image
                 : prev.imagePromptSupport,
+            asideSupport:
+              lastAsideCapabilities && lastAsideCapabilities.event.kind === 'aside_capabilities'
+                ? lastAsideCapabilities.event.fork
+                : prev.asideSupport,
             // Pane-change subscriptions replay the still-pending request while
             // the user holds the wheel. Keep it acknowledged in that case.
             takeovers: prev.browserOwner === 'user' && prev.browserTakeoverHeld ? [] : replayedTakeovers,
@@ -1113,6 +1120,15 @@ export const useStore = create<StoreState>((set, get) => {
           ? { t: 'prompt', agentId, text: input, corrId }
           : { t: 'prompt', agentId, blocks: input, corrId });
       }),
+    aside: (agentId, question) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          resolve(result);
+        });
+        client.send({ t: 'aside', agentId, text: question, corrId });
+      }),
     removeQueuedPrompt: (agentId, promptId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
@@ -1290,6 +1306,7 @@ function shell(id: string): AgentView {
     usage: readStoredUsage(id),
     commands: [],
     imagePromptSupport: null,
+    asideSupport: null,
     queuedPrompts: [],
     controlMode: 'transcript',
     adapter: 'acp',
@@ -1329,6 +1346,7 @@ function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now(
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
+  if (event.kind === 'aside_capabilities') v.asideSupport = event.fork;
   if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: receivedAt };
   if (event.kind === 'control_state') v.controlMode = event.mode;
   if (event.kind === 'audio_preference') {

@@ -233,7 +233,7 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 	if a.SessionID() != "sess_mock" {
 		t.Fatalf("session ID = %q", a.SessionID())
 	}
-	if caps := a.Capabilities(); !caps.Structured || !caps.LoadSession || !caps.Image {
+	if caps := a.Capabilities(); !caps.Structured || !caps.LoadSession || !caps.ForkSession || !caps.Image {
 		t.Fatalf("capabilities = %#v", caps)
 	}
 
@@ -281,6 +281,25 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("prompt did not finish")
+	}
+}
+
+func TestAsideForksAndWrapsForkUpdates(t *testing.T) {
+	a := startMock(t, nil)
+	stop, err := a.Aside(context.Background(), "aside-1", []PromptBlock{{Type: "text", Text: "DERISK_ASIDE"}})
+	if err != nil || stop != "end_turn" {
+		t.Fatalf("Aside() = %q, %v", stop, err)
+	}
+	got := waitEvent(t, a, "aside_event", func(event map[string]any) bool {
+		inner, _ := event["event"].(map[string]any)
+		return event["asideId"] == "aside-1" && inner["kind"] == "message_chunk"
+	})
+	inner := got["event"].(map[string]any)
+	if inner["text"] != "Aside answer." {
+		t.Fatalf("aside event = %#v", got)
+	}
+	if a.SessionID() != "sess_mock" {
+		t.Fatalf("parent session changed to %q", a.SessionID())
 	}
 }
 
