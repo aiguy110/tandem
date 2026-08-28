@@ -49,6 +49,7 @@ afterEach(() => {
   localStorage.clear();
   delete (URL as unknown as Record<string, unknown>).createObjectURL;
   delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
+  delete (navigator as unknown as Record<string, unknown>).mediaSession;
 });
 
 describe('TranscriptPane voice rendering', () => {
@@ -134,6 +135,46 @@ describe('TranscriptPane voice rendering', () => {
     });
     await act(async () => { await Promise.resolve(); });
     expect(play).toHaveBeenCalledOnce();
+  });
+
+  it('routes earbud seek and track commands to the active audio snippet', async () => {
+    const handlers = new Map<string, ((details: { seekOffset?: number }) => void) | null>();
+    const setPositionState = vi.fn();
+    Object.defineProperty(navigator, 'mediaSession', {
+      configurable: true,
+      value: {
+        playbackState: 'none',
+        setActionHandler: vi.fn((action: string, handler: ((details: { seekOffset?: number }) => void) | null) => handlers.set(action, handler)),
+        setPositionState,
+      },
+    });
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:earbud-voice');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByRole('button', { name: 'Listen' }));
+    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response')) as HTMLAudioElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 30 });
+    player.currentTime = 12;
+    fireEvent.play(player);
+
+    handlers.get('seekforward')?.({ seekOffset: 5 });
+    expect(player.currentTime).toBe(17);
+    handlers.get('seekbackward')?.({ seekOffset: 20 });
+    expect(player.currentTime).toBe(0);
+    handlers.get('nexttrack')?.({});
+    expect(player.currentTime).toBe(10);
+    player.currentTime = 28;
+    handlers.get('nexttrack')?.({});
+    expect(player.currentTime).toBe(30);
+    handlers.get('previoustrack')?.({});
+    expect(player.currentTime).toBe(20);
+    expect(setPositionState).toHaveBeenCalled();
   });
 });
 

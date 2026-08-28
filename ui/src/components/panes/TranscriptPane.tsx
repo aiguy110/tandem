@@ -901,8 +901,12 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  useEffect(() => () => {
-    if (audioURL) URL.revokeObjectURL(audioURL);
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => {
+      if (audioURL) URL.revokeObjectURL(audioURL);
+      if (audio) releaseMediaSession(audio);
+    };
   }, [audioURL]);
 
   const render = async (kind: 'loading' | 'rendering') => {
@@ -931,6 +935,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
   useEffect(() => {
     if (!autoplaying || !audioURL || !audioRef.current) return;
     let active = true;
+    activateMediaSession(audioRef.current);
     void audioRef.current.play().catch(() => {
       if (active) onAutoplayFinished(seq);
     });
@@ -947,7 +952,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
 
   return (
     <div className={`message-audio${audioURL || playerPending ? '' : ' message-listen'}`}>
-      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onEnded={() => autoplaying && onAutoplayFinished(seq)} onError={() => autoplaying && onAutoplayFinished(seq)} /> : playerPending ? (
+      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onPlay={(event) => activateMediaSession(event.currentTarget)} onPause={(event) => updateMediaSession(event.currentTarget)} onTimeUpdate={(event) => updateMediaSession(event.currentTarget)} onDurationChange={(event) => updateMediaSession(event.currentTarget)} onEnded={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} onError={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} /> : playerPending ? (
         <div className="message-audio-placeholder" role="status">{renderingAudio || loading === 'rendering' ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
         <button type="button" onClick={() => void render('rendering')} disabled={!enabled || loading !== 'idle'} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
@@ -957,6 +962,69 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
       {error && <span className="message-audio-error" role="alert">{error}</span>}
     </div>
   );
+}
+
+let mediaSessionAudio: HTMLAudioElement | null = null;
+
+function mediaSession(): MediaSession | null {
+  return typeof navigator !== 'undefined' && 'mediaSession' in navigator ? navigator.mediaSession : null;
+}
+
+function seekAudio(audio: HTMLAudioElement, offset: number) {
+  const upper = Number.isFinite(audio.duration) ? audio.duration : Number.POSITIVE_INFINITY;
+  audio.currentTime = Math.max(0, Math.min(upper, audio.currentTime + offset));
+  updateMediaSession(audio);
+}
+
+function setMediaAction(session: MediaSession, action: MediaSessionAction, handler: MediaSessionActionHandler | null) {
+  try {
+    session.setActionHandler(action, handler);
+  } catch {
+    // Browsers expose Media Session actions independently; keep the supported ones.
+  }
+}
+
+function activateMediaSession(audio: HTMLAudioElement) {
+  const session = mediaSession();
+  if (!session) return;
+  mediaSessionAudio = audio;
+  const seek = (direction: -1 | 1) => (details: MediaSessionActionDetails) => {
+    seekAudio(audio, direction * (details.seekOffset ?? 10));
+  };
+  setMediaAction(session, 'play', () => { void audio.play(); });
+  setMediaAction(session, 'pause', () => audio.pause());
+  setMediaAction(session, 'seekbackward', seek(-1));
+  setMediaAction(session, 'seekforward', seek(1));
+  // Many earbuds report double/triple presses as track changes rather than seeks.
+  setMediaAction(session, 'previoustrack', () => seekAudio(audio, -10));
+  setMediaAction(session, 'nexttrack', () => seekAudio(audio, 10));
+  updateMediaSession(audio);
+}
+
+function updateMediaSession(audio: HTMLAudioElement) {
+  const session = mediaSession();
+  if (!session || mediaSessionAudio !== audio) return;
+  session.playbackState = audio.paused ? 'paused' : 'playing';
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  try {
+    session.setPositionState({
+      duration: audio.duration,
+      playbackRate: audio.playbackRate,
+      position: Math.max(0, Math.min(audio.duration, audio.currentTime)),
+    });
+  } catch {
+    // Metadata can briefly be inconsistent while a newly loaded clip settles.
+  }
+}
+
+function releaseMediaSession(audio: HTMLAudioElement) {
+  const session = mediaSession();
+  if (!session || mediaSessionAudio !== audio) return;
+  mediaSessionAudio = null;
+  session.playbackState = 'none';
+  for (const action of ['play', 'pause', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack'] as MediaSessionAction[]) {
+    setMediaAction(session, action, null);
+  }
 }
 
 function TaskList({ item }: { item: Extract<Item, { kind: 'plan' }> }) {
