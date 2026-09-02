@@ -24,7 +24,7 @@ export function buildCommands(): Command[] {
   const s = () => useStore.getState();
   return [
     { id: 'agent.spawn', title: 'Spawn agent…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
-    { id: 'history.open', title: 'History…', subtitle: 'Search past and active sessions by repo, then revive or focus one', run: () => s().setModal('history') },
+    { id: 'agent.resume', title: 'Resume session…', subtitle: 'Search past and active sessions, grouped by repo', run: () => s().setModal('resume') },
     { id: 'automation.open', title: 'Automation…', subtitle: 'View schedules and recent runs', run: () => s().setModal('automation') },
     {
       id: 'agent.spawn.sibling',

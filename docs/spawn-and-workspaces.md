@@ -5,23 +5,27 @@ keystrokes**: sensible defaults, progressive disclosure, and heavy keyboard cont
 No sandboxing yet — agents run in **working directories on the host** (git worktrees where
 possible).
 
-## History
+## Resume Session
 
-The **History…** command (default binding `H`) opens a picker over every live or closed ACP
-session persisted by Tandem, plus imported vendor transcripts and external sessions
-returned by configured ACP adapters that advertise `sessionCapabilities.list`.
+The **Resume session…** command (default binding `R`) opens a picker over every live or
+closed ACP session persisted by Tandem, plus imported vendor transcripts and external
+sessions returned by configured ACP adapters that advertise `sessionCapabilities.list`.
 
 Rows are **grouped by source repository**. The daemon attributes each session to a repo in
 `ResumeCatalog`: Tandem-owned sessions use their recorded workspace, and everything else is
 resolved from its working directory by `workspace.RepoForDir`, which follows a linked
 worktree's `gitdir:` pointer back to the repository it was cut from before falling back to
 walking up for a `.git` entry. `repoPath` is the grouping identity; `repo` is the label.
+Each repo group is ordered by its **best individual match**, so the repo you named leads.
 
-The search box ranks in three tiers, highest first — **session name**, then **repo name**,
-then **hits in the transcript itself** (a daemon-side FTS query, debounced, with stale
-responses discarded). Incidental metadata (agent, branch, working directory, session id)
-matches below the transcript tier so it stays findable without outranking real content.
-Within a tier, active sessions sort above dormant ones, then by recency.
+Search ranks by **match quality first, then field**. Quality is exact > prefix > word >
+substring > subsequence; field priority is session name > repo > transcript > incidental
+metadata (agent, branch, cwd, session id). Quality outranking field is deliberate: strict
+field tiering let any title that merely contained the query as a subsequence ("Trim And
+Deduplicate Empty Metadata" matches `tandem`) beat the repo the user actually typed. A
+transcript hit is a token-prefix FTS match from the daemon (debounced, stale responses
+discarded) and grades as `substring`, so it sits below a deliberate name or repo match and
+above an incidental subsequence.
 
 Entries are deduplicated by ACP session id, and by agent id for running agents. **Active
 sessions appear with an `active` badge and are focused rather than resumed** — Tandem never
@@ -154,7 +158,7 @@ Illustrative default map (all rebindable):
 |---|---|---|
 | `c` | `agent.spawn` | Open quick-spawn palette |
 | `C` | `agent.spawn.sibling` | New agent in the focused repo (new worktree) |
-| `h` | `history.open` | Search past + active sessions, grouped by repo |
+| `R` | `agent.resume` | Resume session — past + active, grouped by repo |
 | `⌘K` | `palette.open` | Command palette |
 | `g a` | `nav.goToAgent` | Jump to agent by name |
 | `j` / `k` | `nav.next` / `nav.prev` | Move through the agent rail |

@@ -764,7 +764,7 @@ func findGitRepos(ctx context.Context, root string, maxDepth int) []string {
 }
 
 // RepoOrigin names the source repository a working directory belongs to. It is
-// what groups sessions in the History palette, so it has to answer for
+// what groups sessions in the Resume palette, so it has to answer for
 // directories Tandem never provisioned — imported vendor transcripts record a
 // bare CWD, and that CWD may since have been deleted.
 type RepoOrigin struct {

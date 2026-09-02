@@ -3,9 +3,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import type { AgentView } from '../store';
 import type { ResumableSession, SessionSearchResult } from '../wire';
-import { HistoryPalette } from './HistoryPalette';
+import { ResumePalette } from './ResumePalette';
 
-const PLACEHOLDER = 'Search history — session, repo, or transcript…';
+const PLACEHOLDER = 'Resume a session — name, repo, or transcript…';
 
 function session(overrides: Partial<ResumableSession> = {}): ResumableSession {
   return {
@@ -71,7 +71,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('HistoryPalette', () => {
+describe('ResumePalette', () => {
   it('groups rows under a repository heading', () => {
     setup({
       resumeCatalog: {
@@ -82,8 +82,8 @@ describe('HistoryPalette', () => {
         adapters: [],
       },
     });
-    const view = render(<HistoryPalette />);
-    const headings = [...view.container.querySelectorAll('.history-repo')].map((node) => node.textContent);
+    const view = render(<ResumePalette />);
+    const headings = [...view.container.querySelectorAll('.resume-repo')].map((node) => node.textContent);
     expect(headings).toEqual(['repo', 'outpost']);
   });
 
@@ -101,8 +101,8 @@ describe('HistoryPalette', () => {
       setPane,
       setModal,
     });
-    const view = render(<HistoryPalette />);
-    expect(view.container.querySelector('.history-badge')?.textContent).toBe('active');
+    const view = render(<ResumePalette />);
+    expect(view.container.querySelector('.resume-badge')?.textContent).toBe('active');
     fireEvent.keyDown(view.container.querySelector('.modal')!, { key: 'Enter' });
     expect(focus).toHaveBeenCalledWith('agent-1');
     expect(setPane).toHaveBeenCalledWith('chat');
@@ -114,8 +114,8 @@ describe('HistoryPalette', () => {
     const target = session();
     const resumeSession = vi.fn().mockResolvedValue({});
     setup({ resumeCatalog: { sessions: [target], adapters: [] }, resumeSession });
-    const view = render(<HistoryPalette />);
-    expect(view.container.querySelector('.history-badge')).toBeNull();
+    const view = render(<ResumePalette />);
+    expect(view.container.querySelector('.resume-badge')).toBeNull();
     await act(async () => {
       fireEvent.keyDown(view.container.querySelector('.modal')!, { key: 'Enter' });
     });
@@ -128,7 +128,7 @@ describe('HistoryPalette', () => {
     setup({
       searchSessions: vi.fn((query: string) => new Promise<SessionSearchResult[]>((resolve) => resolvers.set(query, resolve))),
     });
-    const view = render(<HistoryPalette />);
+    const view = render(<ResumePalette />);
     const input = screen.getByPlaceholderText(PLACEHOLDER);
 
     fireEvent.change(input, { target: { value: 'old' } });
@@ -152,7 +152,7 @@ describe('HistoryPalette', () => {
       },
       resumeSession,
     });
-    const view = render(<HistoryPalette />);
+    const view = render(<ResumePalette />);
     fireEvent.keyDown(view.container.querySelector('.modal')!, { key: 'Enter' });
     expect(resumeSession).not.toHaveBeenCalled();
     expect(view.container.textContent).toContain('No resume adapter is configured.');
@@ -163,7 +163,7 @@ describe('HistoryPalette', () => {
     const target = session({ title: 'zzz' });
     const resumeSession = vi.fn().mockResolvedValue({});
     setup({ searchSessions: vi.fn().mockResolvedValue([result(target, 'needle', 2)]), resumeSession });
-    const view = render(<HistoryPalette />);
+    const view = render(<ResumePalette />);
     fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'needle' } });
     await act(async () => {
       vi.advanceTimersByTime(125);
@@ -181,10 +181,10 @@ describe('HistoryPalette', () => {
         adapters: [],
       },
     });
-    const view = render(<HistoryPalette />);
+    const view = render(<ResumePalette />);
     const modal = view.container.querySelector('.modal')!;
-    expect(view.container.querySelectorAll('.history-row')[0].className).toContain('sel');
+    expect(view.container.querySelectorAll('.resume-row')[0].className).toContain('sel');
     fireEvent.keyDown(modal, { key: 'ArrowDown' });
-    expect(view.container.querySelectorAll('.history-row')[1].className).toContain('sel');
+    expect(view.container.querySelectorAll('.resume-row')[1].className).toContain('sel');
   });
 });
