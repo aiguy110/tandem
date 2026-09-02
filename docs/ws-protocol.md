@@ -274,6 +274,14 @@ to ACP's inline `{type:'image', mimeType, data:<base64>}` block. The ACP
 `{kind:'prompt_capabilities', image:boolean}` event. An image prompt is rejected
 before logging a user message or starting a turn when that capability is false.
 
+Context usage is a durable `{kind:'usage', used, size, cost?, updatedAt}` event.
+`updatedAt` is daemon-owned (epoch ms): the daemon only advances it when the
+agent reports *different* totals, so re-reported identical usage (turn
+boundaries, resumes, idle pings) leaves the "updated Xm ago" age alone. Because
+the stamp is persisted with the event, the UI rebuilds the usage meter and its
+age from the replayed transcript — the same for every client, across reconnects,
+page loads, and daemon restarts.
+
 Prompts submitted during an active turn enter a daemon-owned FIFO rather than
 overlapping ACP `session/prompt` calls. The prompt acknowledgement includes a
 `promptId`, `disposition: 'started'|'queued'`, and a one-based queue `position`.

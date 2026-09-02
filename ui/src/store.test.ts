@@ -168,3 +168,42 @@ describe('annotations store reducer', () => {
     expect(useStore.getState().annotations['agent-2']).toEqual([]);
   });
 });
+
+// The context-usage meter is daemon-owned: usage events carry the timestamp of
+// the last real change and live in the event log, so a fresh page load rebuilds
+// the meter (and its age) from the snapshot rather than browser storage.
+describe('context usage', () => {
+  it('rebuilds usage from the replayed transcript with the daemon timestamp', () => {
+    __testApplyServerMsg({
+      t: 'snapshot',
+      agentId: 'agent-1',
+      seq: 2,
+      transcript: [
+        { seq: 1, event: { kind: 'usage', used: 100, size: 1000, updatedAt: 1_700_000_000_000 } },
+        { seq: 2, event: { kind: 'usage', used: 250, size: 1000, cost: { amount: 0.5, currency: 'USD' }, updatedAt: 1_700_000_060_000 } },
+      ],
+      status: 'idle',
+      controlMode: 'transcript',
+      pendingApprovals: [],
+      queuedPrompts: [],
+    });
+
+    expect(useStore.getState().agents['agent-1'].usage).toEqual({
+      used: 250,
+      size: 1000,
+      cost: { amount: 0.5, currency: 'USD' },
+      updatedAt: 1_700_000_060_000,
+    });
+  });
+
+  it('keeps the daemon timestamp for live usage events instead of arrival time', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'event', agentId: 'agent-1', seq: 1, event: { kind: 'usage', used: 42, size: 1000, updatedAt: 1_700_000_000_000 },
+    });
+
+    expect(useStore.getState().agents['agent-1'].usage?.updatedAt).toBe(1_700_000_000_000);
+  });
+});

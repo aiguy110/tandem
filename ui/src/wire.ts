@@ -94,7 +94,7 @@ export type AgentEvent =
   | { kind: 'aside_started'; asideId: string; question: string }
   | { kind: 'aside_event'; asideId: string; event: AgentEvent }
   | { kind: 'aside_completed'; asideId: string; stopReason?: string; error?: string }
-  | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null }
+  | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null; updatedAt?: number }
   | { kind: 'control_state'; mode: ControlMode }
   | { kind: 'prompt_queued'; promptId: string; blocks: PromptBlock[]; queuedAt: string; position: number }
   | { kind: 'prompt_started'; promptId: string; blocks: PromptBlock[]; queuedAt: string }

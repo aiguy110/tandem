@@ -936,6 +936,26 @@ func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, erro
 	return out, rows.Err()
 }
 
+// LatestEventOfKind returns the newest persisted event of a kind, or nil when
+// the agent has never logged one. Callers use it to re-seed in-memory state
+// (for example the last reported context usage) after a daemon restart without
+// replaying the whole history.
+func (s *Store) LatestEventOfKind(agentID, kind string) (*StoredEvent, error) {
+	var event StoredEvent
+	err := s.db.QueryRow("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND kind = ? ORDER BY seq DESC LIMIT 1", agentID, kind).
+		Scan(&event.Seq, &event.Kind, &event.Payload, &event.TS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid([]byte(event.Payload)) {
+		return nil, fmt.Errorf("event %q/%d has malformed payload JSON", agentID, event.Seq)
+	}
+	return &event, nil
+}
+
 func (s *Store) EventBounds(agentID string) (min, max int64, err error) {
 	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", agentID).Scan(&min, &max)
 	return

@@ -367,30 +367,6 @@ const saveFocusedAgent = (agentId: string | null): void => {
   }
 };
 
-const USAGE_STORAGE_KEY = 'tandem.agentUsage';
-type StoredUsage = NonNullable<AgentView['usage']>;
-
-function readStoredUsage(agentId: string): StoredUsage | null {
-  try {
-    const all = JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || '{}') as Record<string, StoredUsage>;
-    const usage = all[agentId];
-    return usage && usage.used >= 0 && usage.size > 0 && Number.isFinite(usage.updatedAt) ? usage : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredUsage(agentId: string, usage: StoredUsage | null): void {
-  try {
-    const all = JSON.parse(localStorage.getItem(USAGE_STORAGE_KEY) || '{}') as Record<string, StoredUsage>;
-    if (usage) all[agentId] = usage;
-    else delete all[agentId];
-    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify(all));
-  } catch {
-    // Persistence is best-effort when storage is unavailable or malformed.
-  }
-}
-
 // Rails collapse by default on narrow viewports (phones/small tablets), but the
 // user can still toggle them open regardless of width.
 const MOBILE_BREAKPOINT = '(max-width: 860px)';
@@ -629,7 +605,6 @@ export const useStore = create<StoreState>((set, get) => {
         ptyHub.clear(msg.agentId);
         shellHub.clear(msg.agentId);
         browserHub.clear(msg.agentId);
-        writeStoredUsage(msg.agentId, null);
         return;
       }
       case 'snapshot': {
@@ -658,6 +633,7 @@ export const useStore = create<StoreState>((set, get) => {
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
           const lastAsideCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'aside_capabilities');
+          const lastUsage = [...transcript].reverse().find((e) => e.event.kind === 'usage');
           const audioEvents = transcript.filter((e) => e.event.kind === 'audio_preference' || e.event.kind === 'audio_state');
           let audioOnTurnEnd = prev.audioOnTurnEnd;
           let audioState = prev.audioState;
@@ -706,6 +682,10 @@ export const useStore = create<StoreState>((set, get) => {
               lastAsideCapabilities && lastAsideCapabilities.event.kind === 'aside_capabilities'
                 ? lastAsideCapabilities.event.fork
                 : prev.asideSupport,
+            usage:
+              lastUsage && lastUsage.event.kind === 'usage'
+                ? { used: lastUsage.event.used, size: lastUsage.event.size, cost: lastUsage.event.cost, updatedAt: usageUpdatedAt(lastUsage.event) }
+                : prev.usage,
             // Pane-change subscriptions replay the still-pending request while
             // the user holds the wheel. Keep it acknowledged in that case.
             takeovers: prev.browserOwner === 'user' && prev.browserTakeoverHeld ? [] : replayedTakeovers,
@@ -760,13 +740,12 @@ export const useStore = create<StoreState>((set, get) => {
           });
           return;
         }
-        const usageReceivedAt = event.kind === 'usage' ? Date.now() : undefined;
         set((st) => {
           const a = st.agents[agentId] ?? shell(agentId);
           if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
           const prevStatus = a.status;
           const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
-          applyEventToView(next, event, usageReceivedAt);
+          applyEventToView(next, event);
           if (event.kind === 'audio_state' && event.state === 'ready') {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
             next.audioReadyRevision++;
@@ -779,7 +758,6 @@ export const useStore = create<StoreState>((set, get) => {
           if (severity && st.focusedId !== agentId) {
             next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
           }
-          if (next.usage && usageReceivedAt) writeStoredUsage(agentId, next.usage);
           const agents = { ...st.agents, [agentId]: next };
           const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
           return { agents, order };
@@ -1303,7 +1281,7 @@ function shell(id: string): AgentView {
     browserTakeoverHeld: false,
     takeovers: [],
     sessionConfig: null,
-    usage: readStoredUsage(id),
+    usage: null,
     commands: [],
     imagePromptSupport: null,
     asideSupport: null,
@@ -1327,7 +1305,14 @@ function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
 
 // Fold status/permission side effects of an event into the view (mirrors the
 // daemon's session-side handling so the rail stays correct between snapshots).
-function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now()): void {
+// The daemon stamps usage events with the moment the reported totals last
+// changed and persists that with the event, so age survives reconnects, page
+// loads, and other browsers. Pre-updatedAt events fall back to arrival time.
+function usageUpdatedAt(event: Extract<WireEvent, { kind: 'usage' }>): number {
+  return typeof event.updatedAt === 'number' && event.updatedAt > 0 ? event.updatedAt : Date.now();
+}
+
+function applyEventToView(v: AgentView, event: WireEvent): void {
   if (event.kind === 'status') v.status = event.status;
   if (event.kind === 'permission_request') {
     v.status = 'blocked';
@@ -1347,7 +1332,7 @@ function applyEventToView(v: AgentView, event: WireEvent, receivedAt = Date.now(
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
   if (event.kind === 'aside_capabilities') v.asideSupport = event.fork;
-  if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: receivedAt };
+  if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: usageUpdatedAt(event) };
   if (event.kind === 'control_state') v.controlMode = event.mode;
   if (event.kind === 'audio_preference') {
     v.audioOnTurnEnd = event.enabled;

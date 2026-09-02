@@ -233,6 +233,21 @@ func (l *Log) ReplaySince(since int64) (Replay, error) {
 	return Replay{Source: source, Events: events}, nil
 }
 
+// LatestOfKind returns the newest logged event of a kind. ok is false when the
+// agent has never logged one. It reads through to SQLite so it stays correct
+// after a daemon restart, when the in-memory ring is empty.
+func (l *Log) LatestOfKind(kind string) (LoggedEvent, bool, error) {
+	row, err := l.store.LatestEventOfKind(l.agentID, kind)
+	if err != nil || row == nil {
+		return LoggedEvent{}, false, err
+	}
+	event, err := ParseNormalized([]byte(row.Payload))
+	if err != nil {
+		return LoggedEvent{}, false, fmt.Errorf("decode event seq %d: %w", row.Seq, err)
+	}
+	return LoggedEvent{Seq: row.Seq, Event: event, TS: row.TS}, true, nil
+}
+
 func (l *Log) FullHistory() ([]LoggedEvent, error) {
 	rows, err := l.store.RangeEvents(l.agentID, 0)
 	if err != nil {

@@ -62,6 +62,23 @@ type Session struct {
 	shellCancel  context.CancelFunc
 	shellDone    chan struct{}
 	shellRunning bool
+
+	// lastUsage caches the most recent context-usage report so its "updated"
+	// timestamp only advances when the agent actually reported different
+	// usage. usageSeeded records that the cache has been reconciled with the
+	// durable log (once per session, lazily on the first usage event).
+	usageMu     sync.Mutex
+	lastUsage   usageReport
+	usageSeeded bool
+}
+
+// usageReport is the daemon's view of a context-usage event: the numbers the
+// agent reported plus the moment they last changed.
+type usageReport struct {
+	Used      float64
+	Size      float64
+	UpdatedAt int64
+	Present   bool
 }
 
 func (s *Session) DisplayName() string {
@@ -143,6 +160,68 @@ func (s *Session) emit(ev eventlog.Event) {
 	_, _ = s.append(ev)
 }
 
+// usagePayload is the normalized "usage" event. updatedAt is daemon-owned: it
+// is persisted with the event so every client (and every reconnect) reads the
+// same age instead of stamping its own arrival time.
+type usagePayload struct {
+	Kind      string          `json:"kind"`
+	Used      float64         `json:"used"`
+	Size      float64         `json:"size"`
+	Cost      json.RawMessage `json:"cost,omitempty"`
+	UpdatedAt int64           `json:"updatedAt"`
+}
+
+// stampUsage attaches updatedAt to a usage event. Agents re-report usage on
+// their own cadence (turn boundaries, resumes, idle pings); the timestamp only
+// moves when the reported totals changed, i.e. when the model actually
+// produced content, so the UI's "updated Xm ago" tracks real work rather than
+// bookkeeping chatter.
+func (s *Session) stampUsage(ev eventlog.Event) eventlog.Event {
+	var payload usagePayload
+	if json.Unmarshal(ev.Payload, &payload) != nil || payload.Kind != "usage" {
+		return ev
+	}
+	s.usageMu.Lock()
+	if !s.usageSeeded {
+		s.lastUsage = s.durableUsage()
+		s.usageSeeded = true
+	}
+	prev := s.lastUsage
+	updatedAt := time.Now().UnixMilli()
+	if prev.Present && prev.Used == payload.Used && prev.Size == payload.Size && prev.UpdatedAt > 0 {
+		updatedAt = prev.UpdatedAt
+	}
+	s.lastUsage = usageReport{Used: payload.Used, Size: payload.Size, UpdatedAt: updatedAt, Present: true}
+	s.usageMu.Unlock()
+	payload.UpdatedAt = updatedAt
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ev
+	}
+	ev.Payload = encoded
+	return ev
+}
+
+// durableUsage reads the last usage event persisted for this agent so a daemon
+// restart does not reset every agent's usage timer.
+func (s *Session) durableUsage() usageReport {
+	logged, ok, err := s.Log.LatestOfKind("usage")
+	if err != nil || !ok {
+		return usageReport{}
+	}
+	var payload usagePayload
+	if json.Unmarshal(logged.Event.Payload, &payload) != nil {
+		return usageReport{}
+	}
+	updatedAt := payload.UpdatedAt
+	if updatedAt <= 0 {
+		// Events written before usage carried updatedAt fall back to the log's
+		// own append time, which is the same moment.
+		updatedAt = logged.TS
+	}
+	return usageReport{Used: payload.Used, Size: payload.Size, UpdatedAt: updatedAt, Present: true}
+}
+
 func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
 	if ev.Kind != "raw_pty" {
 		var wire struct {
@@ -160,6 +239,9 @@ func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
 			}
 			s.mu.Unlock()
 		}
+	}
+	if ev.Kind == "usage" {
+		ev = s.stampUsage(ev)
 	}
 	le, err := s.Log.Append(ev)
 	if err != nil {

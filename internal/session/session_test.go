@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -412,4 +413,84 @@ func TestImageValidationRejectsBeforeLoggingAndCountsBeforeResolution(t *testing
 			t.Fatalf("err=%v validate=%d", err, a.validationCount())
 		}
 	})
+}
+
+func usageEvent(used, size float64) eventlog.Event {
+	ev, err := eventlog.ParseNormalized([]byte(fmt.Sprintf(`{"kind":"usage","used":%g,"size":%g,"cost":null}`, used, size)))
+	if err != nil {
+		panic(err)
+	}
+	return ev
+}
+
+func decodeUsage(t *testing.T, ev eventlog.Event) usagePayload {
+	t.Helper()
+	var payload usagePayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// The usage timer must only move when the agent reports different totals:
+// re-reported identical usage (turn boundaries, resumes, idle pings) keeps the
+// original timestamp so the UI's "updated Xm ago" tracks real model output.
+func TestUsageTimestampAdvancesOnlyOnChange(t *testing.T) {
+	s, _, _ := testSession(t)
+	first, err := s.append(usageEvent(1000, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAt := decodeUsage(t, first.Event).UpdatedAt
+	if firstAt <= 0 {
+		t.Fatalf("expected a stamped updatedAt, got %d", firstAt)
+	}
+	repeat, err := s.append(usageEvent(1000, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeUsage(t, repeat.Event).UpdatedAt; got != firstAt {
+		t.Fatalf("unchanged usage moved the timer: %d != %d", got, firstAt)
+	}
+	time.Sleep(2 * time.Millisecond)
+	changed, err := s.append(usageEvent(1500, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeUsage(t, changed.Event).UpdatedAt; got <= firstAt {
+		t.Fatalf("changed usage did not move the timer: %d <= %d", got, firstAt)
+	}
+	if got := decodeUsage(t, changed.Event).Used; got != 1500 {
+		t.Fatalf("used was rewritten: %v", got)
+	}
+	if string(decodeUsage(t, changed.Event).Cost) != "null" {
+		t.Fatalf("cost was dropped: %q", decodeUsage(t, changed.Event).Cost)
+	}
+}
+
+// A daemon restart re-seeds the cached usage from SQLite, so re-reported
+// identical usage after the restart still shows its original age.
+func TestUsageTimestampSurvivesRestart(t *testing.T) {
+	s, _, db := testSession(t)
+	first, err := s.append(usageEvent(1000, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAt := decodeUsage(t, first.Event).UpdatedAt
+	log, err := eventlog.New("api-1", db, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New("api-1", "api-1", agentadapter.Spec{}, newFake(), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Dispose(context.Background()) })
+	after, err := restarted.append(usageEvent(1000, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeUsage(t, after.Event).UpdatedAt; got != firstAt {
+		t.Fatalf("restart reset the usage timer: %d != %d", got, firstAt)
+	}
 }
