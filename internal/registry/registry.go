@@ -1162,6 +1162,7 @@ func (r *Registry) SearchSessions(ctx context.Context, query string, limit, maxH
 	}
 
 	grouped := make(map[string]*SessionSearchResult)
+	seenHits := make(map[string]map[string]struct{})
 	order := make([]string, 0, min(limit, len(raw)))
 	for _, hit := range raw {
 		item, ok := byKey[key(hit.Session.Agent, hit.Session.ExternalID)]
@@ -1181,8 +1182,17 @@ func (r *Registry) SearchSessions(ctx context.Context, query string, limit, maxH
 			}
 			group = &SessionSearchResult{Session: item, Score: hit.Score, Hits: []SessionSearchHit{}}
 			grouped[groupKey] = group
+			seenHits[groupKey] = make(map[string]struct{})
 			order = append(order, groupKey)
 		}
+		// Importers can expose the same logical assistant message through more
+		// than one vendor event. Keep one normalized excerpt per role/kind so
+		// duplicates do not consume the session's small visible hit allowance.
+		hitKey := hit.Role + "\x00" + hit.Kind + "\x00" + strings.Join(strings.Fields(hit.Match.Text), " ")
+		if _, duplicate := seenHits[groupKey][hitKey]; duplicate {
+			continue
+		}
+		seenHits[groupKey][hitKey] = struct{}{}
 		if len(group.Hits) >= maxHitsPerSession {
 			continue
 		}
@@ -1226,9 +1236,10 @@ func enrichResumable(dst *ResumableSession, src ResumableSession) {
 	if dst.RepoPath == "" {
 		dst.RepoPath, dst.Repo = src.RepoPath, src.Repo
 	}
-	if src.Source == "history" && src.Title != "" {
+	if src.Source == "history" && src.Title != "" && (dst.Source != "tandem" || dst.Title == "") {
 		// Preserve Tandem's display name separately in AgentName while using
-		// the vendor transcript's usually more descriptive conversation title.
+		// the vendor transcript's usually more descriptive conversation title,
+		// unless the session has an explicit Tandem name from the Agents rail.
 		dst.Title = src.Title
 	} else if dst.Title == "" {
 		dst.Title = src.Title
