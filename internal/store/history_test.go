@@ -3,14 +3,13 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 )
 
 func historyTime(value int64) *int64 { return &value }
 
-func TestReplaceAndSearchHistoryWithContext(t *testing.T) {
+func TestReplaceAndSearchHistoryWithMatchExcerpt(t *testing.T) {
 	s, _ := openTestStore(t)
 	session := HistorySession{
 		Source: "fixture", Agent: "pi", ExternalID: "session-1", CWD: "/work/repo",
@@ -43,8 +42,8 @@ func TestReplaceAndSearchHistoryWithContext(t *testing.T) {
 	if got := hit.Match.Text[hit.Match.Highlights[0].Start:hit.Match.Highlights[0].End]; got != "frobnicator" {
 		t.Fatalf("highlight=%q", got)
 	}
-	if hit.Before == nil || !strings.Contains(hit.Before.Text, "deployment") || hit.After == nil || !strings.Contains(hit.After.Text, "Repair") {
-		t.Fatalf("context before=%#v after=%#v", hit.Before, hit.After)
+	if hit.Before != nil || hit.After != nil {
+		t.Fatalf("search leaked adjacent transcript entries: before=%#v after=%#v", hit.Before, hit.After)
 	}
 	if hits, err := s.SearchHistory(`" OR * : NEAR(`, 10); err != nil || len(hits) != 0 {
 		t.Fatalf("syntax-like input hits=%#v err=%v", hits, err)

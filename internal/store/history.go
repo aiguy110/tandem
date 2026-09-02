@@ -411,13 +411,6 @@ LIMIT ?`, match, limit)
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for i := range hits {
-		before, after, err := s.historyContext(hits[i].EntryID)
-		if err != nil {
-			return nil, err
-		}
-		hits[i].Before, hits[i].After = before, after
-	}
 	return hits, nil
 }
 
@@ -455,38 +448,6 @@ func parseMarkedExcerpt(marked string) HistoryExcerpt {
 		}
 	}
 	return HistoryExcerpt{Text: out.String(), Highlights: highlights}
-}
-
-func (s *Store) historyContext(entryID int64) (*HistoryExcerpt, *HistoryExcerpt, error) {
-	var sessionID, ordinal int64
-	if err := s.db.QueryRow("SELECT sessionId, ordinal FROM history_entries WHERE id = ?", entryID).Scan(&sessionID, &ordinal); err != nil {
-		return nil, nil, err
-	}
-	query := func(order, comparison string) (*HistoryExcerpt, error) {
-		var text string
-		err := s.db.QueryRow("SELECT text FROM history_entries WHERE sessionId = ? AND ordinal "+comparison+" ? ORDER BY ordinal "+order+" LIMIT 1", sessionID, ordinal).Scan(&text)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return &HistoryExcerpt{Text: clipHistoryText(text, 320)}, nil
-	}
-	before, err := query("DESC", "<")
-	if err != nil {
-		return nil, nil, err
-	}
-	after, err := query("ASC", ">")
-	return before, after, err
-}
-
-func clipHistoryText(text string, maxRunes int) string {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	return string(runes[:maxRunes]) + "…"
 }
 
 func nullableInt64(value sql.NullInt64) *int64 {

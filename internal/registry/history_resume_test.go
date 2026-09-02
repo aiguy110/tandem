@@ -191,8 +191,8 @@ func TestSearchSessionsGroupsHitsAndUsesCatalogResumeState(t *testing.T) {
 		!results[0].Session.HistoryOnly || !strings.Contains(results[0].Session.ResumeError, "resumeArgs") {
 		t.Fatalf("catalog resume state was not applied: %#v", results[0].Session)
 	}
-	if results[0].Hits[0].Match.Text == "" || results[0].Hits[0].After == nil {
-		t.Fatalf("missing excerpt context: %#v", results[0].Hits[0])
+	if results[0].Hits[0].Match.Text == "" || results[0].Hits[0].Before != nil || results[0].Hits[0].After != nil {
+		t.Fatalf("unexpected search excerpt: %#v", results[0].Hits[0])
 	}
 }
 

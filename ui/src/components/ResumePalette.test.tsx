@@ -174,6 +174,25 @@ describe('ResumePalette', () => {
     expect(resumeSession).toHaveBeenCalledWith(target);
   });
 
+  it('shows the session name and only the match-centered transcript excerpt', async () => {
+    vi.useFakeTimers();
+    const target = session({ title: 'Named from the Agents rail' });
+    const searchResult = result(target, 'needle');
+    searchResult.hits[0].before = { text: '<recommended_plugins>unrelated transcript beginning', highlights: [] };
+    searchResult.hits[0].after = { text: 'unrelated following message', highlights: [] };
+    setup({ searchSessions: vi.fn().mockResolvedValue([searchResult]) });
+    const view = render(<ResumePalette />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'needle' } });
+    await act(async () => {
+      vi.advanceTimersByTime(125);
+      await Promise.resolve();
+    });
+    expect(view.container.querySelector('.resume-title')?.textContent).toContain('Named from the Agents rail');
+    expect(view.container.querySelector('.history-hit')?.textContent).toContain('needle');
+    expect(view.container.textContent).not.toContain('recommended_plugins');
+    expect(view.container.textContent).not.toContain('unrelated following message');
+  });
+
   it('arrow keys walk rows across repository groups', () => {
     setup({
       resumeCatalog: {

@@ -32,12 +32,10 @@ function Highlighted({ excerpt }: { excerpt: HistoryExcerpt }) {
 function Hit({ hit }: { hit: SessionSearchHit }) {
   return (
     <div className="history-hit">
-      {hit.before && <div className="history-context"><Highlighted excerpt={hit.before} /></div>}
       <div className="history-match">
         {(hit.role || hit.kind) && <span className="history-kind">{hit.role || hit.kind}</span>}
         <Highlighted excerpt={hit.match} />
       </div>
-      {hit.after && <div className="history-context"><Highlighted excerpt={hit.after} /></div>}
     </div>
   );
 }
