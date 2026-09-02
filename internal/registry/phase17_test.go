@@ -14,6 +14,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/workspace"
 )
@@ -205,6 +206,9 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	if s.ControlMode() != "terminal" {
 		t.Fatalf("mode %s", s.ControlMode())
 	}
+	if s.ActiveTurn() || s.Status() != session.Idle {
+		t.Fatalf("terminal handoff retained turn state: active=%v status=%s", s.ActiveTurn(), s.Status())
+	}
 	resumed, err := r.Resume(context.Background(), "sess_mock", "", "", "tandem")
 	if err != nil || resumed != s {
 		t.Fatalf("terminal live resume %v", err)
@@ -252,8 +256,11 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	for s.ControlMode() == "terminal" && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if s.ControlMode() != "switching" {
+	if s.ControlMode() != "transcript" {
 		t.Fatalf("reload failure mode %s", s.ControlMode())
+	}
+	if s.Status() != session.Error {
+		t.Fatalf("reload failure status %s", s.Status())
 	}
 	var history []eventlog.LoggedEvent
 	found := false

@@ -219,6 +219,52 @@ func TestValidatePromptFlattensQuoteBeforeAdapterValidator(t *testing.T) {
 	}
 }
 
+func TestSwapAdapterClearsOldTurnAndIgnoresItsLateResult(t *testing.T) {
+	s, old, _ := testSession(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "stuck"}})
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !s.ActiveTurn() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.ActiveTurn() {
+		t.Fatal("prompt did not become active")
+	}
+
+	replacement := newFake()
+	if err := s.SwapAdapter(context.Background(), func() (agentadapter.Adapter, error) {
+		return replacement, nil
+	}, "transcript", nil); err != nil {
+		t.Fatal(err)
+	}
+	if s.ActiveTurn() || s.Status() != Idle || s.ControlMode() != "transcript" {
+		t.Fatalf("replacement inherited old state: active=%v status=%s mode=%s", s.ActiveTurn(), s.Status(), s.ControlMode())
+	}
+
+	// Simulate the disposed adapter's Prompt call returning late. It should
+	// resolve its caller without changing the replacement's state or appending
+	// a misleading transcript error.
+	old.gate <- struct{}{}
+	if err := <-done; !errors.Is(err, errAdapterReplaced) {
+		t.Fatalf("late prompt error=%v", err)
+	}
+	if s.ActiveTurn() || s.Status() != Idle {
+		t.Fatalf("late prompt changed replacement: active=%v status=%s", s.ActiveTurn(), s.Status())
+	}
+	history, err := s.Log.FullHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range history {
+		if entry.Event.Kind == "error" {
+			t.Fatalf("late old-adapter error leaked into transcript: %s", entry.Event.Payload)
+		}
+	}
+}
+
 func TestQuoteBlocksPersistRichButAdapterSeesFlattenedText(t *testing.T) {
 	s, a, _ := testSession(t)
 	blocks := []agentadapter.PromptBlock{

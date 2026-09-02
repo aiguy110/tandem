@@ -1644,7 +1644,17 @@ func (r *Registry) reloadACP(ctx context.Context, s *session.Session, cwd, sessi
 		// resumable CLI while ACP was stopped.
 		return r.factory.Start(ctx, agentadapter.StartRequest{AgentID: s.ID, CWD: cwd, ResumeSessionID: sessionID, CaptureReplay: true, Spec: s.Spec, Log: s.Log})
 	}
-	return s.SwapAdapter(ctx, startACP, "transcript", nil)
+	err := s.SwapAdapter(ctx, startACP, "transcript", nil)
+	if err != nil {
+		// "switching" is a transient state, not a terminal error state. The CLI
+		// has already been killed, so return the UI to the transcript and surface
+		// the failed reload there instead of leaving the toggle spinning forever.
+		s.SetControlMode("transcript")
+		s.SetStatus(session.Error)
+		payload, _ := json.Marshal(map[string]any{"kind": "error", "message": "failed to reload ACP session: " + err.Error()})
+		s.PushEvent(eventlog.Event{Kind: "error", Payload: payload})
+	}
+	return err
 }
 
 func (r *Registry) LeaveTerminal(ctx context.Context, id string) error {

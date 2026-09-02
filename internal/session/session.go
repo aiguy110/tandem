@@ -113,6 +113,8 @@ type promptResult struct {
 	err        error
 }
 
+var errAdapterReplaced = errors.New("agent adapter replaced during prompt")
+
 // PromptReceipt describes whether an accepted prompt started immediately or
 // was placed behind an active turn.
 type PromptReceipt struct {
@@ -436,7 +438,7 @@ func (s *Session) runPromptQueue() {
 			s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
 			stopReason, err = s.executePrompt(prompt.ctx, prompt.Blocks)
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, errAdapterReplaced) {
 			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": err.Error(), "promptId": prompt.ID})
 			s.emit(eventlog.Event{Kind: "error", Payload: payload})
 		}
@@ -477,8 +479,18 @@ func (s *Session) executeAside(ctx context.Context, id string, blocks []agentada
 func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
 	s.mu.Lock()
 	s.active++
+	epoch := s.adapterEpoch
+	adapter := s.adapter
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); s.active--; s.mu.Unlock() }()
+	defer func() {
+		s.mu.Lock()
+		// SwapAdapter resets activity for the replacement. Do not let a late
+		// return from the disposed adapter make the counter negative.
+		if epoch == s.adapterEpoch && s.active > 0 {
+			s.active--
+		}
+		s.mu.Unlock()
+	}()
 	text := ""
 	for _, b := range blocks {
 		if b.Type == "text" {
@@ -487,7 +499,14 @@ func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.Promp
 	}
 	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
 	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
-	return s.adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
+	stopReason, err := adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
+	s.mu.RLock()
+	replaced := epoch != s.adapterEpoch
+	s.mu.RUnlock()
+	if replaced {
+		return "", errAdapterReplaced
+	}
+	return stopReason, err
 }
 
 // flattenQuoteBlocks converts each "quote" block (a transcript annotation) into
@@ -726,12 +745,21 @@ func (s *Session) SwapAdapter(ctx context.Context, start func() (agentadapter.Ad
 	s.adapter = a
 	s.adapterEpoch++
 	epoch := s.adapterEpoch
+	// Adapter-local lifecycle state must not leak across the handoff. In
+	// particular, a prompt that failed to acknowledge cancellation before its
+	// process was killed must not leave the replacement looking mid-turn.
+	s.active = 0
+	s.status = Idle
+	s.approvals = map[string]agentadapter.Approval{}
+	s.approvalHandlers = map[string]func(string) error{}
 	s.mu.Unlock()
 	if binder, ok := a.(agentadapter.EventBinder); ok {
 		binder.BindEventSink(s.append)
 	}
 	go s.pump(a, epoch, onExit)
 	s.SetControlMode(mode)
+	payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "idle"})
+	s.emit(eventlog.Event{Kind: "status", Payload: payload})
 	return nil
 }
 func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
