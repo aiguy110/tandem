@@ -130,7 +130,8 @@ export function AgentsRail() {
                 <>
                   <section>
                     <strong>Not a git repository</strong>
-                    <p>Tandem cannot tell whether this directory has any changes. Really delete?</p>
+                    <p>This existing directory will not be deleted. Deleting the agent only stops it and removes it from Tandem.</p>
+                    <p>Tandem cannot tell whether the directory has any changes.</p>
                   </section>
                   <section>
                     <strong>Directory</strong>
