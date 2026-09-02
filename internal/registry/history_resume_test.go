@@ -77,6 +77,9 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := r.Rename(live.ID, "Named in Agents rail"); err != nil {
+		t.Fatal(err)
+	}
 	addImportedHistory(t, db, "fake", "sess_mock", cwd, "Imported title", true)
 	addImportedHistory(t, db, "other", "sess_mock", cwd, "Other vendor title", true)
 
@@ -95,7 +98,7 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 		}
 	}
 	if fake == nil || fake.Source != "tandem" || fake.AgentID != live.ID ||
-		fake.Title != "Imported title" || !fake.Resumable {
+		fake.Title != "Named in Agents rail" || !fake.Resumable {
 		t.Fatalf("Tandem precedence failed: %#v", fake)
 	}
 	if other == nil || other.Source != "history" || other.Title != "Other vendor title" {
@@ -174,7 +177,7 @@ func TestSearchSessionsGroupsHitsAndUsesCatalogResumeState(t *testing.T) {
 		SourceKey: "fake/grouped", SourceMeta: json.RawMessage(`{}`),
 	}, []store.HistoryEntry{
 		{ExternalID: "one", Ordinal: 1, Role: "user", Text: "Résumé punctuation: needle!"},
-		{ExternalID: "two", Ordinal: 2, Role: "assistant", Text: "A second needle appears."},
+		{ExternalID: "two", Ordinal: 2, Role: "user", Text: "Résumé   punctuation: needle!"},
 		{ExternalID: "three", Ordinal: 3, Role: "assistant", Text: "A third needle appears."},
 	})
 	if err != nil {
@@ -186,6 +189,9 @@ func TestSearchSessionsGroupsHitsAndUsesCatalogResumeState(t *testing.T) {
 	}
 	if len(results) != 1 || len(results[0].Hits) != 2 {
 		t.Fatalf("grouped results = %#v", results)
+	}
+	if results[0].Hits[0].EntryID != "one" || results[0].Hits[1].EntryID != "three" {
+		t.Fatalf("duplicate excerpts were not collapsed: %#v", results[0].Hits)
 	}
 	if results[0].Session.SessionID != "grouped" || results[0].Session.Resumable ||
 		!results[0].Session.HistoryOnly || !strings.Contains(results[0].Session.ResumeError, "resumeArgs") {
