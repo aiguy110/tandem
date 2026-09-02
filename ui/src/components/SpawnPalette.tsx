@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
-import { fuzzyFilter } from '../fuzzy';
+import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
 import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
@@ -161,7 +161,9 @@ export function SpawnPalette() {
   const launchRef = useRef<HTMLButtonElement>(null);
 
   const filtered = useMemo(() => {
-    const matched = fuzzyFilter(query, dirs, (d) => d.name + ' ' + d.path);
+    // Name first: the path's shared ~/Projects prefix otherwise matches every
+    // repo just as well as a repo's own name does.
+    const matched = fuzzyFilterFields(query, dirs, (d) => [[d.name, 2], [d.path, 1]]);
     if (query) return matched;
     const recentPaths = loadRecentDirs();
     const byPath = new Map(dirs.map((d) => [d.path, d]));

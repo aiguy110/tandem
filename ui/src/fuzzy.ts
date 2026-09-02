@@ -34,3 +34,32 @@ export function fuzzyFilter<T>(query: string, items: T[], key: (t: T) => string)
     .sort((a, b) => b.s - a.s)
     .map((x) => x.it);
 }
+
+// A weighted field: the text to match against and how identifying it is. A
+// repo's name is more identifying than its path, so a name hit should outrank a
+// path hit even when both match equally well (every repo under ~/Projects has
+// "/home/josiah" in its path, so a query like "home" matches all of them).
+export type FuzzyField = [text: string, weight: number];
+
+// Score a query against several weighted fields, keeping the best hit. Weights
+// scale positive scores only — a negative score means a match so thin the
+// length penalty swamped it, and scaling that up would rank it higher.
+export function fuzzyFieldsScore(query: string, fields: FuzzyField[]): number {
+  if (!query) return 0;
+  let best = -Infinity;
+  for (const [text, weight] of fields) {
+    const s = fuzzyScore(query, text);
+    if (s === -Infinity) continue;
+    best = Math.max(best, s > 0 ? s * weight : s);
+  }
+  return best;
+}
+
+export function fuzzyFilterFields<T>(query: string, items: T[], fields: (t: T) => FuzzyField[]): T[] {
+  if (!query) return items;
+  return items
+    .map((it) => ({ it, s: fuzzyFieldsScore(query, fields(it)) }))
+    .filter((x) => x.s > -Infinity)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.it);
+}
