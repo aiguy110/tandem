@@ -5,17 +5,31 @@ keystrokes**: sensible defaults, progressive disclosure, and heavy keyboard cont
 No sandboxing yet — agents run in **working directories on the host** (git worktrees where
 possible).
 
-## Resume Session
+## History
 
-The **Resume session…** command (default binding `R`) opens a fuzzy picker over every live
-or closed ACP session persisted by Tandem plus external sessions returned by configured
-ACP adapters that advertise `sessionCapabilities.list`.
+The **History…** command (default binding `H`) opens a picker over every live or closed ACP
+session persisted by Tandem, plus imported vendor transcripts and external sessions
+returned by configured ACP adapters that advertise `sessionCapabilities.list`.
 
-Entries are deduplicated by ACP session id. Choosing a live entry focuses it; choosing a
-closed Tandem entry recreates its worktree when necessary and loads the stored session;
-choosing an external entry creates a Tandem agent in its reported working directory and
-captures the loaded transcript. External discovery is best-effort, and adapters without
-ACP session listing are identified in the picker.
+Rows are **grouped by source repository**. The daemon attributes each session to a repo in
+`ResumeCatalog`: Tandem-owned sessions use their recorded workspace, and everything else is
+resolved from its working directory by `workspace.RepoForDir`, which follows a linked
+worktree's `gitdir:` pointer back to the repository it was cut from before falling back to
+walking up for a `.git` entry. `repoPath` is the grouping identity; `repo` is the label.
+
+The search box ranks in three tiers, highest first — **session name**, then **repo name**,
+then **hits in the transcript itself** (a daemon-side FTS query, debounced, with stale
+responses discarded). Incidental metadata (agent, branch, working directory, session id)
+matches below the transcript tier so it stays findable without outranking real content.
+Within a tier, active sessions sort above dormant ones, then by recency.
+
+Entries are deduplicated by ACP session id, and by agent id for running agents. **Active
+sessions appear with an `active` badge and are focused rather than resumed** — Tandem never
+spawns a second agent against a transcript that is already open. Choosing a closed Tandem
+entry recreates its worktree when necessary and loads the stored session; choosing an
+external entry creates a Tandem agent in its reported working directory and captures the
+loaded transcript. External discovery is best-effort, and adapters without ACP session
+listing are identified in the picker.
 
 ## SpawnSpec
 
@@ -140,6 +154,7 @@ Illustrative default map (all rebindable):
 |---|---|---|
 | `c` | `agent.spawn` | Open quick-spawn palette |
 | `C` | `agent.spawn.sibling` | New agent in the focused repo (new worktree) |
+| `h` | `history.open` | Search past + active sessions, grouped by repo |
 | `⌘K` | `palette.open` | Command palette |
 | `g a` | `nav.goToAgent` | Jump to agent by name |
 | `j` / `k` | `nav.next` / `nav.prev` | Move through the agent rail |

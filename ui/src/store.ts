@@ -177,7 +177,7 @@ export interface AgentView {
   audioReadyRevision: number;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'history' | 'automation';
 
 export interface AckResult {
   agentId?: string;
@@ -205,8 +205,8 @@ interface StoreState {
   automationRuns: AutomationRun[];
   automationLoading: boolean;
   automationError: string | null;
-  // Resume picker: the resumable-session catalog (null until first fetched) and a
-  // loading flag while the daemon probes agents for external sessions.
+  // History palette: the resumable-session catalog (null until first fetched) and
+  // a loading flag while the daemon probes agents for external sessions.
   resumeCatalog: ResumeCatalog | null;
   resumeLoading: boolean;
   // Unsent prompt drafts, keyed by agentId. Lives here (not in the pane's local
@@ -939,7 +939,7 @@ export const useStore = create<StoreState>((set, get) => {
         get().refreshDirs();
         client.send({ t: 'list_agent_catalog' });
       }
-      if (m === 'resume') get().refreshSessions();
+      if (m === 'history') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
       set({ modal: m });
     },

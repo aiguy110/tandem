@@ -192,6 +192,10 @@ export interface ResumableSession {
   agent: string;
   adapter?: 'acp' | 'pty';
   cwd: string;
+  // Source repository the session belongs to — the History palette's grouping
+  // identity (repoPath) and its display label (repo).
+  repo?: string;
+  repoPath?: string;
   title?: string;
   updatedAt?: string;
   agentId?: string;

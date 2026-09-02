@@ -181,11 +181,15 @@ type persistedSessionConfig struct {
 }
 
 type ResumableSession struct {
-	SessionID   string         `json:"sessionId"`
-	Source      string         `json:"source"`
-	Agent       string         `json:"agent"`
-	Adapter     string         `json:"adapter,omitempty"`
-	CWD         string         `json:"cwd"`
+	SessionID string `json:"sessionId"`
+	Source    string `json:"source"`
+	Agent     string `json:"agent"`
+	Adapter   string `json:"adapter,omitempty"`
+	CWD       string `json:"cwd"`
+	// Repo/RepoPath attribute the session to a source repository so History can
+	// group by it. RepoPath is the grouping identity; Repo is its display name.
+	Repo        string         `json:"repo,omitempty"`
+	RepoPath    string         `json:"repoPath,omitempty"`
 	Title       string         `json:"title,omitempty"`
 	UpdatedAt   string         `json:"updatedAt,omitempty"`
 	AgentID     string         `json:"agentId,omitempty"`
@@ -1039,6 +1043,17 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 	}
 	byKey := map[string]ranked{}
 	key := func(agent, id string) string { return agent + "\x00" + id }
+	// Repo attribution stats the filesystem, and a catalog routinely holds many
+	// sessions per repository, so resolve each directory at most once.
+	resolved := map[string]workspace.RepoOrigin{}
+	repoOf := func(cwd string) workspace.RepoOrigin {
+		origin, seen := resolved[cwd]
+		if !seen {
+			origin = workspace.RepoForDir(cwd)
+			resolved[cwd] = origin
+		}
+		return origin
+	}
 	merge := func(entry ResumableSession, rank int) {
 		k := key(entry.Agent, entry.SessionID)
 		if prior, ok := byKey[k]; ok {
@@ -1073,11 +1088,17 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 		isLive, isClosed := live != nil, rec.ClosedAt != nil
 		entry := ResumableSession{SessionID: *rec.ACPSessionID, Source: "tandem", Agent: agent, Adapter: spec.Adapter, CWD: rec.CWD, Title: rec.Name, UpdatedAt: time.UnixMilli(updated).UTC().Format(time.RFC3339Nano), AgentID: rec.ID, AgentName: rec.Name, Live: &isLive, Closed: &isClosed, Resumable: true}
 		if spec.Workspace.Kind == workspace.KindWorktree {
+			entry.RepoPath, entry.Repo = spec.Workspace.Repo, filepath.Base(spec.Workspace.Repo)
 			entry.Branch = spec.Workspace.Branch
 			if entry.Branch == "" {
 				entry.Branch = "tandem/" + rec.ID
 			}
+		} else {
+			entry.RepoPath, entry.Repo = spec.Workspace.CWD, filepath.Base(spec.Workspace.CWD)
 		}
+		// A record written before the workspace carried a repo, or an existing-dir
+		// spec with no CWD, still needs a grouping key.
+		attributeRepo(&entry, repoOf)
 		if live != nil {
 			entry.Status = live.Status()
 		}
@@ -1089,10 +1110,12 @@ func (r *Registry) ResumeCatalog(ctx context.Context) (ResumeCatalog, error) {
 	}
 	external, adapters := r.externalSessions(ctx)
 	for _, entry := range external {
+		attributeRepo(&entry, repoOf)
 		merge(entry, 3)
 	}
 	for _, item := range history {
 		entry := r.historyCatalogSession(item)
+		attributeRepo(&entry, repoOf)
 		merge(entry, 2)
 	}
 	sessions := make([]ResumableSession, 0, len(byKey))
@@ -1182,9 +1205,26 @@ func (r *Registry) SearchSessions(ctx context.Context, query string, limit, maxH
 	return results, nil
 }
 
+// attributeRepo fills in a session's source repository from its working
+// directory, leaving an attribution the caller already knows to be authoritative
+// (a Tandem workspace spec) untouched.
+func attributeRepo(entry *ResumableSession, repoOf func(string) workspace.RepoOrigin) {
+	if entry.RepoPath != "" || entry.CWD == "" {
+		if entry.RepoPath != "" && entry.Repo == "" {
+			entry.Repo = filepath.Base(entry.RepoPath)
+		}
+		return
+	}
+	origin := repoOf(entry.CWD)
+	entry.RepoPath, entry.Repo = origin.Path, origin.Name
+}
+
 func enrichResumable(dst *ResumableSession, src ResumableSession) {
 	if dst.CWD == "" {
 		dst.CWD = src.CWD
+	}
+	if dst.RepoPath == "" {
+		dst.RepoPath, dst.Repo = src.RepoPath, src.Repo
 	}
 	if src.Source == "history" && src.Title != "" {
 		// Preserve Tandem's display name separately in AgentName while using
