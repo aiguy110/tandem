@@ -2,7 +2,7 @@
 // config (no raw HTML passthrough) is enough for agent prose; this is a
 // single-tenant localhost tool (D1/D15), not a public surface.
 
-import { marked } from 'marked';
+import { marked, type Token, type TokenizerThis, type RendererThis } from 'marked';
 import katex from 'katex';
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -38,6 +38,63 @@ function renderMath(source: string, displayMode: boolean): string {
     strict: 'warn',
   });
 }
+
+// GFM strikethrough misfires constantly on prose that uses `~` for
+// approximation ("~5 min", "10~20"). Take over every `~` run before marked's
+// own `del` tokenizer sees it, and only strike when the tildes look like real
+// delimiters: whitespace (or start of input) left of the opener, whitespace
+// (or end of input) right of the closer, and non-whitespace hugging the inside
+// of both.
+const STRIKE_DOUBLE = /^~~(?=[^\s~])([^\n]*?[^\s~])~~(?=\s|$)/;
+const STRIKE_SINGLE = /^~(?=[^\s~])([^~\n]*[^\s~])~(?=\s|$)/;
+
+interface TildeToken {
+  type: 'tilde';
+  raw: string;
+  text: string;
+  tokens?: Token[];
+}
+
+function afterWhitespace(tokens: { raw?: string }[]): boolean {
+  const raw = tokens[tokens.length - 1]?.raw;
+  if (!raw) return true;
+  return /\s$/.test(raw);
+}
+
+marked.use({
+  extensions: [
+    {
+      name: 'tilde',
+      level: 'inline',
+      start(src: string) {
+        return src.indexOf('~');
+      },
+      tokenizer(this: TokenizerThis, src: string, tokens: Token[]): TildeToken | undefined {
+        if (!src.startsWith('~')) return undefined;
+        if (afterWhitespace(tokens)) {
+          const match = STRIKE_DOUBLE.exec(src) ?? STRIKE_SINGLE.exec(src);
+          if (match) {
+            return {
+              type: 'tilde',
+              raw: match[0],
+              text: match[1],
+              tokens: this.lexer.inlineTokens(match[1]),
+            };
+          }
+        }
+        // Not a strikethrough: emit the tilde run literally so marked's `del`
+        // tokenizer never gets a crack at it.
+        const run = /^~+/.exec(src)![0];
+        return { type: 'tilde', raw: run, text: run, tokens: undefined };
+      },
+      renderer(this: RendererThis, token: Token) {
+        const tok = token as TildeToken;
+        if (!tok.tokens) return escapeHtml(tok.text);
+        return `<del>${this.parser.parseInline(tok.tokens)}</del>`;
+      },
+    },
+  ],
+});
 
 marked.use({
   extensions: [
