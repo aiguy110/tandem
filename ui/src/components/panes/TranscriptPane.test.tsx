@@ -201,6 +201,28 @@ describe('TranscriptPane tool diffs', () => {
     expect(view.container.querySelector('.diff-line.remove .diff-text')?.textContent).toBe('-before');
     expect(view.container.querySelector('.diff-line.add .diff-text')?.textContent).toBe('+after');
   });
+
+  it('shows unchanged ACP snapshot lines as context instead of replacing the entire file', () => {
+    const edited = agent();
+    edited.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'edit-1', title: 'Edit README.md', status: 'done',
+        content: [{ type: 'diff', path: 'README.md', oldText: 'one\ntwo\nthree\nfour\n', newText: 'one\ntwo changed\nthree\nfour\n' }],
+      },
+    }];
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': edited }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByText('Edit README.md'));
+
+    expect([...view.container.querySelectorAll('.diff-line.remove .diff-text')].map((node) => node.textContent)).toEqual(['-two']);
+    expect([...view.container.querySelectorAll('.diff-line.add .diff-text')].map((node) => node.textContent)).toEqual(['+two changed']);
+    expect([...view.container.querySelectorAll('.diff-line.context .diff-text')].map((node) => node.textContent)).toEqual([' one', ' three', ' four']);
+  });
 });
 
 describe('TranscriptPane composer completions', () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
+import { createUnifiedPatch } from '../diff/textDiff';
 import type { AckResult, AgentView } from '../../store';
 import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { renderMessageAudio } from '../../audio';
@@ -1136,34 +1137,11 @@ function parseToolContent(content: unknown): { text: string | null; images: Tool
   return { text: JSON.stringify(content, null, 2), images: [], diffs: [] };
 }
 
-function lineCount(text: string): number {
-  if (!text) return 0;
-  return text.endsWith('\n') ? text.slice(0, -1).split('\n').length : text.split('\n').length;
-}
-
-function diffLines(text: string, prefix: '+' | '-'): string[] {
-  if (!text) return [];
-  const lines = text.split('\n');
-  if (lines.at(-1) === '') lines.pop();
-  return lines.map((line) => `${prefix}${line}`);
-}
-
 // ACP diff content holds the complete before/after text instead of a unified
 // patch. Synthesize one so tool results use the same readable renderer as the
 // workspace Diff tab.
 function toolDiffPatch({ path, oldText, newText }: ToolDiff): string {
-  const oldCount = lineCount(oldText);
-  const newCount = lineCount(newText);
-  const oldRange = oldCount ? `1,${oldCount}` : '0,0';
-  const newRange = newCount ? `1,${newCount}` : '0,0';
-  return [
-    `diff --git a/${path} b/${path}`,
-    `--- a/${path}`,
-    `+++ b/${path}`,
-    `@@ -${oldRange} +${newRange} @@`,
-    ...diffLines(oldText, '-'),
-    ...diffLines(newText, '+'),
-  ].join('\n');
+  return createUnifiedPatch(path, oldText, newText);
 }
 
 // rawInput is the ACP tool_call's arguments (e.g. { path, content } for a
