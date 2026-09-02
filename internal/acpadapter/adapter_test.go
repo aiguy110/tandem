@@ -233,7 +233,7 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 	if a.SessionID() != "sess_mock" {
 		t.Fatalf("session ID = %q", a.SessionID())
 	}
-	if caps := a.Capabilities(); !caps.Structured || !caps.LoadSession || !caps.ForkSession || !caps.Image {
+	if caps := a.Capabilities(); !caps.Structured || !caps.LoadSession || !caps.ForkSession || !caps.Image || !caps.Steering {
 		t.Fatalf("capabilities = %#v", caps)
 	}
 
@@ -281,6 +281,23 @@ func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("prompt did not finish")
+	}
+}
+
+func TestSteerUsesNegotiatedExtension(t *testing.T) {
+	a := startMock(t, nil)
+	if err := a.Steer(context.Background(), []PromptBlock{{Type: "text", Text: "change course"}}); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent(t, a, "message_chunk", func(e map[string]any) bool { return e["text"] == "Steered: change course" })
+}
+
+func TestSteerRequiresAdvertisedCapability(t *testing.T) {
+	a := startMock(t, func(cfg *AdapterConfig) {
+		cfg.Transport.Env = append(cfg.Transport.Env, "TANDEM_MOCK_STEERING_CAPABILITY=false")
+	})
+	if err := a.Steer(context.Background(), []PromptBlock{{Type: "text", Text: "change course"}}); err == nil {
+		t.Fatal("Steer succeeded without advertised capability")
 	}
 }
 

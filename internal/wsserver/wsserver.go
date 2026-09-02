@@ -611,6 +611,20 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+	case "steer":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		blocks := m.Blocks
+		if blocks == nil {
+			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
+		}
+		if err := sess.Steer(context.Background(), blocks); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "disposition": "steered"}, m.CorrID))
 	case "aside":
 		sess, ok := c.requireSession(m)
 		if !ok {

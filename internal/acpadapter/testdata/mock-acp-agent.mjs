@@ -97,6 +97,7 @@ function handle(msg) {
       id: msg.id,
       result: {
         protocolVersion: 1,
+        _meta: { steering: { supported: process.env.TANDEM_MOCK_STEERING_CAPABILITY !== 'false' } },
         agentCapabilities: {
           loadSession: true,
           sessionCapabilities: { list: true, fork: {} },
@@ -159,6 +160,12 @@ function handle(msg) {
   }
   if (msg.method === 'session/close') {
     send({ jsonrpc: '2.0', id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === '_session/steering') {
+    const text = (msg.params?.prompt ?? []).map((b) => b?.text ?? '').join(' ');
+    note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Steered: ${text}` } });
+    send({ jsonrpc: '2.0', id: msg.id, result: { outcome: 'injected' } });
     return;
   }
   // Cancellation (notification, no id): resolve the in-flight prompt as cancelled.

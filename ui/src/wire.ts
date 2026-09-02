@@ -91,6 +91,7 @@ export type AgentEvent =
   | { kind: 'available_commands'; commands: SlashCommand[] }
   | { kind: 'prompt_capabilities'; image: boolean }
   | { kind: 'aside_capabilities'; fork: boolean }
+  | { kind: 'steering_capabilities'; supported: boolean }
   | { kind: 'aside_started'; asideId: string; question: string }
   | { kind: 'aside_event'; asideId: string; event: AgentEvent }
   | { kind: 'aside_completed'; asideId: string; stopReason?: string; error?: string }
@@ -380,6 +381,7 @@ export type ClientMsg =
   | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'steer'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'aside'; agentId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; agentId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; agentId: string; corrId?: string }
@@ -452,7 +454,7 @@ export type ServerMsg =
   | { t: 'prompt_queue'; agentId: string; queuedPrompts: QueuedPrompt[] }
   | { t: 'annotations'; agentId: string; annotations: Annotation[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }
-  | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued'; position?: number; cleared?: number }
+  | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }

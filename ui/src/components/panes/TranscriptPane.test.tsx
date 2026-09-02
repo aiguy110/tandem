@@ -28,6 +28,7 @@ function agent(): AgentView {
     commands: [],
     imagePromptSupport: null,
     asideSupport: null,
+    steeringSupport: null,
     queuedPrompts: [],
     controlMode: 'transcript',
     adapter: 'acp',
@@ -453,5 +454,24 @@ describe('TranscriptPane annotations', () => {
       { seq: 1, role: 'assistant', quote: 'Select these words' },
       'First line\nSecond line',
     );
+  });
+});
+
+describe('TranscriptPane steering', () => {
+  it('shows Steer above Queue only when the working adapter advertises support', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    const working = agent();
+    working.status = 'working';
+    working.steeringSupport = true;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': working }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const steer = view.getByRole('button', { name: 'Steer' });
+    const queue = view.getByRole('button', { name: 'Queue' });
+    expect(steer.parentElement).toBe(queue.parentElement);
+    expect(Array.from(steer.parentElement?.children ?? [])).toEqual([steer, queue]);
   });
 });

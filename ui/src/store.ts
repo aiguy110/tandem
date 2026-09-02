@@ -158,6 +158,7 @@ export interface AgentView {
   // null until the adapter reports ACP prompt capabilities.
   imagePromptSupport: boolean | null;
   asideSupport: boolean | null;
+  steeringSupport: boolean | null;
   // Daemon-owned FIFO entries waiting behind the active turn.
   queuedPrompts: QueuedPrompt[];
   controlMode: 'transcript' | 'switching' | 'terminal';
@@ -183,7 +184,7 @@ export interface AckResult {
   agentId?: string;
   error?: string;
   promptId?: string;
-  disposition?: 'started' | 'queued';
+  disposition?: 'started' | 'queued' | 'steered';
   position?: number;
   cleared?: number;
 }
@@ -264,6 +265,7 @@ interface StoreState {
   renameAgent: (agentId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  steer: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   aside: (agentId: string, question: string) => Promise<AckResult>;
   removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (agentId: string) => Promise<AckResult>;
@@ -633,6 +635,7 @@ export const useStore = create<StoreState>((set, get) => {
           const lastCommands = [...transcript].reverse().find((e) => e.event.kind === 'available_commands');
           const lastPromptCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'prompt_capabilities');
           const lastAsideCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'aside_capabilities');
+          const lastSteeringCapabilities = [...transcript].reverse().find((e) => e.event.kind === 'steering_capabilities');
           const lastUsage = [...transcript].reverse().find((e) => e.event.kind === 'usage');
           const audioEvents = transcript.filter((e) => e.event.kind === 'audio_preference' || e.event.kind === 'audio_state');
           let audioOnTurnEnd = prev.audioOnTurnEnd;
@@ -682,6 +685,10 @@ export const useStore = create<StoreState>((set, get) => {
               lastAsideCapabilities && lastAsideCapabilities.event.kind === 'aside_capabilities'
                 ? lastAsideCapabilities.event.fork
                 : prev.asideSupport,
+            steeringSupport:
+              lastSteeringCapabilities && lastSteeringCapabilities.event.kind === 'steering_capabilities'
+                ? lastSteeringCapabilities.event.supported
+                : prev.steeringSupport,
             usage:
               lastUsage && lastUsage.event.kind === 'usage'
                 ? { used: lastUsage.event.used, size: lastUsage.event.size, cost: lastUsage.event.cost, updatedAt: usageUpdatedAt(lastUsage.event) }
@@ -1098,6 +1105,17 @@ export const useStore = create<StoreState>((set, get) => {
           ? { t: 'prompt', agentId, text: input, corrId }
           : { t: 'prompt', agentId, blocks: input, corrId });
       }),
+    steer: (agentId, input) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          resolve(result);
+        });
+        client.send(typeof input === 'string'
+          ? { t: 'steer', agentId, text: input, corrId }
+          : { t: 'steer', agentId, blocks: input, corrId });
+      }),
     aside: (agentId, question) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
@@ -1285,6 +1303,7 @@ function shell(id: string): AgentView {
     commands: [],
     imagePromptSupport: null,
     asideSupport: null,
+    steeringSupport: null,
     queuedPrompts: [],
     controlMode: 'transcript',
     adapter: 'acp',
@@ -1332,6 +1351,7 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
   if (event.kind === 'aside_capabilities') v.asideSupport = event.fork;
+  if (event.kind === 'steering_capabilities') v.steeringSupport = event.supported;
   if (event.kind === 'usage') v.usage = { used: event.used, size: event.size, cost: event.cost, updatedAt: usageUpdatedAt(event) };
   if (event.kind === 'control_state') v.controlMode = event.mode;
   if (event.kind === 'audio_preference') {

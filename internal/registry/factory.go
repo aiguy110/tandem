@@ -177,7 +177,14 @@ func (a *acpAdapter) BindEventSink(sink func(eventlog.Event) (eventlog.LoggedEve
 
 func (a *acpAdapter) Capabilities() agentadapter.Capabilities {
 	c := a.Adapter.Capabilities()
-	return agentadapter.Capabilities{Structured: c.Structured, Terminals: true, LoadSession: c.LoadSession, ForkSession: c.ForkSession, FS: true, Image: c.Image}
+	return agentadapter.Capabilities{Structured: c.Structured, Terminals: true, LoadSession: c.LoadSession, ForkSession: c.ForkSession, FS: true, Image: c.Image, Steering: c.Steering}
+}
+func (a *acpAdapter) Steer(ctx context.Context, b []agentadapter.PromptBlock) error {
+	in := make([]acpadapter.PromptBlock, len(b))
+	for i, x := range b {
+		in[i] = acpadapter.PromptBlock{Type: x.Type, Text: x.Text, AssetID: x.AssetID, MIMEType: x.MIMEType, Name: x.Name}
+	}
+	return a.Adapter.Steer(ctx, in)
 }
 func (a *acpAdapter) Prompt(ctx context.Context, b []agentadapter.PromptBlock) (string, error) {
 	in := make([]acpadapter.PromptBlock, len(b))

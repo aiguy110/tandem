@@ -10,7 +10,13 @@ import (
 )
 
 type Capabilities struct {
-	Structured, Terminals, LoadSession, ForkSession, FS, Image bool
+	Structured, Terminals, LoadSession, ForkSession, FS, Image, Steering bool
+}
+
+// SteeringAdapter is the optional ACP mid-turn input extension. Steer injects
+// content into the currently running turn instead of starting another turn.
+type SteeringAdapter interface {
+	Steer(context.Context, []PromptBlock) error
 }
 
 // AsideAdapter is the optional ACP draft session/fork surface. The returned
