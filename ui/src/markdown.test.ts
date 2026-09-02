@@ -22,3 +22,48 @@ describe('renderMarkdown math', () => {
     expect(html).toContain('\\[not_math\\]');
   });
 });
+
+describe('renderMarkdown strikethrough', () => {
+  it('strikes delimiters surrounded by whitespace outside and text inside', () => {
+    expect(renderMarkdown('a ~~gone~~ b')).toContain('<del>gone</del>');
+    expect(renderMarkdown('~~gone~~')).toContain('<del>gone</del>');
+    expect(renderMarkdown('a ~gone~ b')).toContain('<del>gone</del>');
+    expect(renderMarkdown('~~two words~~ after')).toContain('<del>two words</del>');
+  });
+
+  it('renders inline markup inside a strikethrough', () => {
+    expect(renderMarkdown('~~a **b**~~')).toContain('<del>a <strong>b</strong></del>');
+  });
+
+  it('leaves approximation tildes alone', () => {
+    for (const src of [
+      'takes ~5 minutes',
+      'about ~10 and ~20 items',
+      '10~20 items',
+      'a~b~c',
+      'roughly ~ 5',
+      'x ~~ y',
+      'costs ~$5 and ~$9',
+      'range ~5-~10 units',
+    ]) {
+      expect(renderMarkdown(src)).not.toContain('<del>');
+    }
+  });
+
+  it('requires whitespace before the opener and after the closer', () => {
+    expect(renderMarkdown('pre~~gone~~ post')).not.toContain('<del>');
+    expect(renderMarkdown('pre ~~gone~~post')).not.toContain('<del>');
+  });
+
+  it('requires non-whitespace inside both delimiters', () => {
+    expect(renderMarkdown('a ~~ gone~~ b')).not.toContain('<del>');
+    expect(renderMarkdown('a ~~gone ~~ b')).not.toContain('<del>');
+  });
+
+  it('keeps tildes literal inside code', () => {
+    const html = renderMarkdown('`~~code~~`\n\n```text\n~~fence~~\n```');
+    expect(html).not.toContain('<del>');
+    expect(html).toContain('~~code~~');
+    expect(html).toContain('~~fence~~');
+  });
+});
