@@ -186,6 +186,7 @@ type ClientMsg =
   | { t: 'subscribe';   agentId: string; channels?: Channel[]; sinceSeq?: number } // channels omitted = all
   | { t: 'unsubscribe'; agentId: string; channels?: Channel[] }
   | { t: 'prompt';      agentId: string; text?: string; blocks?: PromptBlock[] }
+  | { t: 'steer';       agentId: string; text?: string; blocks?: PromptBlock[] }
   | { t: 'remove_queued_prompt'; agentId: string; promptId: string }
   | { t: 'clear_prompt_queue'; agentId: string }
   | { t: 'interrupt_and_clear_queue'; agentId: string }
@@ -291,6 +292,14 @@ Queue changes are durable `prompt_queued`, `prompt_started`, and `prompt_removed
 events; snapshots include the authoritative `queuedPrompts` array, and queue-bearing
 replays end with a `prompt_queue` state message. A normal `interrupt` cancels only
 the active turn and preserves the queue.
+
+Agents may additionally advertise the ACP steering extension through
+`initialize` result `_meta.steering.supported`. Tandem persists that negotiation
+as `{kind:'steering_capabilities', supported:boolean}`. While a turn is active,
+the browser can send `{t:'steer', agentId, text|blocks}` to inject the content
+with `_session/steering`; this bypasses the FIFO. Tandem requests the
+`promptRequired` idle behavior so a completion race never creates a detached
+turn, and leaves the draft available for an explicit send or queue in that case.
 
 ## End-to-end mapping of ACP
 

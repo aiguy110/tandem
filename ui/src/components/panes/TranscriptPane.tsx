@@ -1450,6 +1450,7 @@ type DraftAttachment = {
 
 function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
+  const steer = useStore((s) => s.steer);
   const aside = useStore((s) => s.aside);
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
@@ -1465,6 +1466,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
   const asideSupport = useStore((s) => s.agents[agentId]?.asideSupport ?? null);
+  const steeringSupport = useStore((s) => s.agents[agentId]?.steeringSupport ?? null);
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -1691,7 +1693,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     void upload(attachment);
   };
 
-  const send = async () => {
+  const send = async (steering = false) => {
     if (sending) return;
     const t = text.trim();
     const hasAnnotations = annotations.length > 0;
@@ -1707,7 +1709,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     if (attachments.length === 0 && !hasAnnotations) {
       setSending(true);
       const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
-      const result = btw ? await aside(agentId, btw[1].trim()) : await prompt(agentId, t);
+      const result = !steering && btw ? await aside(agentId, btw[1].trim()) : await (steering ? steer : prompt)(agentId, t);
       setSending(false);
       if (result.error) setAttachmentError(result.error);
       if (result.disposition === 'queued') {
@@ -1727,7 +1729,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     const uploaded = attachments.flatMap((attachment) => attachment.uploadPath ? [attachment.uploadPath] : []);
     if (uploaded.length > 0) blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded.join(', ')}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
     setSending(true);
-    const result = await prompt(agentId, blocks);
+    const result = await (steering ? steer : prompt)(agentId, blocks);
     setSending(false);
     if (result.error) {
       setAttachmentError(result.error);
@@ -1966,18 +1968,28 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             )}
           </div>
           {working && (
-            <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
+              <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
               <span className="stop-btn-icon" aria-hidden="true" />
             </button>
           )}
-          <button
-            className="btn primary"
-            onClick={() => void send()}
-            disabled={sending || uploadsPending || !canSubmit}
-            title={working ? 'Send after the current turn finishes' : 'Send prompt'}
-          >
-            {sending ? (working ? 'Queueing…' : 'Sending…') : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
-          </button>
+          <div className="prompt-send-actions">
+            {working && steeringSupport === true && (
+              <button
+                className="btn"
+                onClick={() => void send(true)}
+                disabled={sending || uploadsPending || !canSubmit}
+                title="Inject this message into the current turn"
+              >Steer</button>
+            )}
+            <button
+              className="btn primary"
+              onClick={() => void send()}
+              disabled={sending || uploadsPending || !canSubmit}
+              title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+            >
+              {sending ? 'Sending…' : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+            </button>
+          </div>
         </div>
       </div>
       {dragging && <div className="prompt-drop-hint">Drop files to attach</div>}

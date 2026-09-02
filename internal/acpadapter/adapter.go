@@ -61,6 +61,7 @@ type Capabilities struct {
 	LoadSession bool
 	ForkSession bool
 	Image       bool
+	Steering    bool
 }
 
 type PromptBlock struct {
@@ -180,6 +181,11 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 				Image bool `json:"image"`
 			} `json:"promptCapabilities"`
 		} `json:"agentCapabilities"`
+		Meta struct {
+			Steering struct {
+				Supported bool `json:"supported"`
+			} `json:"steering"`
+		} `json:"_meta"`
 	}
 	if err := tr.Call(ctx, "initialize", map[string]any{
 		"protocolVersion":    1,
@@ -194,10 +200,11 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		return nil, fmt.Errorf("acp initialize: unsupported or missing protocolVersion %d", init.ProtocolVersion)
 	}
 	a.mu.Lock()
-	a.caps = Capabilities{Structured: true, LoadSession: init.AgentCapabilities.LoadSession, ForkSession: init.AgentCapabilities.SessionCapabilities.Fork != nil, Image: init.AgentCapabilities.PromptCapabilities.Image}
+	a.caps = Capabilities{Structured: true, LoadSession: init.AgentCapabilities.LoadSession, ForkSession: init.AgentCapabilities.SessionCapabilities.Fork != nil, Image: init.AgentCapabilities.PromptCapabilities.Image, Steering: init.Meta.Steering.Supported}
 	a.mu.Unlock()
 	a.emit(map[string]any{"kind": "prompt_capabilities", "image": init.AgentCapabilities.PromptCapabilities.Image})
 	a.emit(map[string]any{"kind": "aside_capabilities", "fork": init.AgentCapabilities.SessionCapabilities.Fork != nil})
+	a.emit(map[string]any{"kind": "steering_capabilities", "supported": init.Meta.Steering.Supported})
 
 	if cfg.ResumeSessionID != "" && init.AgentCapabilities.LoadSession {
 		a.mu.Lock()
@@ -431,6 +438,40 @@ func (a *Adapter) promptSession(ctx context.Context, sessionID string, blocks []
 		return "end_turn", nil
 	}
 	return response.StopReason, nil
+}
+
+// Steer injects content into the active ACP turn using the negotiated steering
+// extension. Asking for promptRequired on an idle race avoids an unowned,
+// detached turn; the caller can leave the draft intact for an explicit send.
+func (a *Adapter) Steer(ctx context.Context, blocks []PromptBlock) error {
+	if !a.Capabilities().Steering {
+		return errors.New("this agent does not support steering")
+	}
+	wire, err := a.resolvePrompt(blocks)
+	if err != nil {
+		return err
+	}
+	a.mu.RLock()
+	sessionID := a.sessionID
+	a.mu.RUnlock()
+	var response struct {
+		Outcome string `json:"outcome"`
+		Reason  string `json:"reason"`
+	}
+	if err := a.tr.Call(ctx, "_session/steering", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    wire,
+		"_meta":     map[string]any{"steering": map[string]any{"idleBehavior": "promptRequired"}},
+	}, &response); err != nil {
+		return fmt.Errorf("acp _session/steering: %w", err)
+	}
+	if response.Outcome == "injected" || response.Outcome == "startedNewTurn" {
+		return nil
+	}
+	if response.Outcome == "promptRequired" {
+		return errors.New("the turn finished before it could be steered; send or queue the prompt instead")
+	}
+	return fmt.Errorf("acp _session/steering: unknown outcome %q", response.Outcome)
 }
 
 func (a *Adapter) resetServiceContext(promptCtx context.Context) context.CancelFunc {

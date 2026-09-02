@@ -355,6 +355,36 @@ func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock)
 	}
 }
 
+// Steer injects a user message into the active adapter turn without entering
+// the daemon prompt queue.
+func (s *Session) Steer(ctx context.Context, blocks []agentadapter.PromptBlock) error {
+	if s.ControlMode() != "transcript" {
+		return errors.New("agent session is controlled by the terminal")
+	}
+	if !s.Capabilities().Steering {
+		return errors.New("this agent does not support steering")
+	}
+	if err := s.ValidatePrompt(blocks); err != nil {
+		return err
+	}
+	steerer, ok := s.adapter.(agentadapter.SteeringAdapter)
+	if !ok {
+		return errors.New("this agent does not support steering")
+	}
+	if err := steerer.Steer(ctx, flattenQuoteBlocks(blocks)); err != nil {
+		return err
+	}
+	text := ""
+	for _, block := range blocks {
+		if block.Type == "text" {
+			text += block.Text
+		}
+	}
+	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
+	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
+	return nil
+}
+
 // EnqueuePrompt accepts a prompt immediately and executes accepted prompts in
 // FIFO order. ACP still sees exactly one session/prompt request at a time.
 func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (PromptReceipt, error) {
