@@ -186,8 +186,8 @@ type ResumableSession struct {
 	Agent     string `json:"agent"`
 	Adapter   string `json:"adapter,omitempty"`
 	CWD       string `json:"cwd"`
-	// Repo/RepoPath attribute the session to a source repository so History can
-	// group by it. RepoPath is the grouping identity; Repo is its display name.
+	// Repo/RepoPath attribute the session to a source repository so the Resume
+	// palette can group by it. RepoPath is the grouping identity; Repo the label.
 	Repo        string         `json:"repo,omitempty"`
 	RepoPath    string         `json:"repoPath,omitempty"`
 	Title       string         `json:"title,omitempty"`

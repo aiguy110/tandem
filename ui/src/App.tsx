@@ -10,7 +10,7 @@ import { FocusArea } from './components/FocusArea';
 import { Inspector } from './components/Inspector';
 import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
-import { HistoryPalette } from './components/HistoryPalette';
+import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
 
 export function App() {
@@ -50,7 +50,7 @@ export function App() {
       <ConnectionBanner />
       {modal === 'spawn' && <SpawnPalette />}
       {modal === 'command' && <CommandPalette />}
-      {modal === 'history' && <HistoryPalette />}
+      {modal === 'resume' && <ResumePalette />}
       {modal === 'automation' && <AutomationModal />}
     </>
   );

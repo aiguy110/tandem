@@ -101,7 +101,7 @@ src/
   useGlobalKeys.ts        scope-aware global key handler
   markdown.ts             marked wrapper for message chunks
   fuzzy.ts                tiny fuzzy matcher for the palettes
-  history.ts              History palette ranking + repo grouping (name > repo > transcript)
+  resume.ts               Resume palette ranking + repo grouping (quality, then name > repo > transcript)
   commands/
     keymap.ts             bindings, scopes, chord matcher, localStorage persistence
     registry.ts           command registry (stable IDs) shared by keymap + palette
@@ -110,7 +110,7 @@ src/
     ptyHub.ts             non-reactive raw_pty buffer + fan-out (rehydrate on focus)
   components/
     ConductorBar, AgentsRail, ApprovalsRail, Inspector, FocusArea,
-    ConnectionBanner, TokenScreen, SpawnPalette, CommandPalette, HistoryPalette
+    ConnectionBanner, TokenScreen, SpawnPalette, CommandPalette, ResumePalette
     panes/ TranscriptPane, TerminalPane, DiffPane, BrowserPane
 ```
 

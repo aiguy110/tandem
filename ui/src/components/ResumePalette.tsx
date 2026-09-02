@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { buildHistoryGroups, flattenGroups, sessionKey, sessionName } from '../history';
-import type { HistoryEntry } from '../history';
+import { buildResumeGroups, flattenGroups, sessionKey, sessionName } from '../resume';
+import type { ResumeEntry } from '../resume';
 import { useStore } from '../store';
 import type { HistoryExcerpt, SessionSearchHit, SessionSearchResult } from '../wire';
 
@@ -42,14 +42,14 @@ function Hit({ hit }: { hit: SessionSearchHit }) {
   );
 }
 
-function sourceLabel(entry: HistoryEntry): string {
+function sourceLabel(entry: ResumeEntry): string {
   const { session } = entry;
   if (session.source === 'tandem') return 'Tandem';
   if (session.source === 'acp') return 'ACP';
   return session.historyOnly ? 'history only' : 'history';
 }
 
-export function HistoryPalette() {
+export function ResumePalette() {
   const catalog = useStore((s) => s.resumeCatalog);
   const loading = useStore((s) => s.resumeLoading);
   const agents = useStore((s) => s.agents);
@@ -74,7 +74,7 @@ export function HistoryPalette() {
     [order, agents],
   );
   const groups = useMemo(
-    () => buildHistoryGroups(query, sessions, liveAgents, historyResults),
+    () => buildResumeGroups(query, sessions, liveAgents, historyResults),
     [query, sessions, liveAgents, historyResults],
   );
   const flat = useMemo(() => flattenGroups(groups), [groups]);
@@ -114,12 +114,12 @@ export function HistoryPalette() {
   }, [flat.length, sel]);
 
   useEffect(() => {
-    rowsRef.current?.querySelector('.history-row.sel')?.scrollIntoView({ block: 'nearest' });
+    rowsRef.current?.querySelector('.resume-row.sel')?.scrollIntoView({ block: 'nearest' });
   }, [sel, flat.length]);
 
   // Reviving an active session must not spawn a second agent against the same
-  // transcript — it is already open, so History just focuses it.
-  const open = async (entry: HistoryEntry | undefined) => {
+  // transcript — it is already open, so Resume just focuses it.
+  const open = async (entry: ResumeEntry | undefined) => {
     if (!entry || busy) return;
     if (entry.liveAgentId) {
       focus(entry.liveAgentId);
@@ -146,7 +146,7 @@ export function HistoryPalette() {
   return (
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && setModal('none')}>
       <div
-        className="modal history-modal"
+        className="modal resume-modal"
         onKeyDown={(event) => {
           if (event.key === 'Escape') return setModal('none');
           if (event.key === 'ArrowDown') {
@@ -165,7 +165,7 @@ export function HistoryPalette() {
         <input
           className="q"
           autoFocus
-          placeholder="Search history — session, repo, or transcript…"
+          placeholder="Resume a session — name, repo, or transcript…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -174,10 +174,10 @@ export function HistoryPalette() {
           {!loading && !searching && flat.length === 0 && <div className="empty">No matching sessions found.</div>}
           {searching && flat.length === 0 && <div className="empty">Searching conversation history…</div>}
           {groups.map((group) => (
-            <div className="history-group" key={group.repoKey}>
-              <div className="history-group-head" title={group.repoKey}>
-                <span className="history-repo">{group.repo}</span>
-                <span className="history-count">{group.entries.length}</span>
+            <div className="resume-group" key={group.repoKey}>
+              <div className="resume-group-head" title={group.repoKey}>
+                <span className="resume-repo">{group.repo}</span>
+                <span className="resume-count">{group.entries.length}</span>
               </div>
               {group.entries.map((entry) => {
                 rowIndex += 1;
@@ -187,19 +187,19 @@ export function HistoryPalette() {
                 return (
                   <div
                     key={sessionKey(session)}
-                    className={`row history-row${index === sel ? ' sel' : ''}${disabled ? ' disabled' : ''}`}
+                    className={`row resume-row${index === sel ? ' sel' : ''}${disabled ? ' disabled' : ''}`}
                     style={busy ? { opacity: 0.6 } : undefined}
                     aria-disabled={disabled}
                     title={disabled ? session.resumeError : undefined}
                     onMouseEnter={() => setSel(index)}
                     onClick={() => void open(entry)}
                   >
-                    <div className="history-content">
-                      <div className="history-heading">
-                        <div className="history-title">
+                    <div className="resume-content">
+                      <div className="resume-heading">
+                        <div className="resume-title">
                           <div className="primary">
                             {sessionName(session)}
-                            {entry.liveAgentId && <span className="history-badge">active</span>}
+                            {entry.liveAgentId && <span className="resume-badge">active</span>}
                           </div>
                           <div className="sub">{session.cwd}{session.branch ? ` · ${session.branch}` : ''}</div>
                         </div>
@@ -210,7 +210,7 @@ export function HistoryPalette() {
                         </div>
                       </div>
                       {entry.hits.map((hit) => <Hit key={hit.entryId} hit={hit} />)}
-                      {disabled && session.resumeError && <div className="history-disabled-reason">{session.resumeError}</div>}
+                      {disabled && session.resumeError && <div className="resume-disabled-reason">{session.resumeError}</div>}
                     </div>
                   </div>
                 );
