@@ -179,7 +179,7 @@ func TestPhase17UnsupportedEnumerationDoesNotFailCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Adapters) != 2 || catalog.Adapters[0].SupportsList {
+	if len(catalog.Adapters) != 1 || catalog.Adapters[0].Agent != "fake" || catalog.Adapters[0].SupportsList {
 		t.Fatalf("adapters %#v", catalog.Adapters)
 	}
 }

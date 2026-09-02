@@ -220,7 +220,7 @@ export function ResumePalette() {
         </div>
         {error && <div className="modal-err">{error}</div>}
         {unsupported.length > 0 && (
-          <div className="modal-err">External sessions cannot be enumerated for: {unsupported.join(', ')}. Tandem-owned sessions still appear.</div>
+          <div className="modal-err">Configured agents without ACP session listing: {unsupported.join(', ')}. Imported and Tandem-owned sessions still appear.</div>
         )}
         <div className="foot">
           <span><span className="kbd">↵</span> {flat[sel]?.liveAgentId ? 'focus' : 'resume'}</span>

@@ -1353,7 +1353,6 @@ func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []
 		}
 	}
 	sort.Slice(adapters, func(i, j int) bool { return adapters[i].Agent < adapters[j].Agent })
-	adapters = append(adapters, ResumeAdapterInfo{Agent: "pty (raw terminal)", SupportsList: false})
 	cache = &externalCache{at: time.Now(), sessions: discovered, adapters: adapters}
 	r.mu.Lock()
 	r.external = cache
