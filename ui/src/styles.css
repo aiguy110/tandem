@@ -731,7 +731,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .resume-row.disabled { cursor: not-allowed; }
 .resume-content { min-width: 0; width: 100%; }
 .resume-heading { display: flex; align-items: center; gap: 10px; }
-.resume-title { min-width: 0; }
+.resume-title { flex: 1 1 auto; min-width: 0; }
+.resume-heading .meta { flex: 0 0 auto; }
 .resume-heading .primary, .resume-heading .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resume-badge { margin-left: 8px; padding: 1px 6px; border-radius: 9px; background: var(--ok-soft); color: var(--ok); font-size: var(--fs-xs); font-family: var(--font-mono); vertical-align: 1px; }
 .history-hit { margin-top: 8px; border-left: 2px solid var(--border); padding-left: 9px; font-size: var(--fs-xs); line-height: 1.45; }
