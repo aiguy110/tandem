@@ -135,7 +135,7 @@ Tandem uses it for `/btw`: call `session/fork` with the parent `sessionId`, `cwd
 servers; send one `session/prompt` to the returned session; then best-effort `session/close`.
 Fork updates are persisted as `aside_event` wrappers in the parent Tandem event log, but are
 never sent back through the parent's ACP session, so the question and answer do not enter
-future parent turns. Claude ACP 0.70.0 and Codex ACP 1.7.0 advertise the capability; Pi ACP
+future parent turns. Claude ACP 0.70.0 and Codex ACP 1.8.0 advertise the capability; Pi ACP
 0.0.31 does not, so the UI hides `/btw` there.
 
 ## stopReason values

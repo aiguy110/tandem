@@ -30,7 +30,7 @@ type pin struct {
 // unmanaged/custom launches; EnsureAgent is a no-op for them.
 var agentPins = map[string]pin{
 	"claude": {spec: "@agentclientprotocol/claude-agent-acp@^0.59.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "claude-agent-acp", "dist", "index.js")},
-	"codex":  {spec: "@agentclientprotocol/codex-acp@^1.1.2", dist: filepath.Join("node_modules", "@agentclientprotocol", "codex-acp", "dist", "index.js")},
+	"codex":  {spec: "@agentclientprotocol/codex-acp@^1.8.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "codex-acp", "dist", "index.js")},
 	"pi":     {spec: "pi-acp@^0.0.31", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
 }
 
