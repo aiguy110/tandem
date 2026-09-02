@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,5 +286,43 @@ func TestHistoryExplicitACPResume(t *testing.T) {
 	}
 	if s.Spec.Adapter != "acp" || s.SessionID() != "acp-session" {
 		t.Fatalf("ACP resume = adapter %q session %q", s.Spec.Adapter, s.SessionID())
+	}
+}
+
+// History groups by repository, so every catalog entry needs an attribution:
+// Tandem sessions take it from their recorded workspace, imported vendor
+// transcripts have only a CWD to resolve from.
+func TestResumeCatalogAttributesSessionsToRepositories(t *testing.T) {
+	f := &phaseFactory{}
+	r, db := historyRegistry(t, f, map[string]config.Agent{"fake": historyAgent("auto")})
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(repo, "ui", "src")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Spawn(context.Background(), agentadapter.Spec{
+		Adapter: "acp", Agent: "fake",
+		Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: repo},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An imported transcript recorded a subdirectory of the same repository; it
+	// must still land in that repository's group, not one named "src".
+	addImportedHistory(t, db, "fake", "sess_nested", nested, "Nested vendor session", true)
+
+	catalog, err := r.ResumeCatalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Sessions) == 0 {
+		t.Fatal("expected catalog sessions")
+	}
+	for _, session := range catalog.Sessions {
+		if session.RepoPath != repo || session.Repo != filepath.Base(repo) {
+			t.Fatalf("session %s attributed to %q/%q, want %q/%q", session.SessionID, session.Repo, session.RepoPath, filepath.Base(repo), repo)
+		}
 	}
 }

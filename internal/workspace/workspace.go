@@ -762,3 +762,73 @@ func findGitRepos(ctx context.Context, root string, maxDepth int) []string {
 	walk(root, maxDepth)
 	return found
 }
+
+// RepoOrigin names the source repository a working directory belongs to. It is
+// what groups sessions in the History palette, so it has to answer for
+// directories Tandem never provisioned — imported vendor transcripts record a
+// bare CWD, and that CWD may since have been deleted.
+type RepoOrigin struct {
+	// Path is the repository root; it falls back to the directory itself when
+	// no enclosing repository can be identified.
+	Path string
+	// Name is the human label for the repository (the root's base name).
+	Name string
+}
+
+// RepoForDir resolves the repository a directory belongs to without shelling
+// out to git, so a whole catalog can be attributed cheaply. A linked worktree
+// (including Tandem's own) records a `gitdir:` pointer back to the repository
+// it was cut from, which is followed in preference to the enclosing directory;
+// anything else walks up for a `.git` entry.
+func RepoForDir(dir string) RepoOrigin {
+	if dir == "" {
+		return RepoOrigin{}
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	if repo := sourceRepoOfWorktree(abs); repo != "" {
+		return RepoOrigin{Path: repo, Name: filepath.Base(repo)}
+	}
+	for cur := abs; ; {
+		if _, err := os.Lstat(filepath.Join(cur, ".git")); err == nil {
+			return RepoOrigin{Path: cur, Name: filepath.Base(cur)}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	// An unresolvable directory still groups under itself rather than
+	// collapsing every orphaned transcript into one nameless bucket.
+	return RepoOrigin{Path: abs, Name: filepath.Base(abs)}
+}
+
+// sourceRepoOfWorktree reads a linked worktree's `.git` file and strips the
+// `.git/worktrees/<name>` suffix to recover the repository it was cut from.
+// Any other `gitdir:` shape (a submodule, say) is left to the directory walk.
+func sourceRepoOfWorktree(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return ""
+	}
+	pointer, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	gitDir := strings.TrimSpace(pointer)
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	worktrees := filepath.Dir(filepath.Clean(gitDir))
+	if filepath.Base(worktrees) != "worktrees" {
+		return ""
+	}
+	repo, ok := strings.CutSuffix(filepath.Dir(worktrees), string(filepath.Separator)+".git")
+	if !ok {
+		return ""
+	}
+	return repo
+}

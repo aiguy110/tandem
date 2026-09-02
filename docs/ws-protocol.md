@@ -64,7 +64,9 @@ subscriptions on one socket are supported.
 `list_sessions` returns a catalog combining Tandem-owned sessions, external sessions
 exposed by ACP adapters, and transcript-imported history. Entries are deduplicated by
 `(agent, session id)`, with live Tandem, closed Tandem, ACP, then history precedence.
-The response also reports each adapter's enumeration support.
+Each entry carries `repo` / `repoPath` — the source repository the History palette groups
+by, taken from a Tandem session's workspace or resolved from the working directory
+otherwise. The response also reports each adapter's enumeration support.
 
 `search_sessions` performs literal token-prefix FTS over the normalized local transcript
 index. Its correlated `session_search` response groups up to `maxHitsPerSession` excerpts

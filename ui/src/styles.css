@@ -721,19 +721,25 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .modal .row .dirty { color: var(--warn); }
 .modal .row .occupied { color: var(--human); }
 .modal .row .sub { color: var(--text-faint); font-size: var(--fs-xs); }
-.resume-modal { width: min(780px, calc(100vw - 32px)); }
-.modal .resume-row { align-items: stretch; }
-.modal .resume-row.disabled { cursor: not-allowed; }
-.resume-content { min-width: 0; width: 100%; }
-.resume-heading { display: flex; align-items: center; gap: 10px; }
-.resume-heading > :first-child { min-width: 0; }
-.resume-heading .primary, .resume-heading .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-modal { width: min(780px, calc(100vw - 32px)); }
+.history-modal .rows { max-height: 58vh; }
+.history-group + .history-group { border-top: 1px solid var(--border); }
+.history-group-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 8px; padding: 7px 16px; background: var(--surface-2); font-size: var(--fs-xs); }
+.history-repo { color: var(--text-dim); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-count { color: var(--text-faint); }
+.modal .history-row { align-items: stretch; padding-left: 26px; }
+.modal .history-row.disabled { cursor: not-allowed; }
+.history-content { min-width: 0; width: 100%; }
+.history-heading { display: flex; align-items: center; gap: 10px; }
+.history-title { min-width: 0; }
+.history-heading .primary, .history-heading .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-badge { margin-left: 8px; padding: 1px 6px; border-radius: 9px; background: var(--ok-soft); color: var(--ok); font-size: var(--fs-xs); font-family: var(--font-mono); vertical-align: 1px; }
 .history-hit { margin-top: 8px; border-left: 2px solid var(--border); padding-left: 9px; font-size: var(--fs-xs); line-height: 1.45; }
 .history-context { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-match { color: var(--text); }
 .history-match mark { border-radius: 2px; background: var(--warn-soft); color: inherit; padding: 0 1px; }
 .history-kind { margin-right: 7px; color: var(--agent); font-family: var(--font-mono); }
-.resume-disabled-reason { margin-top: 6px; color: var(--err); font-size: var(--fs-xs); }
+.history-disabled-reason { margin-top: 6px; color: var(--err); font-size: var(--fs-xs); }
 .modal .row .repo-details { min-width: 0; flex: 1; }
 .modal .row .repo-details .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal .row .profile-button { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

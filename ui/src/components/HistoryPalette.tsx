@@ -1,16 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { fuzzyFilter } from '../fuzzy';
+import { buildHistoryGroups, flattenGroups, sessionKey, sessionName } from '../history';
+import type { HistoryEntry } from '../history';
 import { useStore } from '../store';
-import type { HistoryExcerpt, ResumableSession, SessionSearchHit, SessionSearchResult } from '../wire';
+import type { HistoryExcerpt, SessionSearchHit, SessionSearchResult } from '../wire';
 
 function displayDate(value?: string): string {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-function sessionKey(session: ResumableSession): string {
-  return `${session.agent}\0${session.sessionId}`;
 }
 
 // Server offsets count Unicode code points. Array.from makes those offsets safe
@@ -45,43 +42,23 @@ function Hit({ hit }: { hit: SessionSearchHit }) {
   );
 }
 
-interface DisplayResult {
-  session: ResumableSession;
-  hits: SessionSearchHit[];
+function sourceLabel(entry: HistoryEntry): string {
+  const { session } = entry;
+  if (session.source === 'tandem') return 'Tandem';
+  if (session.source === 'acp') return 'ACP';
+  return session.historyOnly ? 'history only' : 'history';
 }
 
-export function mergeResumeResults(
-  query: string,
-  sessions: ResumableSession[],
-  historyResults: SessionSearchResult[],
-): DisplayResult[] {
-  if (!query.trim()) return sessions.map((session) => ({ session, hits: [] }));
-  const metadata = fuzzyFilter(
-    query,
-    sessions,
-    (session) => `${session.title ?? ''} ${session.agentName ?? ''} ${session.agent} ${session.cwd} ${session.branch ?? ''} ${session.sessionId}`,
-  );
-  const seen = new Set<string>();
-  const merged: DisplayResult[] = [];
-  for (const session of metadata) {
-    const key = sessionKey(session);
-    const history = historyResults.find((result) => sessionKey(result.session) === key);
-    seen.add(key);
-    merged.push({ session, hits: history?.hits ?? [] });
-  }
-  for (const result of historyResults) {
-    const key = sessionKey(result.session);
-    if (!seen.has(key)) merged.push({ session: result.session, hits: result.hits });
-  }
-  return merged;
-}
-
-export function ResumePalette() {
+export function HistoryPalette() {
   const catalog = useStore((s) => s.resumeCatalog);
   const loading = useStore((s) => s.resumeLoading);
+  const agents = useStore((s) => s.agents);
+  const order = useStore((s) => s.order);
   const searchSessions = useStore((s) => s.searchSessions);
   const resumeSession = useStore((s) => s.resumeSession);
+  const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
+  const setPane = useStore((s) => s.setPane);
   const [query, setQuery] = useState('');
   const [historyResults, setHistoryResults] = useState<SessionSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -89,12 +66,18 @@ export function ResumePalette() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchGeneration = useRef(0);
+  const rowsRef = useRef<HTMLDivElement | null>(null);
 
   const sessions = catalog?.sessions ?? [];
-  const results = useMemo(
-    () => mergeResumeResults(query, sessions, historyResults),
-    [query, sessions, historyResults],
+  const liveAgents = useMemo(
+    () => order.map((id) => agents[id]).filter((agent): agent is NonNullable<typeof agent> => !!agent),
+    [order, agents],
   );
+  const groups = useMemo(
+    () => buildHistoryGroups(query, sessions, liveAgents, historyResults),
+    [query, sessions, liveAgents, historyResults],
+  );
+  const flat = useMemo(() => flattenGroups(groups), [groups]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -127,18 +110,30 @@ export function ResumePalette() {
   }, [query, searchSessions]);
 
   useEffect(() => {
-    if (sel >= results.length) setSel(Math.max(0, results.length - 1));
-  }, [results.length, sel]);
+    if (sel >= flat.length) setSel(Math.max(0, flat.length - 1));
+  }, [flat.length, sel]);
 
-  const resume = async (session: ResumableSession | undefined) => {
-    if (!session || busy) return;
-    if (!session.resumable) {
-      setError(session.resumeError ?? 'This transcript is searchable but cannot be resumed.');
+  useEffect(() => {
+    rowsRef.current?.querySelector('.history-row.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [sel, flat.length]);
+
+  // Reviving an active session must not spawn a second agent against the same
+  // transcript — it is already open, so History just focuses it.
+  const open = async (entry: HistoryEntry | undefined) => {
+    if (!entry || busy) return;
+    if (entry.liveAgentId) {
+      focus(entry.liveAgentId);
+      setPane('chat');
+      setModal('none');
+      return;
+    }
+    if (!entry.session.resumable) {
+      setError(entry.session.resumeError ?? 'This transcript is searchable but cannot be resumed.');
       return;
     }
     setBusy(true);
     setError(null);
-    const result = await resumeSession(session);
+    const result = await resumeSession(entry.session);
     if (result.error) {
       setError(result.error);
       setBusy(false);
@@ -146,62 +141,80 @@ export function ResumePalette() {
   };
 
   const unsupported = catalog?.adapters.filter((a) => !a.supportsList).map((a) => a.agent) ?? [];
+  let rowIndex = -1;
 
   return (
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && setModal('none')}>
       <div
-        className="modal resume-modal"
+        className="modal history-modal"
         onKeyDown={(event) => {
           if (event.key === 'Escape') return setModal('none');
           if (event.key === 'ArrowDown') {
             event.preventDefault();
-            setSel((index) => results.length === 0 ? 0 : Math.min(results.length - 1, index + 1));
+            setSel((index) => (flat.length === 0 ? 0 : Math.min(flat.length - 1, index + 1)));
           } else if (event.key === 'ArrowUp') {
             event.preventDefault();
             setSel((index) => Math.max(0, index - 1));
           } else if (event.key === 'Enter') {
             event.preventDefault();
             // A result is a session, even when it contains several transcript hits.
-            void resume(results[sel]?.session);
+            void open(flat[sel]);
           }
         }}
       >
         <input
           className="q"
           autoFocus
-          placeholder="Resume a session…"
+          placeholder="Search history — session, repo, or transcript…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <div className="rows">
+        <div className="rows" ref={rowsRef}>
           {loading && sessions.length === 0 && <div className="empty">Discovering sessions…</div>}
-          {!loading && !searching && results.length === 0 && <div className="empty">No matching sessions found.</div>}
-          {searching && results.length === 0 && <div className="empty">Searching conversation history…</div>}
-          {results.map(({ session, hits }, index) => (
-            <div
-              key={sessionKey(session)}
-              className={`row resume-row${index === sel ? ' sel' : ''}${!session.resumable ? ' disabled' : ''}`}
-              style={busy ? { opacity: 0.6 } : undefined}
-              aria-disabled={!session.resumable}
-              title={!session.resumable ? session.resumeError : undefined}
-              onMouseEnter={() => setSel(index)}
-              onClick={() => void resume(session)}
-            >
-              <div className="resume-content">
-                <div className="resume-heading">
-                  <div>
-                    <div className="primary">{session.title ?? session.agentName ?? session.sessionId}</div>
-                    <div className="sub">{session.cwd}{session.branch ? ` · ${session.branch}` : ''}</div>
-                  </div>
-                  <div className="meta">
-                    <span>{session.agent}</span>
-                    <span>{session.live ? 'live' : session.source === 'tandem' ? 'Tandem' : session.source === 'acp' ? 'ACP' : session.historyOnly ? 'history only' : 'history'}</span>
-                    {session.updatedAt && <span>{displayDate(session.updatedAt)}</span>}
-                  </div>
-                </div>
-                {hits.map((hit) => <Hit key={hit.entryId} hit={hit} />)}
-                {!session.resumable && session.resumeError && <div className="resume-disabled-reason">{session.resumeError}</div>}
+          {!loading && !searching && flat.length === 0 && <div className="empty">No matching sessions found.</div>}
+          {searching && flat.length === 0 && <div className="empty">Searching conversation history…</div>}
+          {groups.map((group) => (
+            <div className="history-group" key={group.repoKey}>
+              <div className="history-group-head" title={group.repoKey}>
+                <span className="history-repo">{group.repo}</span>
+                <span className="history-count">{group.entries.length}</span>
               </div>
+              {group.entries.map((entry) => {
+                rowIndex += 1;
+                const index = rowIndex;
+                const { session } = entry;
+                const disabled = !entry.liveAgentId && !session.resumable;
+                return (
+                  <div
+                    key={sessionKey(session)}
+                    className={`row history-row${index === sel ? ' sel' : ''}${disabled ? ' disabled' : ''}`}
+                    style={busy ? { opacity: 0.6 } : undefined}
+                    aria-disabled={disabled}
+                    title={disabled ? session.resumeError : undefined}
+                    onMouseEnter={() => setSel(index)}
+                    onClick={() => void open(entry)}
+                  >
+                    <div className="history-content">
+                      <div className="history-heading">
+                        <div className="history-title">
+                          <div className="primary">
+                            {sessionName(session)}
+                            {entry.liveAgentId && <span className="history-badge">active</span>}
+                          </div>
+                          <div className="sub">{session.cwd}{session.branch ? ` · ${session.branch}` : ''}</div>
+                        </div>
+                        <div className="meta">
+                          <span>{session.agent}</span>
+                          <span>{entry.liveAgentId ? session.status ?? 'live' : sourceLabel(entry)}</span>
+                          {session.updatedAt && <span>{displayDate(session.updatedAt)}</span>}
+                        </div>
+                      </div>
+                      {entry.hits.map((hit) => <Hit key={hit.entryId} hit={hit} />)}
+                      {disabled && session.resumeError && <div className="history-disabled-reason">{session.resumeError}</div>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>
@@ -210,7 +223,7 @@ export function ResumePalette() {
           <div className="modal-err">External sessions cannot be enumerated for: {unsupported.join(', ')}. Tandem-owned sessions still appear.</div>
         )}
         <div className="foot">
-          <span><span className="kbd">↵</span> resume</span>
+          <span><span className="kbd">↵</span> {flat[sel]?.liveAgentId ? 'focus' : 'resume'}</span>
           <span><span className="kbd">↑↓</span> navigate</span>
           <span><span className="kbd">Esc</span> close</span>
         </div>
