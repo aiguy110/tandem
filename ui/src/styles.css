@@ -383,7 +383,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .card { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
 .card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: var(--fs-sm); }
 .card-head .title { flex: 1; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-head.open .title { overflow: visible; text-overflow: clip; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card-body { border-top: 1px solid var(--border); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: pre-wrap; }
+.tool-text-section { margin-bottom: 10px; }
+.tool-text-section:last-child { margin-bottom: 0; }
+.tool-text-section pre { margin: 0; }
 .tool-args { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
 .tool-args-label { font-family: var(--font-sans, inherit); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-dim)); margin-bottom: 4px; }
 .tool-args pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
@@ -392,8 +396,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tool-terminal-output {
   margin: 0; padding: 8px 10px; background: #05090c; color: #d6e2ea;
   border: 1px solid var(--border); border-radius: var(--r-sm);
-  max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  white-space: pre-wrap; word-break: break-word;
 }
+.tool-terminal-command, .tool-call-title, .tool-output { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.tool-terminal-command, .tool-call-title { padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); }
 .tool-terminal-empty { color: var(--text-faint); font-style: italic; }
 .chip { font-size: var(--fs-xs); padding: 1px 7px; border-radius: 4px; text-transform: capitalize; white-space: nowrap; }
 .chip.pending { color: var(--text-dim); background: var(--surface-3); }

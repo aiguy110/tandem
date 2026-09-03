@@ -1187,7 +1187,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
   }, [images.length]);
   return (
     <div className="card">
-      <div className="card-head" onClick={() => hasBody && setOpen((o) => !o)}>
+      <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
         {command != null ? (
           <span className="title tool-cmd-title">
@@ -1201,15 +1201,19 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
       {open && hasBody && (
         <div className="card-body">
           {command != null ? (
-            body != null ? (
-              <pre className="tool-terminal-output">{body}</pre>
-            ) : (
-              <div className="tool-terminal-empty">(no output)</div>
-            )
+            <>
+              <ToolText label="Command" className="tool-terminal-command">{command}</ToolText>
+              {body != null ? (
+                <ToolText label="Output" className="tool-terminal-output">{body}</ToolText>
+              ) : (
+                <div className="tool-terminal-empty">(no output)</div>
+              )}
+            </>
           ) : (
             <>
+              <ToolText label="Tool" className="tool-call-title">{item.title}</ToolText>
               {diffs.map((diff, index) => <UnifiedDiff key={`${diff.path}-${index}`} patch={toolDiffPatch(diff)} />)}
-              {body != null && <div className="tool-output">{body}</div>}
+              {body != null && <ToolText label="Output" className="tool-output">{body}</ToolText>}
             </>
           )}
           {showArgs && (
@@ -1221,6 +1225,18 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
         </div>
       )}
+    </div>
+  );
+}
+
+// Headers are deliberately compact, but opening a tool call must expose every
+// byte of the command, input, and output without relying on a hover tooltip or
+// a fixed-height inner scroller.
+function ToolText({ label, className, children }: { label: string; className: string; children: string }) {
+  return (
+    <div className="tool-text-section">
+      <div className="tool-args-label">{label}</div>
+      <pre className={className}>{children}</pre>
     </div>
   );
 }

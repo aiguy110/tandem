@@ -54,6 +54,29 @@ afterEach(() => {
 });
 
 describe('TranscriptPane voice rendering', () => {
+  it('shows complete command and output when an execute tool call is expanded', () => {
+    const withTool = agent();
+    const command = 'cd /a/very/long/path && npm run a-command-with-a-long-name -- --verbose';
+    const output = 'first output line\nsecond output line\nthird output line';
+    withTool.events = [{
+      seq: 1,
+      event: { kind: 'tool_call', id: 'bash-1', title: 'Bash', status: 'done', toolKind: 'execute', rawInput: { command }, content: output },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    expect(view.getByText('Command')).toBeTruthy();
+    expect(view.container.querySelector('.tool-terminal-command')?.textContent).toBe(command);
+    expect(view.getByText('Output')).toBeTruthy();
+    expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
+  });
+
   it('requests and exposes audio controls for a completed agent message', async () => {
     localStorage.setItem('tandem.token', 'test-token');
     (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:voice');
