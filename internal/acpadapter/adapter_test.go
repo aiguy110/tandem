@@ -320,6 +320,39 @@ func TestAsideForksAndWrapsForkUpdates(t *testing.T) {
 	}
 }
 
+func TestInterruptCancelsActiveAsideFork(t *testing.T) {
+	a := startMock(t, nil)
+	done := make(chan error, 1)
+	go func() {
+		stop, err := a.Aside(context.Background(), "aside-cancel", []PromptBlock{{Type: "text", Text: "DERISK_FORK_CANCEL"}})
+		if err == nil && stop != "cancelled" {
+			err = fmt.Errorf("stop reason = %q", stop)
+		}
+		done <- err
+	}()
+
+	waitEvent(t, a, "status", func(e map[string]any) bool { return e["status"] == "working" })
+	if err := a.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("interrupt did not cancel the active aside fork")
+	}
+	got := waitEvent(t, a, "aside_event", func(event map[string]any) bool {
+		inner, _ := event["event"].(map[string]any)
+		return event["asideId"] == "aside-cancel" && inner["kind"] == "message_chunk"
+	})
+	inner := got["event"].(map[string]any)
+	if inner["text"] != "Cancelled." {
+		t.Fatalf("aside cancellation event = %#v", got)
+	}
+}
+
 func TestPromptCancellationRestoresIdleStatus(t *testing.T) {
 	a := startMock(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())

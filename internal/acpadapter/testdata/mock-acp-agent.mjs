@@ -171,6 +171,9 @@ function handle(msg) {
   // Cancellation (notification, no id): resolve the in-flight prompt as cancelled.
   // The client has already answered our permission request as cancelled.
   if (msg.method === 'session/cancel') {
+    // ACP cancellation is session-scoped. Ignore a cancellation aimed at the
+    // parent while a forked session owns the prompt, as a real agent would.
+    if (msg.params?.sessionId !== promptSessionId) return;
     note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Cancelled.' } });
     finish('cancelled');
     return;
@@ -180,6 +183,7 @@ function handle(msg) {
     promptSessionId = msg.params?.sessionId ?? sessionId;
     const blocks = msg.params?.prompt ?? [];
     const text = blocks.map((b) => b?.text ?? '').join(' ');
+    if (text.includes('DERISK_FORK_CANCEL')) return;
     if (text.includes('DERISK_ASIDE')) {
       note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Aside answer.' } });
       finish('end_turn');

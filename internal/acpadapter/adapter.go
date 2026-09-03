@@ -569,7 +569,13 @@ func (a *Adapter) Interrupt() error {
 		tools = append(tools, id)
 	}
 	a.liveTools = make(map[string]struct{})
-	sessionID := a.sessionID
+	// An aside runs its prompt against the fork returned by session/fork, not
+	// the durable parent session. Cancel whichever session currently owns the
+	// turn so interrupting /btw reaches the in-flight prompt.
+	sessionID := a.turnSessionID
+	if sessionID == "" {
+		sessionID = a.sessionID
+	}
 	// Keep the cancelled context installed until the next Prompt resets it.
 	// Service requests already emitted by the agent can arrive after the
 	// interrupt and must be rejected as part of the interrupted turn.
