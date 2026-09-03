@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useValuePresence } from '../transitions';
 import { useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
@@ -27,7 +28,9 @@ export function AgentsRail() {
   const renameAgent = useStore((s) => s.renameAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
-  const [confirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
+  const [pendingConfirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
+  // Hold the dialog on screen while it animates away.
+  const { rendered: confirmation, closing: confirmClosing } = useValuePresence(pendingConfirmation);
   const [deleteWorktree, setDeleteWorktree] = useState(true);
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -122,6 +125,7 @@ export function AgentsRail() {
       )}
       {closeError && <div className="rail-close-error">{closeError}</div>}
       {confirmation && agents[confirmation.id] && (
+        <div style={{ display: 'contents' }} className={confirmClosing ? 'popup-closing' : undefined}>
         <div className="modal-scrim" onClick={() => setConfirmation(null)}>
           <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-body">
@@ -178,6 +182,7 @@ export function AgentsRail() {
             </div>
           </div>
         </div>
+        </div>
       )}
     </div>
   );
@@ -214,8 +219,10 @@ function Row({
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
   const [mouseHovered, setMouseHovered] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-  const [details, setDetails] = useState<{ x: number; y: number } | null>(null);
+  const [pendingContextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [pendingDetails, setDetails] = useState<{ x: number; y: number } | null>(null);
+  const { rendered: contextMenu, closing: menuClosing } = useValuePresence(pendingContextMenu);
+  const { rendered: details, closing: detailsClosing } = useValuePresence(pendingDetails);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -253,7 +260,7 @@ function Row({
     setEditing(true);
   };
   useEffect(() => {
-    if (!contextMenu) return;
+    if (!pendingContextMenu) return;
     const dismiss = () => setContextMenu(null);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') dismiss();
@@ -264,9 +271,9 @@ function Row({
       window.removeEventListener('pointerdown', dismiss);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [contextMenu]);
+  }, [pendingContextMenu]);
   useEffect(() => {
-    if (!details) return;
+    if (!pendingDetails) return;
     const dismiss = () => setDetails(null);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') dismiss();
@@ -277,7 +284,7 @@ function Row({
       window.removeEventListener('pointerdown', dismiss);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [details]);
+  }, [pendingDetails]);
   const openDetails = (origin: { x: number; y: number }) => {
     // Keep the initial panel near its invocation point without letting it spill
     // outside the viewport. The user can subsequently reposition it by dragging.
@@ -390,7 +397,7 @@ function Row({
       </>}
       {contextMenu && (
         <div
-          className="agent-context-menu"
+          className={`agent-context-menu${menuClosing ? ' closing' : ''}`}
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label={`Actions for ${agent.name}`}
@@ -411,7 +418,7 @@ function Row({
           </button>
         </div>
       )}
-      {details && <AgentDetails agent={agent} position={details} onClose={() => setDetails(null)} onMove={setDetails} />}
+      {details && <AgentDetails agent={agent} position={details} closing={detailsClosing} onClose={() => setDetails(null)} onMove={setDetails} />}
     </div>
   );
 }
@@ -419,11 +426,13 @@ function Row({
 function AgentDetails({
   agent,
   position,
+  closing,
   onClose,
   onMove,
 }: {
   agent: AgentView;
   position: { x: number; y: number };
+  closing: boolean;
   onClose: () => void;
   onMove: (position: { x: number; y: number }) => void;
 }) {
@@ -449,7 +458,7 @@ function AgentDetails({
 
   return (
     <section
-      className="agent-details-popover"
+      className={`agent-details-popover${closing ? ' closing' : ''}`}
       style={{ left: position.x, top: position.y }}
       role="dialog"
       aria-label={`Details for ${agent.name}`}

@@ -12,6 +12,7 @@ import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
 import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
+import { useValuePresence } from './transitions';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -48,10 +49,22 @@ export function App() {
         <Inspector />
       </div>
       <ConnectionBanner />
-      {modal === 'spawn' && <SpawnPalette />}
-      {modal === 'command' && <CommandPalette />}
-      {modal === 'resume' && <ResumePalette />}
-      {modal === 'automation' && <AutomationModal />}
+      <ModalHost modal={modal} />
     </>
+  );
+}
+
+// Palettes keep rendering for the length of their exit animation after the
+// store has already moved on to 'none' -- see src/transitions.ts.
+function ModalHost({ modal }: { modal: string }) {
+  const { rendered, closing } = useValuePresence(modal === 'none' ? null : modal);
+  if (!rendered) return null;
+  return (
+    <div style={{ display: 'contents' }} className={closing ? 'popup-closing' : undefined}>
+      {rendered === 'spawn' && <SpawnPalette />}
+      {rendered === 'command' && <CommandPalette />}
+      {rendered === 'resume' && <ResumePalette />}
+      {rendered === 'automation' && <AutomationModal />}
+    </div>
   );
 }

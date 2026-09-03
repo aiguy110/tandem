@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
 import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import { usePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
@@ -808,6 +809,7 @@ function ProfilePicker({
     return fuzzyFilter(query, profiles, (p) => p.name).slice(0, 8);
   }, [query, profiles, recent]);
   useEffect(() => setIndex(0), [query]);
+  const { mounted: resultsOpen, closing: resultsClosing } = usePresence(open);
   const choose = (p: Profile) => {
     onPick(p);
     setQuery('');
@@ -829,8 +831,8 @@ function ProfilePicker({
           else if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); setQuery(''); }
         }}
       />
-      {open && (
-        <div className="git-ref-results">
+      {resultsOpen && (
+        <div className={`git-ref-results${resultsClosing ? ' closing' : ''}`}>
           {results.length === 0 && <div className="git-ref-empty">{profiles.length === 0 ? 'No saved profiles yet.' : 'No matching profiles.'}</div>}
           {results.map((p, row) => (
             <button
@@ -878,6 +880,7 @@ function GitRefPicker({
     return items.slice(0, 10);
   }, [query, refs, selected?.displayName]);
   useEffect(() => setIndex(0), [query, refs]);
+  const { mounted: resultsOpen, closing: resultsClosing } = usePresence(open);
 
   const choose = (ref: GitRefInfo) => {
     onChange(ref.ref);
@@ -912,8 +915,8 @@ function GitRefPicker({
           }
         }}
       />
-      {open && !busy && (
-        <div className="git-ref-results">
+      {resultsOpen && !busy && (
+        <div className={`git-ref-results${resultsClosing ? ' closing' : ''}`}>
           {filtered.length === 0 && <div className="git-ref-empty">No matching Git refs.</div>}
           {filtered.map((ref, row) => (
             <button

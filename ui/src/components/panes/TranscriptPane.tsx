@@ -10,6 +10,7 @@ import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
 import { PermissionRequestDetails } from '../PermissionRequest';
+import { usePresence, useUpdateFlash, useValuePresence } from '../../transitions';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -279,6 +280,12 @@ export function TranscriptPane() {
   const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
   const popoverDragOffset = useRef<{ x: number; y: number } | null>(null);
   const captureSelectionRef = useRef<() => void>(() => {});
+  // Memoized so useValuePresence sees a stable identity across re-renders.
+  const popoverView = useMemo(
+    () => (selAnchor && popoverOpen && popoverPosition ? { anchor: selAnchor, position: popoverPosition } : null),
+    [selAnchor, popoverOpen, popoverPosition],
+  );
+  const { rendered: shownPopover, closing: popoverClosing } = useValuePresence(popoverView);
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
@@ -289,6 +296,22 @@ export function TranscriptPane() {
     () => [...transcriptItems].reverse().find((it): it is Extract<Item, { kind: 'message' }> => it.kind === 'message'),
     [transcriptItems],
   );
+  // Rows animate in only when they arrive while the transcript is already on
+  // screen; the first render for an agent (initial load, replay, or switching
+  // agents) seeds the set silently so history does not stampede in.
+  const seenRows = useRef<{ agentId: string; keys: Set<string> }>({ agentId: '', keys: new Set() });
+  const seededForAgent = seenRows.current.agentId === (agent?.id ?? '');
+  const isNewRow = (key: string) => seededForAgent && !seenRows.current.keys.has(key);
+  useLayoutEffect(() => {
+    const seen = seenRows.current;
+    const id = agent?.id ?? '';
+    if (seen.agentId !== id) {
+      seen.agentId = id;
+      seen.keys = new Set();
+    }
+    for (const it of transcriptItems) seen.keys.add(it.key);
+  });
+
   const loadCachedAudio = useCachedAudioLoader(agent?.id ?? '');
   const autoplay = useAutoPlayQueue(agent?.id ?? '', agent?.audioSeq ?? null, agent?.audioReadyRevision ?? 0);
   // Which annotation anchors still resolve to a rendered row (vs. "context
@@ -474,6 +497,7 @@ export function TranscriptPane() {
               <Row
                 key={`${agent.id}:${it.key}`}
                 item={it}
+                entering={isNewRow(it.key)}
                 commands={agent.commands}
                 quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
@@ -512,13 +536,13 @@ export function TranscriptPane() {
               💬 Comment
             </button>
           )}
-          {selAnchor && popoverOpen && popoverPosition && (
-            <div className="annotation-popover" style={popoverPosition}>
+          {shownPopover && (
+            <div className={`annotation-popover${popoverClosing ? ' closing' : ''}`} style={shownPopover.position}>
               <div
                 className="annotation-popover-quote annotation-popover-drag-handle"
                 title="Drag to move comment"
                 onPointerDown={(e) => {
-                  popoverDragOffset.current = { x: e.clientX - popoverPosition.left, y: e.clientY - popoverPosition.top };
+                  popoverDragOffset.current = { x: e.clientX - shownPopover.position.left, y: e.clientY - shownPopover.position.top };
                   e.currentTarget.setPointerCapture(e.pointerId);
                   e.preventDefault();
                 }}
@@ -547,7 +571,7 @@ export function TranscriptPane() {
                 }}
                 onPointerCancel={() => { popoverDragOffset.current = null; }}
               >
-                &ldquo;{previewText(selAnchor.quote, 160)}&rdquo;
+                &ldquo;{previewText(shownPopover.anchor.quote, 160)}&rdquo;
               </div>
               <textarea
                 autoFocus
@@ -561,7 +585,7 @@ export function TranscriptPane() {
                     clearSelectionUi();
                   } else if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    void addAnnotation(agent.id, { seq: selAnchor.seq, role: selAnchor.role, quote: selAnchor.quote }, popoverText.trim());
+                    void addAnnotation(agent.id, { seq: shownPopover.anchor.seq, role: shownPopover.anchor.role, quote: shownPopover.anchor.quote }, popoverText.trim());
                     window.getSelection()?.removeAllRanges();
                     clearSelectionUi();
                   }
@@ -573,7 +597,7 @@ export function TranscriptPane() {
                   type="button"
                   className="btn primary"
                   onClick={() => {
-                    void addAnnotation(agent.id, { seq: selAnchor.seq, role: selAnchor.role, quote: selAnchor.quote }, popoverText.trim());
+                    void addAnnotation(agent.id, { seq: shownPopover.anchor.seq, role: shownPopover.anchor.role, quote: shownPopover.anchor.quote }, popoverText.trim());
                     window.getSelection()?.removeAllRanges();
                     clearSelectionUi();
                   }}
@@ -779,6 +803,7 @@ function QuoteChip({
 
 function Row({
   item,
+  entering,
   commands,
   agentId,
   canRenderAudio,
@@ -793,6 +818,7 @@ function Row({
   onJumpToLinkedBlock,
 }: {
   item: Item;
+  entering: boolean;
   commands: SlashCommand[];
   agentId: string;
   canRenderAudio: boolean;
@@ -807,6 +833,20 @@ function Row({
   onJumpToLinkedBlock: (targetId: string) => void;
 }) {
   const sourceRef = useRef<HTMLElement>(null);
+  // Latched at mount so re-renders while the row streams cannot restart (or cut
+  // short) the entrance animation, then dropped once it has played -- leaving it
+  // on would collide with the update-flash animation on the same element.
+  const [enterClass, setEnterClass] = useState(entering ? ' ev-enter' : '');
+  useEffect(() => {
+    if (!enterClass) return;
+    const timer = window.setTimeout(() => setEnterClass(''), 250);
+    return () => window.clearTimeout(timer);
+  }, [enterClass]);
+  // A user prompt can change after it is first rendered (an image attachment
+  // finishing upload, a quote resolving); flash so the edit is noticeable.
+  const userFlash = useUpdateFlash(
+    item.kind === 'user' ? item.blocks.map((b) => (b.type === 'text' ? b.text : b.type)).join('\u0000') : null,
+  );
   useLayoutEffect(() => {
     if (sourceRef.current) applyQuoteHighlights(sourceRef.current, quoteLinks);
   }, [quoteLinks, item]);
@@ -823,7 +863,7 @@ function Row({
   switch (item.kind) {
     case 'user':
       return (
-        <div ref={sourceRef as React.RefObject<HTMLDivElement>} className="ev user" data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
+        <div ref={sourceRef as React.RefObject<HTMLDivElement>} className={`ev user${enterClass}${userFlash ? ` ${userFlash}` : ''}`} data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
           {item.blocks.map((block, i) => {
             if (block.type === 'text') return <div key={i}><SkillText text={block.text} commands={commands} /></div>;
             if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
@@ -856,7 +896,7 @@ function Row({
         </details>
       );
     case 'tool':
-      return <ToolCard item={item} />;
+      return <ToolCard item={item} enterClass={enterClass} />;
     case 'plan':
       return <TaskList item={item} />;
     case 'terminal':
@@ -1172,8 +1212,11 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
   return null;
 }
 
-function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
+function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
   const [open, setOpen] = useState(false);
+  // Flash on status transitions (pending -> in_progress -> completed/failed)
+  // rather than on every streamed output chunk, which would strobe.
+  const statusFlash = useUpdateFlash(item.status);
   const { text: body, images, diffs } = parseToolContent(item.content);
   const args = formatArgs(item.rawInput);
   const isExecute = item.toolKind === 'execute';
@@ -1186,7 +1229,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }) {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
   return (
-    <div className="card">
+    <div className={`card${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
       <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
         {command != null ? (
@@ -1474,6 +1517,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const { mounted: attachmentMenuMounted, closing: attachmentMenuClosing } = usePresence(attachmentMenuOpen);
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const [queuedFlash, setQueuedFlash] = useState(false);
@@ -1950,8 +1994,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
                 <path d="M8 3v10M3 8h10" />
               </svg>
             </button>
-            {attachmentMenuOpen && (
-              <div className="attachment-menu" role="menu">
+            {attachmentMenuMounted && (
+              <div className={`attachment-menu${attachmentMenuClosing ? ' closing' : ''}`} role="menu">
                 <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); photoRef.current?.click(); }}>
                   Photo gallery
                 </button>

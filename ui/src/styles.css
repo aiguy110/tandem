@@ -15,6 +15,13 @@
   --ok: #4FBF87; --working: #4CC6E8; --warn: #F2B441; --err: #FF6B6B;
   --ok-soft: #4fbf8721; --working-soft: #4cc6e821; --warn-soft: #f2b44121; --err-soft: #ff6b6b21;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+
+  /* Motion. --motion-out must match EXIT_MS in transitions.ts, which is what
+     keeps an exiting popup mounted long enough to animate. */
+  --motion-in: .17s;
+  --motion-out: .13s;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
 }
 
 :root[data-theme='light'] {
@@ -926,3 +933,56 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .tab.disabled { opacity: .4; }
 .tab.attn { color: var(--warn); border-color: var(--warn); }
 .appr.takeover { border-color: var(--warn); background: var(--warn-soft); }
+
+/* ---- motion: popup enter/exit + transcript arrival ----
+   Exit animations only get a chance to paint because usePresence/
+   useValuePresence (src/transitions.ts) hold the outgoing element mounted for
+   --motion-out; the `.closing` class is what swaps it onto the exit keyframes. */
+
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scrim-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(-10px) scale(.975); } to { opacity: 1; transform: none; } }
+@keyframes modal-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-6px) scale(.985); } }
+/* Anchored popups (dropdowns, menus) grow out of their trigger edge rather
+   than drifting, so transform-origin does the positional work. */
+@keyframes popup-in { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes popup-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.96); } }
+@keyframes ev-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+/* A ring rather than a background wash: user bubbles and tool cards both carry
+   their own background, which a background-color animation would clobber and
+   then snap back from when the keyframes stop applying. */
+@keyframes ev-updated { from { box-shadow: 0 0 0 2px var(--agent); } to { box-shadow: 0 0 0 2px transparent; } }
+
+/* Modals and palettes: spawn, command, resume, automation, delete-confirm. */
+.modal-scrim { animation: scrim-in var(--motion-in) ease both; }
+.modal-scrim .modal { animation: modal-in var(--motion-in) var(--ease-out) both; }
+.popup-closing .modal-scrim { animation: scrim-out var(--motion-out) ease both; pointer-events: none; }
+.popup-closing .modal-scrim .modal { animation: modal-out var(--motion-out) var(--ease-in) both; }
+
+/* Pick boxes and small menus. */
+.git-ref-results { transform-origin: top center; animation: popup-in var(--motion-in) var(--ease-out) both; }
+.git-ref-results.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+/* Nothing on the way out should still be clickable. */
+.git-ref-results.closing, .agent-context-menu.closing, .attachment-menu.closing,
+.annotation-popover.closing, .agent-details-popover.closing { pointer-events: none; }
+.agent-context-menu { transform-origin: top left; animation: popup-in var(--motion-in) var(--ease-out) both; }
+.agent-context-menu.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+.attachment-menu { transform-origin: bottom right; animation: popup-in var(--motion-in) var(--ease-out) both; }
+.attachment-menu.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+.annotation-popover { transform-origin: top left; animation: popup-in var(--motion-in) var(--ease-out) both; }
+.annotation-popover.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+.agent-details-popover.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+
+/* Transcript: user messages and tool calls fade up as they arrive, and pulse
+   when they change (a tool call flipping pending -> completed, say). Only rows
+   that appear after the transcript is already on screen get the enter
+   animation, so switching agents does not replay the whole history. */
+.ev-enter { animation: ev-in var(--motion-in) var(--ease-out) both; }
+.is-updated-a { animation: ev-updated .55s ease-out; }
+.is-updated-b { animation: ev-updated .55s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
+  .attachment-menu, .annotation-popover, .agent-details-popover,
+  .ev-enter, .is-updated-a, .is-updated-b { animation-duration: 1ms; }
+}

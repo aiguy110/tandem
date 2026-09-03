@@ -77,6 +77,14 @@ interface AgentView {
   [`ws-protocol.md`](ws-protocol.md#reconnect--replay).
 - **Optimistic control token.** On "grab wheel," immediately reflect `controlOwner: 'user'`
   and disable agent input; confirm/rollback on daemon ack.
+- **Animated popups and transcript arrivals.** `src/transitions.ts` holds `usePresence` /
+  `useValuePresence`, which keep a dismissed popup mounted for the length of its exit
+  animation (React would otherwise unmount it before the keyframes paint) and hand back a
+  `closing` flag; `useUpdateFlash` re-triggers a flash whenever a value changes. Modals and
+  palettes, pick boxes, context menus, the details popover, and the annotation popover all
+  animate in and out; user prompts and tool cards fade up as they arrive and flash on
+  change. Durations live in the `--motion-*` custom properties in `styles.css`, and
+  `--motion-out` must stay in sync with `EXIT_MS`.
 
 ## Implementation status (Phase 4)
 
