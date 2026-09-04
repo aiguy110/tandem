@@ -55,6 +55,8 @@ type Backend interface {
 	ClearAnnotations(string) (int, error)
 	SetAudioEnabled(string, bool) error
 	SetAudioFocus(string, string, bool) error
+	SetAudioPosition(string, int64, int64) (int64, error)
+	AudioPosition(string) (*store.AudioPosition, error)
 }
 
 type Options struct {
@@ -191,6 +193,7 @@ type clientMessage struct {
 	Quote          string                     `json:"quote"`
 	Comment        string                     `json:"comment"`
 	Path           string                     `json:"path"`
+	PositionMs     int64                      `json:"positionMs"`
 }
 
 type connection struct {
@@ -795,6 +798,19 @@ func (c *connection) handle(m clientMessage) {
 		c.commandAck(m, m.AgentID)
 	case "set_audio_focus":
 		c.setAudioFocus(m)
+	case "set_audio_position":
+		updatedAt, err := c.server.opts.Registry.SetAudioPosition(m.AgentID, m.Seq, m.PositionMs)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		// The sending client already knows its own position (it's the one
+		// driving playback); broadcasting back to it would just fight its
+		// local clock with a slightly-stale echo. Other connections watching
+		// the same agent (a second device, or a background rail view) do
+		// need this to keep a resumed player in sync, so they get it.
+		c.server.broadcastAudioPosition(m.AgentID, m.Seq, m.PositionMs, updatedAt, c)
+		c.commandAck(m, m.AgentID)
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
@@ -1043,6 +1059,33 @@ func (h *Handler) broadcastAnnotations(agentID string) {
 	}
 }
 
+// broadcastAudioPosition tells every other connection subscribed to agentID
+// (never the sender — see the set_audio_position handler) where playback
+// currently stands, so a second device's player can resume from the same
+// spot. It never touches the store itself: the caller already wrote the
+// position and hands over the exact values written, so this stays a cheap
+// in-memory fan-out even though the client throttles these to roughly one
+// every 5 seconds during playback.
+func (h *Handler) broadcastAudioPosition(agentID string, seq, positionMs, updatedAt int64, sender *connection) {
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	for _, c := range connections {
+		if c == sender {
+			continue
+		}
+		c.mu.Lock()
+		_, subscribed := c.subs[agentID]
+		c.mu.Unlock()
+		if subscribed {
+			c.send(map[string]any{"t": "audio_position", "agentId": agentID, "seq": seq, "positionMs": positionMs, "updatedAt": updatedAt})
+		}
+	}
+}
+
 func (h *Handler) broadcastAgents() {
 	agents := h.opts.Registry.Summaries(context.Background())
 	h.mu.Lock()
@@ -1197,7 +1240,11 @@ func (c *connection) subscribe(m clientMessage) {
 				audioReady = append(audioReady, map[string]any{"seq": clip.Seq, "durationMs": clip.DurationMs})
 			}
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady})
+		snapshot := map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady}
+		if pos, err := c.server.opts.Registry.AudioPosition(sess.ID); err == nil && pos != nil {
+			snapshot["audioPosition"] = map[string]any{"seq": pos.Seq, "positionMs": pos.PositionMs, "updatedAt": pos.UpdatedAt}
+		}
+		c.send(snapshot)
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {

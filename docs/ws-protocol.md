@@ -214,7 +214,8 @@ type ClientMsg =
   | { t: 'shell_open'; agentId: string; cols: number; rows: number }
   | { t: 'shell_input'; agentId: string; bytesB64: string }
   | { t: 'shell_resize'; agentId: string; cols: number; rows: number }
-  | { t: 'shell_close'; agentId: string };
+  | { t: 'shell_close'; agentId: string }
+  | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number }; // seq: 0 clears (see below)
 
 type PromptBlock =
   | { type: 'text'; text: string }
@@ -249,7 +250,9 @@ type ServerMsg =
                      status: AgentStatus; controlMode: ControlMode;
                      pendingApprovals: Approval[];
                      audioReadySeqs?: number[];                        // deprecated bare form, kept for compat
-                     audioReady?: { seq: number; durationMs: number }[] } // durationMs 0 = unknown
+                     audioReady?: { seq: number; durationMs: number }[]; // durationMs 0 = unknown
+                     audioPosition?: { seq: number; positionMs: number; updatedAt: number } } // omitted = nothing stored
+  | { t: 'audio_position'; agentId: string; seq: number; positionMs: number; updatedAt: number } // cross-device sync only; never sent back to the sender
   | { t: 'event';    agentId: string; seq: number; event: WireEvent }  // live tail (monotonic)
   | { t: 'ack';      corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
@@ -280,6 +283,19 @@ clip written before duration computation existed and not yet re-read). Both fiel
 emitted together for backward compatibility; new clients should prefer `audioReady`.
 The live `audio_state` event carries the same optional `durationMs` for a clip that
 just finished rendering.
+
+The audio player's playback position is daemon-owned so it survives a session switch or
+a closed tab: `set_audio_position` writes one row per agent (last-write-wins, not
+per-message) to `store.AudioPosition`, keyed by the section (`seq`, a transcript message
+seq) and the offset within it (`positionMs`); `seq: 0` is a deliberate reset ("no active
+section" — playlist finished or explicitly cleared) and deletes the stored row rather
+than persisting a zero seq. `snapshot.audioPosition` is omitted entirely when nothing is
+stored for that agent. The client is expected to throttle `set_audio_position` during
+playback (roughly one every 5s, plus on pause/section-change/tab-hide) since every call
+is a durable write; the daemon does not itself rate-limit it. Every *other* connection
+subscribed to the same agent gets a live `audio_position` broadcast on each write, so a
+second device's player can follow along — the sender never gets it echoed back, since it
+already knows the position it just wrote and an echo would just fight its own clock.
 
 Legacy `text` prompts normalize to one text block. Block order is preserved into
 ACP `session/prompt`; only at that boundary does the daemon resolve an owned asset

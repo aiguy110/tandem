@@ -28,7 +28,9 @@ type testBackend struct {
 	resume   struct {
 		sessionID, agent, cwd, source string
 	}
-	annotations map[string][]store.Annotation
+	annotations    map[string][]store.Annotation
+	audioPositions map[string]store.AudioPosition
+	now            func() int64
 }
 
 type inertBrowserDriver struct{}
@@ -100,6 +102,37 @@ func (b *testBackend) SetConfigOption(ctx context.Context, id, configID string, 
 }
 func (*testBackend) SetAudioEnabled(string, bool) error       { return nil }
 func (*testBackend) SetAudioFocus(string, string, bool) error { return nil }
+
+// SetAudioPosition and AudioPosition are an in-memory stand-in for the store,
+// mirroring the ListAnnotations/UpsertAnnotation pattern above, so WS tests
+// can exercise set_audio_position + the snapshot's audioPosition field
+// without a real database.
+func (b *testBackend) SetAudioPosition(agentID string, seq, positionMs int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	updatedAt := int64(0)
+	if b.now != nil {
+		updatedAt = b.now()
+	}
+	if b.audioPositions == nil {
+		b.audioPositions = map[string]store.AudioPosition{}
+	}
+	if seq == 0 {
+		delete(b.audioPositions, agentID)
+		return updatedAt, nil
+	}
+	b.audioPositions[agentID] = store.AudioPosition{AgentID: agentID, Seq: seq, PositionMs: positionMs, UpdatedAt: updatedAt}
+	return updatedAt, nil
+}
+func (b *testBackend) AudioPosition(agentID string) (*store.AudioPosition, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	pos, ok := b.audioPositions[agentID]
+	if !ok {
+		return nil, nil
+	}
+	return &pos, nil
+}
 
 func (b *testBackend) CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error) {
 	return store.BrowserSnapshot{}, nil
@@ -687,6 +720,82 @@ func TestAnnotationsAddUpdateDeleteClearAndBroadcast(t *testing.T) {
 	recv(t, two) // broadcast to peer
 	if got, _ := b.ListAnnotations("a"); len(got) != 0 {
 		t.Fatalf("store not cleared: %#v", got)
+	}
+}
+
+func TestSetAudioPositionPersistsAndBroadcastsWithoutEchoingSender(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	var clock int64 = 1000
+	b.now = func() int64 { return clock }
+
+	one, two := dial(t, url), dial(t, url)
+	for _, c := range []*websocket.Conn{one, two} {
+		send(t, c, map[string]any{"t": "subscribe", "agentId": "a"})
+		snap := recv(t, c)
+		if snap["t"] != "snapshot" {
+			t.Fatalf("snapshot=%#v", snap)
+		}
+		if _, has := snap["audioPosition"]; has {
+			t.Fatalf("expected no audioPosition before any write, got %#v", snap["audioPosition"])
+		}
+		if ack := recv(t, c); ack["t"] != "ack" {
+			t.Fatalf("subscribe ack=%#v", ack)
+		}
+	}
+
+	send(t, one, map[string]any{"t": "set_audio_position", "agentId": "a", "seq": float64(4), "positionMs": float64(12500), "corrId": "pos1"})
+
+	// The sender gets its own ack but must NOT receive a broadcast echo of
+	// the position it just sent — that would fight its own playback clock.
+	// Proven without a read-deadline probe (which can leave the connection's
+	// read side unusable in gorilla/websocket): send a distinguishable
+	// follow-up command and require its reply to be the very next message,
+	// meaning nothing else was queued in between.
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "pos1" || ack["error"] != nil {
+		t.Fatalf("set_audio_position ack=%#v", ack)
+	}
+	send(t, one, map[string]any{"t": "list_dirs", "corrId": "probe"})
+	if msg := recv(t, one); msg["t"] != "dirs" || msg["corrId"] != "probe" {
+		t.Fatalf("expected the probe's own reply next (no echoed broadcast in between): %#v", msg)
+	}
+
+	// A different connection subscribed to the same agent does hear about it,
+	// so a second device can follow along.
+	if msg := recv(t, two); msg["t"] != "audio_position" || msg["agentId"] != "a" || msg["seq"] != float64(4) || msg["positionMs"] != float64(12500) || msg["updatedAt"] != float64(1000) {
+		t.Fatalf("peer broadcast=%#v", msg)
+	}
+
+	if got, err := b.AudioPosition("a"); err != nil || got == nil || got.Seq != 4 || got.PositionMs != 12500 || got.UpdatedAt != 1000 {
+		t.Fatalf("store after set=%#v err=%v", got, err)
+	}
+
+	// A fresh snapshot now carries audioPosition.
+	three := dial(t, url)
+	send(t, three, map[string]any{"t": "subscribe", "agentId": "a"})
+	snap := recv(t, three)
+	pos, _ := snap["audioPosition"].(map[string]any)
+	if pos == nil || pos["seq"] != float64(4) || pos["positionMs"] != float64(12500) || pos["updatedAt"] != float64(1000) {
+		t.Fatalf("snapshot audioPosition=%#v", snap["audioPosition"])
+	}
+	recv(t, three) // subscribe ack
+
+	// seq: 0 clears the stored position; a later snapshot omits the field.
+	clock = 2000
+	send(t, one, map[string]any{"t": "set_audio_position", "agentId": "a", "seq": float64(0), "positionMs": float64(0), "corrId": "pos2"})
+	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "pos2" || ack["error"] != nil {
+		t.Fatalf("clear ack=%#v", ack)
+	}
+	if msg := recv(t, two); msg["t"] != "audio_position" || msg["seq"] != float64(0) {
+		t.Fatalf("peer clear broadcast=%#v", msg)
+	}
+	if got, err := b.AudioPosition("a"); err != nil || got != nil {
+		t.Fatalf("expected cleared position, got %#v err=%v", got, err)
+	}
+	four := dial(t, url)
+	send(t, four, map[string]any{"t": "subscribe", "agentId": "a"})
+	snap = recv(t, four)
+	if _, has := snap["audioPosition"]; has {
+		t.Fatalf("expected omitted audioPosition after clear, got %#v", snap["audioPosition"])
 	}
 }
 

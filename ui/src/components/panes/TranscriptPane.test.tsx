@@ -39,6 +39,7 @@ function agent(): AgentView {
     audioReadySeqs: [],
     audioDurations: {},
     audioReadyRevision: 0,
+    audioPosition: null,
   };
 }
 

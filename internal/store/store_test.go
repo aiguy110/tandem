@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -154,7 +154,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	keep := func(rows []schemaRow) []schemaRow {
 		out := make([]schemaRow, 0, len(rows))
 		for _, row := range rows {
-			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" {
+			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" {
 				continue
 			}
 			out = append(out, row)
@@ -365,6 +365,86 @@ func TestDeleteAgentRemovesAnnotations(t *testing.T) {
 	got, err := s.ListAnnotations("a-1")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("annotations survived agent delete: %#v err=%v", got, err)
+	}
+}
+
+func TestAudioPositionRoundTripAndClear(t *testing.T) {
+	s, _ := openTestStore(t)
+	s.now = func() time.Time { return time.UnixMilli(5000) }
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("expected no position before any write: %#v err=%v", got, err)
+	}
+	updatedAt, err := s.SetAudioPosition("a-1", 4, 12500)
+	if err != nil || updatedAt != 5000 {
+		t.Fatalf("SetAudioPosition = %d, %v", updatedAt, err)
+	}
+	got, err := s.AudioPosition("a-1")
+	if err != nil || got == nil || got.Seq != 4 || got.PositionMs != 12500 || got.UpdatedAt != 5000 {
+		t.Fatalf("position=%#v err=%v", got, err)
+	}
+	// Last-write-wins: a second write for the same agent replaces, not adds.
+	s.now = func() time.Time { return time.UnixMilli(9000) }
+	if _, err := s.SetAudioPosition("a-1", 7, 300); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got == nil || got.Seq != 7 || got.PositionMs != 300 || got.UpdatedAt != 9000 {
+		t.Fatalf("updated position=%#v err=%v", got, err)
+	}
+	// seq: 0 means "no active section" and clears the stored row entirely.
+	if _, err := s.SetAudioPosition("a-1", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("expected position cleared by seq=0: %#v err=%v", got, err)
+	}
+}
+
+func TestDeleteAgentRemovesAudioPosition(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetAudioPosition("a-1", 3, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent("a-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("audio position survived agent delete: %#v err=%v", got, err)
+	}
+}
+
+func TestMigratesAudioPositionTable(t *testing.T) {
+	// audio_position is a wholly new table (added the same way "annotations"
+	// was: only via the additive migrations loop's CREATE TABLE IF NOT
+	// EXISTS), so a pre-existing database without it must still pick it up.
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, spec TEXT NOT NULL, acpSessionId TEXT, status TEXT NOT NULL, createdAt INTEGER NOT NULL, closedAt INTEGER);
+INSERT INTO agents VALUES ('legacy-1','legacy-1','{}',NULL,'idle',123,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SetAudioPosition("legacy-1", 2, 4000); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AudioPosition("legacy-1")
+	if err != nil || got == nil || got.Seq != 2 || got.PositionMs != 4000 {
+		t.Fatalf("migrated position=%#v err=%v", got, err)
 	}
 }
 

@@ -30,10 +30,27 @@ func buildMP3Frame(bitrateIdx, sampleRateIdx, padding int, payloadPrefix []byte)
 	return frame
 }
 
-func mp3ExpectedMillis(sampleRateIdx int, frameCount int) int64 {
-	sr := int64(mp3SampleRate(testVersionMPEG1, sampleRateIdx))
+// mp3ExpectedMillis mirrors the parser's own per-frame nanosecond
+// accumulation (one sample-rate index per frame, so mixed-rate concatenated
+// streams can be asserted precisely) rather than a bulk totalSamples/rate
+// calculation, which would drift from the parser's rounding for anything but
+// a single constant sample rate.
+func mp3ExpectedMillis(sampleRateIdxs []int) int64 {
 	samplesPerFrame := int64(mp3SamplesPerFrame(testVersionMPEG1, testLayerIII))
-	return int64(frameCount) * samplesPerFrame * 1000 / sr
+	var totalNanos int64
+	for _, idx := range sampleRateIdxs {
+		sr := int64(mp3SampleRate(testVersionMPEG1, idx))
+		totalNanos += samplesPerFrame * 1_000_000_000 / sr
+	}
+	return totalNanos / 1_000_000
+}
+
+func repeatIdx(idx, n int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = idx
+	}
+	return out
 }
 
 func TestMP3DurationCBR(t *testing.T) {
@@ -47,7 +64,7 @@ func TestMP3DurationCBR(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true for a clean CBR stream")
 	}
-	want := mp3ExpectedMillis(sampleRateIdx, frameCount)
+	want := mp3ExpectedMillis(repeatIdx(sampleRateIdx, frameCount))
 	if got != want {
 		t.Fatalf("duration = %dms, want %dms", got, want)
 	}
@@ -72,7 +89,7 @@ func TestMP3DurationVBRWithXingHeader(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true for a VBR stream with a Xing header frame")
 	}
-	want := mp3ExpectedMillis(sampleRateIdx, len(bitrateIdxs))
+	want := mp3ExpectedMillis(repeatIdx(sampleRateIdx, len(bitrateIdxs)))
 	if got != want {
 		t.Fatalf("duration = %dms, want %dms", got, want)
 	}
@@ -98,7 +115,7 @@ func TestMP3DurationSkipsID3v2Tag(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true for an ID3v2-prefixed stream")
 	}
-	want := mp3ExpectedMillis(sampleRateIdx, frameCount)
+	want := mp3ExpectedMillis(repeatIdx(sampleRateIdx, frameCount))
 	if got != want {
 		t.Fatalf("duration = %dms, want %dms", got, want)
 	}
@@ -121,9 +138,39 @@ func TestMP3DurationConcatenatedChunks(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true for a concatenated multi-chunk stream")
 	}
-	want := mp3ExpectedMillis(sampleRateIdx, 5) // 2 frames from chunk A + 3 from chunk B
+	want := mp3ExpectedMillis(repeatIdx(sampleRateIdx, 5)) // 2 frames from chunk A + 3 from chunk B
 	if got != want {
 		t.Fatalf("duration = %dms, want %dms", got, want)
+	}
+}
+
+func TestMP3DurationConcatenatedChunksWithDifferentSampleRates(t *testing.T) {
+	// A pathological but possible case: two chunks rendered against different
+	// sample rates concatenated end to end. Summing must not divide the total
+	// sample count by only the last frame's rate (that would silently produce
+	// a wrong duration); each frame must contribute using its own rate.
+	const chunkAIdx, chunkBIdx = 0, 1 // 44100Hz, 48000Hz
+	chunkA := buildMP3Frame(9, chunkAIdx, 0, nil)
+	chunkA = append(chunkA, buildMP3Frame(9, chunkAIdx, 1, nil)...)
+	chunkB := buildMP3Frame(4, chunkBIdx, 0, nil)
+	chunkB = append(chunkB, buildMP3Frame(4, chunkBIdx, 1, nil)...)
+	chunkB = append(chunkB, buildMP3Frame(4, chunkBIdx, 0, nil)...)
+	combined := append(append([]byte{}, chunkA...), chunkB...)
+
+	got, ok := mp3DurationMillis(combined)
+	if !ok {
+		t.Fatalf("expected ok=true for a mixed-sample-rate concatenated stream")
+	}
+	want := mp3ExpectedMillis(append(repeatIdx(chunkAIdx, 2), repeatIdx(chunkBIdx, 3)...))
+	if got != want {
+		t.Fatalf("duration = %dms, want %dms", got, want)
+	}
+	// Sanity: the (buggy) bulk totalSamples/lastFrameRate calculation would
+	// have produced a visibly different number here, since chunkA's rate
+	// differs from chunkB's.
+	wrongBulk := int64(5*1152) * 1000 / int64(mp3SampleRate(testVersionMPEG1, chunkBIdx))
+	if got == wrongBulk {
+		t.Fatalf("duration matched the buggy last-sample-rate calculation: %dms", got)
 	}
 }
 

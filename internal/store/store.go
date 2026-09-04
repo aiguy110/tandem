@@ -320,6 +320,50 @@ func (s *Store) UpdateMessageAudioDuration(agentID string, seq int64, durationMs
 	return err
 }
 
+// AudioPosition is the last known playback position of one agent's audio
+// player — one row per agent (not per message), last-write-wins, so the
+// player can resume across a session switch or a closed tab.
+type AudioPosition struct {
+	AgentID    string
+	Seq        int64
+	PositionMs int64
+	UpdatedAt  int64
+}
+
+// SetAudioPosition persists (or, for seq == 0, clears) an agent's audio
+// playback position. seq == 0 means "no active section" — a deliberate
+// reset, not just an unset value — so it deletes the row rather than storing
+// a zero seq. Returns the daemon-assigned updatedAt used for the write (the
+// caller may use it to describe the change, e.g. in a broadcast, without a
+// second read).
+func (s *Store) SetAudioPosition(agentID string, seq, positionMs int64) (int64, error) {
+	updatedAt := s.now().UnixMilli()
+	if seq == 0 {
+		_, err := s.db.Exec(`DELETE FROM audio_position WHERE agentId = ?`, agentID)
+		return updatedAt, err
+	}
+	_, err := s.db.Exec(`INSERT INTO audio_position (agentId, seq, positionMs, updatedAt) VALUES (?, ?, ?, ?)
+ON CONFLICT(agentId) DO UPDATE SET seq=excluded.seq, positionMs=excluded.positionMs, updatedAt=excluded.updatedAt`,
+		agentID, seq, positionMs, updatedAt)
+	return updatedAt, err
+}
+
+// AudioPosition returns the persisted playback position for an agent, or nil
+// if nothing is stored (never played, or explicitly cleared via seq == 0).
+func (s *Store) AudioPosition(agentID string) (*AudioPosition, error) {
+	var pos AudioPosition
+	err := s.db.QueryRow(`SELECT seq, positionMs, updatedAt FROM audio_position WHERE agentId = ?`, agentID).
+		Scan(&pos.Seq, &pos.PositionMs, &pos.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pos.AgentID = agentID
+	return &pos, nil
+}
+
 // MessageAudioSeqs lists the transcript messages that already have durable
 // rendered audio. The bytes remain private to the authenticated audio route;
 // this is just the metadata needed to rehydrate player controls on another
@@ -487,6 +531,12 @@ func Open(path string) (*Store, error) {
         updatedAt INTEGER NOT NULL
       );
 CREATE INDEX IF NOT EXISTS annotations_agent ON annotations(agentId);`, "annotations table"},
+		{`CREATE TABLE IF NOT EXISTS audio_position (
+        agentId    TEXT PRIMARY KEY,
+        seq        INTEGER NOT NULL,
+        positionMs INTEGER NOT NULL,
+        updatedAt  INTEGER NOT NULL
+      );`, "audio_position table"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()
@@ -607,7 +657,7 @@ func (s *Store) DeleteAgent(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM agent_audio_settings WHERE agentId = ?", "DELETE FROM message_audio WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM agent_audio_settings WHERE agentId = ?", "DELETE FROM message_audio WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM audio_position WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}

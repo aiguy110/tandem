@@ -43,8 +43,7 @@ func normalizeAudioMIME(mimeType string) string {
 // past anything unexpected in between.
 func mp3DurationMillis(data []byte) (int64, bool) {
 	offset := skipID3v2(data)
-	var totalSamples int64
-	var sampleRate int
+	var totalNanos int64
 	found := false
 
 	for offset+4 <= len(data) {
@@ -99,16 +98,18 @@ func mp3DurationMillis(data []byte) (int64, bool) {
 			continue
 		}
 
-		totalSamples += int64(samplesPerFrame)
-		sampleRate = sr
+		// Accumulated per frame (not as a bulk totalSamples/sampleRate at the
+		// end) so a buffer that concatenates chunks encoded at different
+		// sample rates still sums correctly across the seam.
+		totalNanos += int64(samplesPerFrame) * 1_000_000_000 / int64(sr)
 		found = true
 		offset += frameLen
 	}
 
-	if !found || sampleRate <= 0 {
+	if !found {
 		return 0, false
 	}
-	return totalSamples * 1000 / int64(sampleRate), true
+	return totalNanos / 1_000_000, true
 }
 
 func indexOfFrameSync(data []byte, start int) int {
