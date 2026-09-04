@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { WsClient, resolveToken, type ConnState } from './ws/client';
+import type { AudioPosition } from './audio/engine';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
@@ -180,10 +181,12 @@ export interface AgentView {
   // Advances only for a live ready event. It lets the focused chat autoplay
   // newly completed clips without replaying historical audio on reconnect.
   audioReadyRevision: number;
-  // Daemon-owned playback position (last-write-wins, one per agent), so the
-  // player can resume across a session switch or a closed tab. null means
-  // nothing is stored (never played, or explicitly cleared via seq 0).
-  audioPosition: { seq: number; positionMs: number; updatedAt: number } | null;
+  // Daemon-persisted "where was this chat's playback last" — the durable half
+  // of position restore (ui/src/audio/engine.ts owns the browser-side
+  // localStorage half), so the player resumes across a session switch or a
+  // closed tab. null means nothing is stored: never played, or cleared by a
+  // `seq: 0` write. See docs/ws-protocol.md for the wire contract.
+  audioPosition: AudioPosition | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -248,10 +251,10 @@ interface StoreState {
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
   toggleThreadAudio: (agentId: string) => void;
-  // Persists the audio player's current section/offset daemon-side (so it
-  // survives a session switch or a closed tab). seq: 0 means "no active
-  // section" and clears the stored position. The caller (the audio player)
-  // is responsible for throttling calls during playback.
+  // The durable half of playback-position restore: ui/src/audio/engine.ts
+  // calls this (via a sender it's handed at app root) on its throttled /
+  // flush-on-teardown schedule. `seq: 0` means "no active section" and clears
+  // the daemon's stored position. Throttling is the caller's responsibility.
   setAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
