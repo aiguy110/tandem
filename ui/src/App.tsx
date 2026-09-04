@@ -12,6 +12,7 @@ import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
 import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
+import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { useValuePresence } from './transitions';
 
 export function App() {
@@ -38,6 +39,7 @@ export function App() {
 
   return (
     <>
+      <AudioEngineRoot />
       <div
         className={`app${agentsRailCollapsed ? ' agents-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
       >

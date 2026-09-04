@@ -101,7 +101,7 @@ export type AgentEvent =
   | { kind: 'prompt_started'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'audio_preference'; enabled: boolean }
-  | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string };
+  | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
 // AgentEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
@@ -398,6 +398,7 @@ export type ClientMsg =
   | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
   | { t: 'set_audio_enabled'; agentId: string; enabled: boolean; corrId?: string }
   | { t: 'set_audio_focus'; agentId: string; focused: boolean; corrId?: string }
+  | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }
@@ -450,7 +451,8 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[]; audioReadySeqs?: number[] }
+  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[]; audioReadySeqs?: number[]; audioReady?: { seq: number; durationMs: number }[]; audioPosition?: { seq: number; positionMs: number; updatedAt: number } }
+  | { t: 'audio_position'; agentId: string; seq: number; positionMs: number; updatedAt: number }
   | { t: 'prompt_queue'; agentId: string; queuedPrompts: QueuedPrompt[] }
   | { t: 'annotations'; agentId: string; annotations: Annotation[] }
   | { t: 'event'; agentId: string; seq: number; event: WireEvent }

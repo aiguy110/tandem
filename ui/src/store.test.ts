@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testApplyServerMsg, useStore } from './store';
 import type { Annotation } from './wire';
+import { WsClient } from './ws/client';
+import {
+  __getElementForTests as __getEngineElementForTests,
+  __resetForTests as __resetEngineForTests,
+  getState as getEngineState,
+  pause as enginePause,
+  play as enginePlay,
+  setPlaylist as setEnginePlaylist,
+} from './audio/engine';
 
 // Exercises the store's ServerMsg reducer for transcript annotations
 // (docs/transcript-annotations.md): hydration from `snapshot` and wholesale
@@ -205,5 +214,83 @@ describe('context usage', () => {
     });
 
     expect(useStore.getState().agents['agent-1'].usage?.updatedAt).toBe(1_700_000_000_000);
+  });
+});
+
+// The screen-off listening fix: syncAudioFocus (store.ts) must retain audio
+// focus on a hidden document while the audio engine is actually playing or
+// armed mid-section, and only fall back to "no focus" once the engine is
+// genuinely idle. Drives the engine for real (setPlaylist/play/pause) rather
+// than faking EngineState, and spies on WsClient.prototype.send (a real
+// instance already backs the store's `client` — see store.ts) to observe the
+// set_audio_focus messages it sends, since the client never opens a real
+// socket in this test environment (send() just queues silently otherwise).
+describe('audio focus retention on a hidden document', () => {
+  afterEach(() => {
+    __resetEngineForTests();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  });
+
+  it('keeps focus pinned on the listening chat while hidden, and drops it once the engine is genuinely idle', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ order: ['agent-1'], pane: 'chat', focusedId: null });
+
+    // Prime the store's internal audioFocusAgent tracking to a known (null)
+    // baseline first: syncAudioFocus short-circuits when nothing changed, so
+    // asserting on the very first call would be at the mercy of whatever
+    // earlier tests in this file left it pointing at.
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    useStore.getState().focus('agent-1'); // hidden + idle engine -> null baseline
+
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+
+    setEnginePlaylist('agent-1', [1]);
+    enginePlay('agent-1', 1);
+    await vi.waitFor(() => expect(getEngineState().status).toBe('playing'));
+
+    useStore.getState().focus('agent-1'); // still hidden, now actually listening
+
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: true });
+
+    // Paused mid-section (not an idle/never-started engine) — still counts
+    // as listening, so focus must stay pinned.
+    enginePause();
+    __getEngineElementForTests()!.dispatchEvent(new Event('pause'));
+    sendSpy.mockClear();
+    useStore.getState().focus('agent-1');
+    expect(sendSpy).not.toHaveBeenCalled(); // already pinned to agent-1; nothing changed
+
+    // Now the engine is genuinely torn down (e.g. the chat closed) — a
+    // hidden document with nothing playing/armed must not keep pre-rendering
+    // pinned forever.
+    setEnginePlaylist('agent-1', []);
+    useStore.getState().focus('agent-1');
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: false });
+  });
+
+  it('still uses the plain visible/chat-pane rule when not hidden', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ order: ['agent-1'], pane: 'chat', focusedId: null });
+
+    // Prime to a known (null) baseline first — see note in the previous test.
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    useStore.getState().focus('agent-1');
+
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+
+    useStore.getState().focus('agent-1');
+
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: true });
   });
 });

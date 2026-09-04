@@ -17,8 +17,79 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/gorilla/websocket"
 )
+
+// mp3FixtureBytes returns a small, valid MPEG1 Layer III CBR clip (three
+// 128kbps/44100Hz frames, no padding) that internal/voice.Duration can parse.
+// The exact byte layout mirrors the production frame-length formula; see
+// internal/voice/duration_test.go for the parser's own dedicated tests.
+func mp3FixtureBytes(frameCount int) []byte {
+	const frameLen = 417 // 144 * 128000 / 44100, no padding
+	frame := make([]byte, frameLen)
+	frame[0] = 0xFF
+	frame[1] = 0xFB // MPEG1, Layer III, no CRC
+	frame[2] = 0x90 // bitrate idx 9 (128kbps), sample rate idx 0 (44100Hz), no padding
+	var data []byte
+	for i := 0; i < frameCount; i++ {
+		data = append(data, frame...)
+	}
+	return data
+}
+
+type failIfCalledRenderer struct{ t *testing.T }
+
+func (f failIfCalledRenderer) Render(context.Context, string) (voice.Audio, error) {
+	f.t.Fatal("renderer invoked for an already-cached clip")
+	return voice.Audio{}, nil
+}
+
+func TestMessageAudioCacheBackfillsUnknownDuration(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	clip := mp3FixtureBytes(3)
+	wantMs, ok := voice.Duration("audio/mpeg", clip)
+	if !ok || wantMs <= 0 {
+		t.Fatalf("fixture did not parse: ok=%v ms=%d", ok, wantMs)
+	}
+	if err := db.PutMessageAudio(store.MessageAudio{AgentID: "agent", Seq: 3, MIMEType: "audio/mpeg", Data: clip}); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := db.MessageAudio("agent", 3); err != nil || row.DurationMs != 0 {
+		t.Fatalf("expected a freshly written pre-duration row: row=%#v err=%v", row, err)
+	}
+
+	cache := newMessageAudioCache(context.Background(), db, failIfCalledRenderer{t})
+
+	// Direct backfill helper.
+	cached, err := db.MessageAudio("agent", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.backfillDuration("agent", 3, cached); got != wantMs {
+		t.Fatalf("backfillDuration = %d, want %d", got, wantMs)
+	}
+	if row, err := db.MessageAudio("agent", 3); err != nil || row.DurationMs != wantMs {
+		t.Fatalf("backfill was not persisted: row=%#v err=%v", row, err)
+	}
+
+	// render()'s cache-hit path must also backfill (for a separate row) and
+	// must not invoke the renderer, since the clip is already cached.
+	if err := db.PutMessageAudio(store.MessageAudio{AgentID: "agent", Seq: 5, MIMEType: "audio/mpeg", Data: clip}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.render(context.Background(), "agent", 5); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := db.MessageAudio("agent", 5); err != nil || row.DurationMs != wantMs {
+		t.Fatalf("render() cache-hit path did not backfill: row=%#v err=%v", row, err)
+	}
+}
 
 func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 	home := t.TempDir()

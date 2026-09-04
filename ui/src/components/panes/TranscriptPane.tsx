@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { createUnifiedPatch } from '../diff/textDiff';
 import type { AckResult, AgentView } from '../../store';
 import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
-import { renderMessageAudio } from '../../audio';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
 import { PermissionRequestDetails } from '../PermissionRequest';
 import { usePresence, useUpdateFlash, useValuePresence } from '../../transitions';
+import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition, renderClip, restoreLocalPosition, setPlaylist, useEngineState } from '../../audio/engine';
+import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
+import { InlineAudioBar } from '../audio/InlineAudioBar';
 
 // The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -312,8 +314,45 @@ export function TranscriptPane() {
     for (const it of transcriptItems) seen.keys.add(it.key);
   });
 
-  const loadCachedAudio = useCachedAudioLoader(agent?.id ?? '');
-  const autoplay = useAutoPlayQueue(agent?.id ?? '', agent?.audioSeq ?? null, agent?.audioReadyRevision ?? 0);
+  // The playlist is every message row with audio, in transcript order: rows
+  // the daemon has confirmed cached/ready, plus ones rendered locally this
+  // session via "Listen" (engine.renderClip) that the daemon snapshot hasn't
+  // caught up to yet. Subscribing to the engine here (rather than just
+  // reading it once) lets a fresh "Listen" render extend the playlist without
+  // a page reload.
+  const engineAudio = useEngineState();
+  const audioPlaylist = useMemo(() => {
+    if (!agent) return [];
+    const renderedSet = new Set(engineAudio.agentId === agent.id ? engineAudio.renderedSeqs : getRenderedSeqs(agent.id));
+    const seqs: number[] = [];
+    for (const it of items) {
+      if (it.kind !== 'message') continue;
+      const hasAudio = agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq) || renderedSet.has(it.seq);
+      if (hasAudio) seqs.push(it.seq);
+    }
+    return seqs;
+  }, [agent, items, engineAudio]);
+  useEffect(() => {
+    if (agent) setPlaylist(agent.id, audioPlaylist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.id, audioPlaylist]);
+  // Position restore: paint instantly from localStorage on focus (declared
+  // after the setPlaylist effect above so the engine already has this
+  // chat's playlist active — see engine.ts's applyRestoredPosition), then
+  // reconcile against the daemon-durable value once the snapshot has it.
+  // Depends on the playlist's *length*, not its identity: audioPlaylist is a
+  // fresh array every time the engine's own state changes (useEngineState
+  // above), and restoring calls back into the engine — depending on the
+  // array itself would re-run this effect on every engine tick and loop.
+  const audioPlaylistLength = audioPlaylist.length;
+  useEffect(() => {
+    if (agent && audioPlaylistLength > 0) restoreLocalPosition(agent.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.id, audioPlaylistLength]);
+  useEffect(() => {
+    if (agent) reconcileDaemonPosition(agent.id, agent.audioPosition);
+  }, [agent?.id, agent?.audioPosition]);
+  useLiveAudioAutoplay(agent?.id ?? '', agent?.audioSeq ?? null, agent?.audioReadyRevision ?? 0);
   // Which annotation anchors still resolve to a rendered row (vs. "context
   // unavailable" — compaction, etc.).
   const knownSeqs = useMemo(() => {
@@ -507,9 +546,6 @@ export function TranscriptPane() {
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
                 cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
                 renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
-                loadCachedAudio={loadCachedAudio}
-                autoplaying={it.kind === 'message' && autoplay.seq === it.seq}
-                onAutoplayFinished={autoplay.finish}
               />
             ))}
           </div>
@@ -620,68 +656,41 @@ export function TranscriptPane() {
         )}
         {taskList && <TaskList item={taskList} />}
       </div>
+      {audioPlaylist.length > 0 && <GlobalAudioPlayer agentId={agent.id} />}
       <PromptBar agentId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
       <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
     </div>
   );
 }
 
-// A focused chat receives live ready events in message order. Queue each
-// message once and let that row's visible native <audio> element do the actual
-// playback, so its play button and scrubber always describe what is audible.
-function useAutoPlayQueue(agentId: string, seq: number | null, revision: number): { seq: number | null; finish: (seq: number) => void } {
+// A focused chat receives live ready events in message order. The engine's
+// playlist already advances through completed clips sequentially on `ended`
+// (see setPlaylist/activateSection in ui/src/audio/engine.ts), so this only
+// needs to kick off playback for a freshly-arrived clip when nothing is
+// already mid-playback — anything already playing will reach the new clip on
+// its own once it's appended to the playlist.
+//
+// `revision` only advances on a live audio_state ready event (store.ts), not
+// on snapshot replay/backfill — that's what keeps a reconnect or chat switch
+// from re-triggering autoplay for old history. `seen` additionally guards
+// against a duplicate revision bump for the same seq.
+function useLiveAudioAutoplay(agentId: string, seq: number | null, revision: number) {
   const baseline = useRef({ agentId, revision });
   const seen = useRef(new Set<number>());
-  const [queue, setQueue] = useState<number[]>([]);
 
   useEffect(() => {
     if (baseline.current.agentId !== agentId) {
       baseline.current = { agentId, revision };
-      seen.current.clear();
-      setQueue([]);
+      seen.current = new Set();
       return;
     }
     if (baseline.current.revision === revision) return;
     baseline.current.revision = revision;
     if (seq === null || seen.current.has(seq)) return;
     seen.current.add(seq);
-    setQueue((current) => [...current, seq]);
+    if (getState().status === 'playing') return;
+    play(agentId, seq);
   }, [agentId, revision, seq]);
-
-  const finish = useCallback((finishedSeq: number) => {
-    setQueue((current) => current[0] === finishedSeq ? current.slice(1) : current.filter((queuedSeq) => queuedSeq !== finishedSeq));
-  }, []);
-
-  return {
-    seq: baseline.current.agentId === agentId ? queue[0] ?? null : null,
-    finish,
-  };
-}
-
-// Snapshot rows mount oldest first. Batch their retained-byte requests into a
-// single per-chat queue so the newest message at the bottom becomes playable
-// first, without issuing a burst of competing requests.
-function useCachedAudioLoader(agentId: string): (seq: number) => Promise<string> {
-  const jobs = useRef<{ seq: number; resolve: (url: string) => void; reject: (reason: unknown) => void }[]>([]);
-  const draining = useRef(false);
-
-  return useMemo(() => (seq: number) => new Promise<string>((resolve, reject) => {
-    jobs.current.push({ seq, resolve, reject });
-    if (draining.current) return;
-    draining.current = true;
-    void Promise.resolve().then(async () => {
-      while (jobs.current.length) {
-        jobs.current.sort((a, b) => b.seq - a.seq);
-        const job = jobs.current.shift()!;
-        try {
-          job.resolve(await renderMessageAudio(agentId, job.seq));
-        } catch (cause) {
-          job.reject(cause);
-        }
-      }
-      draining.current = false;
-    });
-  }), [agentId]);
 }
 
 // The pending-annotation review tray, rendered above PromptBar (visual
@@ -809,9 +818,6 @@ function Row({
   canRenderAudio,
   cachedAudio,
   renderingAudio,
-  loadCachedAudio,
-  autoplaying,
-  onAutoplayFinished,
   quoteLinks,
   onRespond,
   onJumpToQuote,
@@ -824,9 +830,6 @@ function Row({
   canRenderAudio: boolean;
   cachedAudio: boolean;
   renderingAudio: boolean;
-  loadCachedAudio: (seq: number) => Promise<string>;
-  autoplaying: boolean;
-  onAutoplayFinished: (seq: number) => void;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
@@ -885,7 +888,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} loadCachedAudio={loadCachedAudio} autoplaying={autoplaying} onAutoplayFinished={onAutoplayFinished} />
+          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} />
         </div>
       );
     case 'thought':
@@ -936,152 +939,62 @@ function Row({
   }
 }
 
-function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, loadCachedAudio, autoplaying, onAutoplayFinished }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean; loadCachedAudio: (seq: number) => Promise<string>; autoplaying: boolean; onAutoplayFinished: (seq: number) => void }) {
-  const [loading, setLoading] = useState<'idle' | 'loading' | 'rendering'>('idle');
-  const [audioURL, setAudioURL] = useState<string | null>(null);
+// Rows are pure presentation: no media element, no local playback state.
+// `cachedAudio`/`renderingAudio` come from the daemon-owned audio state
+// (store.ts); this component's own state is just "have I fetched/kicked off
+// a clip for this seq" bookkeeping, delegated to the shared engine
+// (ui/src/audio/engine.ts) for everything about actually playing it.
+function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean }) {
+  const [prefetching, setPrefetching] = useState(false);
+  const [prefetched, setPrefetched] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [manuallyRendered, setManuallyRendered] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
+  // A cached clip is daemon-confirmed ready; prefetch its bytes eagerly
+  // (batched newest-first by the engine) so the InlineAudioBar it renders can
+  // start playback without a fetch delay the first time it's tapped.
   useEffect(() => {
-    const audio = audioRef.current;
-    return () => {
-      if (audioURL) URL.revokeObjectURL(audioURL);
-      if (audio) releaseMediaSession(audio);
-    };
-  }, [audioURL]);
+    if (!cachedAudio || prefetched || prefetching || error) return;
+    setPrefetching(true);
+    void prefetchClip(agentId, seq)
+      .then(() => setPrefetched(true))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setPrefetching(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedAudio]);
 
-  const render = async (kind: 'loading' | 'rendering') => {
-    setLoading(kind);
+  const onListen = async () => {
+    setPending(true);
     setError(null);
     try {
-      const url = kind === 'loading' ? await loadCachedAudio(seq) : await renderMessageAudio(agentId, seq);
-      setAudioURL((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return url;
-      });
+      await renderClip(agentId, seq);
+      setManuallyRendered(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading('idle');
+      setPending(false);
     }
   };
 
-  useEffect(() => {
-    if (cachedAudio && !audioURL && loading === 'idle' && !error) void render('loading');
-  // The cached clip is daemon-owned; fetching it here uses the normal Listen
-  // endpoint but returns the retained bytes without another provider request.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cachedAudio]);
-
-  useEffect(() => {
-    if (!autoplaying || !audioURL || !audioRef.current) return;
-    let active = true;
-    activateMediaSession(audioRef.current);
-    void audioRef.current.play().catch(() => {
-      if (active) onAutoplayFinished(seq);
-    });
-    return () => {
-      active = false;
-      audioRef.current?.pause();
-    };
-  }, [audioURL, autoplaying, onAutoplayFinished, seq]);
-
+  const ready = prefetched || manuallyRendered;
   // A cached clip is known to become a player, so render its full in-flow
   // placeholder immediately. This keeps its row at the final player height
   // while the browser fetches the retained daemon bytes.
-  const playerPending = renderingAudio || loading !== 'idle' || (cachedAudio && !audioURL && !error);
+  const playerPending = renderingAudio || pending || prefetching || (cachedAudio && !ready && !error);
 
   return (
-    <div className={`message-audio${audioURL || playerPending ? '' : ' message-listen'}`}>
-      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onPlay={(event) => activateMediaSession(event.currentTarget)} onPause={(event) => updateMediaSession(event.currentTarget)} onTimeUpdate={(event) => updateMediaSession(event.currentTarget)} onDurationChange={(event) => updateMediaSession(event.currentTarget)} onEnded={(event) => { idleMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} onError={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} /> : playerPending ? (
-        <div className="message-audio-placeholder" role="status">{renderingAudio || loading === 'rendering' ? 'Rendering speech…' : 'Loading speech…'}</div>
+    <div className={`message-audio${ready || playerPending ? '' : ' message-listen'}`}>
+      {ready ? <InlineAudioBar agentId={agentId} seq={seq} /> : playerPending ? (
+        <div className="message-audio-placeholder" role="status">{renderingAudio || pending ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
-        <button type="button" onClick={() => void render('rendering')} disabled={!enabled || loading !== 'idle'} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
+        <button type="button" onClick={() => void onListen()} disabled={!enabled || pending} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
           Listen
         </button>
       )}
       {error && <span className="message-audio-error" role="alert">{error}</span>}
     </div>
   );
-}
-
-let mediaSessionAudio: HTMLAudioElement | null = null;
-
-function mediaSession(): MediaSession | null {
-  return typeof navigator !== 'undefined' && 'mediaSession' in navigator ? navigator.mediaSession : null;
-}
-
-function seekAudio(audio: HTMLAudioElement, offset: number) {
-  const upper = Number.isFinite(audio.duration) ? audio.duration : Number.POSITIVE_INFINITY;
-  audio.currentTime = Math.max(0, Math.min(upper, audio.currentTime + offset));
-  updateMediaSession(audio);
-}
-
-function setMediaAction(session: MediaSession, action: MediaSessionAction, handler: MediaSessionActionHandler | null) {
-  try {
-    session.setActionHandler(action, handler);
-  } catch {
-    // Browsers expose Media Session actions independently; keep the supported ones.
-  }
-}
-
-function activateMediaSession(audio: HTMLAudioElement) {
-  const session = mediaSession();
-  if (!session) return;
-  // Only one clip can own the OS media controls; stop whichever held them so the
-  // reported playback state matches what is actually audible.
-  if (mediaSessionAudio && mediaSessionAudio !== audio) mediaSessionAudio.pause();
-  mediaSessionAudio = audio;
-  const seek = (direction: -1 | 1) => (details: MediaSessionActionDetails) => {
-    seekAudio(audio, direction * (details.seekOffset ?? 10));
-  };
-  setMediaAction(session, 'play', () => { void audio.play(); });
-  setMediaAction(session, 'pause', () => audio.pause());
-  setMediaAction(session, 'seekbackward', seek(-1));
-  setMediaAction(session, 'seekforward', seek(1));
-  setMediaAction(session, 'seekto', (details: MediaSessionActionDetails) => {
-    if (typeof details.seekTime !== 'number') return;
-    seekAudio(audio, details.seekTime - audio.currentTime);
-  });
-  // Many earbuds report double/triple presses as track changes rather than seeks.
-  setMediaAction(session, 'previoustrack', () => seekAudio(audio, -10));
-  setMediaAction(session, 'nexttrack', () => seekAudio(audio, 10));
-  updateMediaSession(audio);
-}
-
-// A finished clip keeps the media session: the handlers stay installed and the
-// state reads as paused, so an earbud press resumes Tandem instead of falling
-// through to whatever else the OS considers playable.
-function idleMediaSession(audio: HTMLAudioElement) {
-  const session = mediaSession();
-  if (!session || mediaSessionAudio !== audio) return;
-  session.playbackState = 'paused';
-}
-
-function updateMediaSession(audio: HTMLAudioElement) {
-  const session = mediaSession();
-  if (!session || mediaSessionAudio !== audio) return;
-  session.playbackState = audio.paused ? 'paused' : 'playing';
-  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
-  try {
-    session.setPositionState({
-      duration: audio.duration,
-      playbackRate: audio.playbackRate,
-      position: Math.max(0, Math.min(audio.duration, audio.currentTime)),
-    });
-  } catch {
-    // Metadata can briefly be inconsistent while a newly loaded clip settles.
-  }
-}
-
-function releaseMediaSession(audio: HTMLAudioElement) {
-  const session = mediaSession();
-  if (!session || mediaSessionAudio !== audio) return;
-  mediaSessionAudio = null;
-  session.playbackState = 'none';
-  for (const action of ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'previoustrack', 'nexttrack'] as MediaSessionAction[]) {
-    setMediaAction(session, action, null);
-  }
 }
 
 function TaskList({ item }: { item: Extract<Item, { kind: 'plan' }> }) {

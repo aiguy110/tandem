@@ -56,6 +56,11 @@ export interface WsClientOpts {
   onOpen: () => void;
 }
 
+// How long wake()'s liveness probe waits for any daemon frame before deciding
+// the socket is dead. Short enough to feel instant, long enough for a phone
+// re-acquiring its radio on unlock.
+const WAKE_PROBE_TIMEOUT_MS = 3000;
+
 export class WsClient {
   private ws: WebSocket | null = null;
   private token: string | null = null;
@@ -63,6 +68,10 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUs = false;
   private outbox: ClientMsg[] = [];
+  // Epoch ms of the last frame received from the daemon. wake() uses it to
+  // tell a live socket from one the OS killed while the page was frozen.
+  private lastMessageAt = 0;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private opts: WsClientOpts) {}
 
@@ -118,6 +127,7 @@ export class WsClient {
       } catch {
         return;
       }
+      this.lastMessageAt = Date.now();
       this.opts.onMessage(msg);
     };
 
@@ -157,6 +167,10 @@ export class WsClient {
   }
 
   private closeSocket(): void {
+    if (this.probeTimer) {
+      clearTimeout(this.probeTimer);
+      this.probeTimer = null;
+    }
     if (this.ws) {
       this.closedByUs = true;
       try {
@@ -174,6 +188,43 @@ export class WsClient {
   }
   clearReconnectTimer(): void {
     this.reconnectTimer = null;
+  }
+
+  // Called on resume-from-hidden (visibilitychange -> visible, pageshow) to
+  // recover promptly from a socket the mobile OS silently killed while the
+  // page was frozen.
+  //
+  // readyState alone can't answer "is this dead": a half-open socket keeps
+  // reporting OPEN until some future write notices. But unconditionally
+  // reconnecting is worse — every ordinary tab switch would drop a healthy
+  // connection and force a full replay. So probe instead: ask the daemon for
+  // something cheap it always answers, and reconnect only if nothing comes
+  // back. Healthy sockets survive; dead ones are replaced in ~3s instead of
+  // waiting out scheduleReconnect's backoff, which stays as-is for genuine
+  // network failures.
+  wake(): void {
+    if (this.closedByUs) return; // stop()/not started yet
+    if (!this.token) return; // need-token state — nothing to reconnect
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.CONNECTING) return; // already mid-connect
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.forceReconnect();
+      return;
+    }
+    if (this.probeTimer) return; // a probe is already outstanding
+    const probedAt = Date.now();
+    this.rawSend({ t: 'list_agents' });
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (this.lastMessageAt < probedAt) this.forceReconnect();
+    }, WAKE_PROBE_TIMEOUT_MS);
+  }
+
+  private forceReconnect(): void {
+    clearReconnect(this);
+    this.attempts = 0;
+    this.closeSocket();
+    this.connect();
   }
 }
 

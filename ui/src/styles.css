@@ -378,12 +378,91 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .ev.msg th { background: var(--surface-2); font-weight: 600; }
 .message-audio { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .message-listen { position: absolute; top: calc(100% + 5px); right: 0; margin-top: 0; transform: translateY(-50%); }
-.message-audio button { appearance: none; border: 0; background: none; color: var(--text-faint); padding: 2px 0; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
-.message-audio button:hover:not(:disabled) { color: var(--agent); }
-.message-audio button:disabled { cursor: default; opacity: .55; }
-.message-audio audio, .message-audio-placeholder { width: min(100%, 360px); height: 32px; }
-.message-audio-placeholder { box-sizing: border-box; display: flex; align-items: center; padding: 0 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); color: var(--text-faint); font: var(--fs-xs)/1 var(--font-mono); }
+.message-audio > button { appearance: none; border: 0; background: none; color: var(--text-faint); padding: 2px 0; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.message-audio > button:hover:not(:disabled) { color: var(--agent); }
+.message-audio > button:disabled { cursor: default; opacity: .55; }
+.message-audio-placeholder { box-sizing: border-box; display: flex; align-items: center; width: min(100%, 360px); height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); color: var(--text-faint); font: var(--fs-xs)/1 var(--font-mono); }
 .message-audio-error { width: 100%; color: var(--err); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+/* Per-row playback widget (InlineAudioBar). Phone-first: 44x44 touch target,
+   thin track with generous invisible hit slop via padding, no volume/menu. */
+.inline-audio-bar { display: flex; align-items: center; gap: 6px; width: min(100%, 360px); }
+.inline-audio-play {
+  flex: 0 0 auto; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+  appearance: none; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2);
+  color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; touch-action: manipulation;
+}
+.inline-audio-play:hover { color: var(--agent); border-color: var(--agent); }
+.inline-audio-track {
+  position: relative; flex: 1 1 auto; min-width: 0; height: 24px; padding: 9px 0; box-sizing: border-box;
+  cursor: pointer; touch-action: none; --played: 0;
+}
+.inline-audio-track::before {
+  content: ''; position: absolute; inset: 9px 0; height: 6px; border-radius: 3px; background: var(--surface-3);
+}
+.inline-audio-fill {
+  position: absolute; top: 9px; left: 0; height: 6px; border-radius: 3px; width: calc(var(--played) * 100%);
+  background: var(--border-strong);
+}
+.inline-audio-track.current .inline-audio-fill { background: var(--agent); }
+.inline-audio-thumb {
+  position: absolute; top: 50%; left: calc(var(--played) * 100%); width: 12px; height: 12px; border-radius: 50%;
+  background: var(--agent); transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface);
+}
+.inline-audio-time { flex: 0 0 auto; display: flex; gap: 6px; font: var(--fs-xs)/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-faint); }
+
+/* Whole-conversation transport (GlobalAudioPlayer), docked above the prompt bar. */
+.global-audio-player {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.global-audio-player.collapsed { padding: 0; border-top: 0; }
+.global-audio-expand {
+  width: 100%; appearance: none; border: 0; border-top: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-dim); font: var(--fs-xs)/1 var(--font-mono); padding: 6px 14px calc(6px + env(safe-area-inset-bottom));
+  cursor: pointer; touch-action: manipulation;
+}
+.global-audio-row { display: flex; align-items: center; gap: 10px; }
+.global-audio-play, .global-audio-skip {
+  flex: 0 0 auto; min-width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+  appearance: none; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2);
+  color: var(--text); font: 600 var(--fs-sm) var(--font-mono); cursor: pointer; touch-action: manipulation;
+}
+.global-audio-play { color: var(--agent); border-color: var(--agent); }
+.global-audio-skip:hover, .global-audio-collapse:hover { color: var(--agent); }
+.global-audio-section { flex: 1 1 auto; text-align: center; font: var(--fs-sm)/1 var(--font-mono); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.global-audio-collapse {
+  flex: 0 0 auto; width: 32px; height: 32px; appearance: none; border: 0; background: none; color: var(--text-faint);
+  cursor: pointer; font-size: var(--fs-sm); touch-action: manipulation;
+}
+.global-audio-keepalive {
+  flex: 0 0 auto; width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0;
+  appearance: none; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-faint); cursor: pointer; font-size: var(--fs-sm); touch-action: manipulation;
+}
+.global-audio-keepalive:hover { color: var(--text); background: var(--surface-2); }
+.global-audio-keepalive.active { color: var(--agent); background: var(--agent-soft); border-color: var(--agent); }
+.global-audio-track {
+  position: relative; width: 100%; height: 28px; padding: 11px 0; box-sizing: border-box; cursor: pointer;
+  touch-action: none; --played: 0;
+}
+.global-audio-track::before {
+  content: ''; position: absolute; inset: 11px 0; height: 6px; border-radius: 3px; background: var(--surface-3);
+}
+.global-audio-fill {
+  position: absolute; top: 11px; left: 0; height: 6px; border-radius: 3px; width: calc(var(--played) * 100%); background: var(--agent);
+}
+.global-audio-thumb {
+  position: absolute; top: 50%; left: calc(var(--played) * 100%); width: 14px; height: 14px; border-radius: 50%;
+  background: var(--agent); transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--surface); pointer-events: none;
+}
+.global-audio-tick {
+  position: absolute; top: 50%; width: 3px; height: 12px; transform: translate(-50%, -50%); appearance: none;
+  border: 0; border-radius: 2px; background: var(--border-strong); padding: 0; cursor: pointer; touch-action: manipulation;
+}
+.global-audio-tick.past { background: var(--agent-soft); }
+.global-audio-tick.current { background: var(--agent); width: 4px; }
+.global-audio-time { display: flex; justify-content: space-between; font: var(--fs-xs)/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-faint); }
 .ev.thought { color: var(--text-faint); font-size: var(--fs-sm); font-style: italic; border-left: 2px solid var(--border); padding-left: 10px; }
 .ev.thought summary { cursor: pointer; }
 

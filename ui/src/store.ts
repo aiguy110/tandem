@@ -5,6 +5,8 @@
 
 import { create } from 'zustand';
 import { WsClient, resolveToken, type ConnState } from './ws/client';
+import type { AudioPosition } from './audio/engine';
+import { getListeningAgentId, getState as getEngineState, setPlaylist as setEnginePlaylist } from './audio/engine';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
@@ -173,9 +175,19 @@ export interface AgentView {
   // Every persisted clip, supplied by daemon snapshots so a second device can
   // reconstruct each message player without re-rendering speech.
   audioReadySeqs: number[];
+  // Known clip durations (ms) by seq, for spacing timeline tick marks
+  // without downloading audio. A seq absent here (or a live ready event
+  // without durationMs) means unknown duration.
+  audioDurations: Record<number, number>;
   // Advances only for a live ready event. It lets the focused chat autoplay
   // newly completed clips without replaying historical audio on reconnect.
   audioReadyRevision: number;
+  // Daemon-persisted "where was this chat's playback last" — the durable half
+  // of position restore (ui/src/audio/engine.ts owns the browser-side
+  // localStorage half), so the player resumes across a session switch or a
+  // closed tab. null means nothing is stored: never played, or cleared by a
+  // `seq: 0` write. See docs/ws-protocol.md for the wire contract.
+  audioPosition: AudioPosition | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -240,6 +252,11 @@ interface StoreState {
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
   toggleThreadAudio: (agentId: string) => void;
+  // The durable half of playback-position restore: ui/src/audio/engine.ts
+  // calls this (via a sender it's handed at app root) on its throttled /
+  // flush-on-teardown schedule. `seq: 0` means "no active section" and clears
+  // the daemon's stored position. Throttling is the caller's responsibility.
+  setAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
@@ -379,7 +396,15 @@ export const useStore = create<StoreState>((set, get) => {
   let audioFocusAgent: string | null = null;
   function syncAudioFocus(): void {
     const state = get();
-    const next = document.visibilityState === 'visible' && state.pane === 'chat' ? state.focusedId : null;
+    // Normally focus tracks "chat pane, document visible" — but a hidden
+    // document is exactly the phone-screen-off listening case this exists
+    // for, so don't drop focus (and thus tell the daemon to stop
+    // pre-rendering speech) while the audio engine is actually playing or
+    // armed mid-section for some chat. Only fall back to "no focus" when the
+    // engine is genuinely not listening (no playlist, idle) — see
+    // getListeningAgentId's doc in engine.ts.
+    const visible = document.visibilityState === 'visible' && state.pane === 'chat';
+    const next = visible ? state.focusedId : getListeningAgentId();
     if (next === audioFocusAgent) return;
     if (audioFocusAgent) client.send({ t: 'set_audio_focus', agentId: audioFocusAgent, focused: false });
     audioFocusAgent = next;
@@ -607,6 +632,10 @@ export const useStore = create<StoreState>((set, get) => {
         ptyHub.clear(msg.agentId);
         shellHub.clear(msg.agentId);
         browserHub.clear(msg.agentId);
+        // Tear the engine's playlist down if it was this (now-closed) chat's
+        // — otherwise a silence keepalive (or pinned audio focus) could keep
+        // running for a chat that no longer exists.
+        if (getEngineState().agentId === msg.agentId) setEnginePlaylist(msg.agentId, []);
         return;
       }
       case 'snapshot': {
@@ -704,6 +733,8 @@ export const useStore = create<StoreState>((set, get) => {
             audioError,
             audioSeq,
             audioReadySeqs: msg.audioReadySeqs ?? [],
+            audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
+            audioPosition: msg.audioPosition ?? null,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -755,6 +786,9 @@ export const useStore = create<StoreState>((set, get) => {
           applyEventToView(next, event);
           if (event.kind === 'audio_state' && event.state === 'ready') {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
+            if (event.durationMs != null) {
+              next.audioDurations = { ...next.audioDurations, [event.seq]: event.durationMs };
+            }
             next.audioReadyRevision++;
           }
           // Raise at most one completed-turn notification for each background
@@ -780,6 +814,17 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       case 'annotations':
         set((st) => ({ annotations: { ...st.annotations, [msg.agentId]: msg.annotations } }));
+        return;
+      case 'audio_position':
+        // Cross-device sync only: the daemon never echoes this back to the
+        // connection that sent set_audio_position, so this only ever reflects
+        // another client's playback moving the shared position.
+        set((st) => {
+          const agent = st.agents[msg.agentId];
+          if (!agent) return st;
+          const audioPosition = msg.seq === 0 ? null : { seq: msg.seq, positionMs: msg.positionMs, updatedAt: msg.updatedAt };
+          return { agents: { ...st.agents, [msg.agentId]: { ...agent, audioPosition } } };
+        });
         return;
     }
   };
@@ -851,6 +896,16 @@ export const useStore = create<StoreState>((set, get) => {
         document.addEventListener('visibilitychange', syncAudioFocus);
         window.addEventListener('focus', refreshVisibleAgents);
         setInterval(refreshVisibleAgents, GIT_REFRESH_INTERVAL_MS);
+        // A frozen (screen-off) page's WS can silently die with the client
+        // unaware — refreshVisibleAgents above only re-fetches state on a
+        // healthy connection, it doesn't detect/fix a dead one. Force a fast
+        // reconnect on both signals the platform gives us for "the page just
+        // came back": visibilitychange -> visible, and pageshow (notably
+        // fired on iOS's back-forward-cache restore, which visibilitychange
+        // alone can miss).
+        const wake = () => { if (document.visibilityState === 'visible') client.wake(); };
+        document.addEventListener('visibilitychange', wake);
+        window.addEventListener('pageshow', wake);
       }
     },
     submitToken: (t) => client.setToken(t.trim()),
@@ -933,6 +988,7 @@ export const useStore = create<StoreState>((set, get) => {
       const agent = get().agents[agentId];
       if (agent) client.send({ t: 'set_audio_enabled', agentId, enabled: !agent.audioOnTurnEnd });
     },
+    setAudioPosition: (agentId, seq, positionMs) => client.send({ t: 'set_audio_position', agentId, seq, positionMs }),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
     refreshSessions: () => {
@@ -1313,7 +1369,9 @@ function shell(id: string): AgentView {
     audioError: null,
     audioSeq: null,
     audioReadySeqs: [],
+    audioDurations: {},
     audioReadyRevision: 0,
+    audioPosition: null,
   };
 }
 
