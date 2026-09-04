@@ -59,17 +59,54 @@ afterEach(() => {
 });
 
 describe('WsClient.wake', () => {
-  it('forces a brand-new connection, closing whatever socket it had', () => {
+  it('keeps a healthy socket when the probe is answered', () => {
+    vi.useFakeTimers();
     const client = new WsClient(opts());
     client.start('tok');
-    expect(FakeWebSocket.instances).toHaveLength(1);
     const first = FakeWebSocket.instances[0];
     first.open();
 
     client.wake();
 
+    // The probe goes out on the existing socket rather than replacing it.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(first.sent.some((raw) => JSON.parse(raw).t === 'list_agents')).toBe(true);
+
+    // Any inbound frame proves the socket is alive.
+    first.onmessage?.({ data: JSON.stringify({ t: 'agents', agents: [] }) });
+    vi.advanceTimersByTime(5000);
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(first.readyState).toBe(FakeWebSocket.OPEN);
+  });
+
+  it('reconnects when a socket that still reports OPEN never answers the probe', () => {
+    vi.useFakeTimers();
+    const client = new WsClient(opts());
+    client.start('tok');
+    const first = FakeWebSocket.instances[0];
+    first.open();
+
+    // The half-open case: the OS killed it while the page was frozen, so it
+    // still claims OPEN but nothing comes back.
+    client.wake();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(5000);
+
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(first.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+
+  it('reconnects immediately, without probing, when the socket is already closed', () => {
+    const client = new WsClient(opts());
+    client.start('tok');
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    first.readyState = FakeWebSocket.CLOSED;
+
+    client.wake();
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   it('does nothing without a token (need-token state)', () => {
