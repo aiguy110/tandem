@@ -465,7 +465,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-bar.dragging { box-shadow: inset 0 0 0 2px var(--agent); }
 .prompt-main { display: flex; gap: 8px; align-items: flex-end; }
 .prompt-actions { display: flex; gap: 8px; align-items: flex-end; }
-.prompt-send-actions { display: flex; flex-direction: column; gap: 4px; }
+/* While a turn is in progress, keep the quick actions in one compact row.
+   Queue spans that row so its right edge stays aligned regardless of whether
+   the adapter supports steering. */
+.prompt-actions.working { display: grid; grid-template-columns: repeat(2, max-content); gap: 4px 8px; align-items: end; }
+.prompt-actions.working.has-steering { grid-template-columns: repeat(3, max-content); }
+.prompt-actions.working .primary { grid-column: 1 / -1; width: 100%; }
 .attachment-menu-wrap { position: relative; }
 .attachment-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 3; min-width: 146px; padding: 4px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); box-shadow: var(--shadow); }
 .attachment-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
@@ -500,6 +505,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .stop-btn { width: 30px; padding: 0; justify-content: center; color: var(--err); }
 .stop-btn-icon { width: 7px; height: 7px; background: currentColor; }
 .stop-btn:hover { border-color: var(--err); background: var(--err-soft); }
+.steer-btn { width: 38px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.steer-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 .prompt-drop-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 30; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--agent); font-weight: 600; }
 
 /* ---- transcript annotations (docs/transcript-annotations.md) ---- */
@@ -636,15 +643,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-text-wrap textarea:focus { outline: none; border-color: var(--agent); }
 .prompt-text-wrap textarea::placeholder { color: var(--text-faint); opacity: 1; }
 
-/* Keep the compact composer controls reachable on narrow screens: attachment
-   and stop share the top row, while the primary action sits beneath them. */
+/* Keep the compact composer controls reachable on narrow screens. */
 @media (max-width: 600px) {
-  .prompt-actions {
-    display: grid;
-    grid-template-columns: repeat(2, auto);
-    align-items: end;
-  }
-  .prompt-actions .primary { grid-column: 1 / -1; justify-content: center; }
+  .prompt-actions.working .primary { justify-content: center; }
 }
 
 /* ---- session config bar (model / permission-mode pickers) ---- */

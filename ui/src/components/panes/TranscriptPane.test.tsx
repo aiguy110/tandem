@@ -539,7 +539,7 @@ describe('TranscriptPane annotations', () => {
 });
 
 describe('TranscriptPane steering', () => {
-  it('shows Steer above Queue only when the working adapter advertises support', () => {
+  it('shows a steering-wheel action beside the other working controls', () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
     const working = agent();
     working.status = 'working';
@@ -550,9 +550,14 @@ describe('TranscriptPane steering', () => {
     }, true);
 
     const view = render(<TranscriptPane />);
-    const steer = view.getByRole('button', { name: 'Steer' });
+    const steer = view.getByRole('button', { name: 'Steer current turn' });
     const queue = view.getByRole('button', { name: 'Queue' });
-    expect(steer.parentElement).toBe(queue.parentElement);
-    expect(Array.from(steer.parentElement?.children ?? [])).toEqual([steer, queue]);
+    const actions = steer.parentElement!;
+    expect(actions).toBe(queue.parentElement);
+    expect(actions.classList.contains('working')).toBe(true);
+    expect(actions.classList.contains('has-steering')).toBe(true);
+    expect(steer.querySelector('svg')).not.toBeNull();
+    expect(Array.from(actions.children)).toContain(steer);
+    expect(Array.from(actions.children)).toContain(queue);
   });
 });

@@ -1994,7 +1994,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             rows={1}
           />
         </div>
-        <div className="prompt-actions">
+        <div className={`prompt-actions${working ? ' working' : ''}${working && steeringSupport === true ? ' has-steering' : ''}`}>
           <div className="attachment-menu-wrap">
             <button
               type="button"
@@ -2026,24 +2026,29 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               <span className="stop-btn-icon" aria-hidden="true" />
             </button>
           )}
-          <div className="prompt-send-actions">
-            {working && steeringSupport === true && (
-              <button
-                className="btn"
-                onClick={() => void send(true)}
-                disabled={sending || uploadsPending || !canSubmit}
-                title="Inject this message into the current turn"
-              >Steer</button>
-            )}
+          {working && steeringSupport === true && (
             <button
-              className="btn primary"
-              onClick={() => void send()}
+              className="btn steer-btn"
+              onClick={() => void send(true)}
               disabled={sending || uploadsPending || !canSubmit}
-              title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+              title="Inject this message into the current turn"
+              aria-label="Steer current turn"
             >
-              {sending ? 'Sending…' : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8" />
+                <circle cx="12" cy="12" r="2" />
+                <path d="M6.3 6.3 10.6 10.6M17.7 6.3l-4.3 4.3M12 14v6" />
+              </svg>
             </button>
-          </div>
+          )}
+          <button
+            className="btn primary"
+            onClick={() => void send()}
+            disabled={sending || uploadsPending || !canSubmit}
+            title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+          >
+            {sending ? 'Sending…' : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+          </button>
         </div>
       </div>
       {dragging && <div className="prompt-drop-hint">Drop files to attach</div>}
