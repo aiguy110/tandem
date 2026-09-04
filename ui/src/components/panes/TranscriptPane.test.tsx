@@ -1,10 +1,20 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
 import type { AgentView } from '../../store';
 import { findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
+import { __resetForTests } from '../../audio/engine';
+import { AudioEngineRoot } from '../audio/AudioEngineRoot';
 
 const initialState = useStore.getState();
+
+// Every render of TranscriptPane sets the audio engine's playlist (even when
+// no message has audio yet), and switching agents pauses whatever element it
+// was previously driving — jsdom's real HTMLMediaElement.pause() throws "not
+// implemented", so stub it globally rather than per audio test.
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+});
 
 function agent(): AgentView {
   return {
@@ -39,6 +49,7 @@ function agent(): AgentView {
     audioSeq: null,
     audioReadySeqs: [],
     audioReadyRevision: 0,
+    audioPosition: null,
   };
 }
 
@@ -46,6 +57,10 @@ afterEach(() => {
   cleanup();
   window.getSelection()?.removeAllRanges();
   useStore.setState(initialState, true);
+  // Before restoring mocks: __resetForTests() pauses whatever element the
+  // engine was driving, and the beforeEach pause() stub needs to still be in
+  // place for that (jsdom's real pause() throws "not implemented").
+  __resetForTests();
   vi.restoreAllMocks();
   localStorage.clear();
   delete (URL as unknown as Record<string, unknown>).createObjectURL;
@@ -88,11 +103,13 @@ describe('TranscriptPane voice rendering', () => {
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
     }, true);
 
-    const view = render(<TranscriptPane />);
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
     expect(view.getByRole('button', { name: 'Listen' }).closest('.message-audio')?.classList.contains('message-listen')).toBe(true);
     fireEvent.click(view.getByRole('button', { name: 'Listen' }));
-    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response'));
-    expect(player.getAttribute('src')).toBe('blob:voice');
+    // Rows no longer own a media element (playback is centralized in the
+    // engine, see ui/src/audio/engine.ts) -- readiness now shows up as the
+    // row's InlineAudioBar play control.
+    await waitFor(() => expect(view.getByRole('button', { name: 'Play response audio' })).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent-1/messages/1/audio', {
       method: 'POST', headers: { Authorization: 'Bearer test-token' },
     });
@@ -111,28 +128,28 @@ describe('TranscriptPane voice rendering', () => {
       agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
     }, true);
 
-    const view = render(<TranscriptPane />);
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
 
     expect(view.getByRole('status').textContent).toBe('Loading speech…');
     expect(view.container.querySelector('.message-audio')?.classList.contains('message-listen')).toBe(false);
 
-    expect((await waitFor(() => view.getByLabelText('Spoken version of agent response'))).getAttribute('src')).toBe('blob:ready-voice');
+    await waitFor(() => expect(view.getByRole('button', { name: 'Play response audio' })).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it('autoplays through the visible player and ignores duplicate ready events', async () => {
+  it('autoplays through the shared element and ignores duplicate ready events', async () => {
     const ready = agent();
     (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:auto-voice');
     (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
-    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     useStore.setState({
       ...initialState,
       agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
     }, true);
 
-    const view = render(<TranscriptPane />);
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
     act(() => {
       useStore.setState((state) => ({
         agents: {
@@ -145,9 +162,10 @@ describe('TranscriptPane voice rendering', () => {
       }));
     });
 
-    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response'));
-    await waitFor(() => expect(play).toHaveBeenCalledOnce());
-    expect(play.mock.instances[0]).toBe(player);
+    await waitFor(() => expect(playSpy).toHaveBeenCalledOnce());
+    // There is exactly one <audio> element for the whole app -- confirm it's
+    // the one that was played, not some per-row element.
+    expect(playSpy.mock.instances[0]).toBe(view.getByTestId('audio-engine-element'));
 
     act(() => {
       useStore.setState((state) => ({
@@ -158,34 +176,38 @@ describe('TranscriptPane voice rendering', () => {
       }));
     });
     await act(async () => { await Promise.resolve(); });
-    expect(play).toHaveBeenCalledOnce();
+    expect(playSpy).toHaveBeenCalledOnce();
   });
 
   it('routes earbud seek and track commands to the active audio snippet', async () => {
-    const handlers = new Map<string, ((details: { seekOffset?: number }) => void) | null>();
+    const handlers = new Map<string, ((details: { seekOffset?: number; seekTime?: number }) => void) | null>();
     const setPositionState = vi.fn();
     Object.defineProperty(navigator, 'mediaSession', {
       configurable: true,
       value: {
         playbackState: 'none',
-        setActionHandler: vi.fn((action: string, handler: ((details: { seekOffset?: number }) => void) | null) => handlers.set(action, handler)),
+        setActionHandler: vi.fn((action: string, handler: ((details: { seekOffset?: number; seekTime?: number }) => void) | null) => handlers.set(action, handler)),
         setPositionState,
       },
     });
     (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:earbud-voice');
     (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     useStore.setState({
       ...initialState,
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
     }, true);
 
-    const view = render(<TranscriptPane />);
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
     fireEvent.click(view.getByRole('button', { name: 'Listen' }));
-    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response')) as HTMLAudioElement;
+    await waitFor(() => view.getByRole('button', { name: 'Play response audio' }));
+    fireEvent.click(view.getByRole('button', { name: 'Play response audio' }));
+    const player = await waitFor(() => view.getByTestId('audio-engine-element')) as HTMLAudioElement;
+    await waitFor(() => expect(player.src).toContain('blob:earbud-voice'));
+
     Object.defineProperty(player, 'duration', { configurable: true, value: 30 });
     player.currentTime = 12;
-    fireEvent.play(player);
 
     handlers.get('seekforward')?.({ seekOffset: 5 });
     expect(player.currentTime).toBe(17);
@@ -198,7 +220,7 @@ describe('TranscriptPane voice rendering', () => {
     expect(player.currentTime).toBe(30);
     handlers.get('previoustrack')?.({});
     expect(player.currentTime).toBe(20);
-    expect(setPositionState).toHaveBeenCalled();
+    await waitFor(() => expect(setPositionState).toHaveBeenCalled());
   });
 
   it('keeps earbud play/pause working after a snippet finishes', async () => {
@@ -212,28 +234,31 @@ describe('TranscriptPane voice rendering', () => {
     (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:earbud-voice');
     (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     useStore.setState({
       ...initialState,
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
     }, true);
 
-    const view = render(<TranscriptPane />);
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
     fireEvent.click(view.getByRole('button', { name: 'Listen' }));
-    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response')) as HTMLAudioElement;
-    Object.defineProperty(player, 'duration', { configurable: true, value: 30 });
-    const play = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(player, 'play', { configurable: true, value: play });
-    fireEvent.play(player);
+    await waitFor(() => view.getByRole('button', { name: 'Play response audio' }));
+    fireEvent.click(view.getByRole('button', { name: 'Play response audio' }));
+    await waitFor(() => expect(playSpy).toHaveBeenCalled());
     expect(handlers.get('play')).toBeTruthy();
 
+    const player = view.getByTestId('audio-engine-element') as HTMLAudioElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 30 });
     fireEvent.ended(player);
 
     // The finished clip keeps the OS controls instead of handing them back.
-    expect(session.playbackState).toBe('paused');
+    await waitFor(() => expect(session.playbackState).toBe('paused'));
     expect(session.setActionHandler).not.toHaveBeenCalledWith('play', null);
     expect(session.setActionHandler).not.toHaveBeenCalledWith('pause', null);
+
+    playSpy.mockClear();
     handlers.get('play')?.({});
-    expect(play).toHaveBeenCalledOnce();
+    expect(playSpy).toHaveBeenCalledOnce();
     expect(handlers.get('pause')).toBeTruthy();
   });
 });

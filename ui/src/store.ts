@@ -176,6 +176,19 @@ export interface AgentView {
   // Advances only for a live ready event. It lets the focused chat autoplay
   // newly completed clips without replaying historical audio on reconnect.
   audioReadyRevision: number;
+  // Daemon-persisted "where was this chat's playback last" — the durable half
+  // of position restore (ui/src/audio/engine.ts owns the browser-side
+  // localStorage half). `seq: 0` means no active section. Folded from the
+  // snapshot's `audioPosition` field; a parallel change owns adding that
+  // field to the wire snapshot type, so it's read here defensively until
+  // that lands. See docs/ws-protocol.md once the contract is finalized there.
+  audioPosition: AudioPosition | null;
+}
+
+export interface AudioPosition {
+  seq: number;
+  positionMs: number;
+  updatedAt: number;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -240,6 +253,10 @@ interface StoreState {
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
   toggleThreadAudio: (agentId: string) => void;
+  // The durable half of playback-position restore; ui/src/audio/engine.ts
+  // calls this (via a sender it's handed at app root) on its throttled/
+  // flush-on-teardown schedule. `seq: 0` clears the daemon's stored position.
+  sendAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
@@ -704,6 +721,11 @@ export const useStore = create<StoreState>((set, get) => {
             audioError,
             audioSeq,
             audioReadySeqs: msg.audioReadySeqs ?? [],
+            // TODO(audio-position): wire.ts's SnapshotMsg doesn't declare
+            // `audioPosition` yet (a parallel change owns that); read it
+            // defensively so this folds in the instant that field lands
+            // without needing another store.ts change.
+            audioPosition: (msg as unknown as { audioPosition?: AudioPosition | null }).audioPosition ?? prev.audioPosition,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -932,6 +954,11 @@ export const useStore = create<StoreState>((set, get) => {
     toggleThreadAudio: (agentId) => {
       const agent = get().agents[agentId];
       if (agent) client.send({ t: 'set_audio_enabled', agentId, enabled: !agent.audioOnTurnEnd });
+    },
+    sendAudioPosition: (agentId, seq, positionMs) => {
+      // TODO(audio-position): 'set_audio_position' isn't in wire.ts's ClientMsg
+      // union yet (a parallel change owns adding it); cast until it lands.
+      client.send({ t: 'set_audio_position', agentId, seq, positionMs } as unknown as Parameters<typeof client.send>[0]);
     },
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
@@ -1314,6 +1341,7 @@ function shell(id: string): AgentView {
     audioSeq: null,
     audioReadySeqs: [],
     audioReadyRevision: 0,
+    audioPosition: null,
   };
 }
 
