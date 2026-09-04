@@ -247,7 +247,9 @@ type ServerMsg =
   | { t: 'snapshot'; agentId: string; seq: number;                     // reconstruct on reconnect
                      transcript: { seq: number; event: WireEvent }[];
                      status: AgentStatus; controlMode: ControlMode;
-                     pendingApprovals: Approval[] }
+                     pendingApprovals: Approval[];
+                     audioReadySeqs?: number[];                        // deprecated bare form, kept for compat
+                     audioReady?: { seq: number; durationMs: number }[] } // durationMs 0 = unknown
   | { t: 'event';    agentId: string; seq: number; event: WireEvent }  // live tail (monotonic)
   | { t: 'ack';      corrId?: string; agentId?: string; error?: string }
   | { t: 'agent_closed'; agentId: string }
@@ -268,6 +270,16 @@ type ServerMsg =
 //   { kind:'shell_pty', dataB64: string } // independent user worktree shell
 //   { kind:'shell_exit', message: string }
 ```
+
+`snapshot.audioReadySeqs` lists the seqs with a durably cached rendered clip (bytes
+still fetched from the authenticated audio route). `audioReady` carries the same seqs
+plus each clip's playback duration in milliseconds, computed once server-side from the
+rendered bytes (`internal/voice.Duration`) so the UI can space a timeline's tick marks
+without downloading audio; `durationMs: 0` means unknown (an unparseable format, or a
+clip written before duration computation existed and not yet re-read). Both fields are
+emitted together for backward compatibility; new clients should prefer `audioReady`.
+The live `audio_state` event carries the same optional `durationMs` for a clip that
+just finished rendering.
 
 Legacy `text` prompts normalize to one text block. Block order is preserved into
 ACP `session/prompt`; only at that boundary does the daemon resolve an owned asset

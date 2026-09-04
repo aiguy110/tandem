@@ -68,6 +68,9 @@ type Options struct {
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
+	// AudioReady is AudioReadySeqs plus each clip's known duration (0 means
+	// unknown), for spacing timeline tick marks without downloading audio.
+	AudioReady func(string) []store.MessageAudioClip
 }
 
 type AutomationStore interface {
@@ -1188,7 +1191,13 @@ func (c *connection) subscribe(m clientMessage) {
 		if c.server.opts.AudioReadySeqs != nil {
 			readySeqs = c.server.opts.AudioReadySeqs(sess.ID)
 		}
-		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs})
+		audioReady := []map[string]any{}
+		if c.server.opts.AudioReady != nil {
+			for _, clip := range c.server.opts.AudioReady(sess.ID) {
+				audioReady = append(audioReady, map[string]any{"seq": clip.Seq, "durationMs": clip.DurationMs})
+			}
+		}
+		c.send(map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady})
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {

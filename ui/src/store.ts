@@ -172,6 +172,10 @@ export interface AgentView {
   // Every persisted clip, supplied by daemon snapshots so a second device can
   // reconstruct each message player without re-rendering speech.
   audioReadySeqs: number[];
+  // Known clip durations (ms) by seq, for spacing timeline tick marks
+  // without downloading audio. A seq absent here (or a live ready event
+  // without durationMs) means unknown duration.
+  audioDurations: Record<number, number>;
   // Advances only for a live ready event. It lets the focused chat autoplay
   // newly completed clips without replaying historical audio on reconnect.
   audioReadyRevision: number;
@@ -697,6 +701,7 @@ export const useStore = create<StoreState>((set, get) => {
             audioError,
             audioSeq,
             audioReadySeqs: msg.audioReadySeqs ?? [],
+            audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -748,6 +753,9 @@ export const useStore = create<StoreState>((set, get) => {
           applyEventToView(next, event);
           if (event.kind === 'audio_state' && event.state === 'ready') {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
+            if (event.durationMs != null) {
+              next.audioDurations = { ...next.audioDurations, [event.seq]: event.durationMs };
+            }
             next.audioReadyRevision++;
           }
           // Raise at most one completed-turn notification for each background
@@ -1294,6 +1302,7 @@ function shell(id: string): AgentView {
     audioError: null,
     audioSeq: null,
     audioReadySeqs: [],
+    audioDurations: {},
     audioReadyRevision: 0,
   };
 }

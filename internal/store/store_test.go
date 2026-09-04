@@ -424,6 +424,70 @@ VALUES ('legacy-job', 'repo', 'watch.ts', 'every 5m', 1, 1)`)
 	}
 }
 
+func TestMigratesMessageAudioDurationMs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE message_audio (
+        agentId   TEXT NOT NULL,
+        seq       INTEGER NOT NULL,
+        mimeType  TEXT NOT NULL,
+        data      BLOB NOT NULL,
+        createdAt INTEGER NOT NULL,
+        PRIMARY KEY (agentId, seq)
+      );
+INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES ('legacy-1', 4, 'audio/mpeg', X'0102', 100)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.MessageAudio("legacy-1", 4)
+	if err != nil || got == nil || got.DurationMs != 0 {
+		t.Fatalf("legacy row=%#v err=%v", got, err)
+	}
+	clips, err := s.MessageAudioClips("legacy-1")
+	if err != nil || len(clips) != 1 || clips[0].Seq != 4 || clips[0].DurationMs != 0 {
+		t.Fatalf("legacy clips=%#v err=%v", clips, err)
+	}
+	// A subsequent write with a known duration must persist through the
+	// migrated column.
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "legacy-1", Seq: 4, MIMEType: "audio/mpeg", Data: []byte{1, 2}, DurationMs: 1500}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MessageAudio("legacy-1", 4); err != nil || got.DurationMs != 1500 {
+		t.Fatalf("updated row=%#v err=%v", got, err)
+	}
+}
+
+func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-2", Seq: 1, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MessageAudio("audio-2", 1); err != nil || got.DurationMs != 0 {
+		t.Fatalf("expected unknown duration on write: row=%#v err=%v", got, err)
+	}
+	if err := s.UpdateMessageAudioDuration("audio-2", 1, 2500); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MessageAudio("audio-2", 1)
+	if err != nil || got == nil || got.DurationMs != 2500 {
+		t.Fatalf("backfilled row=%#v err=%v", got, err)
+	}
+	if clips, err := s.MessageAudioClips("audio-2"); err != nil || len(clips) != 1 || clips[0].DurationMs != 2500 {
+		t.Fatalf("clips=%#v err=%v", clips, err)
+	}
+}
+
 func TestMalformedRowsAreReported(t *testing.T) {
 	s, _ := openTestStore(t)
 	if _, err := s.db.Exec("INSERT INTO agents VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {

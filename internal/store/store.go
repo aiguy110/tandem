@@ -41,11 +41,12 @@ CREATE TABLE IF NOT EXISTS agent_audio_settings (
         enabledAfterSeq INTEGER NOT NULL DEFAULT 0
       );
 CREATE TABLE IF NOT EXISTS message_audio (
-        agentId   TEXT NOT NULL,
-        seq       INTEGER NOT NULL,
-        mimeType  TEXT NOT NULL,
-        data      BLOB NOT NULL,
-        createdAt INTEGER NOT NULL,
+        agentId    TEXT NOT NULL,
+        seq        INTEGER NOT NULL,
+        mimeType   TEXT NOT NULL,
+        data       BLOB NOT NULL,
+        durationMs INTEGER NOT NULL DEFAULT 0,
+        createdAt  INTEGER NOT NULL,
         PRIMARY KEY (agentId, seq)
       );
 CREATE TABLE IF NOT EXISTS assets (
@@ -243,12 +244,25 @@ type Store struct {
 }
 
 // MessageAudio is a durable daemon-owned clip for one completed message.
+// DurationMs is the clip's playback length in milliseconds, computed once
+// from the rendered bytes by internal/voice.Duration. 0 means unknown —
+// either the format could not be parsed, or the row predates duration
+// computation and has not yet been read (see MessageAudio's lazy backfill
+// note below).
 type MessageAudio struct {
-	AgentID   string
-	Seq       int64
-	MIMEType  string
-	Data      []byte
-	CreatedAt int64
+	AgentID    string
+	Seq        int64
+	MIMEType   string
+	Data       []byte
+	DurationMs int64
+	CreatedAt  int64
+}
+
+// MessageAudioClip is the lightweight (no audio bytes) metadata for one
+// cached clip, used to hydrate player controls without downloading audio.
+type MessageAudioClip struct {
+	Seq        int64
+	DurationMs int64
 }
 
 // SetAgentAudioEnabled records the transcript boundary after which automatic
@@ -279,14 +293,15 @@ func (s *Store) PutMessageAudio(audio MessageAudio) error {
 	if audio.CreatedAt == 0 {
 		audio.CreatedAt = s.now().UnixMilli()
 	}
-	_, err := s.db.Exec(`INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, createdAt=excluded.createdAt`, audio.AgentID, audio.Seq, audio.MIMEType, audio.Data, audio.CreatedAt)
+	_, err := s.db.Exec(`INSERT INTO message_audio (agentId, seq, mimeType, data, durationMs, createdAt) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.AgentID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
 	return err
 }
 
 func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
 	var audio MessageAudio
-	err := s.db.QueryRow(`SELECT mimeType, data, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, agentID, seq).Scan(&audio.MIMEType, &audio.Data, &audio.CreatedAt)
+	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, agentID, seq).
+		Scan(&audio.MIMEType, &audio.Data, &audio.DurationMs, &audio.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -295,6 +310,14 @@ func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
 	}
 	audio.AgentID, audio.Seq = agentID, seq
 	return &audio, nil
+}
+
+// UpdateMessageAudioDuration persists a duration computed after the fact —
+// the lazy-backfill path for rows written before duration computation
+// existed. It is a no-op (not an error) if the row is gone.
+func (s *Store) UpdateMessageAudioDuration(agentID string, seq int64, durationMs int64) error {
+	_, err := s.db.Exec(`UPDATE message_audio SET durationMs = ? WHERE agentId = ? AND seq = ?`, durationMs, agentID, seq)
+	return err
 }
 
 // MessageAudioSeqs lists the transcript messages that already have durable
@@ -316,6 +339,27 @@ func (s *Store) MessageAudioSeqs(agentID string) ([]int64, error) {
 		seqs = append(seqs, seq)
 	}
 	return seqs, rows.Err()
+}
+
+// MessageAudioClips is MessageAudioSeqs plus each clip's known duration, for
+// spacing timeline tick marks without downloading audio. A durationMs of 0
+// means unknown (unparseable format, or a pre-duration row not yet read
+// through MessageAudio's lazy backfill).
+func (s *Store) MessageAudioClips(agentID string) ([]MessageAudioClip, error) {
+	rows, err := s.db.Query(`SELECT seq, durationMs FROM message_audio WHERE agentId = ? ORDER BY seq`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var clips []MessageAudioClip
+	for rows.Next() {
+		var clip MessageAudioClip
+		if err := rows.Scan(&clip.Seq, &clip.DurationMs); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
 }
 
 // StoredEvent is the store-level representation of a normalized event.
@@ -431,6 +475,7 @@ func Open(path string) (*Store, error) {
 		{"ALTER TABLE history_sessions ADD COLUMN importerVersion INTEGER NOT NULL DEFAULT 0", "history_sessions.importerVersion"},
 		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
 		{"ALTER TABLE automation_jobs ADD COLUMN wakeSuppression TEXT NOT NULL DEFAULT 'until_closed'", "automation_jobs.wakeSuppression"},
+		{"ALTER TABLE message_audio ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0", "message_audio.durationMs"},
 		{`CREATE TABLE IF NOT EXISTS annotations (
         id        TEXT PRIMARY KEY,
         agentId   TEXT NOT NULL,

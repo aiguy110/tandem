@@ -296,7 +296,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, AudioReadySeqs: audioCache.readySeqs})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
 	defer handler.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
@@ -401,6 +401,7 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 	if cached, err := c.db.MessageAudio(agentID, seq); err != nil {
 		return voice.Audio{}, err
 	} else if cached != nil {
+		c.backfillDuration(agentID, seq, cached)
 		return voice.Audio{Data: cached.Data, MIMEType: cached.MIMEType}, nil
 	}
 	key := audioKey(agentID, seq)
@@ -426,10 +427,30 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 	if err != nil {
 		return voice.Audio{}, err
 	}
-	if err := c.db.PutMessageAudio(store.MessageAudio{AgentID: agentID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data}); err != nil {
+	durationMs, _ := voice.Duration(audio.MIMEType, audio.Data) // best effort; 0 means unknown
+	if err := c.db.PutMessageAudio(store.MessageAudio{AgentID: agentID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data, DurationMs: durationMs}); err != nil {
 		return voice.Audio{}, err
 	}
 	return audio, nil
+}
+
+// backfillDuration computes and persists duration for a cached clip that
+// predates duration computation (DurationMs == 0). It is a best-effort,
+// read-triggered upgrade: any failure to parse or persist just leaves the
+// clip's duration unknown for this read, to be retried on a later read.
+func (c *messageAudioCache) backfillDuration(agentID string, seq int64, cached *store.MessageAudio) int64 {
+	if cached.DurationMs > 0 {
+		return cached.DurationMs
+	}
+	durationMs, ok := voice.Duration(cached.MIMEType, cached.Data)
+	if !ok || durationMs <= 0 {
+		return 0
+	}
+	if err := c.db.UpdateMessageAudioDuration(agentID, seq, durationMs); err != nil {
+		return 0
+	}
+	cached.DurationMs = durationMs
+	return durationMs
 }
 
 func (c *messageAudioCache) watch(s *session.Session) {
@@ -490,6 +511,18 @@ func (c *messageAudioCache) readySeqs(agentID string) []int64 {
 	return seqs
 }
 
+// readyClips is readySeqs plus each clip's known duration, for the WS
+// snapshot's audioReady field. It does not itself trigger backfill (that
+// happens lazily off the render/HTTP audio-serving path, which already has
+// the bytes in hand); rows not yet read through render carry durationMs=0.
+func (c *messageAudioCache) readyClips(agentID string) []store.MessageAudioClip {
+	clips, err := c.db.MessageAudioClips(agentID)
+	if err != nil {
+		return nil
+	}
+	return clips
+}
+
 // claimPreparation makes automatic rendering and its ready notification a
 // once-per-process operation for each message. Turn completion, focus changes,
 // reconnects, and multiple browser clients can all request preparation at the
@@ -537,16 +570,20 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	go func(seqs []int64) {
 		for _, seq := range seqs {
 			if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
-				emitAudioState(s, "ready", seq, "")
+				emitAudioState(s, "ready", seq, "", c.backfillDuration(s.ID, seq, cached))
 				continue
 			}
-			emitAudioState(s, "rendering", seq, "")
+			emitAudioState(s, "rendering", seq, "", 0)
 			if _, err := c.render(c.ctx, s.ID, seq); err != nil {
 				c.releasePreparation(s.ID, seq)
-				emitAudioState(s, "error", seq, err.Error())
+				emitAudioState(s, "error", seq, err.Error(), 0)
 				continue
 			}
-			emitAudioState(s, "ready", seq, "")
+			durationMs := int64(0)
+			if cached, err := c.db.MessageAudio(s.ID, seq); err == nil && cached != nil {
+				durationMs = cached.DurationMs
+			}
+			emitAudioState(s, "ready", seq, "", durationMs)
 		}
 	}(pending)
 }
@@ -599,8 +636,12 @@ func messageBlockContinuation(kind string) bool {
 	return kind == "message_chunk" || kind == "audio_state"
 }
 
-func emitAudioState(s *session.Session, state string, seq int64, message string) {
-	payload, _ := json.Marshal(map[string]any{"kind": "audio_state", "state": state, "seq": seq, "message": message})
+func emitAudioState(s *session.Session, state string, seq int64, message string, durationMs int64) {
+	fields := map[string]any{"kind": "audio_state", "state": state, "seq": seq, "message": message}
+	if durationMs > 0 {
+		fields["durationMs"] = durationMs
+	}
+	payload, _ := json.Marshal(fields)
 	s.PushEvent(eventlog.Event{Kind: "audio_state", Payload: payload})
 }
 
