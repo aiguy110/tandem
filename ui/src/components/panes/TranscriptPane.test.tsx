@@ -200,6 +200,42 @@ describe('TranscriptPane voice rendering', () => {
     expect(player.currentTime).toBe(20);
     expect(setPositionState).toHaveBeenCalled();
   });
+
+  it('keeps earbud play/pause working after a snippet finishes', async () => {
+    const handlers = new Map<string, ((details: { seekOffset?: number }) => void) | null>();
+    const session = {
+      playbackState: 'none',
+      setActionHandler: vi.fn((action: string, handler: ((details: { seekOffset?: number }) => void) | null) => handlers.set(action, handler)),
+      setPositionState: vi.fn(),
+    };
+    Object.defineProperty(navigator, 'mediaSession', { configurable: true, value: session });
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:earbud-voice');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByRole('button', { name: 'Listen' }));
+    const player = await waitFor(() => view.getByLabelText('Spoken version of agent response')) as HTMLAudioElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 30 });
+    const play = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(player, 'play', { configurable: true, value: play });
+    fireEvent.play(player);
+    expect(handlers.get('play')).toBeTruthy();
+
+    fireEvent.ended(player);
+
+    // The finished clip keeps the OS controls instead of handing them back.
+    expect(session.playbackState).toBe('paused');
+    expect(session.setActionHandler).not.toHaveBeenCalledWith('play', null);
+    expect(session.setActionHandler).not.toHaveBeenCalledWith('pause', null);
+    handlers.get('play')?.({});
+    expect(play).toHaveBeenCalledOnce();
+    expect(handlers.get('pause')).toBeTruthy();
+  });
 });
 
 describe('TranscriptPane tool diffs', () => {

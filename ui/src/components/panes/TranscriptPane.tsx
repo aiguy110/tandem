@@ -993,7 +993,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio, load
 
   return (
     <div className={`message-audio${audioURL || playerPending ? '' : ' message-listen'}`}>
-      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onPlay={(event) => activateMediaSession(event.currentTarget)} onPause={(event) => updateMediaSession(event.currentTarget)} onTimeUpdate={(event) => updateMediaSession(event.currentTarget)} onDurationChange={(event) => updateMediaSession(event.currentTarget)} onEnded={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} onError={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} /> : playerPending ? (
+      {audioURL ? <audio ref={audioRef} controls preload="metadata" src={audioURL} aria-label="Spoken version of agent response" onPlay={(event) => activateMediaSession(event.currentTarget)} onPause={(event) => updateMediaSession(event.currentTarget)} onTimeUpdate={(event) => updateMediaSession(event.currentTarget)} onDurationChange={(event) => updateMediaSession(event.currentTarget)} onEnded={(event) => { idleMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} onError={(event) => { releaseMediaSession(event.currentTarget); if (autoplaying) onAutoplayFinished(seq); }} /> : playerPending ? (
         <div className="message-audio-placeholder" role="status">{renderingAudio || loading === 'rendering' ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
         <button type="button" onClick={() => void render('rendering')} disabled={!enabled || loading !== 'idle'} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
@@ -1028,6 +1028,9 @@ function setMediaAction(session: MediaSession, action: MediaSessionAction, handl
 function activateMediaSession(audio: HTMLAudioElement) {
   const session = mediaSession();
   if (!session) return;
+  // Only one clip can own the OS media controls; stop whichever held them so the
+  // reported playback state matches what is actually audible.
+  if (mediaSessionAudio && mediaSessionAudio !== audio) mediaSessionAudio.pause();
   mediaSessionAudio = audio;
   const seek = (direction: -1 | 1) => (details: MediaSessionActionDetails) => {
     seekAudio(audio, direction * (details.seekOffset ?? 10));
@@ -1036,10 +1039,23 @@ function activateMediaSession(audio: HTMLAudioElement) {
   setMediaAction(session, 'pause', () => audio.pause());
   setMediaAction(session, 'seekbackward', seek(-1));
   setMediaAction(session, 'seekforward', seek(1));
+  setMediaAction(session, 'seekto', (details: MediaSessionActionDetails) => {
+    if (typeof details.seekTime !== 'number') return;
+    seekAudio(audio, details.seekTime - audio.currentTime);
+  });
   // Many earbuds report double/triple presses as track changes rather than seeks.
   setMediaAction(session, 'previoustrack', () => seekAudio(audio, -10));
   setMediaAction(session, 'nexttrack', () => seekAudio(audio, 10));
   updateMediaSession(audio);
+}
+
+// A finished clip keeps the media session: the handlers stay installed and the
+// state reads as paused, so an earbud press resumes Tandem instead of falling
+// through to whatever else the OS considers playable.
+function idleMediaSession(audio: HTMLAudioElement) {
+  const session = mediaSession();
+  if (!session || mediaSessionAudio !== audio) return;
+  session.playbackState = 'paused';
 }
 
 function updateMediaSession(audio: HTMLAudioElement) {
@@ -1063,7 +1079,7 @@ function releaseMediaSession(audio: HTMLAudioElement) {
   if (!session || mediaSessionAudio !== audio) return;
   mediaSessionAudio = null;
   session.playbackState = 'none';
-  for (const action of ['play', 'pause', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack'] as MediaSessionAction[]) {
+  for (const action of ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'previoustrack', 'nexttrack'] as MediaSessionAction[]) {
     setMediaAction(session, action, null);
   }
 }
