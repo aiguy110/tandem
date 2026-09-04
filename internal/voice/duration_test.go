@@ -209,8 +209,8 @@ func TestWAVDuration(t *testing.T) {
 	data = append(data, le32(36+dataSize)...)
 	data = append(data, []byte("WAVE")...)
 	data = append(data, []byte("fmt ")...)
-	data = append(data, le32(16)...)     // fmt chunk size
-	data = append(data, le16(1)...)      // PCM
+	data = append(data, le32(16)...) // fmt chunk size
+	data = append(data, le16(1)...)  // PCM
 	data = append(data, le16(channels)...)
 	data = append(data, le32(sampleRate)...)
 	data = append(data, le32(byteRate)...)
