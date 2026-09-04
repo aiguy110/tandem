@@ -248,7 +248,7 @@ type VoiceSettings struct {
 	LegacyCleanupInstructions string `yaml:"cleanupInstructions,omitempty"`
 }
 
-const DefaultVoicePreparationInstructions = "Rewrite the assistant response as clear, natural speech. Remove markdown, URLs, citation syntax, and formatting artifacts. Briefly describe code or tables instead of reading them verbatim. Preserve the important facts and conclusions. Return only the words to speak, with no preamble."
+const DefaultVoicePreparationInstructions = "Rewrite the assistant response as clear, natural speech. Remove markdown, URLs, citation syntax, and formatting artifacts. Expand abbreviations, symbols, and compact technical notation into their usual spoken forms when that improves pronunciation; for example, turn \"MiB/token\" into \"megabytes per token\". Briefly describe code or tables instead of reading them verbatim. Preserve the important facts and conclusions. Return only the words to speak, with no preamble."
 
 // NodeSettings records the operator's Node runtime choice. Mode is "system"
 // (use Command / PATH) or "managed" (download+own the pinned Version).

@@ -73,6 +73,22 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestDefaultVoicePreparationInstructionsExpandTechnicalNotation(t *testing.T) {
+	instructions := DefaultVoicePreparationInstructions
+	if len(strings.Fields(instructions)) >= 100 {
+		t.Fatalf("default voice instructions should remain concise: %d words", len(strings.Fields(instructions)))
+	}
+	for _, want := range []string{
+		"Expand abbreviations, symbols, and compact technical notation",
+		"MiB/token",
+		"megabytes per token",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("default voice instructions missing %q: %q", want, instructions)
+		}
+	}
+}
+
 func TestSettingsFilePrecedence(t *testing.T) {
 	o := options(t, nil)
 	home := o.Env["TANDEM_HOME"]
