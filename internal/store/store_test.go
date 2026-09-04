@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -154,7 +154,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	keep := func(rows []schemaRow) []schemaRow {
 		out := make([]schemaRow, 0, len(rows))
 		for _, row := range rows {
-			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" {
+			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" {
 				continue
 			}
 			out = append(out, row)
@@ -368,6 +368,86 @@ func TestDeleteAgentRemovesAnnotations(t *testing.T) {
 	}
 }
 
+func TestAudioPositionRoundTripAndClear(t *testing.T) {
+	s, _ := openTestStore(t)
+	s.now = func() time.Time { return time.UnixMilli(5000) }
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("expected no position before any write: %#v err=%v", got, err)
+	}
+	updatedAt, err := s.SetAudioPosition("a-1", 4, 12500)
+	if err != nil || updatedAt != 5000 {
+		t.Fatalf("SetAudioPosition = %d, %v", updatedAt, err)
+	}
+	got, err := s.AudioPosition("a-1")
+	if err != nil || got == nil || got.Seq != 4 || got.PositionMs != 12500 || got.UpdatedAt != 5000 {
+		t.Fatalf("position=%#v err=%v", got, err)
+	}
+	// Last-write-wins: a second write for the same agent replaces, not adds.
+	s.now = func() time.Time { return time.UnixMilli(9000) }
+	if _, err := s.SetAudioPosition("a-1", 7, 300); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got == nil || got.Seq != 7 || got.PositionMs != 300 || got.UpdatedAt != 9000 {
+		t.Fatalf("updated position=%#v err=%v", got, err)
+	}
+	// seq: 0 means "no active section" and clears the stored row entirely.
+	if _, err := s.SetAudioPosition("a-1", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("expected position cleared by seq=0: %#v err=%v", got, err)
+	}
+}
+
+func TestDeleteAgentRemovesAudioPosition(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetAudioPosition("a-1", 3, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent("a-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
+		t.Fatalf("audio position survived agent delete: %#v err=%v", got, err)
+	}
+}
+
+func TestMigratesAudioPositionTable(t *testing.T) {
+	// audio_position is a wholly new table (added the same way "annotations"
+	// was: only via the additive migrations loop's CREATE TABLE IF NOT
+	// EXISTS), so a pre-existing database without it must still pick it up.
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, spec TEXT NOT NULL, acpSessionId TEXT, status TEXT NOT NULL, createdAt INTEGER NOT NULL, closedAt INTEGER);
+INSERT INTO agents VALUES ('legacy-1','legacy-1','{}',NULL,'idle',123,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SetAudioPosition("legacy-1", 2, 4000); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AudioPosition("legacy-1")
+	if err != nil || got == nil || got.Seq != 2 || got.PositionMs != 4000 {
+		t.Fatalf("migrated position=%#v err=%v", got, err)
+	}
+}
+
 func TestMigratesDatabaseWithoutCWD(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := sql.Open("sqlite", path)
@@ -421,6 +501,70 @@ VALUES ('legacy-job', 'repo', 'watch.ts', 'every 5m', 1, 1)`)
 	job, err := s.AutomationJob("legacy-job")
 	if err != nil || job == nil || job.WakeSuppression != "until_closed" {
 		t.Fatalf("legacy job=%#v err=%v", job, err)
+	}
+}
+
+func TestMigratesMessageAudioDurationMs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE message_audio (
+        agentId   TEXT NOT NULL,
+        seq       INTEGER NOT NULL,
+        mimeType  TEXT NOT NULL,
+        data      BLOB NOT NULL,
+        createdAt INTEGER NOT NULL,
+        PRIMARY KEY (agentId, seq)
+      );
+INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES ('legacy-1', 4, 'audio/mpeg', X'0102', 100)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.MessageAudio("legacy-1", 4)
+	if err != nil || got == nil || got.DurationMs != 0 {
+		t.Fatalf("legacy row=%#v err=%v", got, err)
+	}
+	clips, err := s.MessageAudioClips("legacy-1")
+	if err != nil || len(clips) != 1 || clips[0].Seq != 4 || clips[0].DurationMs != 0 {
+		t.Fatalf("legacy clips=%#v err=%v", clips, err)
+	}
+	// A subsequent write with a known duration must persist through the
+	// migrated column.
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "legacy-1", Seq: 4, MIMEType: "audio/mpeg", Data: []byte{1, 2}, DurationMs: 1500}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MessageAudio("legacy-1", 4); err != nil || got.DurationMs != 1500 {
+		t.Fatalf("updated row=%#v err=%v", got, err)
+	}
+}
+
+func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-2", Seq: 1, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MessageAudio("audio-2", 1); err != nil || got.DurationMs != 0 {
+		t.Fatalf("expected unknown duration on write: row=%#v err=%v", got, err)
+	}
+	if err := s.UpdateMessageAudioDuration("audio-2", 1, 2500); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MessageAudio("audio-2", 1)
+	if err != nil || got == nil || got.DurationMs != 2500 {
+		t.Fatalf("backfilled row=%#v err=%v", got, err)
+	}
+	if clips, err := s.MessageAudioClips("audio-2"); err != nil || len(clips) != 1 || clips[0].DurationMs != 2500 {
+		t.Fatalf("clips=%#v err=%v", clips, err)
 	}
 }
 

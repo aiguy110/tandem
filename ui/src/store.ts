@@ -173,9 +173,17 @@ export interface AgentView {
   // Every persisted clip, supplied by daemon snapshots so a second device can
   // reconstruct each message player without re-rendering speech.
   audioReadySeqs: number[];
+  // Known clip durations (ms) by seq, for spacing timeline tick marks
+  // without downloading audio. A seq absent here (or a live ready event
+  // without durationMs) means unknown duration.
+  audioDurations: Record<number, number>;
   // Advances only for a live ready event. It lets the focused chat autoplay
   // newly completed clips without replaying historical audio on reconnect.
   audioReadyRevision: number;
+  // Daemon-owned playback position (last-write-wins, one per agent), so the
+  // player can resume across a session switch or a closed tab. null means
+  // nothing is stored (never played, or explicitly cleared via seq 0).
+  audioPosition: { seq: number; positionMs: number; updatedAt: number } | null;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
@@ -240,6 +248,11 @@ interface StoreState {
   setModal: (m: ModalKind) => void;
   toggleInspector: () => void;
   toggleThreadAudio: (agentId: string) => void;
+  // Persists the audio player's current section/offset daemon-side (so it
+  // survives a session switch or a closed tab). seq: 0 means "no active
+  // section" and clears the stored position. The caller (the audio player)
+  // is responsible for throttling calls during playback.
+  setAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
   refreshAgents: () => void;
   refreshSessions: () => void;
@@ -704,6 +717,8 @@ export const useStore = create<StoreState>((set, get) => {
             audioError,
             audioSeq,
             audioReadySeqs: msg.audioReadySeqs ?? [],
+            audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
+            audioPosition: msg.audioPosition ?? null,
           };
           const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
           return {
@@ -755,6 +770,9 @@ export const useStore = create<StoreState>((set, get) => {
           applyEventToView(next, event);
           if (event.kind === 'audio_state' && event.state === 'ready') {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
+            if (event.durationMs != null) {
+              next.audioDurations = { ...next.audioDurations, [event.seq]: event.durationMs };
+            }
             next.audioReadyRevision++;
           }
           // Raise at most one completed-turn notification for each background
@@ -780,6 +798,17 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       case 'annotations':
         set((st) => ({ annotations: { ...st.annotations, [msg.agentId]: msg.annotations } }));
+        return;
+      case 'audio_position':
+        // Cross-device sync only: the daemon never echoes this back to the
+        // connection that sent set_audio_position, so this only ever reflects
+        // another client's playback moving the shared position.
+        set((st) => {
+          const agent = st.agents[msg.agentId];
+          if (!agent) return st;
+          const audioPosition = msg.seq === 0 ? null : { seq: msg.seq, positionMs: msg.positionMs, updatedAt: msg.updatedAt };
+          return { agents: { ...st.agents, [msg.agentId]: { ...agent, audioPosition } } };
+        });
         return;
     }
   };
@@ -933,6 +962,7 @@ export const useStore = create<StoreState>((set, get) => {
       const agent = get().agents[agentId];
       if (agent) client.send({ t: 'set_audio_enabled', agentId, enabled: !agent.audioOnTurnEnd });
     },
+    setAudioPosition: (agentId, seq, positionMs) => client.send({ t: 'set_audio_position', agentId, seq, positionMs }),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
     refreshSessions: () => {
@@ -1313,7 +1343,9 @@ function shell(id: string): AgentView {
     audioError: null,
     audioSeq: null,
     audioReadySeqs: [],
+    audioDurations: {},
     audioReadyRevision: 0,
+    audioPosition: null,
   };
 }
 
