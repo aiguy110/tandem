@@ -376,6 +376,32 @@ describe('TranscriptPane composer completions', () => {
     expect(highlight?.querySelectorAll('.skill-mention')).toHaveLength(1);
   });
 
+  it('highlights a leading /btw when asides are supported', () => {
+    const withAside = agent();
+    withAside.asideSupport = true;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      drafts: { 'agent-1': '/btw Is this isolated?' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.aside-mention')?.textContent).toBe('/btw');
+  });
+
+  it('does not highlight /btw away from the start of a prompt', () => {
+    const withAside = agent();
+    withAside.asideSupport = true;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      drafts: { 'agent-1': 'Ask first, then /btw this.' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.aside-mention')).toBeNull();
+  });
+
   it('renders workspace file mentions like slash commands', () => {
     const withCommand = agent();
     withCommand.commands = [{ name: 'help', description: 'Show help' }];
