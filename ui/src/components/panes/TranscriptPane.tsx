@@ -1376,7 +1376,7 @@ function fileCompletionRequest(query: string): { dir: string; filter: string } |
     : { dir: query.slice(0, slash) || '.', filter: query.slice(slash + 1) };
 }
 
-function SkillText({ text, commands }: { text: string; commands: SlashCommand[] }) {
+function SkillText({ text, commands, asideSupport = false }: { text: string; commands: SlashCommand[]; asideSupport?: boolean | null }) {
   const names = new Set(commands.map((command) => command.name));
   const parts: React.ReactNode[] = [];
   // Keep the highlight layer in sync with the two kinds of composer tokens:
@@ -1388,10 +1388,17 @@ function SkillText({ text, commands }: { text: string; commands: SlashCommand[] 
     const token = match[0];
     const isCommand = token[0] === '/';
     const isKnownCommand = isCommand && names.has(token.slice(1));
+    // `/btw` is a transport-level aside, rather than an agent-provided slash
+    // command. It is only special at the start of a prompt (apart from leading
+    // whitespace), matching the send path below exactly.
+    const isAside = asideSupport === true
+      && text.slice(0, start).trim() === ''
+      && /^\/btw$/i.test(token)
+      && (start + token.length === text.length || /\s/.test(text[start + token.length]));
     const isFileMention = token[0] === '@';
-    if (!isMentionBoundary(text, start) || (!isKnownCommand && !isFileMention)) continue;
+    if (!isMentionBoundary(text, start) || (!isKnownCommand && !isAside && !isFileMention)) continue;
     if (start > previous) parts.push(text.slice(previous, start));
-    parts.push(<span className="skill-mention" key={start}>{token}</span>);
+    parts.push(<span className={isAside ? 'aside-mention' : 'skill-mention'} key={start}>{token}</span>);
     previous = start + token.length;
   }
   if (previous < text.length) parts.push(text.slice(previous));
@@ -1436,6 +1443,10 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  // The draft is shared Zustand state so it survives pane remounts. Preserve
+  // the native selection across that controlled-value update; otherwise some
+  // browsers collapse it to the end while the user is typing mid-prompt.
+  const pendingSelectionRef = useRef<{ value: string; start: number; end: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
   const aborts = useRef(new Map<string, AbortController>());
@@ -1510,6 +1521,11 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     if (highlightRef.current) {
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
+    }
+    const pendingSelection = pendingSelectionRef.current;
+    if (pendingSelection?.value === text && document.activeElement === el) {
+      el.setSelectionRange(pendingSelection.start, pendingSelection.end);
+      pendingSelectionRef.current = null;
     }
   }, [text]);
 
@@ -1848,7 +1864,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           }}
         />
         <div className="prompt-text-wrap">
-          <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} /></div>
+          <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} asideSupport={asideSupport} /></div>
           <textarea
             ref={textRef}
             data-prompt-agent={agentId}
@@ -1864,6 +1880,11 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
               }
             }}
             onChange={(e) => {
+              pendingSelectionRef.current = {
+                value: e.target.value,
+                start: e.target.selectionStart ?? e.target.value.length,
+                end: e.target.selectionEnd ?? e.target.value.length,
+              };
               setDraft(agentId, e.target.value);
               updateCaret(e.target);
             }}
