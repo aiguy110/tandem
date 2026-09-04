@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getGlobalDuration, play, seekGlobal, skip, subscribeFrame, toggle, useEngineState } from '../../audio/engine';
+import { getGlobalDuration, play, seekGlobal, setKeepaliveEnabled, skip, subscribeFrame, toggle, useEngineState } from '../../audio/engine';
 import { formatAudioTime } from './InlineAudioBar';
+
+const KEEPALIVE_TITLE = 'Keep the player alive between responses — lets playback continue with the screen off; uses battery and leaves a persistent notification.';
 
 // Evenly-spaced tick fallback for Phase 1: real per-clip durations aren't
 // reported by the daemon yet, so every section gets an equal-width slice.
@@ -91,6 +93,16 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
         </button>
         <button type="button" className="global-audio-skip" aria-label="Forward 10 seconds" onClick={() => skip(10)}>10»</button>
         <span className="global-audio-section">{sectionLabel}</span>
+        <button
+          type="button"
+          className={`global-audio-keepalive${s.keepaliveEnabled ? ' active' : ''}`}
+          aria-pressed={s.keepaliveEnabled}
+          onClick={() => setKeepaliveEnabled(!s.keepaliveEnabled)}
+          title={KEEPALIVE_TITLE}
+        >
+          <span aria-hidden="true">◔</span>
+          <span className="sr-only">{s.keepaliveEnabled ? 'Disable' : 'Enable'} keeping the player alive between responses (uses battery)</span>
+        </button>
         <button type="button" className="global-audio-collapse" onClick={() => setCollapsed(true)} title="Collapse playback controls">▼</button>
       </div>
       <div

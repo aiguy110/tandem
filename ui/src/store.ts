@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { WsClient, resolveToken, type ConnState } from './ws/client';
 import type { AudioPosition } from './audio/engine';
+import { getListeningAgentId, getState as getEngineState, setPlaylist as setEnginePlaylist } from './audio/engine';
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
@@ -395,7 +396,15 @@ export const useStore = create<StoreState>((set, get) => {
   let audioFocusAgent: string | null = null;
   function syncAudioFocus(): void {
     const state = get();
-    const next = document.visibilityState === 'visible' && state.pane === 'chat' ? state.focusedId : null;
+    // Normally focus tracks "chat pane, document visible" — but a hidden
+    // document is exactly the phone-screen-off listening case this exists
+    // for, so don't drop focus (and thus tell the daemon to stop
+    // pre-rendering speech) while the audio engine is actually playing or
+    // armed mid-section for some chat. Only fall back to "no focus" when the
+    // engine is genuinely not listening (no playlist, idle) — see
+    // getListeningAgentId's doc in engine.ts.
+    const visible = document.visibilityState === 'visible' && state.pane === 'chat';
+    const next = visible ? state.focusedId : getListeningAgentId();
     if (next === audioFocusAgent) return;
     if (audioFocusAgent) client.send({ t: 'set_audio_focus', agentId: audioFocusAgent, focused: false });
     audioFocusAgent = next;
@@ -623,6 +632,10 @@ export const useStore = create<StoreState>((set, get) => {
         ptyHub.clear(msg.agentId);
         shellHub.clear(msg.agentId);
         browserHub.clear(msg.agentId);
+        // Tear the engine's playlist down if it was this (now-closed) chat's
+        // — otherwise a silence keepalive (or pinned audio focus) could keep
+        // running for a chat that no longer exists.
+        if (getEngineState().agentId === msg.agentId) setEnginePlaylist(msg.agentId, []);
         return;
       }
       case 'snapshot': {
@@ -883,6 +896,16 @@ export const useStore = create<StoreState>((set, get) => {
         document.addEventListener('visibilitychange', syncAudioFocus);
         window.addEventListener('focus', refreshVisibleAgents);
         setInterval(refreshVisibleAgents, GIT_REFRESH_INTERVAL_MS);
+        // A frozen (screen-off) page's WS can silently die with the client
+        // unaware — refreshVisibleAgents above only re-fetches state on a
+        // healthy connection, it doesn't detect/fix a dead one. Force a fast
+        // reconnect on both signals the platform gives us for "the page just
+        // came back": visibilitychange -> visible, and pageshow (notably
+        // fired on iOS's back-forward-cache restore, which visibilitychange
+        // alone can miss).
+        const wake = () => { if (document.visibilityState === 'visible') client.wake(); };
+        document.addEventListener('visibilitychange', wake);
+        window.addEventListener('pageshow', wake);
       }
     },
     submitToken: (t) => client.setToken(t.trim()),

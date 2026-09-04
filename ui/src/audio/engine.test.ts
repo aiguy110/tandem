@@ -6,12 +6,14 @@ import { renderMessageAudio } from '../audio';
 import {
   __getElementForTests,
   __resetForTests,
+  getListeningAgentId,
   getState,
   pause,
   play,
   reconcileDaemonPosition,
   restoreLocalPosition,
   seedDurations,
+  setKeepaliveEnabled,
   setPlaylist,
   setPositionSender,
 } from './engine';
@@ -171,5 +173,201 @@ describe('audio engine position restore', () => {
 
     expect(getState().position).toBeLessThanOrEqual(8);
     expect(getState().status).toBe('paused');
+  });
+});
+
+describe('getListeningAgentId (audio-focus retention predicate)', () => {
+  it('returns the agent while a section is actually playing', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    expect(getListeningAgentId()).toBe('agent-1');
+  });
+
+  it('returns the agent while armed and paused mid-section (not merely "has a playlist")', async () => {
+    setPlaylist('agent-1', [10, 20]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    pause();
+    // jsdom's stubbed .pause() doesn't dispatch a real 'pause' event; fire it
+    // manually so the status transition attach() drives from it happens, as
+    // it would in a real browser.
+    __getElementForTests()!.dispatchEvent(new Event('pause'));
+
+    expect(getState().status).toBe('paused');
+    expect(getState().index).toBe(0);
+    expect(getListeningAgentId()).toBe('agent-1');
+  });
+
+  it('returns null for a chat that has an unplayed playlist but was never started (genuinely not listening)', () => {
+    setPlaylist('agent-1', [10, 20]);
+
+    expect(getState().status).toBe('idle');
+    expect(getListeningAgentId()).toBeNull();
+  });
+
+  it('returns null once there is no playlist at all', () => {
+    expect(getState().agentId).toBeNull();
+    expect(getListeningAgentId()).toBeNull();
+  });
+});
+
+describe('silence keepalive', () => {
+  it('defaults to enabled', () => {
+    expect(getState().keepaliveEnabled).toBe(true);
+  });
+
+  it('does not engage during the very first fetch — only once something has actually played', async () => {
+    // Never resolves, so the engine stays in 'loading' for this section.
+    mockRenderMessageAudio.mockImplementation(() => new Promise<string>(() => {}));
+    setPlaylist('agent-1', [10]);
+
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('loading'));
+
+    const el = __getElementForTests()!;
+    expect(el.loop).toBe(false);
+  });
+
+  it('quietly loops the shared element once a playlist is exhausted, without surfacing as a playing section', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+    // Never visible as "playing" to the transcript / global player.
+    expect(getState().status).toBe('paused');
+    expect(getState().index).toBe(0);
+  });
+
+  it('never advances the section or records a duration for the silence loop', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+
+    // A duration/ended event on the (looping) silence clip must not be
+    // recorded against the real seq or advance the (nonexistent) next section.
+    Object.defineProperty(el, 'duration', { configurable: true, value: 1 });
+    el.dispatchEvent(new Event('durationchange'));
+    el.dispatchEvent(new Event('ended'));
+
+    expect(getState().durations[10]).toBeUndefined();
+    expect(getState().status).toBe('paused');
+    expect(getState().index).toBe(0);
+  });
+
+  it('does not write a position for the silence clip and preserves seq: 0 clear semantics', async () => {
+    const sent: { agentId: string; seq: number; positionMs: number }[] = [];
+    setPositionSender((agentId, seq, positionMs) => sent.push({ agentId, seq, positionMs }));
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    // The playlist-end flush still reports the real section (10), never the
+    // silence clip's own (irrelevant) position — the keepalive is looping at
+    // this point (see the previous test).
+    expect(sent.at(-1)).toMatchObject({ agentId: 'agent-1', seq: 10 });
+
+    // Close the chat (same agent, playlist now empty) while the keepalive is
+    // still looping, then force a flush the way a hidden/backgrounded tab
+    // would (engine.ts's own visibilitychange listener). It must report
+    // seq: 0 (no active section) — never a position derived from the
+    // (irrelevant) silence clip that's still physically playing.
+    setPlaylist('agent-1', []);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(sent.at(-1)).toMatchObject({ agentId: 'agent-1', seq: 0, positionMs: 0 });
+    } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    }
+  });
+
+  it('stops on an explicit user pause instead of quietly looping', async () => {
+    setPlaylist('agent-1', [10, 20]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+
+    pause();
+    __getElementForTests()!.dispatchEvent(new Event('pause')); // see note above on jsdom's stubbed .pause()
+
+    const el = __getElementForTests()!;
+    expect(el.loop).toBe(false);
+    expect(getState().status).toBe('paused');
+  });
+
+  it('does not resume by itself after playlist end once the user explicitly pauses again', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true)); // auto-armed keepalive after natural end
+
+    pause(); // an explicit pause on top of the auto-armed state
+
+    expect(el.loop).toBe(false);
+  });
+
+  it('stops when the setting is turned off', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+
+    setKeepaliveEnabled(false);
+
+    expect(el.loop).toBe(false);
+    expect(getState().keepaliveEnabled).toBe(false);
+  });
+
+  it('stops on teardown: the chat closing (playlist cleared) leaves nothing looping', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+
+    setPlaylist('agent-1', []); // same chat, e.g. the agent was closed
+
+    expect(el.loop).toBe(false);
+  });
+
+  it('lets a tap on the global player resume the real clip instead of leaving silence looping', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    __getElementForTests()!.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(getState().status).toBe('paused'));
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+    const silenceCallCount = mockRenderMessageAudio.mock.calls.length;
+
+    play('agent-1'); // "replay" tap on the global player
+    __getElementForTests()!.dispatchEvent(new Event('play')); // see note above on jsdom's stubbed .play()
+
+    expect(el.loop).toBe(false);
+    // Resumed the already-cached clip directly rather than re-fetching it.
+    expect(mockRenderMessageAudio.mock.calls.length).toBe(silenceCallCount);
+    expect(getState().status).toBe('playing');
   });
 });

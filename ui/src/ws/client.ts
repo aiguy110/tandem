@@ -175,6 +175,26 @@ export class WsClient {
   clearReconnectTimer(): void {
     this.reconnectTimer = null;
   }
+
+  // Called on resume-from-hidden (visibilitychange -> visible, pageshow) to
+  // recover promptly from a socket the mobile OS silently killed while the
+  // page was frozen. readyState can lag reality by many seconds (or never
+  // update at all until some future network operation notices), so rather
+  // than try to determine "is this actually dead" from here, just force a
+  // fresh connection outright — the reconnect-with-replay design (onOpen
+  // re-subscribes with sinceSeq) makes this cheap and safe even on the
+  // occasional call where the old socket actually was still fine. This is a
+  // separate fast path from scheduleReconnect's backoff+jitter, which stays
+  // as-is for genuine network failures.
+  wake(): void {
+    if (this.closedByUs) return; // stop()/not started yet
+    if (!this.token) return; // need-token state — nothing to reconnect
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) return; // already mid-connect
+    clearReconnect(this);
+    this.attempts = 0;
+    this.closeSocket();
+    this.connect();
+  }
 }
 
 function clearReconnect(c: WsClient): void {

@@ -37,12 +37,41 @@ export interface EngineState {
   // that the daemon hasn't necessarily confirmed as cached yet. Scoped to
   // agentId. Callers fold this into cachedAudio/playlist membership.
   renderedSeqs: number[];
+  // User setting (persisted, device-local): keep the shared element producing
+  // silent audio between sections / at the end of a finished playlist so a
+  // phone with the screen off doesn't get frozen by the OS mid-playback. See
+  // "Silence keepalive" below. Defaults to ON (the user explicitly wants
+  // this); still user-toggleable because it costs battery and leaves a
+  // persistent media notification.
+  keepaliveEnabled: boolean;
 }
 
 type Listener = (state: EngineState) => void;
 type FrameListener = (position: number, globalPosition: number) => void;
 
 const FALLBACK_SECTION_SECONDS = 30;
+
+const KEEPALIVE_STORAGE_KEY = 'tandem.audio.keepaliveEnabled';
+
+function readKeepaliveSetting(): boolean {
+  try {
+    const raw = localStorage.getItem(KEEPALIVE_STORAGE_KEY);
+    if (raw === '0') return false;
+    if (raw === '1') return true;
+    return true; // default ON, per explicit product decision — see EngineState.keepaliveEnabled doc.
+  } catch {
+    return true;
+  }
+}
+
+function writeKeepaliveSetting(enabled: boolean) {
+  try {
+    localStorage.setItem(KEEPALIVE_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Storage can be unavailable (private browsing, quota) — the setting
+    // just won't survive a reload; playback for this session is unaffected.
+  }
+}
 
 let state: EngineState = {
   agentId: null,
@@ -54,7 +83,15 @@ let state: EngineState = {
   status: 'idle',
   error: null,
   renderedSeqs: [],
+  keepaliveEnabled: readKeepaliveSetting(),
 };
+
+// Set true by the exported pause() (an explicit user action) and cleared by
+// play()/activateSection() (any resume or fresh section). Distinguishes "the
+// user asked us to stop" from "the playlist naturally ran out" — both leave
+// EngineState.status === 'paused', but only the latter should keep the
+// silence keepalive running (see wantsKeepalive below).
+let userExplicitlyPaused = false;
 
 const listeners = new Set<Listener>();
 const frameListeners = new Set<FrameListener>();
@@ -89,6 +126,7 @@ function setState(patch: Partial<EngineState>) {
   // separate explicit calls at their call sites — see flushPosition callers.
   if (state.status === 'playing' && prevStatus !== 'playing') startPositionFlushLoop();
   else if (state.status !== 'playing' && prevStatus === 'playing') stopPositionFlushLoop();
+  updateKeepalive();
   emit();
 }
 
@@ -114,7 +152,7 @@ export function useEngineState(): EngineState {
 // property / transform) rather than setState, so this never triggers React
 // re-renders on its own.
 function tick() {
-  const pos = element?.currentTime ?? state.position;
+  const pos = realCurrentTime();
   const global = currentGlobalPosition();
   for (const fn of frameListeners) fn(pos, global);
   rafId = requestAnimationFrame(tick);
@@ -150,12 +188,23 @@ function currentGlobalPosition(): number {
     const d = state.durations[seq];
     base += Number.isFinite(d) ? d : estimateSectionSeconds();
   }
-  const live = element?.currentTime ?? state.position;
+  const live = realCurrentTime();
   return base + (Number.isFinite(live) ? live : 0);
 }
 
 export function getGlobalPosition(): number {
   return currentGlobalPosition();
+}
+
+// What the store's syncAudioFocus() needs to decide whether to retain audio
+// focus while the document is hidden: the chat actively playing, or armed
+// mid-section (paused with a section active) — NOT merely "has an unplayed
+// playlist" (that's the "genuinely not listening" case the brief calls out;
+// see wantsKeepalive below for the related-but-distinct predicate governing
+// the silence keepalive rather than daemon pre-render focus).
+export function getListeningAgentId(): string | null {
+  const listening = state.status === 'playing' || (state.status === 'paused' && state.index >= 0);
+  return listening ? state.agentId : null;
 }
 
 export function getGlobalDuration(): number {
@@ -195,22 +244,35 @@ function attach(el: HTMLAudioElement) {
     el.currentTime = previous.currentTime;
     previous.pause();
   }
-  el.addEventListener('play', () => setState({ status: 'playing', error: null }));
+  // Every listener below must ignore events fired for the keepalive silence
+  // clip — it shares this element (see "Silence keepalive" below) but must
+  // never be visible as playback state: no status flips, no duration
+  // recorded against a real seq, no advance(), no error surfaced.
+  el.addEventListener('play', () => {
+    if (silencePlaying) return;
+    setState({ status: 'playing', error: null });
+  });
   el.addEventListener('pause', () => {
+    if (silencePlaying) return;
     if (state.status !== 'playing') return;
     setState({ status: 'paused', position: el.currentTime });
     flushPosition(true);
   });
   el.addEventListener('durationchange', () => {
+    if (silencePlaying) return;
     const seq = currentSeq();
     if (seq == null || !Number.isFinite(el.duration) || el.duration <= 0) return;
     setState({ duration: el.duration, durations: { ...state.durations, [seq]: el.duration } });
   });
   el.addEventListener('ended', () => {
+    // The silence clip always loops (see startKeepaliveSilence), so 'ended'
+    // should never fire for it — this guard is belt-and-suspenders.
+    if (silencePlaying) return;
     setState({ position: Number.isFinite(el.duration) ? el.duration : state.position });
     advance();
   });
   el.addEventListener('error', () => {
+    if (silencePlaying) return;
     if (el.src) setState({ status: 'error', error: 'Playback failed' });
   });
 }
@@ -225,6 +287,156 @@ function currentSeq(): number | null {
 // nothing loaded for it yet — so play()/seekWithin() need to tell "already
 // loaded, just resume/seek" apart from "never loaded, must fetch first".
 let loadedIndex = -1;
+
+// --- Silence keepalive ---------------------------------------------------
+//
+// Mobile browsers freeze a hidden page's timers and stall its WebSocket —
+// navigator.wakeLock does NOT help (it requires a visible document and is
+// auto-released on hide). The one reliable exception is that an actively
+// *playing* media element keeps the page alive. So between sections (while
+// the next clip is still being fetched) and once a playlist is exhausted but
+// the chat is still "armed", we keep the single shared <audio> element
+// producing silence rather than letting it go idle — this is what lets the
+// next section start on its own with the screen off.
+//
+// This is best-effort, not a guarantee: iOS in particular may still suspend
+// a backgrounded page eventually regardless (background audio budgets, the
+// app being fully backgrounded rather than just screen-off, etc.).
+//
+// The silence clip shares the ONE element real sections play through (never
+// a second element, never a competing WebAudio graph — see file header) so
+// it never fights the real clip for the media session. Every element event
+// listener in attach() ignores events fired while `silencePlaying` is set,
+// and realCurrentTime()/currentGlobalPosition() fall back to the frozen
+// `state.position` while it's active, so it can never be mistaken for a
+// playing section, corrupt a recorded duration, or pollute a position flush
+// with a fake seq.
+//
+// Whether the shared element currently holds the silence loop is tracked
+// with this explicit flag rather than by comparing `element.src` against the
+// silence blob URL — object URLs aren't guaranteed distinguishable that way
+// (e.g. a test or polyfill that stubs URL.createObjectURL to a fixed value),
+// and an explicit flag we set/clear ourselves is exact regardless.
+let silencePlaying = false;
+let silenceUrl: string | null = null;
+
+// A minimal valid WAV: 8-bit PCM, mono, silent (all samples at the unsigned
+// midpoint, 128). Generated in-process rather than shipped as a repo asset.
+function buildSilentWavBytes(seconds = 1, sampleRate = 8000): Uint8Array {
+  const numSamples = Math.max(1, Math.floor(seconds * sampleRate));
+  const dataSize = numSamples; // 1 byte/sample (8-bit PCM)
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeStr = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true); // byte rate (1 byte/sample * sampleRate)
+  view.setUint16(32, 1, true); // block align
+  view.setUint16(34, 8, true); // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+  const bytes = new Uint8Array(buffer);
+  bytes.fill(128, 44); // silence
+  return bytes;
+}
+
+function ensureSilenceUrl(): string {
+  if (silenceUrl) return silenceUrl;
+  const bytes = buildSilentWavBytes();
+  const blob = new Blob([bytes.slice().buffer], { type: 'audio/wav' });
+  silenceUrl = URL.createObjectURL(blob);
+  return silenceUrl;
+}
+
+// True while the shared element currently holds a real clip (or nothing yet)
+// rather than the silence loop — callers that decide "is a fresh load
+// needed" must treat "showing silence" the same as "nothing loaded", since
+// resuming/seeking against the silence src would silently do nothing to the
+// real section.
+function elementHoldsRealClip(): boolean {
+  return !silencePlaying;
+}
+
+// Prefer this over a raw `element.currentTime` read anywhere that number
+// feeds visible/persisted state (the live timeline, position flushes) — while
+// silence is looping, the element's real currentTime cycles 0..~1s and must
+// not leak into the frozen `state.position` those readers expect.
+function realCurrentTime(): number {
+  if (silencePlaying) return state.position;
+  return element?.currentTime ?? state.position;
+}
+
+function wantsKeepalive(): boolean {
+  if (!state.keepaliveEnabled) return false;
+  if (!state.agentId || state.playlist.length === 0) return false;
+  if (userExplicitlyPaused) return false;
+  // 'idle' covers both "never played anything in this chat yet" and a fresh
+  // setPlaylist reset — don't start burning battery until the user has
+  // actually begun listening. 'error' and 'playing' need no keepalive help.
+  if (state.status === 'idle' || state.status === 'error' || state.status === 'playing') return false;
+  // The very first fetch (nothing has ever loaded into the element yet) is a
+  // direct consequence of the user's own tap, not a "between sections" gap —
+  // don't engage keepalive for it.
+  if (state.status === 'loading' && loadedIndex === -1) return false;
+  return true; // 'loading' (fetching the next section) or an auto-paused 'paused' (playlist end, blocked autoplay retry)
+}
+
+function startKeepaliveSilence(el: HTMLAudioElement) {
+  const url = ensureSilenceUrl();
+  silencePlaying = true;
+  el.loop = true;
+  if (el.src !== url) el.src = url;
+  void el.play().catch(() => {
+    // Autoplay can be blocked outside a user gesture; nothing more to do here
+    // — the next real play() (itself gesture-derived, or a continuation of an
+    // already-playing session) will retry naturally.
+  });
+}
+
+function stopKeepaliveSilence(el: HTMLAudioElement) {
+  silencePlaying = false;
+  el.loop = false;
+  el.pause();
+}
+
+// Undo the silence takeover in place, synchronously — used when the section
+// that's "already loaded" (loadedIndex) is the one being resumed, so there's
+// a cached URL to restore without a re-fetch/activateSection round trip
+// (which would also turn a same-tick resume into an async one).
+function resumeFromSilence(offset: number) {
+  const el = ensureElement();
+  silencePlaying = false;
+  el.loop = false;
+  if (liveUrl && el.src !== liveUrl) el.src = liveUrl;
+  el.currentTime = offset;
+}
+
+// Single choke point, called from setState() after every transition — see
+// its call site for why that's sufficient (state changes are the only thing
+// wantsKeepalive() depends on besides the element itself).
+function updateKeepalive() {
+  const el = element;
+  if (!el) return;
+  const want = wantsKeepalive();
+  if (want && !silencePlaying) startKeepaliveSilence(el);
+  else if (!want && silencePlaying) stopKeepaliveSilence(el);
+}
+
+// User-facing setting (see EngineState.keepaliveEnabled) — persisted
+// device-locally like localStorage position/theme/etc, not daemon state,
+// since it's purely about this browser's own background-survival behavior.
+export function setKeepaliveEnabled(enabled: boolean) {
+  writeKeepaliveSetting(enabled);
+  setState({ keepaliveEnabled: enabled });
+}
 
 // --- Clip loading ------------------------------------------------------
 
@@ -385,7 +597,7 @@ function flushPosition(immediate: boolean) {
   if (!immediate && now - lastPositionFlush < POSITION_FLUSH_INTERVAL_MS) return;
   lastPositionFlush = now;
   const seq = index >= 0 ? playlist[index] : 0; // seq 0 == "no active section" (clears the daemon's stored value)
-  const positionMs = index >= 0 ? Math.round((element?.currentTime ?? state.position) * 1000) : 0;
+  const positionMs = index >= 0 ? Math.round(realCurrentTime() * 1000) : 0;
   const pos: AudioPosition = { seq, positionMs, updatedAt: now };
   // The localStorage write must happen synchronously here — this is also
   // called from the pagehide handler below, where an in-flight WS send has
@@ -466,6 +678,7 @@ export function setPlaylist(agentId: string, seqs: number[]) {
     flushPosition(true);
     ensureElement().pause();
     loadedIndex = -1;
+    userExplicitlyPaused = false;
     setState({
       agentId,
       playlist: seqs,
@@ -491,12 +704,15 @@ async function activateSection(index: number, opts: { autoplay: boolean; offset?
   if (state.index !== -1 && state.index !== index) flushPosition(true); // flush the outgoing section
   const seq = playlist[index];
   const generation = ++loadGeneration;
+  userExplicitlyPaused = false; // an activation is always a resume/fresh-section, never a pause
   setState({ index, status: 'loading', error: null, position: opts.offset ?? 0, duration: state.durations[seq] ?? NaN });
   try {
     const url = await queueLoad(agentId, seq);
     if (generation !== loadGeneration) return; // superseded by a newer activation
     const el = ensureElement();
     const stale = liveUrl;
+    silencePlaying = false; // a real section is taking the element back over
+    el.loop = false; // undo the keepalive silence loop if it was showing
     if (el.src !== url) el.src = url;
     liveUrl = url;
     revokeIfUnused(stale);
@@ -526,6 +742,7 @@ let loadGeneration = 0;
 
 export function play(agentId: string, seq?: number) {
   if (state.agentId !== agentId) return;
+  userExplicitlyPaused = false;
   const targetIndex = seq != null ? state.playlist.indexOf(seq) : state.index;
   if (targetIndex === -1) {
     if (seq == null && state.playlist.length > 0) void activateSection(0, { autoplay: true });
@@ -540,15 +757,25 @@ export function play(agentId: string, seq?: number) {
     void activateSection(targetIndex, { autoplay: true, offset });
     return;
   }
+  // The target section is already loaded — but the keepalive silence may
+  // have taken over the element's src since (see "Silence keepalive" above).
+  // Restore it synchronously (the URL is still cached) rather than routing
+  // through activateSection's async re-fetch.
+  if (!elementHoldsRealClip()) resumeFromSilence(state.position);
   void ensureElement().play().catch(() => setState({ status: 'paused' }));
 }
 
 export function pause() {
+  userExplicitlyPaused = true;
   element?.pause();
-  // The 'pause' event listener updates status; flush unconditionally here too
-  // (cheap/idempotent) so an explicit pause() call flushes even in
-  // environments where a stubbed .pause() doesn't fire the event (tests).
+  // The 'pause' event listener updates status for a real clip; flush
+  // unconditionally here too (cheap/idempotent) so an explicit pause() call
+  // flushes even in environments where a stubbed .pause() doesn't fire the
+  // event (tests). Also stop the keepalive silence directly: if it (rather
+  // than a real clip) was what the element was actually playing, its own
+  // 'pause' event is ignored by attach()'s guard, so nothing else would.
   flushPosition(true);
+  updateKeepalive();
 }
 
 export function toggle(agentId: string) {
@@ -570,6 +797,7 @@ export function seekWithin(seq: number, seconds: number) {
     void activateSection(i, { autoplay: state.status === 'playing', offset: clamped });
     return;
   }
+  if (!elementHoldsRealClip()) resumeFromSilence(clamped);
   const el = ensureElement();
   el.currentTime = clamped;
   setState({ position: clamped });
@@ -653,6 +881,16 @@ export function __resetForTests() {
   stopPositionFlushLoop();
   lastPositionFlush = 0;
   positionSender = null;
+  userExplicitlyPaused = false;
+  silencePlaying = false;
+  if (silenceUrl) {
+    try {
+      URL.revokeObjectURL(silenceUrl);
+    } catch {
+      // jsdom/test environments may not implement this; harmless either way.
+    }
+  }
+  silenceUrl = null;
   state = {
     agentId: null,
     playlist: [],
@@ -663,6 +901,7 @@ export function __resetForTests() {
     status: 'idle',
     error: null,
     renderedSeqs: [],
+    keepaliveEnabled: true, // deterministic for tests, matching the default-ON product decision
   };
 }
 
