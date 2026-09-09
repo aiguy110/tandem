@@ -128,7 +128,14 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			// transcript snapshot must be able to distinguish an old, completed
 			// takeover from one that is still waiting for the human.
 			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_resolved", "reqId": reqID})
-			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "working"})
+			// Returning the wheel can race with an interrupt. Do not resurrect a
+			// cancelled turn as "working" just because its browser takeover was
+			// released after the prompt ended.
+			if agents != nil {
+				if s := agents.Get(id); s != nil {
+					pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": takeoverResolvedStatus(s.ActiveTurn(), s.Status())})
+				}
+			}
 		},
 	})
 	exe, exeErr := os.Executable()
@@ -693,4 +700,18 @@ func pushAgentEvent(agents *registry.Registry, id string, value any) {
 	if err == nil {
 		s.PushEvent(eventlog.Event{Kind: kind, Payload: payload})
 	}
+}
+
+// takeoverResolvedStatus restores the turn state after the user returns a
+// browser takeover. A takeover itself marks a session blocked, but it does not
+// keep a cancelled prompt alive. Preserve an error, otherwise only report
+// working while the session still has an active prompt.
+func takeoverResolvedStatus(active bool, current session.Status) session.Status {
+	if active {
+		return session.Working
+	}
+	if current == session.Error {
+		return session.Error
+	}
+	return session.Idle
 }

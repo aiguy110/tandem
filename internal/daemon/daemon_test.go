@@ -16,10 +16,31 @@ import (
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/gorilla/websocket"
 )
+
+func TestTakeoverResolvedStatusDoesNotResurrectCancelledTurn(t *testing.T) {
+	tests := []struct {
+		name    string
+		active  bool
+		current session.Status
+		want    session.Status
+	}{
+		{name: "active takeover resumes turn", active: true, current: session.Blocked, want: session.Working},
+		{name: "cancelled takeover becomes idle", active: false, current: session.Blocked, want: session.Idle},
+		{name: "error is retained", active: false, current: session.Error, want: session.Error},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := takeoverResolvedStatus(tt.active, tt.current); got != tt.want {
+				t.Fatalf("takeoverResolvedStatus(%v, %q) = %q, want %q", tt.active, tt.current, got, tt.want)
+			}
+		})
+	}
+}
 
 // mp3FixtureBytes returns a small, valid MPEG1 Layer III CBR clip (three
 // 128kbps/44100Hz frames, no padding) that internal/voice.Duration can parse.
