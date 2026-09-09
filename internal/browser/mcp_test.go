@@ -23,7 +23,7 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 		t.Fatalf("servers = %#v", got)
 	}
 	wantOutputDir := filepath.Join(os.TempDir(), "api-58")
-	if got[0].Name != "playwright" || got[0].Command != "/tools/node" || !reflect.DeepEqual(got[0].Args, []string{cli, "--cdp-endpoint", b.EndpointFor("api/58"), "--output-dir", wantOutputDir}) {
+	if got[0].Name != PlaywrightMCPName || got[0].Command != "/tools/node" || !reflect.DeepEqual(got[0].Args, []string{cli, "--cdp-endpoint", b.EndpointFor("api/58"), "--output-dir", wantOutputDir}) {
 		t.Fatalf("playwright declaration = %#v", got[0])
 	}
 	if info, err := os.Stat(wantOutputDir); err != nil || !info.IsDir() {

@@ -93,9 +93,9 @@ A saved script may begin with YAML in a leading `@tandem` documentation block:
  * name: gmail-reply-watcher
  * description: Check whether a reply of interest has arrived.
  * tools:
- *   - name: playwright.browser_find
+ *   - name: tandem-playwright.browser_find
  *     reason: Search the authenticated inbox for a matching reply.
- *   - name: playwright.browser_snapshot
+ *   - name: tandem-playwright.browser_snapshot
  *     reason: Capture the matching message for the awakened agent.
  * browser:
  *   snapshot: gmail-authenticated
@@ -136,7 +136,7 @@ The generated `tandem:runtime` module exposes typed MCP tools and `report()`:
 ```ts
 import { tools, report } from "tandem:runtime";
 
-const matches = await tools.playwright.browser_find({
+const matches = await tools["tandem-playwright"].browser_find({
   text: "Polar Ice Air",
 });
 
