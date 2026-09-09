@@ -127,6 +127,7 @@ type Adapter struct {
 	permissions    map[string]pendingPermission
 	liveTools      map[string]struct{}
 	toolFiles      map[string]string
+	toolTerminals  map[string]string
 	serviceCtx     context.Context
 	serviceStop    context.CancelFunc
 	serviceWG      sync.WaitGroup
@@ -160,7 +161,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 	serviceCtx, serviceStop := context.WithCancel(childCtx)
-	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop}
+	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), toolTerminals: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop}
 	if cfg.ParentToolCallIDPath != "" {
 		a.parentPath = strings.Split(cfg.ParentToolCallIDPath, ".")
 	}
@@ -1069,20 +1070,30 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		}
 		status := toolStatus(rawString(u["status"]))
 		fileCandidate := playwrightScreenshotFile(title, u["rawInput"])
+		terminalID := terminalIDFromToolContent(u["content"])
 		a.mu.Lock()
 		if fileCandidate != "" {
 			a.toolFiles[id] = fileCandidate
 		}
 		if status == "pending" || status == "running" {
 			a.liveTools[id] = struct{}{}
+			if terminalID != "" {
+				a.toolTerminals[id] = terminalID
+			}
 		} else {
 			delete(a.liveTools, id)
 			delete(a.toolFiles, id)
+			delete(a.toolTerminals, id)
 		}
 		a.mu.Unlock()
 		ev := map[string]any{"kind": "tool_call", "id": id, "title": title, "status": status}
 		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
 			ev["content"] = content
+		}
+		if terminalID != "" && status != "pending" && status != "running" {
+			if content, ok := a.completedTerminalContent(terminalID); ok {
+				ev["content"] = content
+			}
 		}
 		copyJSONField(ev, "rawInput", u["rawInput"])
 		copyJSONField(ev, "toolKind", u["kind"])
@@ -1111,13 +1122,23 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		copyJSONField(ev, "toolKind", u["kind"])
 		a.mu.Lock()
 		fileCandidate := a.toolFiles[id]
+		terminalID := a.toolTerminals[id]
 		if status != "" && status != "pending" && status != "running" {
 			delete(a.liveTools, id)
 			delete(a.toolFiles, id)
+			delete(a.toolTerminals, id)
 		}
 		a.mu.Unlock()
 		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
 			ev["content"] = content
+		}
+		// Codex exposes execute results as a terminal reference on the initial
+		// tool_call, then sends a content-less completion update. Snapshot the
+		// daemon-owned terminal here so the durable transcript contains output.
+		if _, hasContent := ev["content"]; !hasContent && terminalID != "" && status != "" && status != "pending" && status != "running" {
+			if content, ok := a.completedTerminalContent(terminalID); ok {
+				ev["content"] = content
+			}
 		}
 		attachParentID(ev, parentID)
 		a.pushUpdate(note.SessionID, ev)
@@ -1290,6 +1311,36 @@ func (a *Adapter) normalizeToolContent(raw json.RawMessage, extraFile string) (a
 		}
 	}
 	return blocks, true
+}
+
+func terminalIDFromToolContent(raw json.RawMessage) string {
+	var blocks []struct {
+		Type       string `json:"type"`
+		TerminalID string `json:"terminalId"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	for _, block := range blocks {
+		if block.Type == "terminal" && block.TerminalID != "" {
+			return block.TerminalID
+		}
+	}
+	return ""
+}
+
+func (a *Adapter) completedTerminalContent(terminalID string) (any, bool) {
+	if a.cfg.Terminals == nil {
+		return nil, false
+	}
+	output, err := a.cfg.Terminals.Output(terminalID)
+	if err != nil || output.Output == "" {
+		return nil, false
+	}
+	return []any{map[string]any{
+		"type":    "content",
+		"content": map[string]any{"type": "text", "text": output.Output},
+	}}, true
 }
 
 func toolImageAsset(stored assets.Stored, name string) map[string]any {

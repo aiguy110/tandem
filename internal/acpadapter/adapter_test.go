@@ -31,6 +31,12 @@ import (
 
 type fakeAssets struct{ stored assets.Stored }
 
+type discardEvents struct{}
+
+func (discardEvents) Append(event eventlog.Event) (eventlog.LoggedEvent, error) {
+	return eventlog.LoggedEvent{Event: event}, nil
+}
+
 func (f fakeAssets) Get(agentID, assetID string) (assets.Stored, error) {
 	if agentID != "api-1" || assetID != f.stored.AssetID {
 		return assets.Stored{}, assets.ErrNotFound
@@ -712,12 +718,49 @@ func TestConfigOptionsFlattenGroups(t *testing.T) {
 // AdapterConfig.ParentToolCallIDPath.
 func newUpdateAdapter(parentPath []string) *Adapter {
 	return &Adapter{
-		cfg:        AdapterConfig{AgentID: "api-1"},
-		ctx:        context.Background(),
-		events:     make(chan eventlog.Event, 16),
-		liveTools:  map[string]struct{}{},
-		toolFiles:  map[string]string{},
-		parentPath: parentPath,
+		cfg:           AdapterConfig{AgentID: "api-1"},
+		ctx:           context.Background(),
+		events:        make(chan eventlog.Event, 16),
+		liveTools:     map[string]struct{}{},
+		toolFiles:     map[string]string{},
+		toolTerminals: map[string]string{},
+		parentPath:    parentPath,
+	}
+}
+
+func TestCompletedTerminalToolSnapshotsOutput(t *testing.T) {
+	host, err := terminalhost.New(terminalhost.Options{DefaultCwd: t.TempDir(), EventLog: discardEvents{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = host.Close(context.Background()) })
+	id, err := host.Create(context.Background(), terminalhost.CreateOptions{
+		Command: "sh", Args: []string{"-c", "printf 'branch-name\\n'"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.WaitForExit(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newUpdateAdapter(nil)
+	a.cfg.Terminals = host
+	start := fmt.Sprintf(`{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"exec-1",`+
+		`"title":"git branch --show-current","kind":"execute","status":"in_progress","content":[{"type":"terminal","terminalId":%q}]}}`, id)
+	if err := a.handleUpdate(json.RawMessage(start)); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent(t, a, "tool_call", nil)
+
+	done := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec-1","status":"completed"}}`
+	if err := a.handleUpdate(json.RawMessage(done)); err != nil {
+		t.Fatal(err)
+	}
+	got := waitEvent(t, a, "tool_call_update", nil)
+	encoded, _ := json.Marshal(got["content"])
+	if !strings.Contains(string(encoded), `branch-name`) {
+		t.Fatalf("completed terminal content = %s", encoded)
 	}
 }
 
