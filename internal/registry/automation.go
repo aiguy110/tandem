@@ -57,7 +57,7 @@ func (r *Registry) spawnProfile(ctx context.Context, profileRef, repo, task, bro
 		}
 		r.browser.SeedSnapshot(agent.ID, browserKind, browserRef)
 		if err := r.browser.EnsureProvisioned(ctx, agent.ID); err != nil {
-			_, _ = r.Close(context.Background(), agent.ID, true, true)
+			_, _ = r.Close(context.Background(), agent.ID, true, true, false)
 			return nil, fmt.Errorf("seed wake agent browser: %w", err)
 		}
 	}

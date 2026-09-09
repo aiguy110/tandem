@@ -32,6 +32,7 @@ export function AgentsRail() {
   // Hold the dialog on screen while it animates away.
   const { rendered: confirmation, closing: confirmClosing } = useValuePresence(pendingConfirmation);
   const [deleteWorktree, setDeleteWorktree] = useState(true);
+  const [deinitSubmodules, setDeinitSubmodules] = useState(false);
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
@@ -42,10 +43,15 @@ export function AgentsRail() {
       const preview = await getClosePreview(id);
       if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged) {
         const result = await closeAgent(id, false, true);
-        if (result.error) setCloseError(result.error);
+        if (result.error?.startsWith('submodules_block_worktree_removal')) {
+          setDeleteWorktree(true);
+          setDeinitSubmodules(true);
+          setConfirmation({ id, preview });
+        } else if (result.error) setCloseError(result.error);
         return;
       }
       setDeleteWorktree(preview.kind === 'worktree');
+      setDeinitSubmodules((preview.submodules?.length ?? 0) > 0);
       setConfirmation({ id, preview });
     } catch (error) {
       setCloseError((error as Error).message);
@@ -150,6 +156,20 @@ export function AgentsRail() {
                   {confirmation.preview.unmerged && (
                     <section><strong>Unmerged commits</strong><pre>{confirmation.preview.unmerged}</pre></section>
                   )}
+                  {confirmation.preview.submodules?.map((submodule) => (
+                    <section key={submodule.path}>
+                      <strong>Submodule: {submodule.path}</strong>
+                      <p>This initialized checkout must be deinitialized before its containing worktree can be removed.</p>
+                      {submodule.uncommitted && <><p>Uncommitted changes will be discarded if you deinitialize this submodule.</p><pre>{submodule.uncommitted}</pre></>}
+                      {submodule.localCommits && <><p>Local-only commits should be pushed or saved on a named branch before deletion.</p><pre>{submodule.localCommits}</pre></>}
+                    </section>
+                  ))}
+                  {deinitSubmodules && (
+                    <section>
+                      <strong>Submodule cleanup required</strong>
+                      <p>Git cannot remove this worktree while its submodules are initialized. Deleting will run <code>git submodule deinit -f --all</code>, which removes their checkouts and can discard the changes shown above.</p>
+                    </section>
+                  )}
                   {confirmation.preview.targetRef && (
                     <section><strong>Integration target</strong><pre>{confirmation.preview.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}{typeof confirmation.preview.ahead === 'number' ? `\n${confirmation.preview.ahead} ahead · ${confirmation.preview.behind ?? 0} behind` : ''}</pre></section>
                   )}
@@ -172,8 +192,11 @@ export function AgentsRail() {
               <button
                 className="btn danger"
                 onClick={async () => {
-                  const result = await closeAgent(confirmation.id, deleteWorktree, deleteWorktree);
-                  if (result.error) setCloseError(result.error);
+                  const result = await closeAgent(confirmation.id, deleteWorktree, deleteWorktree, deinitSubmodules);
+                  if (result.error?.startsWith('submodules_block_worktree_removal')) {
+                    setDeinitSubmodules(true);
+                    setCloseError('Submodule cleanup is required before this worktree can be removed.');
+                  } else if (result.error) setCloseError(result.error);
                   else setConfirmation(null);
                 }}
               >

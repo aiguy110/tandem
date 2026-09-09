@@ -157,7 +157,7 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	if err != nil || focused != live {
 		t.Fatalf("live resume: %v %#v", err, focused)
 	}
-	if ok, err := r.Close(context.Background(), live.ID, false, false); err != nil || !ok {
+	if ok, err := r.Close(context.Background(), live.ID, false, false, false); err != nil || !ok {
 		t.Fatal(err)
 	}
 	restored, err := r.Resume(context.Background(), "sess_mock", "", "", "tandem")

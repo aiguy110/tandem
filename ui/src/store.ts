@@ -298,7 +298,7 @@ interface StoreState {
   setConfigOption: (agentId: string, configId: string, value: string | boolean) => void;
   getClosePreview: (agentId: string) => Promise<ClosePreview>;
   getDiff: (agentId: string) => Promise<WorkspaceDiff>;
-  closeAgent: (agentId: string, force?: boolean, deleteWorktree?: boolean) => Promise<AckResult>;
+  closeAgent: (agentId: string, force?: boolean, deleteWorktree?: boolean, deinitSubmodules?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
   nav: (dir: 1 | -1) => void;
   // Browser pane control (Phase 5).
@@ -1252,11 +1252,11 @@ export const useStore = create<StoreState>((set, get) => {
         pendingDiffs.set(corrId, { resolve, reject });
         client.send({ t: 'get_diff', agentId, corrId });
       }),
-    closeAgent: (agentId, force, deleteWorktree) =>
+    closeAgent: (agentId, force, deleteWorktree, deinitSubmodules) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'close_agent', agentId, force, deleteWorktree, corrId });
+        client.send({ t: 'close_agent', agentId, force, deleteWorktree, deinitSubmodules, corrId });
       }),
     send: (m) => client.send(m),
     // Opt an agent's browser channel in/out (screencast focus rule). Re-subscribe

@@ -99,10 +99,14 @@ isn't already occupied by a live agent. A failed provision (missing dir, git err
 `kind:'existing'` collision) rejects the `spawn_agent` call — no agent is registered — with
 a structured error message (see below).
 
-`close_agent { force? }` removes the worktree checkout but **keeps the branch**. If the
+`close_agent { force?, deinitSubmodules? }` removes the worktree checkout but **keeps the branch**. If the
 worktree has uncommitted changes and `force` isn't set, the close is **refused** — the agent
 keeps running, no `agent_closed` is broadcast — with a `dirty_worktree` error; `force:true`
 overrides and removes the checkout anyway. `kind:'existing'` workspaces just detach (no-op).
+If Git refuses removal because initialized submodules are present, Tandem returns
+`submodules_block_worktree_removal`. A subsequent `force:true, deinitSubmodules:true` request
+explicitly runs `git submodule deinit -f --all` before retrying; callers must show the
+submodule preflight because this can discard uncommitted submodule changes.
 
 **Structured errors:** today `ack.error` is still a plain string (no wire shape change), but
 WorkspaceManager errors are conventionally prefixed `"<code>: <detail>"` so a client can

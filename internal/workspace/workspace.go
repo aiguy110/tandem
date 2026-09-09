@@ -281,13 +281,22 @@ func (m *Manager) GitState(ctx context.Context, cwd string, ws Workspace) (GitSt
 }
 
 type ClosePreview struct {
-	Kind        Kind   `json:"kind"`
-	Uncommitted string `json:"uncommitted"`
-	Unmerged    string `json:"unmerged"`
-	TargetRef   string `json:"targetRef,omitempty"`
-	Ahead       *int   `json:"ahead,omitempty"`
-	Behind      *int   `json:"behind,omitempty"`
-	NotGitRepo  bool   `json:"notGitRepo,omitempty"`
+	Kind        Kind                    `json:"kind"`
+	Uncommitted string                  `json:"uncommitted"`
+	Unmerged    string                  `json:"unmerged"`
+	Submodules  []SubmoduleClosePreview `json:"submodules,omitempty"`
+	TargetRef   string                  `json:"targetRef,omitempty"`
+	Ahead       *int                    `json:"ahead,omitempty"`
+	Behind      *int                    `json:"behind,omitempty"`
+	NotGitRepo  bool                    `json:"notGitRepo,omitempty"`
+}
+
+// SubmoduleClosePreview identifies work that could be lost when a submodule is
+// deinitialized in order to remove its containing worktree.
+type SubmoduleClosePreview struct {
+	Path         string `json:"path"`
+	Uncommitted  string `json:"uncommitted,omitempty"`
+	LocalCommits string `json:"localCommits,omitempty"`
 }
 
 // Diff separates work that still needs committing from commits that have not
@@ -341,6 +350,10 @@ func (m *Manager) ClosePreview(ctx context.Context, cwd string, ws Workspace) (C
 		return ClosePreview{}, err
 	}
 	p := ClosePreview{Kind: ws.Kind, Uncommitted: uncommitted}
+	p.Submodules, err = m.submoduleClosePreview(ctx, cwd)
+	if err != nil {
+		return ClosePreview{}, err
+	}
 	if ws.Kind != KindWorktree {
 		return p, nil
 	}
@@ -356,6 +369,49 @@ func (m *Manager) ClosePreview(ctx context.Context, cwd string, ws Workspace) (C
 	p.Ahead, p.Behind = &a, &b
 	p.Unmerged, err = m.git.Run(ctx, cwd, "log", "--oneline", p.TargetRef+"..HEAD")
 	return p, err
+}
+
+func (m *Manager) submoduleClosePreview(ctx context.Context, cwd string) ([]SubmoduleClosePreview, error) {
+	paths, err := m.initializedSubmodulePaths(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	var previews []SubmoduleClosePreview
+	for _, path := range paths {
+		submoduleDir := filepath.Join(cwd, path)
+		uncommitted, statusErr := m.git.Run(ctx, submoduleDir, "status", "--short")
+		if statusErr != nil { // A raced/deleted checkout is safe to ignore.
+			continue
+		}
+		// Commits reachable only from local branches are not backed by a remote.
+		// They usually survive deinit, but can become unreachable and later pruned.
+		localCommits, logErr := m.git.Run(ctx, submoduleDir, "log", "--oneline", "--branches", "--not", "--remotes")
+		if logErr != nil {
+			return nil, logErr
+		}
+		previews = append(previews, SubmoduleClosePreview{Path: path, Uncommitted: uncommitted, LocalCommits: localCommits})
+	}
+	return previews, nil
+}
+
+func (m *Manager) initializedSubmodulePaths(ctx context.Context, cwd string) ([]string, error) {
+	status, err := m.git.Run(ctx, cwd, "submodule", "status", "--recursive")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, line := range strings.Split(status, "\n") {
+		// The format is "<state><commit> <path> ...". A leading '-' means
+		// uninitialized, which deinit will not discard.
+		if len(line) < 43 || line[0] == '-' {
+			continue
+		}
+		parts := strings.Fields(line[1:])
+		if len(parts) >= 2 {
+			paths = append(paths, parts[1])
+		}
+	}
+	return paths, nil
 }
 
 // runPatch preserves meaningful leading spaces on context lines. It also
@@ -414,7 +470,7 @@ func (m *Manager) Rollback(ctx context.Context, ws Workspace, cwd string, create
 	}
 }
 
-func (m *Manager) Teardown(ctx context.Context, ws Workspace, cwd string, force bool) error {
+func (m *Manager) Teardown(ctx context.Context, ws Workspace, cwd string, force, deinitSubmodules bool) error {
 	if ws.Kind == KindExisting {
 		return nil
 	}
@@ -441,12 +497,38 @@ func (m *Manager) Teardown(ctx context.Context, ws Workspace, cwd string, force 
 			return &Error{"dirty_worktree", fmt.Sprintf(`%s has uncommitted changes — close with force:true to override (branch %q is kept either way)`, cwd, ws.Branch)}
 		}
 	}
+	if !deinitSubmodules {
+		paths, err := m.initializedSubmodulePaths(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		if len(paths) > 0 {
+			return &Error{"submodules_block_worktree_removal", "this worktree contains initialized submodules; review their changes, then confirm deinitializing them before retrying removal"}
+		}
+	}
 	args := []string{"worktree", "remove", cwd}
 	if force {
 		args = append(args, "--force")
 	}
+	// This is deliberately an opt-in operation: -f removes submodule working
+	// directories even when they have changes. Do it before the retry because
+	// --force can otherwise make Git remove the containing worktree directly.
+	if deinitSubmodules {
+		if !force {
+			return &Error{"submodules_block_worktree_removal", "deinitializing submodules requires a forced close because it can discard uncommitted submodule changes"}
+		}
+		if _, err := m.git.Run(ctx, cwd, "submodule", "deinit", "-f", "--all"); err != nil {
+			return fmt.Errorf("deinitialize submodules before removing worktree: %w", err)
+		}
+	}
 	_, err := m.git.Run(ctx, ws.Repo, args...)
-	return err
+	if err == nil || !strings.Contains(err.Error(), "working trees containing submodules cannot be moved or removed") {
+		return err
+	}
+	if !deinitSubmodules {
+		return &Error{"submodules_block_worktree_removal", "this worktree contains initialized submodules; review their changes, then confirm deinitializing them before retrying removal"}
+	}
+	return &Error{"submodules_block_worktree_removal", "submodule cleanup was requested but Git still could not remove this worktree"}
 }
 
 func (m *Manager) removeOrphanedWorktree(cwd string) error {

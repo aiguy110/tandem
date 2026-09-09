@@ -1690,7 +1690,7 @@ func (r *Registry) ResumeCLICommand(id string) (string, error) {
 	return "", nil
 }
 
-func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree bool) (bool, error) {
+func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, deinitSubmodules bool) (bool, error) {
 	r.mu.RLock()
 	s := r.sessions[id]
 	cwd := r.cwds[id]
@@ -1711,7 +1711,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree b
 			return false, fmt.Errorf("decode orphaned agent workspace: %w", err)
 		}
 		if deleteWorktree {
-			if err := r.workspace.Teardown(ctx, spec.Workspace, rec.CWD, force); err != nil {
+			if err := r.workspace.Teardown(ctx, spec.Workspace, rec.CWD, force, deinitSubmodules); err != nil {
 				return false, err
 			}
 		}
@@ -1724,7 +1724,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree b
 		return true, nil
 	}
 	if deleteWorktree {
-		if err := r.workspace.Teardown(ctx, s.Spec.Workspace, cwd, force); err != nil {
+		if err := r.workspace.Teardown(ctx, s.Spec.Workspace, cwd, force, deinitSubmodules); err != nil {
 			return false, err
 		}
 	}

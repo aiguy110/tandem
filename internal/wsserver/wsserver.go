@@ -31,7 +31,7 @@ type Backend interface {
 	Get(string) *session.Session
 	Spawn(context.Context, agentadapter.Spec) (*session.Session, error)
 	SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error)
-	Close(context.Context, string, bool, bool) (bool, error)
+	Close(context.Context, string, bool, bool, bool) (bool, error)
 	Summaries(context.Context) []registry.Summary
 	ListDirs(context.Context) ([]workspace.RepoInfo, error)
 	ListWorkspaceEntries(context.Context, string, string) ([]registry.WorkspaceEntry, error)
@@ -148,52 +148,53 @@ func tokenMatches(got, want string) bool {
 }
 
 type clientMessage struct {
-	T              string                     `json:"t"`
-	AgentID        string                     `json:"agentId"`
-	Channels       []string                   `json:"channels"`
-	SinceSeq       int64                      `json:"sinceSeq"`
-	CorrID         json.RawMessage            `json:"corrId"`
-	Text           string                     `json:"text"`
-	Blocks         []agentadapter.PromptBlock `json:"blocks"`
-	BytesB64       string                     `json:"bytesB64"`
-	Cols           int                        `json:"cols"`
-	Rows           int                        `json:"rows"`
-	ReqID          string                     `json:"reqId"`
-	PromptID       string                     `json:"promptId"`
-	OptionID       string                     `json:"optionId"`
-	ModeID         string                     `json:"modeId"`
-	ConfigID       string                     `json:"configId"`
-	Value          any                        `json:"value"`
-	Spec           agentadapter.Spec          `json:"spec"`
-	Agent          string                     `json:"agent"`
-	Harness        string                     `json:"harness"`
-	ACPArgs        []string                   `json:"acpArgs"`
-	CWD            string                     `json:"cwd"`
-	Repo           string                     `json:"repo"`
-	Force          bool                       `json:"force"`
-	DeleteWorktree *bool                      `json:"deleteWorktree"`
-	SessionID      string                     `json:"sessionId"`
-	Source         string                     `json:"source"`
-	Query          string                     `json:"query"`
-	Limit          int                        `json:"limit"`
-	MaxHits        int                        `json:"maxHitsPerSession"`
-	Reindex        bool                       `json:"reindex"`
-	InterruptFirst bool                       `json:"interrupt"`
-	Action         string                     `json:"action"`
-	Event          browser.BrowserInputEvent  `json:"event"`
-	Name           string                     `json:"name"`
-	ID             string                     `json:"id"`
-	SnapshotID     string                     `json:"snapshotId"`
-	Project        string                     `json:"project"`
-	RepositoryID   string                     `json:"repositoryId"`
-	Enabled        bool                       `json:"enabled"`
-	Focused        bool                       `json:"focused"`
-	Seq            int64                      `json:"seq"`
-	Role           string                     `json:"role"`
-	Quote          string                     `json:"quote"`
-	Comment        string                     `json:"comment"`
-	Path           string                     `json:"path"`
-	PositionMs     int64                      `json:"positionMs"`
+	T                string                     `json:"t"`
+	AgentID          string                     `json:"agentId"`
+	Channels         []string                   `json:"channels"`
+	SinceSeq         int64                      `json:"sinceSeq"`
+	CorrID           json.RawMessage            `json:"corrId"`
+	Text             string                     `json:"text"`
+	Blocks           []agentadapter.PromptBlock `json:"blocks"`
+	BytesB64         string                     `json:"bytesB64"`
+	Cols             int                        `json:"cols"`
+	Rows             int                        `json:"rows"`
+	ReqID            string                     `json:"reqId"`
+	PromptID         string                     `json:"promptId"`
+	OptionID         string                     `json:"optionId"`
+	ModeID           string                     `json:"modeId"`
+	ConfigID         string                     `json:"configId"`
+	Value            any                        `json:"value"`
+	Spec             agentadapter.Spec          `json:"spec"`
+	Agent            string                     `json:"agent"`
+	Harness          string                     `json:"harness"`
+	ACPArgs          []string                   `json:"acpArgs"`
+	CWD              string                     `json:"cwd"`
+	Repo             string                     `json:"repo"`
+	Force            bool                       `json:"force"`
+	DeleteWorktree   *bool                      `json:"deleteWorktree"`
+	DeinitSubmodules bool                       `json:"deinitSubmodules"`
+	SessionID        string                     `json:"sessionId"`
+	Source           string                     `json:"source"`
+	Query            string                     `json:"query"`
+	Limit            int                        `json:"limit"`
+	MaxHits          int                        `json:"maxHitsPerSession"`
+	Reindex          bool                       `json:"reindex"`
+	InterruptFirst   bool                       `json:"interrupt"`
+	Action           string                     `json:"action"`
+	Event            browser.BrowserInputEvent  `json:"event"`
+	Name             string                     `json:"name"`
+	ID               string                     `json:"id"`
+	SnapshotID       string                     `json:"snapshotId"`
+	Project          string                     `json:"project"`
+	RepositoryID     string                     `json:"repositoryId"`
+	Enabled          bool                       `json:"enabled"`
+	Focused          bool                       `json:"focused"`
+	Seq              int64                      `json:"seq"`
+	Role             string                     `json:"role"`
+	Quote            string                     `json:"quote"`
+	Comment          string                     `json:"comment"`
+	Path             string                     `json:"path"`
+	PositionMs       int64                      `json:"positionMs"`
 }
 
 type connection struct {
@@ -855,7 +856,7 @@ func (c *connection) handle(m clientMessage) {
 		if m.DeleteWorktree != nil {
 			deleteWorktree = *m.DeleteWorktree
 		}
-		closed, err := c.server.opts.Registry.Close(context.Background(), m.AgentID, m.Force, deleteWorktree)
+		closed, err := c.server.opts.Registry.Close(context.Background(), m.AgentID, m.Force, deleteWorktree, m.DeinitSubmodules)
 		if err != nil {
 			c.commandError(m, err)
 			return

@@ -282,11 +282,11 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	if failed.Status != "error" {
 		t.Fatalf("failed status=%s", failed.Status)
 	}
-	ok, err := r.Close(context.Background(), "web-1", false, false)
+	ok, err := r.Close(context.Background(), "web-1", false, false, false)
 	if !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	ok, err = r.Close(context.Background(), "web-1", false, false)
+	ok, err = r.Close(context.Background(), "web-1", false, false, false)
 	if ok || err != nil {
 		t.Fatal(ok, err)
 	}
@@ -362,7 +362,7 @@ func TestResumeUnpromptedTandemSessionStartsFreshACPSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := s.SessionID()
-	if ok, err := r.Close(context.Background(), s.ID, false, false); !ok || err != nil {
+	if ok, err := r.Close(context.Background(), s.ID, false, false, false); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
 
@@ -538,14 +538,14 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 	if retained == nil || retained.Tandem == nil || retained.Tandem.AgentID != s.ID || !retained.Tandem.Live || retained.Tandem.Closed || retained.Tandem.IntegrationRef != targetRef {
 		t.Fatalf("live retained ref=%+v", retained)
 	}
-	ok, err := r.Close(context.Background(), s.ID, false, true)
+	ok, err := r.Close(context.Background(), s.ID, false, true, false)
 	if ok || !workspace.IsCode(err, "dirty_worktree") {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
 	if r.Get(s.ID) == nil {
 		t.Fatal("refused close removed live session")
 	}
-	ok, err = r.Close(context.Background(), s.ID, true, true)
+	ok, err = r.Close(context.Background(), s.ID, true, true, false)
 	if !ok || err != nil {
 		t.Fatalf("forced close ok=%v err=%v", ok, err)
 	}
@@ -594,7 +594,7 @@ func TestCloseForceRemovesDurableOrphanWithoutLiveSession(t *testing.T) {
 	if err := db.UpsertAgent(store.Agent{ID: "orphan", Name: "orphan", Spec: spec, CWD: cwd, Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	closed, err := r.Close(context.Background(), "orphan", true, true)
+	closed, err := r.Close(context.Background(), "orphan", true, true, false)
 	if err != nil || !closed {
 		t.Fatalf("closed=%v err=%v", closed, err)
 	}

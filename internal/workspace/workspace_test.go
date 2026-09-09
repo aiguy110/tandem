@@ -105,10 +105,10 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	if !strings.Contains(p.Uncommitted, "dirty.txt") || !strings.Contains(p.Unmerged, "agent work") || p.Ahead == nil || *p.Ahead != 1 {
 		t.Fatalf("bad preview: %+v", p)
 	}
-	if err := m.Teardown(ctx, a.Workspace, a.CWD, false); !workspace.IsCode(err, "dirty_worktree") {
+	if err := m.Teardown(ctx, a.Workspace, a.CWD, false, false); !workspace.IsCode(err, "dirty_worktree") {
 		t.Fatalf("got %v", err)
 	}
-	if err := m.Teardown(ctx, a.Workspace, a.CWD, true); err != nil {
+	if err := m.Teardown(ctx, a.Workspace, a.CWD, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(a.CWD); !os.IsNotExist(err) {
@@ -117,7 +117,7 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	if got := git(t, f.repo, "branch", "--list", a.Workspace.Branch); got == "" {
 		t.Fatal("forced close deleted branch")
 	}
-	if err := m.Teardown(ctx, b.Workspace, b.CWD, false); err != nil {
+	if err := m.Teardown(ctx, b.Workspace, b.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := git(t, f.repo, "branch", "--list", b.Workspace.Branch); got == "" {
@@ -131,6 +131,50 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	}
 }
 
+func TestTeardownDeinitializesSubmodulesOnlyAfterExplicitConfirmation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	sub := filepath.Join(f.root, "submodule-source")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, sub, "init", "-q", "-b", "main")
+	git(t, sub, "config", "user.email", "test@example.com")
+	git(t, sub, "config", "user.name", "Test")
+	write(t, filepath.Join(sub, "README.md"), "submodule\n")
+	git(t, sub, "add", ".")
+	git(t, sub, "commit", "-q", "-m", "init")
+	git(t, f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub")
+	git(t, f.repo, "commit", "-qam", "add submodule")
+
+	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
+	wt, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "with-submodule", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, wt.CWD, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
+	write(t, filepath.Join(wt.CWD, "vendor", "sub", "dirty.txt"), "discard me\n")
+	preview, err := m.ClosePreview(ctx, wt.CWD, wt.Workspace)
+	if err != nil || len(preview.Submodules) != 1 || preview.Submodules[0].Path != "vendor/sub" || !strings.Contains(preview.Submodules[0].Uncommitted, "dirty.txt") {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if err := os.Remove(filepath.Join(wt.CWD, "vendor", "sub", "dirty.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Teardown(ctx, wt.Workspace, wt.CWD, false, false); !workspace.IsCode(err, "submodules_block_worktree_removal") {
+		t.Fatalf("Teardown without confirmation = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt.CWD, "vendor", "sub")); err != nil {
+		t.Fatalf("unconfirmed teardown altered submodule: %v", err)
+	}
+	if err := m.Teardown(ctx, wt.Workspace, wt.CWD, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wt.CWD); !os.IsNotExist(err) {
+		t.Fatal("teardown retained checkout")
+	}
+}
+
 func TestTeardownForceRemovesOrphanedManagedWorktree(t *testing.T) {
 	root := t.TempDir()
 	managed := filepath.Join(root, "worktrees")
@@ -140,10 +184,10 @@ func TestTeardownForceRemovesOrphanedManagedWorktree(t *testing.T) {
 	}
 	m := workspace.New(workspace.Config{WorktreesDir: managed})
 	ws := workspace.Workspace{Kind: workspace.KindWorktree, Repo: filepath.Join(root, "missing-repo")}
-	if err := m.Teardown(context.Background(), ws, orphan, false); !workspace.IsCode(err, "orphaned_worktree") {
+	if err := m.Teardown(context.Background(), ws, orphan, false, false); !workspace.IsCode(err, "orphaned_worktree") {
 		t.Fatalf("expected orphaned_worktree, got %v", err)
 	}
-	if err := m.Teardown(context.Background(), ws, orphan, true); err != nil {
+	if err := m.Teardown(context.Background(), ws, orphan, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
@@ -244,7 +288,7 @@ func TestFeatureAwareProvisionDiscoveryAndState(t *testing.T) {
 	if !workspace.IsCode(err, "branch_exists") {
 		t.Fatalf("got %v", err)
 	}
-	if err = m.Teardown(ctx, result.Workspace, result.CWD, false); err != nil {
+	if err = m.Teardown(ctx, result.Workspace, result.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
 	attached, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "attach", Branch: result.Workspace.Branch, Integration: result.Workspace.Integration}, "attached", nil)
@@ -268,7 +312,7 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 	if auto.Workspace.Branch != "tandem/main/auto-2" {
 		t.Fatalf("automatic collision branch=%s", auto.Workspace.Branch)
 	}
-	if err = m.Teardown(ctx, auto.Workspace, auto.CWD, false); err != nil {
+	if err = m.Teardown(ctx, auto.Workspace, auto.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
 	first, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same", nil)
@@ -276,7 +320,7 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Keep the first branch but remove its checkout; an automatically derived collision gets a suffix.
-	if err = m.Teardown(ctx, first.Workspace, first.CWD, false); err != nil {
+	if err = m.Teardown(ctx, first.Workspace, first.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
 	second, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same-2", nil)

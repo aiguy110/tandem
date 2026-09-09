@@ -76,7 +76,7 @@ func (b *testBackend) Spawn(context.Context, agentadapter.Spec) (*session.Sessio
 func (*testBackend) SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error) {
 	return registry.SpawnOptions{Modes: json.RawMessage(`null`), ConfigOptions: []json.RawMessage{}}, nil
 }
-func (b *testBackend) Close(_ context.Context, id string, _, _ bool) (bool, error) {
+func (b *testBackend) Close(_ context.Context, id string, _, _, _ bool) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.sessions[id] == nil {

@@ -365,6 +365,7 @@ export interface ClosePreview {
   ahead?: number;
   behind?: number;
   notGitRepo?: boolean;
+  submodules?: { path: string; uncommitted?: string; localCommits?: string }[];
 }
 export interface WorkspaceDiff {
   uncommitted: string;
@@ -410,7 +411,7 @@ export type ClientMsg =
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; agentId: string; corrId?: string }
   | { t: 'get_diff'; agentId: string; corrId?: string }
-  | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; corrId?: string }
+  | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; deinitSubmodules?: boolean; corrId?: string }
   | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
   | { t: 'restart_browser'; agentId: string; snapshotId?: string; corrId?: string }

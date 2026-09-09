@@ -105,7 +105,7 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 		t.Fatalf("cross-agent identity collapsed: %#v", other)
 	}
 
-	if ok, err := r.Close(context.Background(), live.ID, false, false); err != nil || !ok {
+	if ok, err := r.Close(context.Background(), live.ID, false, false, false); err != nil || !ok {
 		t.Fatal(err)
 	}
 	catalog, err = r.ResumeCatalog(context.Background())
