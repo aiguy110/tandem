@@ -717,9 +717,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .prompt-text-wrap textarea {
   position: relative; z-index: 1; display: block; width: 100%; box-sizing: border-box;
   resize: none; min-height: calc(1.4em + 20px); max-height: calc(5.6em + 20px);
+  /* The highlight layer beneath this textarea must wrap at exactly the same
+     width. A native scrollbar gutter narrows only the textarea and makes the
+     visible text drift away from its caret once the composer overflows. */
+  scrollbar-width: none;
   background: transparent; color: transparent; caret-color: var(--text); border: 1px solid var(--border);
   border-radius: var(--r-sm); padding: 9px 11px; font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.4;
 }
+.prompt-text-wrap textarea::-webkit-scrollbar { display: none; }
 .prompt-text-wrap textarea:focus { outline: none; border-color: var(--agent); }
 .prompt-text-wrap textarea::placeholder { color: var(--text-faint); opacity: 1; }
 
