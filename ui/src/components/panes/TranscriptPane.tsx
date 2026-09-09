@@ -1164,6 +1164,15 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
   return null;
 }
 
+// Terminal output is already displayed in a preformatted block. Some ACP
+// agents additionally wrap it in a Markdown code fence (usually ```console),
+// which would otherwise be shown as literal, redundant text. Strip only that
+// outer wrapper; fences within the command's actual output remain intact.
+function terminalOutput(text: string): string {
+  const withoutOpeningFence = text.replace(/^```[^\r\n]*\r?\n/, '');
+  return withoutOpeningFence.replace(/\r?\n```[ \t]*$/, '');
+}
+
 function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
   const [open, setOpen] = useState(false);
   // Flash on status transitions (pending -> in_progress -> completed/failed)
@@ -1203,7 +1212,7 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
             <>
               <ToolText label="Command" className="tool-terminal-command">{command}</ToolText>
               {body != null ? (
-                <ToolText label="Output" className="tool-terminal-output">{body}</ToolText>
+                <ToolText label="Output" className="tool-terminal-output">{terminalOutput(body)}</ToolText>
               ) : (
                 <div className="tool-terminal-empty">(no output)</div>
               )}

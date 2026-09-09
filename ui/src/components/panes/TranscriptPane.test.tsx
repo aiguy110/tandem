@@ -93,6 +93,27 @@ describe('TranscriptPane voice rendering', () => {
     expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
   });
 
+  it('removes an outer Markdown code fence from execute output', () => {
+    const withTool = agent();
+    withTool.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'bash-1', title: 'Bash', status: 'done', toolKind: 'execute',
+        rawInput: { command: 'git status' }, content: '```console\nOn branch main\n```',
+      },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe('On branch main');
+  });
+
   it('streams ACP terminal output into its running tool card', async () => {
     const withTool = agent();
     withTool.events = [
