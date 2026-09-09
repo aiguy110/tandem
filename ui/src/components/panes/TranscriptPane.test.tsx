@@ -93,6 +93,30 @@ describe('TranscriptPane voice rendering', () => {
     expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
   });
 
+  it('shows tool arguments before output when a tool call is expanded', () => {
+    const withTool = agent();
+    withTool.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'search-1', title: 'ToolSearch', status: 'done',
+        rawInput: { query: 'Microsoft 365', max_results: 15 }, content: 'Tool: ListMcpResourcesTool',
+      },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    const body = view.container.querySelector('.card-body')!;
+    const argumentsLabel = Array.from(body.querySelectorAll('.tool-args-label')).find((label) => label.textContent === 'Arguments')!;
+    const outputLabel = Array.from(body.querySelectorAll('.tool-args-label')).find((label) => label.textContent === 'Output')!;
+    expect(argumentsLabel.compareDocumentPosition(outputLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('requests and exposes audio controls for a completed agent message', async () => {
     localStorage.setItem('tandem.token', 'test-token');
     (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:voice');

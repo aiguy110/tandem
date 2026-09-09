@@ -1184,15 +1184,15 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
           ) : (
             <>
               <ToolText label="Tool" className="tool-call-title">{item.title}</ToolText>
+              {showArgs && (
+                <div className="tool-args">
+                  <div className="tool-args-label">Arguments</div>
+                  <pre>{args}</pre>
+                </div>
+              )}
               {diffs.map((diff, index) => <UnifiedDiff key={`${diff.path}-${index}`} patch={toolDiffPatch(diff)} />)}
               {body != null && <ToolText label="Output" className="tool-output">{body}</ToolText>}
             </>
-          )}
-          {showArgs && (
-            <div className="tool-args">
-              <div className="tool-args-label">Arguments</div>
-              <pre>{args}</pre>
-            </div>
           )}
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
         </div>
