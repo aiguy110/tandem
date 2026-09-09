@@ -1201,9 +1201,9 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   );
 }
 
-// Headers are deliberately compact, but opening a tool call must expose every
-// byte of the command, input, and output without relying on a hover tooltip or
-// a fixed-height inner scroller.
+// Headers stay compact; opening a tool call exposes every byte of its command,
+// input, and output in the body without relying on a hover tooltip or a
+// fixed-height inner scroller.
 function ToolText({ label, className, children }: { label: string; className: string; children: string }) {
   return (
     <div className="tool-text-section">
