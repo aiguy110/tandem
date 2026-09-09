@@ -1166,7 +1166,6 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
 
 function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
   const [open, setOpen] = useState(false);
-  const autoExpanded = useRef(false);
   // Flash on status transitions (pending -> in_progress -> completed/failed)
   // rather than on every streamed output chunk, which would strobe.
   const statusFlash = useUpdateFlash(item.status);
@@ -1185,12 +1184,6 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
-  useEffect(() => {
-    if (item.terminalOutput && !autoExpanded.current) {
-      autoExpanded.current = true;
-      setOpen(true);
-    }
-  }, [item.terminalOutput]);
   return (
     <div className={`card${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
       <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>

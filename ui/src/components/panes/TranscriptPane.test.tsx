@@ -113,6 +113,8 @@ describe('TranscriptPane voice rendering', () => {
     }, true);
 
     const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.tool-terminal-output')).toBeNull();
+    fireEvent.click(view.container.querySelector('.card-head')!);
     await waitFor(() => expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe('first output line\nsecond output line\n'));
     expect(view.container.querySelector('.mini-term')).toBeNull();
   });
