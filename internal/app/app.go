@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/aiguy110/tandem/internal/automationmcp"
 	"github.com/aiguy110/tandem/internal/buildinfo"
@@ -72,6 +75,23 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	// --needs-review is an internal status probe used immediately after a
+	// self-update. It must be run by the replacement binary because only it
+	// knows its configuration compatibility version.
+	if len(args) == 2 && args[0] == "setup" && args[1] == "--needs-review" {
+		home, err := setupHome()
+		if err != nil {
+			fmt.Fprintf(stderr, "setup: resolve TANDEM_HOME: %v\n", err)
+			return 1
+		}
+		needsReview, err := setup.ConfigNeedsReview(home)
+		if err != nil {
+			fmt.Fprintf(stderr, "setup: check configuration compatibility: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, needsReview)
+		return 0
+	}
 	if len(args) == 2 && args[0] == "setup" && args[1] == "--agent" {
 		if !stdinIsTerminal() {
 			fmt.Fprintln(stderr, "tandem setup --agent requires an interactive terminal")
@@ -103,16 +123,50 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
 	case "update":
-		if err := updater.Update(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
+		updated, err := updater.UpdateWithResult(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout})
+		if err != nil {
 			fmt.Fprintf(stderr, "update tandem: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "tandem: run 'tandem setup' to review configuration changes after an update.")
+		if !updated {
+			return 0
+		}
+		needsReview, err := updatedBinaryNeedsReview()
+		if err != nil {
+			fmt.Fprintf(stderr, "tandem: updated successfully, but could not check whether setup is needed: %v\n", err)
+			return 0
+		}
+		if needsReview {
+			fmt.Fprintln(stdout, "tandem: run 'tandem setup' to review configuration changes after an update.")
+		}
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
 		return 2
 	}
+}
+
+func setupHome() (string, error) {
+	if home := os.Getenv("TANDEM_HOME"); home != "" {
+		return home, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".tandem"), nil
+}
+
+func updatedBinaryNeedsReview() (bool, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return false, err
+	}
+	output, err := exec.Command(executable, "setup", "--needs-review").Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) == "true", nil
 }
 
 func runDaemon(stdout, stderr io.Writer) int {

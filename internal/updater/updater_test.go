@@ -76,7 +76,7 @@ func TestUpdateReplacesExecutable(t *testing.T) {
 	}
 	var log strings.Builder
 
-	err := Update(context.Background(), Options{
+	updated, err := UpdateWithResult(context.Background(), Options{
 		CurrentVersion: "1.0.0",
 		APIBaseURL:     server.URL,
 		GOOS:           "linux",
@@ -87,6 +87,9 @@ func TestUpdateReplacesExecutable(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("UpdateWithResult reported no update")
 	}
 	got, err := os.ReadFile(target)
 	if err != nil {
@@ -109,7 +112,7 @@ func TestUpdateAlreadyCurrentDoesNotDownload(t *testing.T) {
 	defer server.Close()
 	var log strings.Builder
 
-	err := Update(context.Background(), Options{
+	updated, err := UpdateWithResult(context.Background(), Options{
 		CurrentVersion: "v1.1.0",
 		APIBaseURL:     server.URL,
 		Log:            &log,
@@ -117,6 +120,9 @@ func TestUpdateAlreadyCurrentDoesNotDownload(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if updated {
+		t.Fatal("UpdateWithResult reported an update")
 	}
 	if got := downloads.Load(); got != 0 {
 		t.Fatalf("download requests = %d, want 0", got)

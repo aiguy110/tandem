@@ -42,14 +42,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	fmt.Fprintln(out, "Tandem setup")
 	fmt.Fprintln(out, "------------")
 	fmt.Fprintf(out, "Configuring %s. Press enter to accept the bracketed default.\n\n", config.ConfigFilePath(home))
-	if needsGuidedUpgrade(home, existing) {
-		launched, err := offerClaudeGuide(ctx, r, out, home, existing)
-		if err != nil {
-			return err
-		}
-		if launched {
-			return nil
-		}
+	launched, err := offerClaudeGuide(ctx, r, out, home, existing)
+	if err != nil {
+		return err
+	}
+	if launched {
+		return nil
 	}
 
 	settings, err := promptSettings(r, out, existing)
@@ -107,20 +105,25 @@ func Complete(out io.Writer) error {
 	return nil
 }
 
-func needsGuidedUpgrade(home string, settings config.Settings) bool {
-	if settings.ConfigVersion >= config.CurrentConfigVersion {
-		return false
-	}
-	_, err := os.Stat(config.ConfigFilePath(home))
-	return err == nil
-}
-
 func offerClaudeGuide(ctx context.Context, r *bufio.Reader, out io.Writer, home string, settings config.Settings) (bool, error) {
-	fmt.Fprintf(out, "This configuration has compatibility version %d; Tandem now uses version %d.\n", settings.ConfigVersion, config.CurrentConfigVersion)
-	fmt.Fprintln(out, "Claude Code can review the release-specific setup guide and help make any needed changes.")
-	fmt.Fprintln(out, "  1) Launch Claude Code setup guide (recommended)")
+	exists, err := configExists(home)
+	if err != nil {
+		return false, err
+	}
+	defaultChoice := "1"
+	switch {
+	case !exists:
+		fmt.Fprintln(out, "No Tandem configuration exists yet. Claude Code can guide a fresh setup.")
+	case settings.ConfigVersion < config.CurrentConfigVersion:
+		fmt.Fprintf(out, "This configuration has compatibility version %d; Tandem now uses version %d.\n", settings.ConfigVersion, config.CurrentConfigVersion)
+		fmt.Fprintln(out, "Claude Code can review the release-specific setup guide and help make any needed changes.")
+	default:
+		fmt.Fprintf(out, "This configuration's compatibility version (%d) is already up-to-date with this Tandem build. A Claude Code review is probably not necessary.\n", settings.ConfigVersion)
+		defaultChoice = "2"
+	}
+	fmt.Fprintln(out, "  1) Launch Claude Code setup guide")
 	fmt.Fprintln(out, "  2) Continue with Tandem's manual prompts")
-	answer, err := ask(r, out, "Choose", "1")
+	answer, err := ask(r, out, "Choose", defaultChoice)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
@@ -134,24 +137,39 @@ func offerClaudeGuide(ctx context.Context, r *bufio.Reader, out io.Writer, home 
 	}
 }
 
+// ConfigNeedsReview reports whether an existing config was written for an
+// older configuration compatibility version than this build supports.
+func ConfigNeedsReview(home string) (bool, error) {
+	settings, err := config.LoadSettings(home)
+	if err != nil {
+		return false, err
+	}
+	exists, err := configExists(home)
+	if err != nil {
+		return false, err
+	}
+	return exists && settings.ConfigVersion < config.CurrentConfigVersion, nil
+}
+
+func configExists(home string) (bool, error) {
+	_, err := os.Stat(config.ConfigFilePath(home))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("stat %s: %w", config.ConfigFilePath(home), err)
+}
+
 func launchClaudeGuide(ctx context.Context, out io.Writer, home string, settings config.Settings) error {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return fmt.Errorf("Claude Code is required for the guided setup option: %w", err)
 	}
-	version := buildinfo.Version
-	if version == "" || version == "dev" {
-		version = "master"
+	prompt, err := claudeGuidePrompt(home, settings)
+	if err != nil {
+		return err
 	}
-	state := fmt.Sprintf("an existing configuration at %s, with compatibility version %d", config.ConfigFilePath(home), settings.ConfigVersion)
-	if _, err := os.Stat(config.ConfigFilePath(home)); errors.Is(err, os.ErrNotExist) {
-		state = "a fresh Tandem installation"
-	}
-	prompt := fmt.Sprintf(`Help the user configure Tandem. This is %s. Tandem is running release %s and its current configuration compatibility version is %d.
-
-Read the release-specific setup guide first:
-https://github.com/aiguy110/tandem/blob/%s/docs/setup-agent.md
-
-Inspect the existing configuration if present, explain any changes before making them, and preserve unrelated agent catalog settings. When configuration is complete, tell the user to run: tandem setup --complete`, state, buildinfo.Version, config.CurrentConfigVersion, version)
 	fmt.Fprintln(out, "\nStarting Claude Code. Return here when the guided session is finished.")
 	cmd := exec.CommandContext(ctx, "claude", prompt)
 	cmd.Stdin = os.Stdin
@@ -161,6 +179,31 @@ Inspect the existing configuration if present, explain any changes before making
 		return fmt.Errorf("run Claude Code setup guide: %w", err)
 	}
 	return nil
+}
+
+func claudeGuidePrompt(home string, settings config.Settings) (string, error) {
+	version := buildinfo.Version
+	if version == "" || version == "dev" {
+		version = "master"
+	}
+	exists, err := configExists(home)
+	if err != nil {
+		return "", err
+	}
+	state := fmt.Sprintf("an existing configuration at %s, with compatibility version %d", config.ConfigFilePath(home), settings.ConfigVersion)
+	guidance := "Review its compatibility with this build and make any needed changes."
+	if !exists {
+		state = "a fresh Tandem installation"
+		guidance = "Guide the user through creating its initial configuration."
+	} else if settings.ConfigVersion >= config.CurrentConfigVersion {
+		guidance = "Its compatibility version is already up-to-date with this build, so explain that a review is probably unnecessary; only make changes the user explicitly requests."
+	}
+	return fmt.Sprintf(`Help the user configure Tandem. This is %s. Tandem is running release %s and its current configuration compatibility version is %d.
+
+Read the release-specific setup guide first:
+https://github.com/aiguy110/tandem/blob/%s/docs/setup-agent.md
+
+%s Inspect the existing configuration if present, explain any changes before making them, and preserve unrelated agent catalog settings. When configuration is complete, tell the user to run: tandem setup --complete`, state, buildinfo.Version, config.CurrentConfigVersion, version, guidance), nil
 }
 
 func resolveHome() (string, error) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aiguy110/tandem/internal/buildinfo"
+	"github.com/aiguy110/tandem/internal/config"
 )
 
 func TestDebugConfigCommand(t *testing.T) {
@@ -88,6 +89,25 @@ func TestSetupCommandRequiresTerminal(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "requires an interactive terminal") {
 		t.Fatalf("Run(setup) stderr = %q", stderr.String())
+	}
+}
+
+func TestSetupNeedsReviewStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TANDEM_HOME", home)
+	if err := config.SaveSettings(home, config.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"setup", "--needs-review"}, &stdout, &stderr); code != 0 || stdout.String() != "true\n" {
+		t.Fatalf("outdated review status: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if err := config.SaveSettings(home, config.Settings{ConfigVersion: config.CurrentConfigVersion}); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := Run([]string{"setup", "--needs-review"}, &stdout, &stderr); code != 0 || stdout.String() != "false\n" {
+		t.Fatalf("current review status: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

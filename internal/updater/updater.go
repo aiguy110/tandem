@@ -72,40 +72,48 @@ func CheckAtStartup(ctx context.Context, opts Options) error {
 // atomically replaces the current executable. Invoking the explicit command is
 // the user's consent, so this operation has no additional interactive prompt.
 func Update(ctx context.Context, opts Options) error {
+	_, err := UpdateWithResult(ctx, opts)
+	return err
+}
+
+// UpdateWithResult behaves like Update and also reports whether it replaced the
+// executable. Callers that need information provided only by the new binary
+// can use the result to avoid querying it when no update was installed.
+func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
 	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" {
-		return errors.New("self-update is unavailable for development builds")
+		return false, errors.New("self-update is unavailable for development builds")
 	}
 	setDefaults(&opts)
 	latest, err := fetchLatest(ctx, opts)
 	if err != nil {
-		return err
+		return false, err
 	}
 	newer, err := newerVersion(opts.CurrentVersion, latest.TagName)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !newer {
 		fmt.Fprintf(opts.Log, "tandem: already up to date (%s)\n", opts.CurrentVersion)
-		return nil
+		return false, nil
 	}
 	binaryName := fmt.Sprintf("tandem_%s_%s", opts.GOOS, opts.GOARCH)
 	binary, ok := findAsset(latest.Assets, binaryName)
 	if !ok {
-		return fmt.Errorf("release %s has no asset %s", latest.TagName, binaryName)
+		return false, fmt.Errorf("release %s has no asset %s", latest.TagName, binaryName)
 	}
 	checksum, ok := findAsset(latest.Assets, binaryName+".sha256")
 	if !ok {
-		return fmt.Errorf("release %s has no checksum for %s", latest.TagName, binaryName)
+		return false, fmt.Errorf("release %s has no checksum for %s", latest.TagName, binaryName)
 	}
 	wantSHA, err := downloadChecksum(ctx, opts.HTTPClient, checksum.DownloadURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := replaceExecutable(ctx, opts, binary.DownloadURL, wantSHA); err != nil {
-		return err
+		return false, err
 	}
 	fmt.Fprintf(opts.Log, "tandem: updated %s from %s to %s\n", opts.Executable, opts.CurrentVersion, latest.TagName)
-	return nil
+	return true, nil
 }
 
 func setDefaults(opts *Options) {

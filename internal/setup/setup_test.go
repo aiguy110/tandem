@@ -43,11 +43,12 @@ func TestRunEndToEnd(t *testing.T) {
 	}))
 	defer steel.Close()
 
-	// Answers in prompt order: project roots, bind, port, Steel, existing
+	// Answers in prompt order: continue manually, project roots, bind, port, Steel, existing
 	// service, URL, blank API key, managed Node, decline shared language-model
 	// setup, then accept the
 	// default systemd answer at EOF.
 	answers := strings.Join([]string{
+		"2",
 		"/tmp/proj-a, /tmp/proj-b",
 		"0.0.0.0",
 		"8080",
@@ -177,5 +178,86 @@ func TestCompleteRecordsCompatibilityVersion(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "compatibility version") {
 		t.Fatalf("completion output = %q", out.String())
+	}
+}
+
+func TestOfferClaudeGuideDescribesConfigState(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings config.Settings
+		write    bool
+		want     string
+		default_ string
+	}{
+		{"fresh", config.Settings{}, false, "No Tandem configuration exists yet", "Choose [1]"},
+		{"outdated", config.Settings{}, true, "Tandem now uses version", "Choose [1]"},
+		{"current", config.Settings{ConfigVersion: config.CurrentConfigVersion}, true, "already up-to-date", "Choose [2]"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if test.write {
+				if err := config.SaveSettings(home, test.settings); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			launched, err := offerClaudeGuide(context.Background(), bufio.NewReader(strings.NewReader("2\n")), &out, home, test.settings)
+			if err != nil || launched {
+				t.Fatalf("offerClaudeGuide launched=%v err=%v", launched, err)
+			}
+			if !strings.Contains(out.String(), test.want) || !strings.Contains(out.String(), test.default_) {
+				t.Fatalf("output = %q, want %q and %q", out.String(), test.want, test.default_)
+			}
+		})
+	}
+}
+
+func TestConfigNeedsReview(t *testing.T) {
+	home := t.TempDir()
+	got, err := ConfigNeedsReview(home)
+	if err != nil || got {
+		t.Fatalf("fresh config review = %v, %v; want false, nil", got, err)
+	}
+	if err := config.SaveSettings(home, config.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ConfigNeedsReview(home)
+	if err != nil || !got {
+		t.Fatalf("outdated config review = %v, %v; want true, nil", got, err)
+	}
+	if err := config.SaveSettings(home, config.Settings{ConfigVersion: config.CurrentConfigVersion}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ConfigNeedsReview(home)
+	if err != nil || got {
+		t.Fatalf("current config review = %v, %v; want false, nil", got, err)
+	}
+}
+
+func TestClaudeGuidePromptDescribesConfigState(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings config.Settings
+		write    bool
+		want     string
+	}{
+		{"fresh", config.Settings{}, false, "Guide the user through creating its initial configuration."},
+		{"outdated", config.Settings{}, true, "Review its compatibility with this build"},
+		{"current", config.Settings{ConfigVersion: config.CurrentConfigVersion}, true, "review is probably unnecessary"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if test.write {
+				if err := config.SaveSettings(home, test.settings); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prompt, err := claudeGuidePrompt(home, test.settings)
+			if err != nil || !strings.Contains(prompt, test.want) {
+				t.Fatalf("prompt = %q, err = %v; want %q", prompt, err, test.want)
+			}
+		})
 	}
 }
