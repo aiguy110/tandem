@@ -93,6 +93,30 @@ describe('TranscriptPane voice rendering', () => {
     expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
   });
 
+  it('streams ACP terminal output into its running tool card', async () => {
+    const withTool = agent();
+    withTool.events = [
+      {
+        seq: 1,
+        event: {
+          kind: 'tool_call', id: 'bash-1', title: 'Bash', status: 'running', toolKind: 'execute',
+          rawInput: { command: 'while true; do date; done' }, terminalId: 'terminal-1',
+        },
+      },
+      { seq: 2, event: { kind: 'terminal_output', termId: 'terminal-1', chunk: 'first output line\n', truncated: false } },
+      { seq: 3, event: { kind: 'terminal_output', termId: 'terminal-1', chunk: 'second output line\n', truncated: false } },
+    ];
+    withTool.lastSeq = 3;
+    useStore.setState({
+      ...initialState,
+      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    await waitFor(() => expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe('first output line\nsecond output line\n'));
+    expect(view.container.querySelector('.mini-term')).toBeNull();
+  });
+
   it('shows tool arguments before output when a tool call is expanded', () => {
     const withTool = agent();
     withTool.events = [{

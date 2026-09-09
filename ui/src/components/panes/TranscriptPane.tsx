@@ -28,7 +28,7 @@ type Item =
   | { kind: 'user'; key: string; seq: number; blocks: PromptBlock[] }
   | { kind: 'message'; key: string; seq: number; text: string }
   | { kind: 'thought'; key: string; seq: number; text: string }
-  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string }
+  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; terminalOutput?: string; terminalTruncated?: boolean }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
@@ -39,6 +39,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const items: Item[] = [];
   const tools = new Map<string, Extract<Item, { kind: 'tool' }>>();
   const terms = new Map<string, Extract<Item, { kind: 'terminal' }>>();
+  const terminalTools = new Map<string, Extract<Item, { kind: 'tool' }>>();
   let plan: Extract<Item, { kind: 'plan' }> | undefined;
   const pendingIds = new Set(pending.map((p) => p.reqId));
   const asides = new Map<string, Extract<Item, { kind: 'aside' }>>();
@@ -77,10 +78,12 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           if (ev.content != null) existing.content = ev.content;
           if (ev.rawInput != null) existing.rawInput = ev.rawInput;
           if (ev.toolKind != null) existing.toolKind = ev.toolKind;
+          if (ev.terminalId != null) associateTerminal(existing, ev.terminalId);
         } else {
           const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput, toolKind: ev.toolKind };
           tools.set(ev.id, item);
           items.push(item);
+          if (ev.terminalId != null) associateTerminal(item, ev.terminalId);
         }
         break;
       }
@@ -96,6 +99,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           if (ev.title) t.title = ev.title;
           if (ev.rawInput != null) t.rawInput = ev.rawInput;
           if (ev.toolKind != null) t.toolKind = ev.toolKind;
+          if (ev.terminalId != null) associateTerminal(t, ev.terminalId);
         }
         break;
       }
@@ -106,6 +110,12 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         plan.entries = ev.entries;
         break;
       case 'terminal_output': {
+        const tool = terminalTools.get(ev.termId);
+        if (tool) {
+          tool.terminalOutput = (tool.terminalOutput ?? '') + ev.chunk;
+          tool.terminalTruncated = tool.terminalTruncated || ev.truncated;
+          break;
+        }
         let term = terms.get(ev.termId);
         if (!term) {
           term = { kind: 'terminal', key: `term${ev.termId}`, termId: ev.termId, text: '', truncated: false };
@@ -141,6 +151,19 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         break;
       }
     }
+  }
+  // ACP can report a tool call after a fast terminal has begun producing
+  // output. Fold the buffered standalone terminal row into that tool card.
+  function associateTerminal(tool: Extract<Item, { kind: 'tool' }>, terminalId: string) {
+    tool.terminalId = terminalId;
+    terminalTools.set(terminalId, tool);
+    const terminal = terms.get(terminalId);
+    if (!terminal) return;
+    tool.terminalOutput = terminal.text;
+    tool.terminalTruncated = terminal.truncated;
+    terms.delete(terminalId);
+    const index = items.indexOf(terminal);
+    if (index >= 0) items.splice(index, 1);
   }
   // Keep only still-pending permission cards inline (answered ones fall away).
   const visible = items.filter((it) => it.kind !== 'permission' || pendingIds.has(it.reqId));
@@ -1143,10 +1166,15 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
 
 function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
   const [open, setOpen] = useState(false);
+  const autoExpanded = useRef(false);
   // Flash on status transitions (pending -> in_progress -> completed/failed)
   // rather than on every streamed output chunk, which would strobe.
   const statusFlash = useUpdateFlash(item.status);
-  const { text: body, images, diffs } = parseToolContent(item.content);
+  const { text: contentBody, images, diffs } = parseToolContent(item.content);
+  // Terminal chunks are delivered independently of tool-call updates. Prefer
+  // that live buffer whenever present; the completion event still contains a
+  // durable terminal snapshot for transcript replay.
+  const body = item.terminalOutput ?? contentBody;
   const args = formatArgs(item.rawInput);
   const isExecute = item.toolKind === 'execute';
   const command = isExecute ? terminalCommand(item) : null;
@@ -1157,6 +1185,12 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
+  useEffect(() => {
+    if (item.terminalOutput && !autoExpanded.current) {
+      autoExpanded.current = true;
+      setOpen(true);
+    }
+  }, [item.terminalOutput]);
   return (
     <div className={`card${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
       <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
@@ -1180,6 +1214,7 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
               ) : (
                 <div className="tool-terminal-empty">(no output)</div>
               )}
+              {item.terminalTruncated && <div className="tool-terminal-truncated">(output truncated)</div>}
             </>
           ) : (
             <>

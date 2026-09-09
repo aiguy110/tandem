@@ -1087,6 +1087,11 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		}
 		a.mu.Unlock()
 		ev := map[string]any{"kind": "tool_call", "id": id, "title": title, "status": status}
+		// A terminal content block is a live reference, rather than the command's
+		// result. Preserve its identity so the UI can render output incrementally.
+		if terminalID != "" {
+			ev["terminalId"] = terminalID
+		}
 		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
 			ev["content"] = content
 		}
@@ -1129,6 +1134,9 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			delete(a.toolTerminals, id)
 		}
 		a.mu.Unlock()
+		if terminalID != "" {
+			ev["terminalId"] = terminalID
+		}
 		if content, ok := a.normalizeToolContent(u["content"], finalToolFile(status, fileCandidate)); ok {
 			ev["content"] = content
 		}

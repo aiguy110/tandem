@@ -78,8 +78,8 @@ export type AgentEvent =
   // transcript group subagent output under its spawn instead of interleaving it.
   | { kind: 'message_chunk'; text: string; parentId?: string }
   | { kind: 'thought_chunk'; text: string; parentId?: string }
-  | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; parentId?: string }
-  | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown; title?: string; rawInput?: unknown; toolKind?: string; parentId?: string }
+  | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
+  | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown; title?: string; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
   | { kind: 'plan'; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal_output'; termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }

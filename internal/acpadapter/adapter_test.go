@@ -751,7 +751,10 @@ func TestCompletedTerminalToolSnapshotsOutput(t *testing.T) {
 	if err := a.handleUpdate(json.RawMessage(start)); err != nil {
 		t.Fatal(err)
 	}
-	waitEvent(t, a, "tool_call", nil)
+	started := waitEvent(t, a, "tool_call", nil)
+	if started["terminalId"] != id {
+		t.Fatalf("tool call terminalId = %v, want %q", started["terminalId"], id)
+	}
 
 	done := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec-1","status":"completed"}}`
 	if err := a.handleUpdate(json.RawMessage(done)); err != nil {
