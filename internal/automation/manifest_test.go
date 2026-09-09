@@ -13,7 +13,7 @@ func TestParseManifest(t *testing.T) {
  * name: inbox watcher
  * description: Finds interesting mail.
  * tools:
- *   - name: playwright.browser_find
+ *   - name: tandem-playwright.browser_find
  *     reason: Search the inbox
  * browser:
  *   snapshot: signed-in-mail

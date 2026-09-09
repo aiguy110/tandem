@@ -18,6 +18,12 @@ type MCPServer struct {
 
 type MCPEnvVariable struct{ Name, Value string }
 
+// PlaywrightMCPName is deliberately Tandem-namespaced. Claude Code applies
+// disabledMcpServers from a user's configuration even to MCP servers supplied
+// on its command line. A generic "playwright" name is commonly disabled there,
+// which would silently hide Tandem's browser tools.
+const PlaywrightMCPName = "tandem-playwright"
+
 type MCPWiring struct {
 	Broker           *Broker
 	NodeRuntime      string
@@ -37,7 +43,7 @@ func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
 		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(agentID))
 		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{
-			Name: "playwright", Command: w.NodeRuntime,
+			Name: PlaywrightMCPName, Command: w.NodeRuntime,
 			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(agentID), "--output-dir", outputDir},
 			Env:  []MCPEnvVariable{},
 		})
