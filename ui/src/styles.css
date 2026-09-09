@@ -547,7 +547,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* While a turn is in progress, keep the quick actions in one compact row.
    Queue spans that row so its right edge stays aligned regardless of whether
    the adapter supports steering. */
-.prompt-actions.working { display: grid; grid-template-columns: repeat(2, max-content); gap: 4px 8px; align-items: end; }
+.prompt-actions.working { display: grid; grid-template-columns: repeat(2, max-content); gap: 10px 8px; align-items: end; }
 .prompt-actions.working.has-steering { grid-template-columns: repeat(3, max-content); }
 .prompt-actions.working .primary { grid-column: 1 / -1; width: 100%; justify-content: center; }
 .attachment-menu-wrap { position: relative; }
