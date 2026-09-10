@@ -52,3 +52,23 @@ then have the user run `tandem setup --complete` to record version 1.
 
 No additional migration is required. A user may still run `tandem setup` to
 review or edit settings interactively.
+
+### Version 1 to version 2
+
+Version 2 adds Tandem-owned, harness-neutral MCP configuration. Explain that
+global servers may be added to `~/.tandem/config.yml` under `mcpServers:`, and
+repository-only servers may be added to `.tandem/.config.yml`. Prefer the CLI
+so it preserves the surrounding YAML:
+
+```sh
+tandem mcp add NAME COMMAND [ARGS...]
+tandem mcp add --project NAME COMMAND [ARGS...]
+```
+
+The first command is global; the second writes in the current repository.
+Project entries override global entries of the same name. The running daemon
+reads this configuration when starting each new ACP agent, so no daemon restart
+is needed for an added server to appear in newly spawned sessions. Existing
+agent sessions retain their original declarations. Do not add or change MCP
+servers unless the user asks; this migration is primarily to make the new
+surface discoverable.

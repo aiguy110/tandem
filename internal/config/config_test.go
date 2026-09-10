@@ -490,3 +490,46 @@ func TestStableExecutablePathResolvesEphemeralShims(t *testing.T) {
 		t.Fatalf("ephemeral shim should resolve to %q, got %q", real, got)
 	}
 }
+
+func TestMCPServersMergeGlobalAndProjectOverrides(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(ConfigFilePath(home), []byte("mcpServers:\n  global:\n    command: global-command\n  overridden:\n    command: global-version\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := ProjectMCPConfigPath(project)
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("mcpServers:\n  local:\n    command: local-command\n  overridden:\n    command: project-version\n    args: [--fast]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := LoadMCPServers(home, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 3 || servers["global"].Command != "global-command" || servers["local"].Command != "local-command" || servers["overridden"].Command != "project-version" || !reflect.DeepEqual(servers["overridden"].Args, []string{"--fast"}) {
+		t.Fatalf("resolved MCP servers = %#v", servers)
+	}
+}
+
+func TestAddMCPServerPreservesGlobalConfiguration(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigFilePath(home), []byte("settings:\n  port: 7718\nagents:\n  example: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := AddMCPServer(home, "", "files", MCPServer{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-filesystem"}}, false)
+	if err != nil || path != ConfigFilePath(home) {
+		t.Fatalf("AddMCPServer = %q, %v", path, err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "settings:") || !strings.Contains(string(b), "agents:") {
+		t.Fatalf("unrelated config was lost: %s", b)
+	}
+	servers, err := LoadMCPServers(home, "")
+	if err != nil || servers["files"].Command != "npx" {
+		t.Fatalf("stored MCP server = %#v, %v", servers, err)
+	}
+}

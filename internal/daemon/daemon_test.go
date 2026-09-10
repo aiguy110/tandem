@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/httpserver"
@@ -39,6 +40,47 @@ func TestTakeoverResolvedStatusDoesNotResurrectCancelledTurn(t *testing.T) {
 				t.Fatalf("takeoverResolvedStatus(%v, %q) = %q, want %q", tt.active, tt.current, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfiguredMCPServersUsesLiveGlobalAndProjectConfiguration(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(config.ConfigFilePath(home), []byte("mcpServers:\n  global:\n    command: global-server\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := config.ProjectMCPConfigPath(project)
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("mcpServers:\n  project:\n    command: project-server\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := configuredMCPServers(browser.MCPWiring{}, home, "agent-1", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, server := range servers {
+		got[server.Name] = server.Command
+	}
+	if got["global"] != "global-server" || got["project"] != "project-server" {
+		t.Fatalf("configured servers = %#v", got)
+	}
+	// The same resolver observes a write after daemon startup, which is the
+	// no-restart behavior used for subsequent spawned agent sessions.
+	if _, err := config.AddMCPServer(home, project, "later", config.MCPServer{Command: "later-server"}, false); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = configuredMCPServers(browser.MCPWiring{}, home, "agent-2", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, server := range servers {
+		found = found || (server.Name == "later" && server.Command == "later-server")
+	}
+	if !found {
+		t.Fatalf("live configuration change was not applied: %#v", servers)
 	}
 }
 

@@ -94,6 +94,16 @@ type BrowserConfig struct {
 	PlaywrightMCPCLI    string         `json:"playwrightMcpCli"`
 }
 
+// MCPServer is a harness-neutral stdio MCP declaration. Definitions live in
+// the operator config's top-level mcpServers map, or in a project's
+// .tandem/.config.yml. A project definition with the same name replaces the
+// global one for that project.
+type MCPServer struct {
+	Command string            `yaml:"command" json:"command"`
+	Args    []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
 type Config struct {
 	Home           string                  `json:"home"`
 	RuntimeRoot    string                  `json:"runtimeRoot"`
@@ -191,7 +201,7 @@ type Settings struct {
 // CurrentConfigVersion is written by the current setup wizard. The initial
 // tracked version accepts untracked legacy configurations so existing installs
 // can bootstrap without being locked out after upgrading.
-const CurrentConfigVersion = 1
+const CurrentConfigVersion = 2
 
 // OldestCompatibleConfigVersion is the lowest configuration version this
 // release can safely run. Raise it only at a deliberate compatibility
@@ -324,6 +334,102 @@ func SaveSettings(home string, s Settings) error {
 		return err
 	}
 	return os.Chmod(path, 0o600)
+}
+
+// ProjectMCPConfigPath is the repository-local MCP configuration location.
+func ProjectMCPConfigPath(cwd string) string { return filepath.Join(cwd, ".tandem", ".config.yml") }
+
+// LoadMCPServers resolves global definitions and then project-local overrides.
+// It deliberately reads the files on each call: the daemon invokes it while
+// starting an agent, so `tandem mcp add` takes effect for new sessions without
+// restarting the running daemon.
+func LoadMCPServers(home, cwd string) (map[string]MCPServer, error) {
+	servers := map[string]MCPServer{}
+	if err := loadMCPFile(ConfigFilePath(home), servers); err != nil {
+		return nil, err
+	}
+	if cwd != "" {
+		if err := loadMCPFile(ProjectMCPConfigPath(cwd), servers); err != nil {
+			return nil, err
+		}
+	}
+	return servers, nil
+}
+
+func loadMCPFile(path string, dst map[string]MCPServer) error {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var doc struct {
+		MCPServers map[string]MCPServer `yaml:"mcpServers"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("invalid %s: %w", path, err)
+	}
+	for name, server := range doc.MCPServers {
+		if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
+			return fmt.Errorf("invalid %s: mcp server names must be non-empty and contain no dots", path)
+		}
+		if strings.TrimSpace(server.Command) == "" {
+			return fmt.Errorf("invalid %s: mcpServers.%s.command is required", path, name)
+		}
+		dst[name] = server
+	}
+	return nil
+}
+
+// AddMCPServer records a server in the global config by default, or in the
+// project-local config when project is true. It preserves unrelated top-level
+// configuration, including agent catalog and setup settings.
+func AddMCPServer(home, cwd, name string, server MCPServer, project bool) (string, error) {
+	if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
+		return "", errors.New("mcp server name must be non-empty and contain no dots")
+	}
+	if strings.TrimSpace(server.Command) == "" {
+		return "", errors.New("mcp server command is required")
+	}
+	path := ConfigFilePath(home)
+	if project {
+		if cwd == "" {
+			return "", errors.New("project MCP configuration requires a working directory")
+		}
+		path = ProjectMCPConfigPath(cwd)
+	}
+	doc := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return "", fmt.Errorf("parse %s: %w", path, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	servers := map[string]MCPServer{}
+	if raw, ok := doc["mcpServers"]; ok {
+		encoded, err := yaml.Marshal(raw)
+		if err != nil || yaml.Unmarshal(encoded, &servers) != nil {
+			return "", fmt.Errorf("parse %s: mcpServers must be a mapping", path)
+		}
+	}
+	servers[name] = server
+	doc["mcpServers"] = servers
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return "", err
+	}
+	return path, os.Chmod(path, 0o600)
 }
 
 func Load() (Config, error) {

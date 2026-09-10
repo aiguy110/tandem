@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,7 +147,9 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		return exeErr
 	}
 	wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
-	factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id, cwd string) []browser.MCPServer { return browser.BuildMCPServers(wiring, id, cwd) }}
+	factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id, cwd string) ([]browser.MCPServer, error) {
+		return configuredMCPServers(wiring, cfg.Home, id, cwd)
+	}}
 	audioCache := newMessageAudioCache(ctx, db, voiceRenderer)
 	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker,
 		OnSession: audioCache.watch,
@@ -204,7 +207,10 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 			}
 			broker.SeedSnapshot(runID, selected.Kind, selected.Ref)
 		}
-		servers := browser.BuildMCPServers(wiring, runID, repoRoot)
+		servers, serversErr := configuredMCPServers(wiring, cfg.Home, runID, repoRoot)
+		if serversErr != nil {
+			return nil, serversErr
+		}
 		return automation.StartMCPToolSession(runCtx, servers, repoRoot, requested, os.Stderr, func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -343,6 +349,45 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		return nil
 	}
 	return err
+}
+
+// configuredMCPServers combines Tandem's built-ins with the live global and
+// project-local server configuration. This is intentionally evaluated per
+// session creation, so changes made by `tandem mcp add` are available to new
+// agents immediately without restarting the daemon.
+func configuredMCPServers(wiring browser.MCPWiring, home, agentID, cwd string) ([]browser.MCPServer, error) {
+	servers := browser.BuildMCPServers(wiring, agentID, cwd)
+	used := make(map[string]bool, len(servers))
+	for _, server := range servers {
+		used[server.Name] = true
+	}
+	configured, err := config.LoadMCPServers(home, cwd)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(configured))
+	for name := range configured {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if used[name] {
+			return nil, fmt.Errorf("mcp server %q conflicts with a Tandem-provided server", name)
+		}
+		definition := configured[name]
+		keys := make([]string, 0, len(definition.Env))
+		for key := range definition.Env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		env := make([]browser.MCPEnvVariable, 0, len(keys))
+		for _, key := range keys {
+			env = append(env, browser.MCPEnvVariable{Name: key, Value: definition.Env[key]})
+		}
+		servers = append(servers, browser.MCPServer{Name: name, Command: definition.Command, Args: definition.Args, Env: env})
+		used[name] = true
+	}
+	return servers, nil
 }
 
 func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, error) {
