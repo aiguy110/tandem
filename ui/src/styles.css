@@ -189,6 +189,49 @@ body.dock-resizing .app { transition: none; }
 .rail-toggle .chevron { font-size: var(--fs-md); }
 .rail-toggle .label { writing-mode: vertical-rl; text-transform: uppercase; font-size: var(--fs-xs); letter-spacing: .8px; }
 .rail-toggle .count { writing-mode: horizontal-tb; }
+.rail-expanded {
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  animation: rail-content-in .225s var(--ease-out) both;
+}
+/* Once the grid has started to collapse, preserve the outgoing dock at its
+   former width just long enough to let its contents leave gracefully. */
+.rail.collapsed .rail-expanded {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--agents-rail-width, 240px);
+  overflow: hidden;
+  pointer-events: none;
+  animation: rail-content-out .225s var(--ease-in) both;
+}
+.rail-r.collapsed .rail-expanded { inset: 0 0 0 auto; width: var(--approvals-rail-width, 300px); }
+.rail-expanded > .rail-head,
+.rail-expanded > .agent-row,
+.rail-expanded > .appr,
+.rail-expanded > .empty,
+.rail-expanded > .rail-close-error { animation: rail-card-in .225s var(--ease-out) both; }
+.rail-expanded.closing > .rail-head,
+.rail-expanded.closing > .agent-row,
+.rail-expanded.closing > .appr,
+.rail-expanded.closing > .empty,
+.rail-expanded.closing > .rail-close-error { animation: rail-card-out .195s var(--ease-in) both; }
+.rail-expanded > .agent-row:nth-child(2), .rail-expanded > .appr:nth-child(2) { animation-delay: 20ms; }
+.rail-expanded > .agent-row:nth-child(3), .rail-expanded > .appr:nth-child(3) { animation-delay: 40ms; }
+.rail-expanded > .agent-row:nth-child(4), .rail-expanded > .appr:nth-child(4) { animation-delay: 60ms; }
+@keyframes rail-content-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rail-content-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes rail-card-in { from { opacity: 0; transform: translateX(-7px); } to { opacity: 1; transform: none; } }
+@keyframes rail-card-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-7px); } }
+.rail-r .rail-expanded > .rail-head,
+.rail-r .rail-expanded > .appr,
+.rail-r .rail-expanded > .empty { animation-name: rail-card-in-right; }
+.rail-r .rail-expanded.closing > .rail-head,
+.rail-r .rail-expanded.closing > .appr,
+.rail-r .rail-expanded.closing > .empty { animation-name: rail-card-out-right; }
+@keyframes rail-card-in-right { from { opacity: 0; transform: translateX(7px); } to { opacity: 1; transform: none; } }
+@keyframes rail-card-out-right { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(7px); } }
 .count {
   min-width: 18px; text-align: center; padding: 0 5px; border-radius: 9px;
   background: var(--surface-3); color: var(--text-dim); font-size: var(--fs-xs);
@@ -1120,6 +1163,8 @@ body.dock-resizing .app { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
   .attachment-menu, .annotation-popover, .agent-details-popover,
-  .ev-enter, .is-updated-a, .is-updated-b { animation-duration: 1ms; }
+  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded,
+  .rail-expanded > .rail-head, .rail-expanded > .agent-row,
+  .rail-expanded > .appr, .rail-expanded > .empty, .rail-expanded > .rail-close-error { animation-duration: 1ms; }
   .card-body-wrap, .card-body { transition-duration: 1ms; }
 }
