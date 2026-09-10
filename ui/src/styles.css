@@ -144,6 +144,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   color: var(--text-dim); background: var(--surface); white-space: nowrap;
 }
 
+/* On phones, controls take precedence over build metadata. Keeping each action
+   on one line also prevents the bar from becoming taller when space is tight. */
+@media (max-width: 640px) {
+  .bar { gap: 6px; padding-inline: 8px; }
+  .brand .version { display: none; }
+  .bar > .btn { white-space: nowrap; }
+}
+
 /* ---- rails ---- */
 .rail { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
 .rail-r { border-right: none; border-left: 1px solid var(--border); }
