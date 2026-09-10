@@ -24,3 +24,11 @@ or Git revision; there is no alternate TypeScript daemon.
 
 Check startup or a deferred restart with `journalctl --user -u tandem -f`. The daemon prints
 `TANDEM_READY`, the bound port, and the bootstrap URL after restoration succeeds.
+
+Release builds check GitHub for a newer release when the daemon starts and every five
+minutes thereafter. An available release appears as a daemon-owned notification in every
+connected UI. Installing uses the same verified, atomic replacement path as `tandem update`.
+After replacement, the running daemon asks the new binary whether `settings.configVersion`
+needs review. Compatible updates offer a deferred restart; configuration changes instead
+offer to start the configured default ACP agent in `$TANDEM_HOME`. Development builds and
+installations with `TANDEM_NO_UPDATE_CHECK` set do not make update-check requests.

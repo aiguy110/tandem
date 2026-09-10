@@ -15,6 +15,7 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/historyimport"
+	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -334,6 +335,41 @@ func TestAutomationListAndEnableToggle(t *testing.T) {
 	jobs := got["jobs"].([]any)
 	if len(jobs) != 1 || jobs[0].(map[string]any)["enabled"] != false {
 		t.Fatalf("toggled=%#v", got)
+	}
+}
+
+func TestSystemNotificationsSnapshotBroadcastAndAction(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	center := notifications.New()
+	center.Upsert(notifications.Notification{ID: "update", Severity: "attention", Title: "Update available"})
+	var actedID, actedAction string
+	handler := New(Options{
+		Token: "secret", Registry: backend, Automation: db, Notifications: center,
+		NotificationAction: func(_ context.Context, id, action string) (string, error) {
+			actedID, actedAction = id, action
+			return "a", nil
+		},
+	})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	send(t, c, map[string]any{"t": "list_system_notifications", "corrId": "list"})
+	got := recv(t, c)
+	if got["t"] != "system_notifications" || got["corrId"] != "list" || len(got["notifications"].([]any)) != 1 {
+		t.Fatalf("snapshot = %#v", got)
+	}
+	center.Upsert(notifications.Notification{ID: "update", Severity: "success", Title: "Ready"})
+	if got = recv(t, c); got["t"] != "system_notifications" || got["notifications"].([]any)[0].(map[string]any)["title"] != "Ready" {
+		t.Fatalf("broadcast = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "system_notification_action", "notificationId": "update", "action": "restart", "corrId": "act"})
+	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != "a" || got["corrId"] != "act" {
+		t.Fatalf("action ack = %#v", got)
+	}
+	if actedID != "update" || actedAction != "restart" {
+		t.Fatalf("action = %q %q", actedID, actedAction)
 	}
 }
 

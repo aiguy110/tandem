@@ -792,6 +792,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .appr.notification.sev-success { border-color: var(--ok); background: var(--ok-soft); }
 .appr.notification.sev-attention { border-color: var(--warn); background: var(--warn-soft); }
 .appr.notification.sev-failure { border-color: var(--err); background: var(--err-soft); }
+.appr.system-notification .notification-message { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.appr.system-notification .acts { margin-top: 9px; }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
 .permission-request-rail { margin: 2px 0 10px; }

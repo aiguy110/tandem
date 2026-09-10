@@ -20,6 +20,7 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/historyimport"
+	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -60,13 +61,15 @@ type Backend interface {
 }
 
 type Options struct {
-	Token      string
-	Registry   Backend
-	Fallback   http.Handler
-	WriteQueue int
-	Browser    *browser.Broker
-	History    HistoryLifecycle
-	Automation AutomationStore
+	Token              string
+	Registry           Backend
+	Fallback           http.Handler
+	WriteQueue         int
+	Browser            *browser.Broker
+	History            HistoryLifecycle
+	Automation         AutomationStore
+	Notifications      *notifications.Center
+	NotificationAction func(context.Context, string, string) (string, error)
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
@@ -92,18 +95,27 @@ type Handler struct {
 	upgrader    websocket.Upgrader
 	mu          sync.Mutex
 	connections map[*connection]struct{}
+	unsubscribe func()
 }
 
 func New(opts Options) *Handler {
 	if opts.WriteQueue <= 0 {
 		opts.WriteQueue = 8192
 	}
-	return &Handler{opts: opts, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, EnableCompression: false}, connections: map[*connection]struct{}{}}
+	h := &Handler{opts: opts, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, EnableCompression: false}, connections: map[*connection]struct{}{}}
+	if opts.Notifications != nil {
+		h.unsubscribe = opts.Notifications.Subscribe(h.broadcastSystemNotifications)
+	}
+	return h
 }
 
 // Close terminates upgraded sockets, which net/http intentionally no longer
 // owns after hijacking them during the WebSocket handshake.
 func (h *Handler) Close() {
+	if h.unsubscribe != nil {
+		h.unsubscribe()
+		h.unsubscribe = nil
+	}
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {
@@ -195,6 +207,7 @@ type clientMessage struct {
 	Comment          string                     `json:"comment"`
 	Path             string                     `json:"path"`
 	PositionMs       int64                      `json:"positionMs"`
+	NotificationID   string                     `json:"notificationId"`
 }
 
 type connection struct {
@@ -755,6 +768,19 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.commandAck(m, sess.ID)
+	case "list_system_notifications":
+		c.sendSystemNotifications(m.CorrID)
+	case "system_notification_action":
+		if c.server.opts.NotificationAction == nil {
+			c.commandError(m, errors.New("notification actions are unavailable"))
+			return
+		}
+		agentID, err := c.server.opts.NotificationAction(context.Background(), m.NotificationID, m.Action)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, agentID)
 	case "get_spawn_options":
 		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
 		if err != nil {
@@ -994,6 +1020,27 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.AgentID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
 		c.send(withCorr(map[string]any{"t": "ack", "error": m.T + " not implemented yet"}, m.CorrID))
+	}
+}
+
+func (c *connection) sendSystemNotifications(corrID json.RawMessage) {
+	items := []notifications.Notification{}
+	if c.server.opts.Notifications != nil {
+		items = c.server.opts.Notifications.List()
+	}
+	c.send(withCorr(map[string]any{"t": "system_notifications", "notifications": items}, corrID))
+}
+
+func (h *Handler) broadcastSystemNotifications(items []notifications.Notification) {
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	message := map[string]any{"t": "system_notifications", "notifications": items}
+	for _, c := range connections {
+		c.send(message)
 	}
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __testApplyServerMsg, useStore } from './store';
+import { __testApplyServerMsg, notificationsSummary, useStore } from './store';
 import type { Annotation } from './wire';
 import { WsClient } from './ws/client';
 import {
@@ -32,9 +32,21 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null });
+  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, systemNotifications: [] });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
+});
+
+describe('system notifications', () => {
+  it('hydrates the daemon snapshot and includes it in the rail badge', () => {
+    __testApplyServerMsg({
+      t: 'system_notifications',
+      notifications: [{ id: 'update', severity: 'attention', title: 'Update available', actions: [{ id: 'install', label: 'Update' }] }],
+    });
+
+    expect(useStore.getState().systemNotifications).toHaveLength(1);
+    expect(notificationsSummary(useStore.getState())).toEqual({ total: 1, severity: 'attention' });
+  });
 });
 
 describe('agent ordering', () => {

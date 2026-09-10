@@ -29,10 +29,12 @@ import (
 	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/languagemodel"
+	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/updater"
 	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
@@ -255,6 +257,12 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		},
 	})
 	deferred := newDeferredShutdown(ctx, token, agents)
+	notificationCenter := notifications.New()
+	updateService := updater.NewService(updater.ServiceOptions{
+		Updater: updater.Options{CurrentVersion: buildinfo.Version, Log: stdout},
+		Home:    cfg.Home, Center: notificationCenter, Agents: agents, Log: stdout,
+		Restart: func() { deferred.Request() },
+	})
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/internal/automation/run", "/internal/automation/evaluate", "/internal/automation/preapprove":
@@ -304,8 +312,9 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: updateService.HandleAction, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
 	defer handler.Close()
+	updateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
