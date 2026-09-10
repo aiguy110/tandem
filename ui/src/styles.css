@@ -184,11 +184,13 @@ body.dock-resizing .app { transition: none; }
   width: 100%; height: 100%; background: transparent; border: none;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   padding: 12px 0; color: var(--text-faint);
+  animation: rail-toggle-in .16s var(--ease-out) both;
 }
 .rail-toggle:hover { color: var(--text); background: var(--surface-2); }
 .rail-toggle .chevron { font-size: var(--fs-md); }
 .rail-toggle .label { writing-mode: vertical-rl; text-transform: uppercase; font-size: var(--fs-xs); letter-spacing: .8px; }
 .rail-toggle .count { writing-mode: horizontal-tb; }
+@keyframes rail-toggle-in { from { opacity: 0; } to { opacity: 1; } }
 .rail-expanded {
   min-width: 0;
   height: 100%;
@@ -1140,6 +1142,7 @@ body.dock-resizing .app { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
   .attachment-menu, .annotation-popover, .agent-details-popover,
-  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded.closing .agent-row .dot { animation-duration: 1ms; }
+  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded.closing .agent-row .dot,
+  .rail-toggle { animation-duration: 1ms; }
   .card-body-wrap, .card-body { transition-duration: 1ms; }
 }
