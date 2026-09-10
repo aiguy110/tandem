@@ -488,7 +488,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 @keyframes card-body-expand { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
 @keyframes card-body-collapse { from { grid-template-rows: 1fr; } to { grid-template-rows: 0fr; } }
 @keyframes card-body-content-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes card-body-content-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-4px); } }
 .card-body-wrap.entering .card-body { animation: card-body-content-in .225s var(--ease-out) both; }
+.card-body-wrap.collapsing .card-body { animation: card-body-content-out .225s var(--ease-in) both; }
 .tool-text-section { margin-bottom: 10px; }
 .tool-text-section:last-child { margin-bottom: 0; }
 .tool-text-section pre { margin: 0; }
