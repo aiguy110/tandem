@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ import (
 )
 
 const defaultRepository = "aiguy110/tandem"
+
+var developmentVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+\.[0-9a-f]{8}$`)
 
 // Options supplies the process-specific dependencies used by CheckAtStartup.
 // Zero values select the production defaults.
@@ -47,7 +50,7 @@ type asset struct {
 // never prompts, downloads, or changes the running executable. Development
 // builds and an explicitly disabled check do no network I/O.
 func CheckAtStartup(ctx context.Context, opts Options) error {
-	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
+	if isDevelopmentVersion(opts.CurrentVersion) || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return nil
 	}
 	setDefaults(&opts)
@@ -80,7 +83,7 @@ func Update(ctx context.Context, opts Options) error {
 // executable. Callers that need information provided only by the new binary
 // can use the result to avoid querying it when no update was installed.
 func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
-	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" {
+	if isDevelopmentVersion(opts.CurrentVersion) {
 		return false, errors.New("self-update is unavailable for development builds")
 	}
 	setDefaults(&opts)
@@ -114,6 +117,10 @@ func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
 	}
 	fmt.Fprintf(opts.Log, "tandem: updated %s from %s to %s\n", opts.Executable, opts.CurrentVersion, latest.TagName)
 	return true, nil
+}
+
+func isDevelopmentVersion(value string) bool {
+	return value == "" || value == "dev" || developmentVersion.MatchString(value)
 }
 
 func setDefaults(opts *Options) {

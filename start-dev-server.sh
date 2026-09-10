@@ -4,6 +4,12 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# shellcheck source=scripts/development-build-info.sh
+source ./scripts/development-build-info.sh
+version="$(tandem_development_version)"
+commit="$(git rev-parse HEAD)"
+build_time="$(git show -s --format=%cI HEAD)"
+
 go_cmd="${TANDEM_GO_CMD:-}"
 if [[ -z "$go_cmd" ]]; then
   if command -v go >/dev/null 2>&1; then
@@ -16,13 +22,13 @@ if [[ -z "$go_cmd" ]]; then
   fi
 fi
 
-./scripts/stage-go-ui.sh
+VERSION="$version" ./scripts/stage-go-ui.sh
 
 echo "==> Installing external agent and browser runtimes"
 (cd runtime && npm install)
 
 echo "==> Building native daemon"
-"$go_cmd" build -o tandem ./cmd/tandem
+"$go_cmd" build -ldflags "-X github.com/aiguy110/tandem/internal/buildinfo.Version=$version -X github.com/aiguy110/tandem/internal/buildinfo.Commit=$commit -X github.com/aiguy110/tandem/internal/buildinfo.BuildTime=$build_time" -o tandem ./cmd/tandem
 
 echo "==> Starting native daemon with embedded UI"
 exec ./tandem
