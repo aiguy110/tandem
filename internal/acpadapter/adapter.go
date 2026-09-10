@@ -1045,6 +1045,17 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 	if err := json.Unmarshal(note.Update, &u); err != nil {
 		return fmt.Errorf("acp: malformed %s update: %w", header.Variant, err)
 	}
+	// Codex ACP streams command output through an extension in the update's
+	// _meta object while exposing the command itself as a terminal content
+	// block. Those terminal ids do not belong to the client TerminalHost, so
+	// normalize the extension into the same durable event vocabulary used by
+	// client-owned terminals instead of losing the output at this boundary.
+	if output, ok := terminalOutputMeta(u["_meta"]); ok {
+		a.pushUpdate(note.SessionID, map[string]any{
+			"kind": "terminal_output", "termId": output.TerminalID,
+			"chunk": output.Data, "truncated": false,
+		})
+	}
 	parentID := a.parentToolCallID(u["_meta"])
 	switch header.Variant {
 	case "agent_message_chunk", "agent_thought_chunk":
@@ -1335,6 +1346,36 @@ func terminalIDFromToolContent(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+type terminalMetaOutput struct {
+	Data       string `json:"data"`
+	TerminalID string `json:"terminal_id"`
+}
+
+// terminalOutputMeta reads the Codex ACP terminal-output extension. Tandem
+// currently negotiates the delta form, but accepting both spellings keeps the
+// normalization correct for agents that select the snapshot-named variant.
+func terminalOutputMeta(raw json.RawMessage) (terminalMetaOutput, bool) {
+	if len(raw) == 0 {
+		return terminalMetaOutput{}, false
+	}
+	var meta struct {
+		Output      json.RawMessage `json:"terminal_output"`
+		OutputDelta json.RawMessage `json:"terminal_output_delta"`
+	}
+	if json.Unmarshal(raw, &meta) != nil {
+		return terminalMetaOutput{}, false
+	}
+	value := meta.OutputDelta
+	if len(value) == 0 {
+		value = meta.Output
+	}
+	var output terminalMetaOutput
+	if len(value) == 0 || json.Unmarshal(value, &output) != nil || output.TerminalID == "" || output.Data == "" {
+		return terminalMetaOutput{}, false
+	}
+	return output, true
 }
 
 func (a *Adapter) completedTerminalContent(terminalID string) (any, bool) {

@@ -767,6 +767,45 @@ func TestCompletedTerminalToolSnapshotsOutput(t *testing.T) {
 	}
 }
 
+func TestCodexTerminalOutputMetaBecomesDurableTerminalEvents(t *testing.T) {
+	a := newUpdateAdapter(nil)
+	start := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"exec-1",` +
+		`"title":"go test ./...","kind":"execute","status":"in_progress",` +
+		`"content":[{"type":"terminal","terminalId":"exec-1"}]}}`
+	if err := a.handleUpdate(json.RawMessage(start)); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent(t, a, "tool_call", nil)
+
+	for _, tc := range []struct {
+		name, field, data string
+	}{
+		{name: "delta", field: "terminal_output_delta", data: "first line\n"},
+		{name: "snapshot spelling", field: "terminal_output", data: "second line\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			update := fmt.Sprintf(`{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update",`+
+				`"toolCallId":"exec-1","_meta":{%q:{"data":%q,"terminal_id":"exec-1"}}}}`, tc.field, tc.data)
+			if err := a.handleUpdate(json.RawMessage(update)); err != nil {
+				t.Fatal(err)
+			}
+			got := waitEvent(t, a, "terminal_output", nil)
+			if got["termId"] != "exec-1" || got["chunk"] != tc.data || got["truncated"] != false {
+				t.Fatalf("terminal output = %#v", got)
+			}
+			waitEvent(t, a, "tool_call_update", nil)
+		})
+	}
+
+	done := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec-1","status":"completed"}}`
+	if err := a.handleUpdate(json.RawMessage(done)); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitEvent(t, a, "tool_call_update", nil); got["status"] != "done" {
+		t.Fatalf("completed update = %#v", got)
+	}
+}
+
 func TestParentToolCallMetaAnnotatesSubagentUpdates(t *testing.T) {
 	// A subagent tool call carries the spawning Task call's id under the
 	// configured _meta path; it should surface as a normalized parentId.
