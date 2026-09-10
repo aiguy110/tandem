@@ -9,6 +9,9 @@ export function ConductorBar({ version }: { version: string | null }) {
 
   return (
     <div className="bar">
+      <div className="brand">
+        <b>Tandem</b><span className="version" aria-label={version ? `Version ${version}` : 'Loading version'}>{version ?? '…'}</span>
+      </div>
       <button className="btn primary" onClick={() => setModal('spawn')} title={`Spawn agent (${prettyBinding(b['agent.spawn'])})`}>
         + Agent <span className="kbd">{prettyBinding(b['agent.spawn'])}</span>
       </button>
@@ -16,9 +19,6 @@ export function ConductorBar({ version }: { version: string | null }) {
         <span className="kbd">{prettyBinding(b['palette.open'])}</span> palette
       </button>
       <div className="spacer" />
-      <div className="brand">
-        <b>Tandem</b><span className="version" aria-label={version ? `Version ${version}` : 'Loading version'}>{version ?? '…'}</span>
-      </div>
       <button className="btn ghost" onClick={toggleTheme} title="Toggle light / dark">
         {theme === 'dark' ? '◐ dark' : '◑ light'}
       </button>
