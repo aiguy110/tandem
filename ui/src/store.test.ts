@@ -32,10 +32,11 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, systemNotifications: [] });
+  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, drafts: {}, systemNotifications: [] });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
+  localStorage.removeItem('tandem.promptDrafts');
 });
 
 describe('system notifications', () => {
@@ -112,6 +113,31 @@ describe('thread audio preference', () => {
     useStore.getState().focus('agent-1');
 
     expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-1');
+  });
+
+  it('persists focus changes made by keyboard navigation', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+
+    useStore.getState().focus('agent-1');
+    useStore.getState().nav(1);
+
+    expect(useStore.getState().focusedId).toBe('agent-2');
+    expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-2');
+  });
+
+  it('persists every unsent prompt draft', () => {
+    useStore.getState().setDraft('agent-1', 'Keep this prompt after refreshing.');
+    useStore.getState().setDraft('agent-2', 'And this one too.');
+
+    expect(JSON.parse(localStorage.getItem('tandem.promptDrafts') ?? '{}')).toEqual({
+      'agent-1': 'Keep this prompt after refreshing.',
+      'agent-2': 'And this one too.',
+    });
   });
 
   it('restores the selected pane for each focused agent', () => {

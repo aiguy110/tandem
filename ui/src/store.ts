@@ -394,6 +394,30 @@ const saveFocusedAgent = (agentId: string | null): void => {
   }
 };
 
+// Prompt drafts are deliberately browser-owned. Unlike queued or submitted
+// prompts, they have not reached the daemon yet, so keeping them here also
+// makes a daemon restart harmless to an in-progress composition.
+const DRAFTS_STORAGE_KEY = 'tandem.promptDrafts';
+const initialDrafts = (): Record<string, string> => {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(DRAFTS_STORAGE_KEY) ?? '{}');
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter((entry): entry is [string, string] =>
+        typeof entry[0] === 'string' && typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {};
+  }
+};
+const saveDrafts = (drafts: Record<string, string>): void => {
+  try {
+    localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {
+    // Drafting still works when browser storage is unavailable.
+  }
+};
+
 const AGENT_PANES_STORAGE_KEY = 'tandem.agentPanes';
 const initialAgentPanes = (): Record<string, PaneId> => {
   try {
@@ -900,7 +924,7 @@ export const useStore = create<StoreState>((set, get) => {
     automationError: null,
     resumeCatalog: null,
     resumeLoading: false,
-    drafts: {},
+    drafts: initialDrafts(),
     annotations: {},
     browserSubAgent: null,
     agentsRailCollapsed: isNarrowViewport(),
@@ -1356,6 +1380,16 @@ export const useStore = create<StoreState>((set, get) => {
       syncAudioFocus();
     },
   };
+});
+
+// Some focus changes are part of higher-level actions (spawn, resume, and
+// keyboard navigation) rather than `focus()`. Subscribe once at the store
+// boundary so persistence cannot depend on which action made the mutation.
+// Do the same for drafts: every keystroke reaches localStorage synchronously,
+// before a refresh or daemon restart can discard the browser state.
+useStore.subscribe((state, previous) => {
+  if (state.focusedId !== previous.focusedId) saveFocusedAgent(state.focusedId);
+  if (state.drafts !== previous.drafts) saveDrafts(state.drafts);
 });
 
 // Derived selector: rail order with blocked/error floated to the top.
