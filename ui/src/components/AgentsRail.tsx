@@ -112,32 +112,50 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
           Press <span className="kbd">C</span> or <b>+ Agent</b> to spawn one.
         </div>
       ) : (
-        order.map((id) => (
-          <Row
-            key={id}
-            agent={agents[id]}
-            active={id === focusedId}
-            onClick={() => focus(id)}
-            onMarkUnread={() => markAgentUnread(id)}
-            onRename={(name) => renameAgent(id, name)}
-            onDelete={() => void requestDelete(id)}
-            dragging={id === draggedId}
-            dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
-            onDragStart={() => setDraggedId(id)}
-            onDragOver={(after) => {
-              if (draggedId && draggedId !== id) setDropTarget({ id, after });
-            }}
-            onDrop={(after) => {
-              if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
-              setDraggedId(null);
+        <>
+          {order.map((id) => (
+            <Row
+              key={id}
+              agent={agents[id]}
+              active={id === focusedId}
+              onClick={() => focus(id)}
+              onMarkUnread={() => markAgentUnread(id)}
+              onRename={(name) => renameAgent(id, name)}
+              onDelete={() => void requestDelete(id)}
+              dragging={id === draggedId}
+              dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
+              onDragStart={() => setDraggedId(id)}
+              onDragOver={(after) => {
+                if (draggedId && draggedId !== id) setDropTarget({ id, after });
+              }}
+              onDrop={(after) => {
+                if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
+                setDraggedId(null);
+                setDropTarget(null);
+              }}
+              onDragEnd={() => {
+                setDraggedId(null);
+                setDropTarget(null);
+              }}
+            />
+          ))}
+          <div
+            className={`agent-drop-end${draggedId ? ' active' : ''}`}
+            aria-hidden="true"
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
               setDropTarget(null);
             }}
-            onDragEnd={() => {
+            onDrop={(event) => {
+              event.preventDefault();
+              const lastId = order.at(-1);
+              if (draggedId && lastId && draggedId !== lastId) reorderAgent(draggedId, lastId, true);
               setDraggedId(null);
               setDropTarget(null);
             }}
           />
-        ))
+        </>
       )}
       {closeError && <div className="rail-close-error">{closeError}</div>}
       {confirmation && agents[confirmation.id] && (
