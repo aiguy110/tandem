@@ -63,6 +63,7 @@ so it preserves the surrounding YAML:
 ```sh
 tandem mcp add NAME COMMAND [ARGS...]
 tandem mcp add --project NAME COMMAND [ARGS...]
+tandem mcp add --transport http NAME URL
 ```
 
 The first command is global; the second writes in the current repository.

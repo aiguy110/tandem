@@ -33,9 +33,12 @@ type AssetStore interface {
 
 type MCPServer struct {
 	Name    string            `json:"name"`
+	Type    string            `json:"type,omitempty"`
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     []acp.EnvVariable `json:"env"`
+	URL     string            `json:"url,omitempty"`
+	Headers []acp.EnvVariable `json:"headers,omitempty"`
 }
 
 type AdapterConfig struct {

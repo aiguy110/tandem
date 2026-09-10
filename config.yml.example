@@ -96,6 +96,11 @@ harnesses: {}
 #     args: [-y, "@modelcontextprotocol/server-filesystem", "/path/to/root"]
 #     env:
 #       EXAMPLE_TOKEN: ""
+#   mem0:
+#     type: http
+#     url: http://localhost:8081/mcp
+#     headers:
+#       Authorization: "Bearer example"
 
 # The `tandem setup` wizard writes an
 # operator-owned `settings:` block to $TANDEM_HOME/config.yml, separate from
