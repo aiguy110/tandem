@@ -205,6 +205,10 @@ body.dock-resizing .app { transition: none; }
   pointer-events: none;
 }
 .rail-r.collapsed .rail-expanded { inset: 0 0 0 auto; width: var(--approvals-rail-width, 300px); }
+/* Working dots otherwise remain visible at the rail's anchored edge until the
+   final unmount. Let them leave over the same interval as the dock instead. */
+.rail-expanded.closing .agent-row .dot { animation: rail-status-out .195s var(--ease-in) both; }
+@keyframes rail-status-out { from { opacity: 1; } to { opacity: 0; } }
 .count {
   min-width: 18px; text-align: center; padding: 0 5px; border-radius: 9px;
   background: var(--surface-3); color: var(--text-dim); font-size: var(--fs-xs);
@@ -1136,6 +1140,6 @@ body.dock-resizing .app { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
   .attachment-menu, .annotation-popover, .agent-details-popover,
-  .ev-enter, .is-updated-a, .is-updated-b { animation-duration: 1ms; }
+  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded.closing .agent-row .dot { animation-duration: 1ms; }
   .card-body-wrap, .card-body { transition-duration: 1ms; }
 }
