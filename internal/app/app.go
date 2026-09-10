@@ -18,7 +18,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [setup [--agent|--complete]|mcp add [--project] NAME COMMAND [ARGS...]|update|version|debug config]"
+const usage = "usage: tandem [setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -149,12 +149,25 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 func addMCP(args []string, stdout, stderr io.Writer) int {
 	project := false
-	if len(args) > 0 && args[0] == "--project" {
-		project = true
-		args = args[1:]
+	transport := "stdio"
+	for len(args) > 0 {
+		switch args[0] {
+		case "--project":
+			project = true
+			args = args[1:]
+		case "--transport":
+			if len(args) < 2 || (args[1] != "stdio" && args[1] != "http") {
+				fmt.Fprintln(stderr, "usage: tandem mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]")
+				return 2
+			}
+			transport, args = args[1], args[2:]
+		default:
+			goto flagsDone
+		}
 	}
+flagsDone:
 	if len(args) < 2 {
-		fmt.Fprintln(stderr, "usage: tandem mcp add [--project] NAME COMMAND [ARGS...]")
+		fmt.Fprintln(stderr, "usage: tandem mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]")
 		return 2
 	}
 	home, err := setupHome()
@@ -170,7 +183,15 @@ func addMCP(args []string, stdout, stderr io.Writer) int {
 	if project {
 		cwd = projectRoot(cwd)
 	}
-	path, err := config.AddMCPServer(home, cwd, args[0], config.MCPServer{Command: args[1], Args: args[2:]}, project)
+	server := config.MCPServer{Command: args[1], Args: args[2:]}
+	if transport == "http" {
+		if len(args) != 2 {
+			fmt.Fprintln(stderr, "mcp: HTTP transport accepts exactly NAME and URL")
+			return 2
+		}
+		server = config.MCPServer{Type: "http", URL: args[1]}
+	}
+	path, err := config.AddMCPServer(home, cwd, args[0], server, project)
 	if err != nil {
 		fmt.Fprintf(stderr, "mcp: %v\n", err)
 		return 1

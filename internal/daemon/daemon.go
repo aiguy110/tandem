@@ -384,7 +384,16 @@ func configuredMCPServers(wiring browser.MCPWiring, home, agentID, cwd string) (
 		for _, key := range keys {
 			env = append(env, browser.MCPEnvVariable{Name: key, Value: definition.Env[key]})
 		}
-		servers = append(servers, browser.MCPServer{Name: name, Command: definition.Command, Args: definition.Args, Env: env})
+		headerKeys := make([]string, 0, len(definition.Headers))
+		for key := range definition.Headers {
+			headerKeys = append(headerKeys, key)
+		}
+		sort.Strings(headerKeys)
+		headers := make([]browser.MCPEnvVariable, 0, len(headerKeys))
+		for _, key := range headerKeys {
+			headers = append(headers, browser.MCPEnvVariable{Name: key, Value: definition.Headers[key]})
+		}
+		servers = append(servers, browser.MCPServer{Name: name, Type: definition.Type, Command: definition.Command, Args: definition.Args, Env: env, URL: definition.URL, Headers: headers})
 		used[name] = true
 	}
 	return servers, nil

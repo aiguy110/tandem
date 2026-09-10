@@ -99,9 +99,12 @@ type BrowserConfig struct {
 // .tandem/.config.yml. A project definition with the same name replaces the
 // global one for that project.
 type MCPServer struct {
-	Command string            `yaml:"command" json:"command"`
+	Type    string            `yaml:"type,omitempty" json:"type,omitempty"`
+	Command string            `yaml:"command,omitempty" json:"command,omitempty"`
 	Args    []string          `yaml:"args,omitempty" json:"args,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	URL     string            `yaml:"url,omitempty" json:"url,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 type Config struct {
@@ -374,8 +377,17 @@ func loadMCPFile(path string, dst map[string]MCPServer) error {
 		if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
 			return fmt.Errorf("invalid %s: mcp server names must be non-empty and contain no dots", path)
 		}
-		if strings.TrimSpace(server.Command) == "" {
-			return fmt.Errorf("invalid %s: mcpServers.%s.command is required", path, name)
+		switch server.Type {
+		case "", "stdio":
+			if strings.TrimSpace(server.Command) == "" {
+				return fmt.Errorf("invalid %s: mcpServers.%s.command is required", path, name)
+			}
+		case "http":
+			if strings.TrimSpace(server.URL) == "" {
+				return fmt.Errorf("invalid %s: mcpServers.%s.url is required for HTTP transport", path, name)
+			}
+		default:
+			return fmt.Errorf("invalid %s: mcpServers.%s.type must be stdio or http", path, name)
 		}
 		dst[name] = server
 	}
@@ -389,8 +401,16 @@ func AddMCPServer(home, cwd, name string, server MCPServer, project bool) (strin
 	if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
 		return "", errors.New("mcp server name must be non-empty and contain no dots")
 	}
-	if strings.TrimSpace(server.Command) == "" {
-		return "", errors.New("mcp server command is required")
+	if server.Type == "http" {
+		if strings.TrimSpace(server.URL) == "" {
+			return "", errors.New("HTTP mcp server URL is required")
+		}
+	} else if server.Type == "" || server.Type == "stdio" {
+		if strings.TrimSpace(server.Command) == "" {
+			return "", errors.New("mcp server command is required")
+		}
+	} else {
+		return "", errors.New("mcp server type must be stdio or http")
 	}
 	path := ConfigFilePath(home)
 	if project {

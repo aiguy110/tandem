@@ -512,6 +512,17 @@ func TestMCPServersMergeGlobalAndProjectOverrides(t *testing.T) {
 	}
 }
 
+func TestMCPServersSupportsHTTPTransport(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigFilePath(home), []byte("mcpServers:\n  mem0:\n    type: http\n    url: http://localhost:8081/mcp\n    headers:\n      Authorization: Bearer token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := LoadMCPServers(home, "")
+	if err != nil || servers["mem0"].Type != "http" || servers["mem0"].URL != "http://localhost:8081/mcp" || servers["mem0"].Headers["Authorization"] != "Bearer token" {
+		t.Fatalf("HTTP MCP configuration = %#v, %v", servers, err)
+	}
+}
+
 func TestAddMCPServerPreservesGlobalConfiguration(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(ConfigFilePath(home), []byte("settings:\n  port: 7718\nagents:\n  example: {}\n"), 0o600); err != nil {

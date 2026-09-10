@@ -72,7 +72,11 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 			for i, variable := range server.Env {
 				env[i] = acp.EnvVariable{Name: variable.Name, Value: variable.Value}
 			}
-			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Command: server.Command, Args: server.Args, Env: env})
+			headers := make([]acp.EnvVariable, len(server.Headers))
+			for i, header := range server.Headers {
+				headers[i] = acp.EnvVariable{Name: header.Name, Value: header.Value}
+			}
+			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Type: server.Type, Command: server.Command, Args: server.Args, Env: env, URL: server.URL, Headers: headers})
 		}
 	}
 	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{AgentID: req.AgentID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(launch.ACP.Env), Stderr: os.Stderr}})

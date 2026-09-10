@@ -57,6 +57,19 @@ func TestMCPAddWritesGlobalAndProjectConfiguration(t *testing.T) {
 	}
 }
 
+func TestMCPAddHTTPTransport(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TANDEM_HOME", home)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mcp", "add", "--transport", "http", "mem0", "http://localhost:8081/mcp"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("HTTP mcp add: code=%d stderr=%q", code, stderr.String())
+	}
+	servers, err := config.LoadMCPServers(home, "")
+	if err != nil || servers["mem0"].Type != "http" || servers["mem0"].URL != "http://localhost:8081/mcp" {
+		t.Fatalf("HTTP MCP configuration = %#v, %v", servers, err)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	oldVersion, oldCommit, oldBuildTime := buildinfo.Version, buildinfo.Commit, buildinfo.BuildTime
 	t.Cleanup(func() {

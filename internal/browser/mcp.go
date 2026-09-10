@@ -11,9 +11,12 @@ import (
 // configuration at session/new.
 type MCPServer struct {
 	Name    string
+	Type    string
 	Command string
 	Args    []string
 	Env     []MCPEnvVariable
+	URL     string
+	Headers []MCPEnvVariable
 }
 
 type MCPEnvVariable struct{ Name, Value string }

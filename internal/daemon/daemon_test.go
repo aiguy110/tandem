@@ -45,7 +45,7 @@ func TestTakeoverResolvedStatusDoesNotResurrectCancelledTurn(t *testing.T) {
 
 func TestConfiguredMCPServersUsesLiveGlobalAndProjectConfiguration(t *testing.T) {
 	home, project := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(config.ConfigFilePath(home), []byte("mcpServers:\n  global:\n    command: global-server\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigFilePath(home), []byte("mcpServers:\n  global:\n    command: global-server\n  remote:\n    type: http\n    url: http://localhost:8081/mcp\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	local := config.ProjectMCPConfigPath(project)
@@ -65,6 +65,15 @@ func TestConfiguredMCPServersUsesLiveGlobalAndProjectConfiguration(t *testing.T)
 	}
 	if got["global"] != "global-server" || got["project"] != "project-server" {
 		t.Fatalf("configured servers = %#v", got)
+	}
+	var remote *browser.MCPServer
+	for i := range servers {
+		if servers[i].Name == "remote" {
+			remote = &servers[i]
+		}
+	}
+	if remote == nil || remote.Type != "http" || remote.URL != "http://localhost:8081/mcp" {
+		t.Fatalf("HTTP server was not converted into an ACP declaration: %#v", remote)
 	}
 	// The same resolver observes a write after daemon startup, which is the
 	// no-restart behavior used for subsequent spawned agent sessions.
