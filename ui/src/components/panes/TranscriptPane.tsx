@@ -1179,6 +1179,7 @@ function terminalOutput(text: string): string {
 
 function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
   const [open, setOpen] = useState(false);
+  const { mounted: bodyMounted, closing: bodyClosing } = usePresence(open, 225);
   // Flash on status transitions (pending -> in_progress -> completed/failed)
   // rather than on every streamed output chunk, which would strobe.
   const statusFlash = useUpdateFlash(item.status);
@@ -1210,8 +1211,10 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
         )}
         <span className={`chip ${item.status}`}>{item.status}</span>
       </div>
-      {open && hasBody && (
-        <div className="card-body">
+      {bodyMounted && hasBody && (
+        <div className={`card-body-wrap${bodyClosing ? '' : ' open entering'}`} aria-hidden={bodyClosing}>
+          <div className="card-body-inner">
+            <div className="card-body">
           {command != null ? (
             <>
               <ToolText label="Command" className="tool-terminal-command">{command}</ToolText>
@@ -1236,6 +1239,8 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
             </>
           )}
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
+            </div>
+          </div>
         </div>
       )}
     </div>

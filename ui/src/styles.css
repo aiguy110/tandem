@@ -471,7 +471,22 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: var(--fs-sm); }
 .card-head .title { flex: 1; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-head.open .title:not(.tool-cmd-title) { overflow: visible; text-overflow: clip; white-space: pre-wrap; overflow-wrap: anywhere; }
-.card-body { border-top: 1px solid var(--border); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: pre-wrap; }
+.card-body-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .225s var(--ease-out);
+}
+.card-body-wrap.open { grid-template-rows: 1fr; }
+.card-body-wrap.entering { animation: card-body-expand .225s var(--ease-out) both; }
+.card-body-inner { min-height: 0; overflow: hidden; }
+.card-body {
+  border-top: 1px solid var(--border); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: pre-wrap;
+  opacity: 0; transform: translateY(-4px); transition: opacity .225s ease, transform .225s var(--ease-out);
+}
+.card-body-wrap.open .card-body { opacity: 1; transform: none; }
+@keyframes card-body-expand { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
+@keyframes card-body-content-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.card-body-wrap.entering .card-body { animation: card-body-content-in .225s var(--ease-out) both; }
 .tool-text-section { margin-bottom: 10px; }
 .tool-text-section:last-child { margin-bottom: 0; }
 .tool-text-section pre { margin: 0; }
@@ -1072,4 +1087,5 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
   .attachment-menu, .annotation-popover, .agent-details-popover,
   .ev-enter, .is-updated-a, .is-updated-b { animation-duration: 1ms; }
+  .card-body-wrap, .card-body { transition-duration: 1ms; }
 }
