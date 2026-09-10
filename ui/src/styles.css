@@ -92,7 +92,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .app {
   display: grid;
   grid-template-rows: 46px 1fr auto;
-  grid-template-columns: 240px 1fr 300px;
+  grid-template-columns: var(--agents-rail-width, 240px) minmax(0, 1fr) var(--approvals-rail-width, 300px);
   grid-template-areas:
     'bar bar bar'
     'agents focus approvals'
@@ -100,15 +100,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   height: 100%;
   transition: grid-template-columns .225s ease;
 }
-.app.agents-collapsed { grid-template-columns: 34px 1fr 300px; }
-.app.approvals-collapsed { grid-template-columns: 240px 1fr 34px; }
+.app.agents-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 300px); }
+.app.approvals-collapsed { grid-template-columns: var(--agents-rail-width, 240px) minmax(0, 1fr) 34px; }
 .app.agents-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
 
 /* Below this width, both rails collapse by default (toggleable regardless). */
 @media (max-width: 860px) {
-  .app { grid-template-columns: 200px 1fr 260px; }
-  .app.agents-collapsed { grid-template-columns: 34px 1fr 260px; }
-  .app.approvals-collapsed { grid-template-columns: 200px 1fr 34px; }
+  .app { grid-template-columns: var(--agents-rail-width, 200px) minmax(0, 1fr) var(--approvals-rail-width, 260px); }
+  .app.agents-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 260px); }
+  .app.approvals-collapsed { grid-template-columns: var(--agents-rail-width, 200px) minmax(0, 1fr) 34px; }
   .app.agents-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
 }
 
@@ -153,8 +153,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 
 /* ---- rails ---- */
-.rail { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+.rail { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; position: relative; }
 .rail-r { border-right: none; border-left: 1px solid var(--border); }
+.dock-resize-handle { position: absolute; z-index: 3; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.dock-resize-handle-right { right: -4px; }
+.dock-resize-handle-left { left: -4px; }
+.dock-resize-handle:hover, body.dock-resizing .dock-resize-handle { background: var(--agent); opacity: .45; }
+body.dock-resizing { cursor: col-resize; user-select: none; }
+body.dock-resizing .app { transition: none; }
 .agents { grid-area: agents; }
 .approvals { grid-area: approvals; }
 .rail-head {

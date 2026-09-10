@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useStore } from './store';
 import { useGlobalKeys } from './useGlobalKeys';
 import { TokenScreen } from './components/TokenScreen';
@@ -23,6 +23,30 @@ export function App() {
   const boot = useStore((s) => s.boot);
   const agentsRailCollapsed = useStore((s) => s.agentsRailCollapsed);
   const approvalsRailCollapsed = useStore((s) => s.approvalsRailCollapsed);
+  // Deliberately component-local: dock widths reset with each page load.
+  const defaultDockWidths = () => window.innerWidth <= 860
+    ? { agents: 200, approvals: 260 }
+    : { agents: 240, approvals: 300 };
+  const [dockWidths, setDockWidths] = useState(defaultDockWidths);
+
+  const resizeDock = (dock: 'agents' | 'approvals', startX: number) => {
+    const startWidth = dockWidths[dock];
+    const otherWidth = dockWidths[dock === 'agents' ? 'approvals' : 'agents'];
+    const direction = dock === 'agents' ? 1 : -1;
+    const onMove = (event: PointerEvent) => {
+      const maxWidth = Math.max(160, window.innerWidth - otherWidth - 240);
+      const width = Math.max(160, Math.min(maxWidth, startWidth + direction * (event.clientX - startX)));
+      setDockWidths((current) => ({ ...current, [dock]: width }));
+    };
+    const onEnd = () => {
+      document.body.classList.remove('dock-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+    };
+    document.body.classList.add('dock-resizing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+  };
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -66,12 +90,13 @@ export function App() {
       <AudioEngineRoot />
       <div
         className={`app${agentsRailCollapsed ? ' agents-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
+        style={{ '--agents-rail-width': `${dockWidths.agents}px`, '--approvals-rail-width': `${dockWidths.approvals}px` } as CSSProperties}
       >
 
         <ConductorBar version={daemonVersion} />
-        <AgentsRail />
+        <AgentsRail onResizeStart={(x) => resizeDock('agents', x)} />
         <FocusArea />
-        <ApprovalsRail />
+        <ApprovalsRail onResizeStart={(x) => resizeDock('approvals', x)} />
         <Inspector />
       </div>
       <ConnectionBanner />

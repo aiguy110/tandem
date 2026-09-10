@@ -14,7 +14,7 @@ const SEVERITY_CLASS: Record<NotifSeverity, string> = {
 
 // Left rail — the orchestra. One row per agent in the order arranged by the
 // user. Click = focus; drag = reorder.
-export function AgentsRail() {
+export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
   const order = useStore(rankedOrder);
   const agents = useStore((s) => s.agents);
   const focusedId = useStore((s) => s.focusedId);
@@ -87,6 +87,16 @@ export function AgentsRail() {
 
   return (
     <div className="rail agents">
+      <div
+        className="dock-resize-handle dock-resize-handle-right"
+        role="separator"
+        aria-label="Resize agents panel"
+        aria-orientation="vertical"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          onResizeStart?.(event.clientX);
+        }}
+      />
       <div className="rail-head">
         <button className="rail-toggle-btn" title="Collapse agents" onClick={toggleCollapsed}>
           ‹

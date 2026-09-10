@@ -21,7 +21,7 @@ const SEVERITY_LABEL: Record<NotifSeverity, string> = {
 
 // Right rail — the conductor's inbox for completed turns, approvals, and browser
 // requests across every agent. Clicking a completed-turn card marks it read.
-export function ApprovalsRail() {
+export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
   const notifications = useStore(allTurnNotifications);
@@ -55,6 +55,16 @@ export function ApprovalsRail() {
 
   return (
     <div className="rail rail-r approvals">
+      <div
+        className="dock-resize-handle dock-resize-handle-left"
+        role="separator"
+        aria-label="Resize notifications panel"
+        aria-orientation="vertical"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          onResizeStart?.(event.clientX);
+        }}
+      />
       <div className="rail-head">
         <span className="rail-head-label" onClick={toggleCollapsed}>
           Notifications <span className={`count${total ? ` ${badgeClass}` : ''}`}>{total}</span>
