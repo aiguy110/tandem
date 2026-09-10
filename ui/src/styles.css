@@ -179,7 +179,7 @@ body.dock-resizing .app { transition: none; }
 .rail-toggle-btn:hover { color: var(--text); background: var(--surface-2); }
 
 /* Collapsed rail: a thin vertical strip with a click-to-expand toggle. */
-.rail.collapsed { width: 34px; }
+.rail.collapsed { width: 34px; overflow: hidden; }
 .rail-toggle {
   width: 100%; height: 100%; background: transparent; border: none;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -195,12 +195,16 @@ body.dock-resizing .app { transition: none; }
   overflow-y: auto;
   background: var(--surface);
 }
-/* Keep closing content inside the grid cell. The app's grid-column transition
-   reveals or clips it smoothly; an overlay here would visibly escape the dock. */
+/* Keep the outgoing layout at its normal width, then clip it at the shrinking
+   rail edge. This prevents cards from reflowing into a thin column as they go. */
 .rail.collapsed .rail-expanded {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--agents-rail-width, 240px);
   overflow: hidden;
   pointer-events: none;
 }
+.rail-r.collapsed .rail-expanded { inset: 0 0 0 auto; width: var(--approvals-rail-width, 300px); }
 .count {
   min-width: 18px; text-align: center; padding: 0 5px; border-radius: 9px;
   background: var(--surface-3); color: var(--text-dim); font-size: var(--fs-xs);
