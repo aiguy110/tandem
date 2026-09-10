@@ -35,6 +35,9 @@ export function App() {
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
 
   useEffect(() => {
+    // Check only once the socket is connected. In particular, this happens
+    // after the reconnect banner clears when the daemon has rebuilt itself.
+    if (conn !== 'connected') return;
     const controller = new AbortController();
     void loadDaemonVersion(controller.signal).then(({ version }) => {
       if (version !== frontendVersion) {
@@ -50,7 +53,7 @@ export function App() {
       }
     });
     return () => controller.abort();
-  }, []);
+  }, [conn]);
 
   useGlobalKeys();
 

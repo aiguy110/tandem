@@ -38,6 +38,17 @@ func TestNewerVersion(t *testing.T) {
 	}
 }
 
+func TestDevelopmentVersion(t *testing.T) {
+	for value, want := range map[string]bool{
+		"": true, "dev": true, "v0.5.1.1234abcd": true,
+		"v0.5.1": false, "v0.5.1.1234abc": false, "v0.5.1.1234abcd0": false,
+	} {
+		if got := isDevelopmentVersion(value); got != want {
+			t.Errorf("isDevelopmentVersion(%q) = %v, want %v", value, got, want)
+		}
+	}
+}
+
 func TestCheckAtStartupReportsWithoutDownloading(t *testing.T) {
 	var downloads atomic.Int32
 	server := releaseServer(t, []byte("new binary"), &downloads)
