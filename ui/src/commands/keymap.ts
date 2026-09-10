@@ -93,7 +93,7 @@ export function prettyBinding(b: Binding): string {
           if (k === 'space') return '␣';
           return k.length === 1 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1);
         })
-        .join(''),
+        .join(isMac ? '' : '+'),
     )
     .join(' ');
 }
