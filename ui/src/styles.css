@@ -133,6 +133,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .btn:hover { border-color: var(--border-strong); background: var(--surface-3); }
 .btn.primary { background: var(--agent-soft); border-color: var(--agent); color: var(--agent); }
 .btn.ghost { background: transparent; }
+.bar > .btn { padding-inline: 6px; }
 .palette-button-icon {
   width: 16px; height: 16px;
   fill: currentColor;
