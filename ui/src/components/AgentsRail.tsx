@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useValuePresence } from '../transitions';
+import { usePresence, useValuePresence } from '../transitions';
 import { useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
@@ -28,6 +28,9 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const renameAgent = useStore((s) => s.renameAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
+  // Keep the full dock alive long enough for its cards to animate out while
+  // the app grid contracts, mirroring expandable tool-call bodies.
+  const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
   const [pendingConfirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
   // Hold the dialog on screen while it animates away.
   const { rendered: confirmation, closing: confirmClosing } = useValuePresence(pendingConfirmation);
@@ -73,20 +76,17 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
     }));
   };
 
-  if (collapsed) {
-    return (
-      <div className="rail agents collapsed">
+  return (
+    <div className={`rail agents${collapsed ? ' collapsed' : ''}`}>
+      {collapsed && !expandedMounted && (
         <button className="rail-toggle" title="Show agents" onClick={toggleCollapsed}>
           <span className="chevron">›</span>
           <span className="label">Agents</span>
           {order.length > 0 && <span className="count">{order.length}</span>}
         </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rail agents">
+      )}
+      {expandedMounted && (
+      <div className={`rail-expanded${railClosing ? ' closing' : ' entering'}`} aria-hidden={railClosing}>
       <div
         className="dock-resize-handle dock-resize-handle-right"
         role="separator"
@@ -158,6 +158,8 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
         </>
       )}
       {closeError && <div className="rail-close-error">{closeError}</div>}
+      </div>
+      )}
       {confirmation && agents[confirmation.id] && (
         <div style={{ display: 'contents' }} className={confirmClosing ? 'popup-closing' : undefined}>
         <div className="modal-scrim" onClick={() => setConfirmation(null)}>

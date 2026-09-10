@@ -1,6 +1,7 @@
 import { useStore, allApprovals, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
 import type { NotifSeverity } from '../store';
 import { PermissionRequestDetails } from './PermissionRequest';
+import { usePresence } from '../transitions';
 
 // Green / yellow / red, and the dot + card modifier that render it.
 const SEVERITY_CLASS: Record<NotifSeverity, string> = {
@@ -33,6 +34,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const toggleWheel = useStore((s) => s.toggleWheel);
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
+  const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
   const summary = useStore(notificationsSummary);
   const actOnSystemNotification = useStore((s) => s.actOnSystemNotification);
 
@@ -41,20 +43,17 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   // > green).
   const badgeClass = summary.severity ? SEVERITY_CLASS[summary.severity] : '';
 
-  if (collapsed) {
-    return (
-      <div className="rail rail-r approvals collapsed">
+  return (
+    <div className={`rail rail-r approvals${collapsed ? ' collapsed' : ''}`}>
+      {collapsed && !expandedMounted && (
         <button className="rail-toggle" title="Show notifications" onClick={toggleCollapsed}>
           <span className="chevron">‹</span>
           <span className="label">Notifications</span>
           {total > 0 && <span className={`count ${badgeClass}`}>{total}</span>}
         </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rail rail-r approvals">
+      )}
+      {expandedMounted && (
+      <div className={`rail-expanded${railClosing ? ' closing' : ' entering'}`} aria-hidden={railClosing}>
       <div
         className="dock-resize-handle dock-resize-handle-left"
         role="separator"
@@ -171,6 +170,8 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
             </div>
           );
         })
+      )}
+      </div>
       )}
     </div>
   );
