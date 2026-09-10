@@ -32,9 +32,10 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, systemNotifications: [] });
+  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, systemNotifications: [] });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
+  localStorage.removeItem('tandem.agentPanes');
 });
 
 describe('system notifications', () => {
@@ -111,6 +112,25 @@ describe('thread audio preference', () => {
     useStore.getState().focus('agent-1');
 
     expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-1');
+  });
+
+  it('restores the selected pane for each focused agent', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+
+    useStore.getState().focus('agent-1');
+    useStore.getState().setPane('diff');
+    useStore.getState().focus('agent-2');
+    expect(useStore.getState().pane).toBe('chat');
+
+    useStore.getState().setPane('shell');
+    useStore.getState().focus('agent-1');
+    expect(useStore.getState().pane).toBe('diff');
+    expect(JSON.parse(localStorage.getItem('tandem.agentPanes') ?? '{}')).toEqual({ 'agent-1': 'diff', 'agent-2': 'shell' });
   });
 
   it('hydrates daemon-owned audio preference and ready state from transcript events', () => {

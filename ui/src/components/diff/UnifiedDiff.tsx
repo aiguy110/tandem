@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 export type DiffLineKind = 'add' | 'remove' | 'hunk' | 'meta' | 'context';
 
 export interface DiffLine {
@@ -66,11 +68,25 @@ export function parseUnifiedDiff(patch: string): DiffFile[] {
   return files;
 }
 
-export function UnifiedDiff({ patch }: { patch: string }) {
+export function UnifiedDiff({ patch, collapseRevision }: { patch: string; collapseRevision?: number }) {
+  const files = parseUnifiedDiff(patch);
+  const [openFiles, setOpenFiles] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(files.map((file) => [file.key, !file.isBinary])),
+  );
+
+  useEffect(() => {
+    setOpenFiles(Object.fromEntries(files.map((file) => [file.key, collapseRevision === undefined && !file.isBinary])));
+  }, [patch, collapseRevision]);
+
   return (
     <div className="unified-diff">
-      {parseUnifiedDiff(patch).map((file) => (
-        <details className="diff-file" key={file.key} open={!file.isBinary}>
+      {files.map((file) => (
+        <details
+          className="diff-file"
+          key={file.key}
+          open={openFiles[file.key] ?? !file.isBinary}
+          onToggle={(event) => setOpenFiles((current) => ({ ...current, [file.key]: event.currentTarget.open }))}
+        >
           <summary>
             <span className="diff-file-chevron" aria-hidden="true">›</span>
             <span>{file.label}</span>

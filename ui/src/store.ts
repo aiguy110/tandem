@@ -208,6 +208,10 @@ interface StoreState {
   agents: Record<string, AgentView>;
   order: string[];
   focusedId: string | null;
+  // The selected pane belongs to an agent/session, rather than to the focus
+  // area. `pane` remains the currently focused agent's pane for consumers that
+  // need a simple current-view value.
+  panesByAgent: Record<string, PaneId>;
   pane: PaneId;
   modal: ModalKind;
   inspectorOpen: boolean;
@@ -390,6 +394,27 @@ const saveFocusedAgent = (agentId: string | null): void => {
   }
 };
 
+const AGENT_PANES_STORAGE_KEY = 'tandem.agentPanes';
+const initialAgentPanes = (): Record<string, PaneId> => {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(AGENT_PANES_STORAGE_KEY) ?? '{}');
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter((entry): entry is [string, PaneId] =>
+        typeof entry[0] === 'string' && PANES.includes(entry[1] as PaneId)),
+    );
+  } catch {
+    return {};
+  }
+};
+const saveAgentPanes = (panes: Record<string, PaneId>) => {
+  try {
+    localStorage.setItem(AGENT_PANES_STORAGE_KEY, JSON.stringify(panes));
+  } catch {
+    // Switching panes still works when browser storage is unavailable.
+  }
+};
+
 // Rails collapse by default on narrow viewports (phones/small tablets), but the
 // user can still toggle them open regardless of width.
 const MOBILE_BREAKPOINT = '(max-width: 860px)';
@@ -472,8 +497,9 @@ export const useStore = create<StoreState>((set, get) => {
             }
           }
           const focusedId = st.focusedId && agents[st.focusedId] ? st.focusedId : order[0] ?? null;
+          const pane = focusedId ? st.panesByAgent[focusedId] ?? 'chat' : 'chat';
           if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
-          return { agents, order, focusedId };
+          return { agents, order, focusedId, pane };
         });
         // The reconnect path already re-subscribes tracked agents. Summary
         // refreshes only need to subscribe agents discovered for the first time.
@@ -631,10 +657,11 @@ export const useStore = create<StoreState>((set, get) => {
           delete agents[msg.agentId];
           const order = st.order.filter((id) => id !== msg.agentId);
           const focusedId = st.focusedId === msg.agentId ? order[0] ?? null : st.focusedId;
+          const pane = focusedId ? st.panesByAgent[focusedId] ?? 'chat' : 'chat';
           if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
           const annotations = { ...st.annotations };
           delete annotations[msg.agentId];
-          return { agents, order, focusedId, annotations };
+          return { agents, order, focusedId, pane, annotations };
         });
         ptyHub.clear(msg.agentId);
         shellHub.clear(msg.agentId);
@@ -860,6 +887,7 @@ export const useStore = create<StoreState>((set, get) => {
     agents: {},
     order: initialAgentOrder(),
     focusedId: initialFocusedAgent(),
+    panesByAgent: initialAgentPanes(),
     pane: 'chat',
     modal: 'none',
     inspectorOpen: false,
@@ -925,8 +953,9 @@ export const useStore = create<StoreState>((set, get) => {
       const previousHadPty = previous ? wantsPty(previous) : false;
       set((st) => {
         const agent = st.agents[id];
-        if (!agent || agent.turnNotifications.length === 0) return { focusedId: id };
-        return { focusedId: id, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
+        const pane = st.panesByAgent[id] ?? 'chat';
+        if (!agent || agent.turnNotifications.length === 0) return { focusedId: id, pane };
+        return { focusedId: id, pane, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
       });
       if (get().agents[id]) saveFocusedAgent(id);
       syncAudioFocus();
@@ -969,7 +998,15 @@ export const useStore = create<StoreState>((set, get) => {
       if (get().pane === p) return;
       const id = get().focusedId;
       const hadPty = id ? wantsPty(id) : false;
-      set({ pane: p });
+      if (id) {
+        set((st) => {
+          const panesByAgent = { ...st.panesByAgent, [id]: p };
+          saveAgentPanes(panesByAgent);
+          return { pane: p, panesByAgent };
+        });
+      } else {
+        set({ pane: p });
+      }
       syncAudioFocus();
       if (!id) return;
       if (wantsPty(id) && !hadPty) replayPtyFor(id);

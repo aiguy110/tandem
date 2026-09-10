@@ -308,6 +308,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* ---- reusable unified diff ---- */
 .diff-pane { background: var(--bg); }
 .diff-toolbar { height: 42px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: var(--fs-sm); }
+.diff-toolbar-actions { display: flex; align-items: center; gap: 6px; }
 .diff-toolbar button { padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); }
 .diff-scroll { overflow: auto; padding: 16px; }
 .diff-section + .diff-section { margin-top: 24px; }
