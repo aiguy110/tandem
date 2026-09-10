@@ -22,6 +22,7 @@ import (
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/automation"
 	"github.com/aiguy110/tandem/internal/browser"
+	"github.com/aiguy110/tandem/internal/buildinfo"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/historyimport"
@@ -241,7 +242,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		_ = agents.DisposeAll(disposeCtx)
 	}()
 	httpHandler := httpserver.New(httpserver.Options{
-		Token: token, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
+		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
 		Uploads: agents,
 		Voice:   voiceRenderer,
 		MessageText: func(agentID string, seq int64) (string, error) {

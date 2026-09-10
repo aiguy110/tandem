@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from './store';
 import { useGlobalKeys } from './useGlobalKeys';
 import { TokenScreen } from './components/TokenScreen';
@@ -14,6 +14,7 @@ import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
 import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { useValuePresence } from './transitions';
+import { frontendVersion, loadDaemonVersion } from './version';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -31,6 +32,26 @@ export function App() {
     boot();
   }, [boot]);
 
+  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadDaemonVersion(controller.signal).then(({ version }) => {
+      if (version !== frontendVersion) {
+        window.location.reload();
+        return;
+      }
+      setDaemonVersion(version);
+    }).catch((error: unknown) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        // A transient failure should not take mission control offline. Keep the
+        // loading placeholder, and let the next browser refresh retry.
+        console.warn('Could not load Tandem version', error);
+      }
+    });
+    return () => controller.abort();
+  }, []);
+
   useGlobalKeys();
 
   if (conn === 'need-token' || conn === 'rejected') {
@@ -44,7 +65,7 @@ export function App() {
         className={`app${agentsRailCollapsed ? ' agents-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
       >
 
-        <ConductorBar />
+        <ConductorBar version={daemonVersion} />
         <AgentsRail />
         <FocusArea />
         <ApprovalsRail />

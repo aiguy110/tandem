@@ -7,7 +7,9 @@ ui_dir="$repo_root/ui"
 stage_dir="$repo_root/internal/ui/dist"
 
 echo "==> Building React UI"
-(cd "$ui_dir" && npm ci && npm run build)
+# This value is used only to tell whether a cached UI belongs to the daemon
+# serving it. The displayed version always comes from the daemon at runtime.
+(cd "$ui_dir" && npm ci && VITE_TANDEM_VERSION="${VERSION:-dev}" npm run build)
 
 echo "==> Staging UI at internal/ui/dist"
 rm -rf "$stage_dir"
