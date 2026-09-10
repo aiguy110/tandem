@@ -28,8 +28,9 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const renameAgent = useStore((s) => s.renameAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
-  // Keep the full dock alive long enough for its cards to animate out while
-  // the app grid contracts, mirroring expandable tool-call bodies.
+  // Keep the full dock alive until the grid has finished contracting, so its
+  // contents stay clipped by the shrinking dock rather than disappearing at
+  // the start of the transition.
   const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
   const [pendingConfirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
   // Hold the dialog on screen while it animates away.
