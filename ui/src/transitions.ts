@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
  * stay in step with the `--motion-*` custom properties in styles.css. */
 
 /** How long the exit keyframes in styles.css run for, in ms. */
-export const EXIT_MS = 130;
+export const EXIT_MS = 195;
 
 /**
  * Keeps the last non-null `value` mounted while it animates away, so callers

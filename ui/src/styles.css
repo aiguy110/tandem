@@ -18,8 +18,8 @@
 
   /* Motion. --motion-out must match EXIT_MS in transitions.ts, which is what
      keeps an exiting popup mounted long enough to animate. */
-  --motion-in: .17s;
-  --motion-out: .13s;
+  --motion-in: .255s;
+  --motion-out: .195s;
   --ease-out: cubic-bezier(.2, .8, .2, 1);
   --ease-in: cubic-bezier(.4, 0, 1, 1);
 }
@@ -98,7 +98,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     'agents focus approvals'
     'inspector inspector inspector';
   height: 100%;
-  transition: grid-template-columns .15s ease;
+  transition: grid-template-columns .225s ease;
 }
 .app.agents-collapsed { grid-template-columns: 34px 1fr 300px; }
 .app.approvals-collapsed { grid-template-columns: 240px 1fr 34px; }
@@ -216,7 +216,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   position: fixed; z-index: 21; width: min(390px, calc(100vw - 16px)); max-height: min(430px, calc(100vh - 16px));
   overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
   box-shadow: 0 16px 38px rgba(0, 0, 0, .38); transform-origin: top left;
-  animation: agent-details-in .16s cubic-bezier(.2, .8, .2, 1) both;
+  animation: agent-details-in .24s cubic-bezier(.2, .8, .2, 1) both;
 }
 @keyframes agent-details-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: scale(1); } }
 .agent-details-head {
@@ -239,7 +239,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-detail code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font: var(--fs-xs)/1.45 var(--font-mono); }
 .agent-detail code.plain { font-family: inherit; font-size: var(--fs-sm); }
 .dot.idle { background: var(--ok); }
-.dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 1.4s infinite; }
+.dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 2.1s infinite; }
 .dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
 .dot.error { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
@@ -306,7 +306,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .diff-file > summary { display: flex; align-items: center; gap: 7px; padding: 7px 11px; font: 600 var(--fs-sm) var(--font-mono); cursor: pointer; list-style: none; user-select: none; }
 .diff-file > summary::-webkit-details-marker { display: none; }
 .diff-file[open] > summary { border-bottom: 1px solid var(--border); }
-.diff-file-chevron { color: var(--text-faint); transition: transform .12s ease; }
+.diff-file-chevron { color: var(--text-faint); transition: transform .18s ease; }
 .diff-file[open] .diff-file-chevron { transform: rotate(90deg); }
 .diff-file-kind { margin-left: auto; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 400; }
 .diff-code { overflow-x: auto; font: var(--fs-xs)/1.55 var(--font-mono); }
@@ -368,7 +368,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   position: absolute; top: 6px; right: 6px; padding: 3px 8px;
   font: var(--fs-xs)/1.4 var(--font-mono); color: var(--text-dim);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
-  cursor: pointer; opacity: 0; transition: opacity .12s ease;
+  cursor: pointer; opacity: 0; transition: opacity .18s ease;
 }
 .ev.msg .code-block:hover .code-copy-btn, .ev.msg .code-copy-btn:focus-visible,
 .aside-answer .code-block:hover .code-copy-btn, .aside-answer .code-copy-btn:focus-visible { opacity: 1; }
@@ -504,7 +504,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .task-list > summary { list-style: none; }
 .task-list > summary::-webkit-details-marker { display: none; }
-.task-list-chevron { color: var(--text-faint); transition: transform .12s ease; }
+.task-list-chevron { color: var(--text-faint); transition: transform .18s ease; }
 .task-list[open] .task-list-chevron { transform: rotate(90deg); }
 .task-list-progress { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-xs); }
 .task-list .plan { border-top: 1px solid var(--border); padding: 6px 12px; }
@@ -683,19 +683,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   31%, 85% { background-color: transparent; }
   100% { background-color: transparent; }
 }
-.annotation-flash { animation: annotation-flash-kf 1.7s ease-out; border-radius: var(--r-sm); }
+.annotation-flash { animation: annotation-flash-kf 2.55s ease-out; border-radius: var(--r-sm); }
 @keyframes annotation-quote-flash-kf {
   0%, 16%, 54%, 70% { background: color-mix(in srgb, var(--agent) 62%, transparent); }
   31%, 85% { background: color-mix(in srgb, var(--agent) 24%, transparent); }
   100% { background: color-mix(in srgb, var(--agent) 24%, transparent); }
 }
-.annotation-quote-flash { animation: annotation-quote-flash-kf 1.7s ease-out; }
+.annotation-quote-flash { animation: annotation-quote-flash-kf 2.55s ease-out; }
 @keyframes annotation-link-flash-kf {
   0%, 16%, 54%, 70% { box-shadow: 0 0 0 2px var(--agent), 0 0 18px color-mix(in srgb, var(--agent) 65%, transparent); background: color-mix(in srgb, var(--agent) 12%, transparent); }
   31%, 85% { box-shadow: none; background: transparent; }
   100% { box-shadow: none; }
 }
-.annotation-link-flash { animation: annotation-link-flash-kf 1.7s ease-out; border-radius: var(--r-sm); }
+.annotation-link-flash { animation: annotation-link-flash-kf 2.55s ease-out; border-radius: var(--r-sm); }
 .slash-popup {
   position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
@@ -1065,8 +1065,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    that appear after the transcript is already on screen get the enter
    animation, so switching agents does not replay the whole history. */
 .ev-enter { animation: ev-in var(--motion-in) var(--ease-out) both; }
-.is-updated-a { animation: ev-updated .55s ease-out; }
-.is-updated-b { animation: ev-updated .55s ease-out; }
+.is-updated-a { animation: ev-updated .825s ease-out; }
+.is-updated-b { animation: ev-updated .825s ease-out; }
 
 @media (prefers-reduced-motion: reduce) {
   .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,

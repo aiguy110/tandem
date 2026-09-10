@@ -398,10 +398,12 @@ export function TranscriptPane() {
     return links;
   }, [annotations, transcriptItems]);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = (smooth = false) => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (smooth && !reducedMotion && typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    else el.scrollTop = el.scrollHeight;
     stick.current = true;
     setAtBottom(true);
   };
@@ -414,9 +416,11 @@ export function TranscriptPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  // As new items stream in, keep the tail pinned only while sticking.
+  // As new items stream in, keep the tail pinned only while sticking. Smooth
+  // tail-following makes the existing rows slide upward as a new row appears,
+  // rather than jumping after its layout has been added.
   useEffect(() => {
-    if (stick.current) scrollToBottom();
+    if (stick.current) scrollToBottom(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
@@ -436,7 +440,7 @@ export function TranscriptPane() {
     popoverDragOffset.current = null;
   };
 
-  const flash = (el: HTMLElement, className: string, duration = 1300) => {
+  const flash = (el: HTMLElement, className: string, duration = 2550) => {
     el.classList.remove(className);
     // Restart the animation when a user revisits the same link before its
     // previous pulse has finished.
@@ -455,7 +459,7 @@ export function TranscriptPane() {
       .find((mark) => mark.dataset.annotationTargets?.split('|').includes(targetId));
     const destination = highlight ?? el;
     destination.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    flash(destination, highlight ? 'annotation-quote-flash' : 'annotation-flash', 1700);
+    flash(destination, highlight ? 'annotation-quote-flash' : 'annotation-flash', 2550);
     return true;
   };
 
@@ -463,7 +467,7 @@ export function TranscriptPane() {
     const target = document.getElementById(targetId);
     if (!target) return;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    flash(target, 'annotation-link-flash', 1700);
+    flash(target, 'annotation-link-flash', 2550);
   };
 
   // Native long-press selection is not tied reliably to a touchend event. iOS
@@ -573,7 +577,7 @@ export function TranscriptPane() {
             ))}
           </div>
           {!atBottom && (
-            <button className="scroll-latest" onClick={scrollToBottom} title="Scroll to latest">
+            <button className="scroll-latest" onClick={() => scrollToBottom()} title="Scroll to latest">
               ↓ Latest
             </button>
           )}
@@ -865,7 +869,7 @@ function Row({
   const [enterClass, setEnterClass] = useState(entering ? ' ev-enter' : '');
   useEffect(() => {
     if (!enterClass) return;
-    const timer = window.setTimeout(() => setEnterClass(''), 250);
+    const timer = window.setTimeout(() => setEnterClass(''), 255);
     return () => window.clearTimeout(timer);
   }, [enterClass]);
   // A user prompt can change after it is first rendered (an image attachment
