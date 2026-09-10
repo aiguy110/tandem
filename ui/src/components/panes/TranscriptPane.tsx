@@ -577,7 +577,7 @@ export function TranscriptPane() {
             ))}
           </div>
           {!atBottom && (
-            <button className="scroll-latest" onClick={() => scrollToBottom()} title="Scroll to latest">
+            <button className="scroll-latest" onClick={() => scrollToBottom(true)} title="Scroll to latest">
               ↓ Latest
             </button>
           )}
