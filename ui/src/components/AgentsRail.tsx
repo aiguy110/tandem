@@ -395,7 +395,7 @@ function Row({
           </span>
         </div>
       </div>
-      {showActions && <>
+      {showActions && <div className="agent-actions">
         <button
           className="rename-btn"
           title="Rename agent"
@@ -417,7 +417,7 @@ function Row({
         >
           🗑
         </button>
-      </>}
+      </div>}
       {contextMenu && (
         <div
           className={`agent-context-menu${menuClosing ? ' closing' : ''}`}

@@ -194,9 +194,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .count.sev-failure { background: var(--err-soft); color: var(--err); }
 
 .agent-row {
-  display: grid; grid-template-columns: 14px 1fr auto auto; gap: 8px;
+  display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px;
   padding: 9px 12px; border-bottom: 1px solid var(--border);
-  cursor: grab; align-items: start;
+  cursor: grab; align-items: start; position: relative;
 }
 .agent-row:hover { background: var(--surface-2); }
 .agent-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
@@ -206,6 +206,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .agent-row.active.drop-before { box-shadow: inset 2px 0 0 var(--agent), inset 0 3px 0 var(--agent); }
 .agent-row.active.drop-after { box-shadow: inset 2px 0 0 var(--agent), inset 0 -3px 0 var(--agent); }
 .agent-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+.agent-actions {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  display: flex; gap: 2px;
+}
 .agent-row .delete-btn, .agent-row .rename-btn {
   align-self: center; background: transparent; border: none; padding: 2px 4px;
   font-size: var(--fs-sm); line-height: 1; color: var(--text-faint);
