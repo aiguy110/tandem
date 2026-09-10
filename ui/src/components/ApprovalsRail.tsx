@@ -25,6 +25,7 @@ export function ApprovalsRail() {
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
   const notifications = useStore(allTurnNotifications);
+  const systemNotifications = useStore((s) => s.systemNotifications);
   const agents = useStore((s) => s.agents);
   const respond = useStore((s) => s.respond);
   const focus = useStore((s) => s.focus);
@@ -33,6 +34,7 @@ export function ApprovalsRail() {
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
   const summary = useStore(notificationsSummary);
+  const actOnSystemNotification = useStore((s) => s.actOnSystemNotification);
 
   const total = summary.total;
   // The panel badge takes the color of its highest-severity item (red > yellow
@@ -61,6 +63,28 @@ export function ApprovalsRail() {
           ›
         </button>
       </div>
+      {systemNotifications.map((notification) => (
+        <div key={notification.id} className={`appr notification system-notification ${SEVERITY_CLASS[notification.severity]}`}>
+          <div className="who">
+            <span className={`dot ${SEVERITY_DOT[notification.severity]}`} /> Tandem
+          </div>
+          <div className="what">{notification.title}</div>
+          {notification.message && <div className="notification-message">{notification.message}</div>}
+          {!!notification.actions?.length && (
+            <div className="acts">
+              {notification.actions.map((action) => (
+                <button
+                  key={action.id}
+                  className={action.primary ? 'btn-approve' : 'btn-deny'}
+                  onClick={() => void actOnSystemNotification(notification.id, action.id)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
       {notifications.map(({ agentId, notification }) => (
         <div
           key={`${agentId}-${notification.seq}`}
@@ -101,7 +125,7 @@ export function ApprovalsRail() {
           </div>
         </div>
       ))}
-      {items.length === 0 && takeovers.length === 0 && notifications.length === 0 ? (
+      {items.length === 0 && takeovers.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
         <div className="empty">No notifications. Completed agent turns and requests for attention appear here.</div>
       ) : (
         items.map(({ agentId, approval }) => {

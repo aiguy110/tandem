@@ -46,28 +46,46 @@ type asset struct {
 	DownloadURL string `json:"browser_download_url"`
 }
 
+// CheckResult describes the latest release without downloading any assets.
+type CheckResult struct {
+	CurrentVersion string
+	LatestVersion  string
+	Available      bool
+}
+
+// Check queries the latest release. Development builds and installations with
+// update checks disabled return an empty, unavailable result without network
+// access.
+func Check(ctx context.Context, opts Options) (CheckResult, error) {
+	result := CheckResult{CurrentVersion: opts.CurrentVersion}
+	if isDevelopmentVersion(opts.CurrentVersion) || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
+		return result, nil
+	}
+	setDefaults(&opts)
+	latest, err := fetchLatest(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+	result.LatestVersion = latest.TagName
+	result.Available, err = newerVersion(opts.CurrentVersion, latest.TagName)
+	return result, err
+}
+
 // CheckAtStartup checks the latest GitHub release and reports how to update. It
 // never prompts, downloads, or changes the running executable. Development
 // builds and an explicitly disabled check do no network I/O.
 func CheckAtStartup(ctx context.Context, opts Options) error {
-	if isDevelopmentVersion(opts.CurrentVersion) || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
-		return nil
-	}
-	setDefaults(&opts)
-
-	latest, err := fetchLatest(ctx, opts)
+	result, err := Check(ctx, opts)
 	if err != nil {
 		return err
 	}
-	newer, err := newerVersion(opts.CurrentVersion, latest.TagName)
-	if err != nil {
-		return err
-	}
-	if !newer {
+	if !result.Available {
 		return nil
 	}
-
-	fmt.Fprintf(opts.Log, "tandem: a newer release is available: %s (running %s); run 'tandem update' to install it\n", latest.TagName, opts.CurrentVersion)
+	if opts.Log == nil {
+		opts.Log = os.Stderr
+	}
+	fmt.Fprintf(opts.Log, "tandem: a newer release is available: %s (running %s); run 'tandem update' to install it\n", result.LatestVersion, result.CurrentVersion)
 	return nil
 }
 

@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/aiguy110/tandem/internal/automationmcp"
 	"github.com/aiguy110/tandem/internal/buildinfo"
@@ -131,7 +129,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if !updated {
 			return 0
 		}
-		needsReview, err := updatedBinaryNeedsReview()
+		needsReview, err := updater.UpdatedBinaryNeedsReview("")
 		if err != nil {
 			fmt.Fprintf(stderr, "tandem: updated successfully, but could not check whether setup is needed: %v\n", err)
 			return 0
@@ -157,22 +155,7 @@ func setupHome() (string, error) {
 	return filepath.Join(home, ".tandem"), nil
 }
 
-func updatedBinaryNeedsReview() (bool, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return false, err
-	}
-	output, err := exec.Command(executable, "setup", "--needs-review").Output()
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(string(output)) == "true", nil
-}
-
 func runDaemon(stdout, stderr io.Writer) int {
-	if err := updater.CheckAtStartup(context.Background(), updater.Options{CurrentVersion: buildinfo.Version, Log: stdout}); err != nil {
-		fmt.Fprintf(stderr, "tandem: update check failed: %v\n", err)
-	}
 	if err := daemon.Run(stdout); err != nil {
 		fmt.Fprintf(stderr, "run daemon: %v\n", err)
 		return 1

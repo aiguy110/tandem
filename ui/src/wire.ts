@@ -119,6 +119,20 @@ export interface Approval {
   options: { optionId: string; name: string }[];
 }
 
+export interface SystemNotificationAction {
+  id: string;
+  label: string;
+  primary?: boolean;
+}
+
+export interface SystemNotification {
+  id: string;
+  severity: 'success' | 'attention' | 'failure';
+  title: string;
+  message?: string;
+  actions?: SystemNotificationAction[];
+}
+
 export interface RepoInfo {
   path: string;
   name: string;
@@ -401,6 +415,8 @@ export type ClientMsg =
   | { t: 'set_audio_focus'; agentId: string; focused: boolean; corrId?: string }
   | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
+  | { t: 'list_system_notifications'; corrId?: string }
+  | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
   | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; corrId?: string }
@@ -461,6 +477,7 @@ export type ServerMsg =
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
+  | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }

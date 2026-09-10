@@ -32,6 +32,7 @@ import type {
   ServerMsg,
   SessionConfigOption,
   SessionModeState,
+  SystemNotification,
   SlashCommand,
   SpawnSpec,
   SpawnOptions,
@@ -238,6 +239,8 @@ interface StoreState {
   // matchMedia breakpoint at boot, then user-toggleable regardless of width.
   agentsRailCollapsed: boolean;
   approvalsRailCollapsed: boolean;
+  // Daemon-owned operational notifications, including self-update actions.
+  systemNotifications: SystemNotification[];
 
   // actions
   boot: () => void;
@@ -270,6 +273,7 @@ interface StoreState {
   openShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
+  actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string, harness?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
   listWorkspaceEntries: (agentId: string, path: string) => Promise<WorkspaceEntry[]>;
@@ -520,6 +524,9 @@ export const useStore = create<StoreState>((set, get) => {
         }
         break;
       }
+      case 'system_notifications':
+        set({ systemNotifications: msg.notifications });
+        return;
       case 'profiles': {
         const pending = msg.corrId ? pendingProfiles.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -841,6 +848,7 @@ export const useStore = create<StoreState>((set, get) => {
       // Rediscover agents (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
       client.send({ t: 'list_agent_catalog' });
+      client.send({ t: 'list_system_notifications' });
       // Also re-subscribe to anything we already track, immediately (idempotent).
       for (const id of get().order) subscribeAgent(id);
     },
@@ -869,6 +877,7 @@ export const useStore = create<StoreState>((set, get) => {
     browserSubAgent: null,
     agentsRailCollapsed: isNarrowViewport(),
     approvalsRailCollapsed: isNarrowViewport(),
+    systemNotifications: [],
 
     boot: () => {
       const tok = resolveToken();
@@ -1086,6 +1095,18 @@ export const useStore = create<StoreState>((set, get) => {
           resolve(r);
         });
         client.send({ t: 'spawn_agent', spec, corrId });
+      }),
+    actOnSystemNotification: (notificationId, action) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (result.agentId && !result.error) {
+            get().refreshAgents();
+            set({ focusedId: result.agentId, pane: 'chat' });
+          }
+          resolve(result);
+        });
+        client.send({ t: 'system_notification_action', notificationId, action, corrId });
       }),
     getSpawnOptions: (agent, cwd, harness) =>
       new Promise<SpawnOptions>((resolve, reject) => {
@@ -1327,8 +1348,8 @@ export function allTurnNotifications(st: StoreState): { agentId: string; notific
 // Notifications-panel badge summary: total items across every agent (unread
 // turns + approvals + takeovers) and the highest severity among them.
 export function notificationsSummary(st: StoreState): { total: number; severity: NotifSeverity | null } {
-  const severities: NotifSeverity[] = [];
-  let total = 0;
+  const severities: NotifSeverity[] = st.systemNotifications.map((n) => n.severity);
+  let total = st.systemNotifications.length;
   for (const id of Object.keys(st.agents)) {
     const badge = agentBadge(st.agents[id]);
     total += badge.count;

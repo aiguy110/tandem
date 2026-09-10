@@ -44,13 +44,7 @@ func (d *deferredShutdown) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.mu.Lock()
-	already := d.requested
-	if !already {
-		d.requested = true
-		go d.wait()
-	}
-	d.mu.Unlock()
+	_, already := d.Request()
 
 	w.Header().Set("Content-Type", "text/plain")
 	flag := 0
@@ -58,6 +52,19 @@ func (d *deferredShutdown) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		flag = 1
 	}
 	_, _ = fmt.Fprintf(w, "%d %d\n", d.agents.ActiveTurnCount(), flag)
+}
+
+// Request schedules a clean shutdown after all active turns finish. It is
+// shared by the localhost deployment endpoint and the in-app update action.
+func (d *deferredShutdown) Request() (active int, already bool) {
+	d.mu.Lock()
+	already = d.requested
+	if !already {
+		d.requested = true
+		go d.wait()
+	}
+	d.mu.Unlock()
+	return d.agents.ActiveTurnCount(), already
 }
 
 func (d *deferredShutdown) wait() {
