@@ -29,6 +29,34 @@ func TestDebugConfigCommand(t *testing.T) {
 	}
 }
 
+func TestMCPAddWritesGlobalAndProjectConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TANDEM_HOME", home)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mcp", "add", "global-tools", "npx", "-y", "server"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("global mcp add: code=%d stderr=%q", code, stderr.String())
+	}
+	servers, err := config.LoadMCPServers(home, "")
+	if err != nil || servers["global-tools"].Command != "npx" || !strings.EqualFold(strings.Join(servers["global-tools"].Args, " "), "-y server") {
+		t.Fatalf("global MCP configuration = %#v, %v", servers, err)
+	}
+
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"mcp", "add", "--project", "project-tools", "node", "server.js"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("project mcp add: code=%d stderr=%q", code, stderr.String())
+	}
+	servers, err = config.LoadMCPServers(home, project)
+	if err != nil || servers["project-tools"].Command != "node" || servers["global-tools"].Command != "npx" {
+		t.Fatalf("project MCP configuration = %#v, %v", servers, err)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	oldVersion, oldCommit, oldBuildTime := buildinfo.Version, buildinfo.Commit, buildinfo.BuildTime
 	t.Cleanup(func() {

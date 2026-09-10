@@ -82,6 +82,21 @@ agents:
 
 harnesses: {}
 
+# Harness-neutral MCP servers are declared once by Tandem and supplied to every
+# ACP agent it spawns. Project-local servers live in .tandem/.config.yml with
+# the same mcpServers shape; a project entry with the same name overrides this
+# global entry. `tandem mcp add NAME COMMAND [ARGS...]` writes this block, and
+# `tandem mcp add --project ...` writes the project-local file. New agent
+# sessions see additions immediately; existing sessions keep their original
+# MCP declarations.
+#
+# mcpServers:
+#   filesystem:
+#     command: npx
+#     args: [-y, "@modelcontextprotocol/server-filesystem", "/path/to/root"]
+#     env:
+#       EXAMPLE_TOKEN: ""
+
 # The `tandem setup` wizard writes an
 # operator-owned `settings:` block to $TANDEM_HOME/config.yml, separate from
 # the agent catalog above. It is never present in this shipped example file;
@@ -92,7 +107,7 @@ harnesses: {}
 # override it, and built-in defaults fill any gaps.
 #
 # settings:
-#   configVersion: 1        # written by tandem setup; tracks config compatibility
+#   configVersion: 2        # written by tandem setup; tracks config compatibility
 #   projectRoots:          # dirs scanned for repos in the spawn palette
 #     - /home/you/Projects
 #   bind: 127.0.0.1        # HTTP + WS listen address

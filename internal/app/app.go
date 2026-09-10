@@ -18,7 +18,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [setup [--agent|--complete]|update|version|debug config]"
+const usage = "usage: tandem [setup [--agent|--complete]|mcp add [--project] NAME COMMAND [ARGS...]|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -62,6 +62,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, string(data))
 		return 0
+	}
+	if len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
+		return addMCP(args[2:], stdout, stderr)
 	}
 	if len(args) == 0 {
 		return runDaemon(stdout, stderr)
@@ -141,6 +144,52 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
 		return 2
+	}
+}
+
+func addMCP(args []string, stdout, stderr io.Writer) int {
+	project := false
+	if len(args) > 0 && args[0] == "--project" {
+		project = true
+		args = args[1:]
+	}
+	if len(args) < 2 {
+		fmt.Fprintln(stderr, "usage: tandem mcp add [--project] NAME COMMAND [ARGS...]")
+		return 2
+	}
+	home, err := setupHome()
+	if err != nil {
+		fmt.Fprintf(stderr, "mcp: resolve TANDEM_HOME: %v\n", err)
+		return 1
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "mcp: working directory: %v\n", err)
+		return 1
+	}
+	if project {
+		cwd = projectRoot(cwd)
+	}
+	path, err := config.AddMCPServer(home, cwd, args[0], config.MCPServer{Command: args[1], Args: args[2:]}, project)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcp: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "added MCP server %q to %s; new Tandem agent sessions will use it immediately\n", args[0], path)
+	return 0
+}
+
+// projectRoot finds the nearest Git worktree/repository root. A .git entry may
+// be either a directory or a git-worktree pointer file.
+func projectRoot(cwd string) string {
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return cwd
+		}
 	}
 }
 
