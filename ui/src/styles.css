@@ -156,8 +156,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .rail { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; position: relative; }
 .rail-r { border-right: none; border-left: 1px solid var(--border); }
 .dock-resize-handle { position: absolute; z-index: 3; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
-.dock-resize-handle-right { right: -4px; }
-.dock-resize-handle-left { left: -4px; }
+.dock-resize-handle-right { right: 0; }
+.dock-resize-handle-left { left: 0; }
 .dock-resize-handle:hover, body.dock-resizing .dock-resize-handle { background: var(--agent); opacity: .45; }
 body.dock-resizing { cursor: col-resize; user-select: none; }
 body.dock-resizing .app { transition: none; }
