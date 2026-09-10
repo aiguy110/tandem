@@ -478,6 +478,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .card-body-wrap.open { grid-template-rows: 1fr; }
 .card-body-wrap.entering { animation: card-body-expand .225s var(--ease-out) both; }
+.card-body-wrap.collapsing { animation: card-body-collapse .225s var(--ease-in) both; }
 .card-body-inner { min-height: 0; overflow: hidden; }
 .card-body {
   border-top: 1px solid var(--border); padding: 10px 12px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); white-space: pre-wrap;
@@ -485,6 +486,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .card-body-wrap.open .card-body { opacity: 1; transform: none; }
 @keyframes card-body-expand { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
+@keyframes card-body-collapse { from { grid-template-rows: 1fr; } to { grid-template-rows: 0fr; } }
 @keyframes card-body-content-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .card-body-wrap.entering .card-body { animation: card-body-content-in .225s var(--ease-out) both; }
 .tool-text-section { margin-bottom: 10px; }
