@@ -116,6 +116,18 @@ func TestStaticUIAndSPAFallback(t *testing.T) {
 	}
 }
 
+func TestVersionEndpoint(t *testing.T) {
+	h := New(Options{Version: "v1.2.3"})
+	w := request(t, h, http.MethodGet, "/version", nil, nil)
+	if w.Code != http.StatusOK || w.Body.String() != "{\"version\":\"v1.2.3\"}\n" || w.Header().Get("Cache-Control") != noCache {
+		t.Fatalf("response=%d headers=%v body=%q", w.Code, w.Header(), w.Body.String())
+	}
+	w = request(t, h, http.MethodPost, "/version", nil, nil)
+	if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("post response=%d allow=%q", w.Code, w.Header().Get("Allow"))
+	}
+}
+
 func TestExternalUIAndTraversal(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/index.html", []byte("external shell"), 0o600); err != nil {

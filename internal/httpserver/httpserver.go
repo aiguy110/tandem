@@ -44,7 +44,11 @@ type configuredUploadStore interface {
 }
 
 type Options struct {
-	Token              string
+	Token string
+	// Version identifies the daemon serving this UI. It is intentionally
+	// available without bearer authentication: the UI needs it before a user
+	// has supplied a token, and it contains no sensitive information.
+	Version            string
 	BootstrapURL       string
 	UIDir              string
 	UI                 fs.FS
@@ -76,11 +80,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if r.URL.Path == "/version" {
+		h.serveVersion(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		h.serveAPI(w, r)
 		return
 	}
 	h.serveUI(w, r)
+}
+
+func (h *Handler) serveVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", noCache)
+	writeJSON(w, http.StatusOK, map[string]string{"version": h.opts.Version})
 }
 
 func unsafePath(p string) bool {
