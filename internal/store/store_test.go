@@ -34,7 +34,9 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 	s, _ := openTestStore(t)
 	s.now = func() time.Time { return time.UnixMilli(1700000009999) }
 
-	for name, want := range map[string]string{"journal_mode": "wal", "synchronous": "1", "foreign_keys": "1", "user_version": "0"} {
+	// user_version is Tandem's repair marker, not a schema number: Open bumps
+	// it as one-time data fixups land (1 = message_audio duration reset).
+	for name, want := range map[string]string{"journal_mode": "wal", "synchronous": "1", "foreign_keys": "1", "user_version": "1"} {
 		var got string
 		if err := s.db.QueryRow("PRAGMA " + name).Scan(&got); err != nil {
 			t.Fatal(err)
@@ -545,6 +547,43 @@ INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES ('leg
 	}
 	if got, err := s.MessageAudio("legacy-1", 4); err != nil || got.DurationMs != 1500 {
 		t.Fatalf("updated row=%#v err=%v", got, err)
+	}
+}
+
+// Durations written before the MP3 parser's bitrate tables were corrected are
+// about half the true clip length. Open clears them exactly once so the
+// read-triggered backfill recomputes from the stored bytes; a second Open must
+// leave freshly written durations alone.
+func TestOpenResetsStaleMessageAudioDurationsOnce(t *testing.T) {
+	s, path := openTestStore(t)
+	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-3", Seq: 2, MIMEType: "audio/mpeg", Data: []byte("clip"), DurationMs: 5903}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("PRAGMA user_version = 0"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.MessageAudio("audio-3", 2)
+	if err != nil || got == nil || got.DurationMs != 0 {
+		t.Fatalf("stale duration should be cleared: row=%#v err=%v", got, err)
+	}
+	if err := reopened.UpdateMessageAudioDuration("audio-3", 2, 11424); err != nil {
+		t.Fatal(err)
+	}
+	reopened.Close()
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if got, err := again.MessageAudio("audio-3", 2); err != nil || got.DurationMs != 11424 {
+		t.Fatalf("repair must not repeat: row=%#v err=%v", got, err)
 	}
 }
 

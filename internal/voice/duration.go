@@ -142,16 +142,20 @@ func synchsafeInt(b []byte) int {
 	return int(b[0])<<21 | int(b[1])<<14 | int(b[2])<<7 | int(b[3])
 }
 
+// Both tables are indexed by the header's raw 2-bit layer field, which counts
+// *down* from Layer I: 3=Layer I, 2=Layer II, 1=Layer III. Ordering the rows
+// the other way silently reads a neighbouring layer's bitrates, which yields
+// wrong frame lengths (and so a wrong duration) rather than a parse failure.
 var mp3BitrateMPEG1 = [4][16]int{
-	1: {0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, -1}, // Layer I
+	3: {0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, -1}, // Layer I
 	2: {0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, -1},    // Layer II
-	3: {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1},     // Layer III
+	1: {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1},     // Layer III
 }
 
 var mp3BitrateMPEG2 = [4][16]int{
-	1: {0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, -1}, // Layer I
+	3: {0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, -1}, // Layer I
 	2: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1},      // Layer II
-	3: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1},      // Layer III
+	1: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1},      // Layer III
 }
 
 func mp3Bitrate(version, layer byte, idx int) int {

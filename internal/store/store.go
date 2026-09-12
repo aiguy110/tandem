@@ -580,6 +580,26 @@ WHERE enabled != 0`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate agent_audio_settings.enabledAfterSeq: %w", err)
 	}
+	// Clip durations persisted before the MP3 frame walk's bitrate tables were
+	// fixed are roughly half the true length (see internal/voice/duration.go).
+	// Zeroing them once re-arms the read-triggered backfill, which recomputes
+	// from the stored bytes — no provider work, no re-render. user_version is
+	// unused otherwise, so it doubles as the "already repaired" marker.
+	var audioDurationRepair int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&audioDurationRepair); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read schema version: %w", err)
+	}
+	if audioDurationRepair < 1 {
+		if _, err := db.Exec("UPDATE message_audio SET durationMs = 0"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("reset message audio durations: %w", err)
+		}
+		if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("record schema version: %w", err)
+		}
+	}
 	// Phase-6 ownership columns can be reconstructed from the atomically
 	// persisted source checkpoints, avoiding a needless rewrite (and later
 	// grace-period purge) of unchanged transcripts on upgrade.

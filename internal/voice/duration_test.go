@@ -248,3 +248,45 @@ func TestDurationDispatchesByMIMEType(t *testing.T) {
 		t.Fatalf("expected ok=true for audio/mpeg with a parameter suffix")
 	}
 }
+
+// TestMP3DurationLiteralHeaders pins the parser against hand-written headers
+// whose frame length and duration come from the MPEG spec, not from this
+// package's own tables. The rest of this file builds its fixtures with
+// buildMP3Frame, which calls mp3Bitrate — so a wrong bitrate table stays
+// self-consistent there and the resulting duration error goes unnoticed.
+// These cases are the independent check; the MPEG2 Layer III one is the
+// format Tandem's TTS provider actually returns (mono 24kHz, 128kbps).
+func TestMP3DurationLiteralHeaders(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header     [4]byte
+		frameLen   int // bytes per frame, per the spec
+		frames     int
+		wantMillis int64
+	}{
+		// MPEG2 Layer III, 128kbps, 24kHz: 72 * 128000 / 24000 = 384 bytes,
+		// 576 samples / 24000Hz = 24ms per frame.
+		"mpeg2 layer III 128kbps 24kHz": {header: [4]byte{0xFF, 0xF3, 0xC4, 0x00}, frameLen: 384, frames: 100, wantMillis: 2400},
+		// MPEG1 Layer III, 128kbps, 44.1kHz: 144 * 128000 / 44100 = 417 bytes,
+		// 1152 samples / 44100Hz = 26.122ms per frame.
+		"mpeg1 layer III 128kbps 44.1kHz": {header: [4]byte{0xFF, 0xFB, 0x90, 0x00}, frameLen: 417, frames: 100, wantMillis: 2612},
+		// MPEG1 Layer I, 128kbps, 44.1kHz: (12 * 128000 / 44100) * 4 = 136
+		// bytes, 384 samples / 44100Hz = 8.707ms per frame.
+		"mpeg1 layer I 128kbps 44.1kHz": {header: [4]byte{0xFF, 0xFF, 0x40, 0x00}, frameLen: 136, frames: 100, wantMillis: 870},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var data []byte
+			for i := 0; i < tc.frames; i++ {
+				frame := make([]byte, tc.frameLen)
+				copy(frame, tc.header[:])
+				data = append(data, frame...)
+			}
+			got, ok := mp3DurationMillis(data)
+			if !ok {
+				t.Fatalf("expected ok=true for %s", name)
+			}
+			if got != tc.wantMillis {
+				t.Fatalf("duration = %dms, want %dms", got, tc.wantMillis)
+			}
+		})
+	}
+}
