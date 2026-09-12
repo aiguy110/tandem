@@ -61,7 +61,11 @@ The master proxies the same live controls available for a local agent, including
 - prompts, queued prompts, interrupts, permissions, modes, and configuration;
 - transcript events, raw terminal and workspace-shell input/output;
 - lifecycle, rename, close preview, diff, and close operations;
-- browser screencast frames, input, takeover notifications, and control ownership.
+- browser screencast frames, input, takeover notifications, and control ownership;
+- spoken transcript playback: the clip is rendered (and cached) by the host that owns
+  the transcript, using that host's configured voice provider, and travels back over
+  the tunnel so the master can serve it from its ordinary audio route. A master with no
+  voice provider of its own can still play a remote agent's messages.
 
 The slave continues to serve its own local UI. Local users and the master are peer
 controllers of the slave's daemon-owned state, so updates and control changes are

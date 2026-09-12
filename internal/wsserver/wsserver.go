@@ -26,6 +26,7 @@ import (
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/aiguy110/tandem/internal/workspace"
 	"github.com/gorilla/websocket"
 )
@@ -79,6 +80,11 @@ type Options struct {
 	// AudioReady is AudioReadySeqs plus each clip's known duration (0 means
 	// unknown), for spacing timeline tick marks without downloading audio.
 	AudioReady func(string) []store.MessageAudioClip
+	// RenderMessageAudio renders (or returns the cached) clip for one
+	// transcript message. It backs the render_message_audio command, which
+	// exists so a master can fetch a federated agent's audio over the tunnel;
+	// browsers fetch local clips from the authenticated HTTP audio route.
+	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
 }
 
 // Federation is the master-side transport used for host-qualified browser
@@ -392,6 +398,35 @@ func (c *connection) close() {
 	})
 }
 
+// renderMessageAudio answers with one message's clip inline. Only a master
+// reaching a federated agent uses this path — the tunnel carries protocol JSON
+// only, so the bytes ride along base64-encoded like raw_pty and browser_frame.
+func (c *connection) renderMessageAudio(m clientMessage) {
+	reply := func(extra map[string]any) {
+		envelope := map[string]any{"t": "message_audio", "agentId": m.AgentID, "seq": m.Seq}
+		for k, v := range extra {
+			envelope[k] = v
+		}
+		c.send(withCorr(envelope, m.CorrID))
+	}
+	if m.AgentID == "" || m.Seq < 1 {
+		reply(map[string]any{"error": "agentId and seq are required"})
+		return
+	}
+	if c.server.opts.RenderMessageAudio == nil {
+		reply(map[string]any{"error": "voice rendering is not configured; run tandem setup"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	audio, err := c.server.opts.RenderMessageAudio(ctx, m.AgentID, m.Seq)
+	if err != nil {
+		reply(map[string]any{"error": err.Error()})
+		return
+	}
+	reply(map[string]any{"mimeType": audio.MIMEType, "data": base64.StdEncoding.EncodeToString(audio.Data)})
+}
+
 func (c *connection) setAudioFocus(m clientMessage) {
 	clientID := fmt.Sprintf("%p", c)
 	c.mu.Lock()
@@ -501,7 +536,7 @@ func (c *connection) handle(m clientMessage) {
 		m.HostID = m.Spec.HostID
 	}
 	if m.HostID == "" && m.AgentID != "" {
-		if hostID, agentID, ok := splitRemoteAgentID(m.AgentID); ok {
+		if hostID, agentID, ok := SplitRemoteAgentID(m.AgentID); ok {
 			m.HostID, m.AgentID = hostID, agentID
 		}
 	}
@@ -949,6 +984,8 @@ func (c *connection) handle(m clientMessage) {
 		c.commandAck(m, m.AgentID)
 	case "set_audio_focus":
 		c.setAudioFocus(m)
+	case "render_message_audio":
+		c.renderMessageAudio(m)
 	case "set_audio_position":
 		updatedAt, err := c.server.opts.Registry.SetAudioPosition(m.AgentID, m.Seq, m.PositionMs)
 		if err != nil {
@@ -1201,7 +1238,9 @@ func (c *connection) forwardFederation(m clientMessage) {
 func remoteAgentID(hostID, agentID string) string {
 	return "federation~" + base64.RawURLEncoding.EncodeToString([]byte(hostID)) + "~" + base64.RawURLEncoding.EncodeToString([]byte(agentID))
 }
-func splitRemoteAgentID(id string) (hostID, agentID string, ok bool) {
+// SplitRemoteAgentID decodes a namespaced federated agent ID back into the
+// owning host and that host's local agent ID.
+func SplitRemoteAgentID(id string) (hostID, agentID string, ok bool) {
 	parts := strings.SplitN(id, "~", 3)
 	if len(parts) != 3 || parts[0] != "federation" || parts[1] == "" || parts[2] == "" {
 		return "", "", false

@@ -2,6 +2,7 @@ package wsserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
+	"github.com/aiguy110/tandem/internal/voice"
 	"github.com/aiguy110/tandem/internal/workspace"
 	"github.com/gorilla/websocket"
 )
@@ -339,6 +341,10 @@ func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter,
 }
 
 func setupWSHistory(t *testing.T, queue int, history HistoryLifecycle) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
+	return setupWSOptions(t, queue, history, nil)
+}
+
+func setupWSOptions(t *testing.T, queue int, history HistoryLifecycle, tweak func(*Options)) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -354,7 +360,11 @@ func setupWSHistory(t *testing.T, queue int, history HistoryLifecycle) (*store.S
 		t.Fatal(err)
 	}
 	b := &testBackend{sessions: map[string]*session.Session{"a": s}}
-	server := httptest.NewServer(New(Options{Token: "secret", Registry: b, WriteQueue: queue, History: history, Automation: db}))
+	opts := Options{Token: "secret", Registry: b, WriteQueue: queue, History: history, Automation: db}
+	if tweak != nil {
+		tweak(&opts)
+	}
+	server := httptest.NewServer(New(opts))
 	t.Cleanup(func() { server.Close(); db.Close() })
 	return db, b, a, server, "ws" + strings.TrimPrefix(server.URL, "http")
 }
@@ -1172,4 +1182,57 @@ func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) 
 		t.Fatal("slow websocket blocked event producer")
 	}
 	waitHead(t, restored, 105)
+}
+
+func TestRenderMessageAudioReturnsInlineClipAndSurfacesFailures(t *testing.T) {
+	var gotAgent string
+	var gotSeq int64
+	fail := false
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(o *Options) {
+		o.RenderMessageAudio = func(_ context.Context, agentID string, seq int64) (voice.Audio, error) {
+			gotAgent, gotSeq = agentID, seq
+			if fail {
+				return voice.Audio{}, errors.New("provider is down")
+			}
+			return voice.Audio{Data: []byte("mp3-bytes"), MIMEType: "audio/mpeg"}, nil
+		}
+	})
+	c := dial(t, url)
+
+	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "seq": float64(7), "corrId": "audio-1"})
+	got := recv(t, c)
+	if got["t"] != "message_audio" || got["corrId"] != "audio-1" || got["agentId"] != "a" || got["seq"] != float64(7) {
+		t.Fatalf("envelope=%#v", got)
+	}
+	if got["mimeType"] != "audio/mpeg" {
+		t.Fatalf("mimeType=%#v", got["mimeType"])
+	}
+	data, err := base64.StdEncoding.DecodeString(got["data"].(string))
+	if err != nil || string(data) != "mp3-bytes" {
+		t.Fatalf("data=%#v err=%v", got["data"], err)
+	}
+	if gotAgent != "a" || gotSeq != 7 {
+		t.Fatalf("renderer called with %q/%d", gotAgent, gotSeq)
+	}
+
+	fail = true
+	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "seq": float64(7), "corrId": "audio-2"})
+	if got := recv(t, c); got["t"] != "message_audio" || got["corrId"] != "audio-2" || got["error"] != "provider is down" {
+		t.Fatalf("failure envelope=%#v", got)
+	}
+
+	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "corrId": "audio-3"})
+	if got := recv(t, c); got["error"] != "agentId and seq are required" {
+		t.Fatalf("missing seq envelope=%#v", got)
+	}
+}
+
+func TestRenderMessageAudioWithoutRendererReportsConfiguration(t *testing.T) {
+	_, _, _, _, url := setupWS(t, 0)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "seq": float64(2), "corrId": "audio-1"})
+	got := recv(t, c)
+	if got["t"] != "message_audio" || got["error"] != "voice rendering is not configured; run tandem setup" {
+		t.Fatalf("envelope=%#v", got)
+	}
 }

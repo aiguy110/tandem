@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -262,19 +263,6 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		defer cancel()
 		_ = agents.DisposeAll(disposeCtx)
 	}()
-	httpHandler := httpserver.New(httpserver.Options{
-		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
-		Uploads: agents,
-		Voice:   voiceRenderer,
-		MessageText: func(agentID string, seq int64) (string, error) {
-			return transcriptMessageText(db, agentID, seq)
-		},
-		RenderMessageAudio: audioCache.render,
-		AgentExists: func(id string) bool {
-			agent, lookupErr := db.Agent(id)
-			return lookupErr == nil && agent != nil
-		},
-	})
 	deferred := newDeferredShutdown(ctx, token, agents)
 	notificationCenter := notifications.New()
 	loopback, err := federation.NewLoopbackLocal(origin, token)
@@ -289,6 +277,36 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	httpHandler := httpserver.New(httpserver.Options{
+		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
+		Uploads: agents,
+		Voice:   voiceRenderer,
+		MessageText: func(agentID string, seq int64) (string, error) {
+			return transcriptMessageText(db, agentID, seq)
+		},
+		// A federated agent's transcript lives on the host that owns it, so
+		// its clip is rendered there and carried back over the tunnel.
+		RenderMessageAudio: func(renderCtx context.Context, agentID string, seq int64) (voice.Audio, error) {
+			if hostID, localID, ok := wsserver.SplitRemoteAgentID(agentID); ok {
+				return remoteMessageAudio(renderCtx, federationService, hostID, localID, seq)
+			}
+			return audioCache.render(renderCtx, agentID, seq)
+		},
+		AgentExists: func(id string) bool {
+			if hostID, _, ok := wsserver.SplitRemoteAgentID(id); ok {
+				// Only the owning host can confirm the agent; accept any ID
+				// naming a host we know and let the remote call 404 instead.
+				for _, host := range federationService.Hosts() {
+					if host.ID == hostID {
+						return true
+					}
+				}
+				return false
+			}
+			agent, lookupErr := db.Agent(id)
+			return lookupErr == nil && agent != nil
+		},
+	})
 	updateService := updater.NewService(updater.ServiceOptions{
 		Updater: updater.Options{CurrentVersion: buildinfo.Version, Log: stdout},
 		Home:    cfg.Home, Center: notificationCenter, Agents: agents, Log: stdout,
@@ -353,7 +371,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render})
 	defer handler.Close()
 	updateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -483,6 +501,42 @@ func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, 
 		return "", httpserver.ErrMessageNotFound
 	}
 	return text.String(), nil
+}
+
+// remoteMessageAudio renders one federated agent's clip on the host that owns
+// its transcript. The tunnel carries browser-protocol JSON only, so the bytes
+// come back base64-encoded and are decoded here for the ordinary audio route.
+func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, agentID string, seq int64) (voice.Audio, error) {
+	if svc == nil {
+		return voice.Audio{}, errors.New("remote hosts are unavailable")
+	}
+	payload, err := json.Marshal(map[string]any{"t": "render_message_audio", "agentId": agentID, "seq": seq})
+	if err != nil {
+		return voice.Audio{}, err
+	}
+	response, err := svc.Call(ctx, hostID, payload)
+	if err != nil {
+		return voice.Audio{}, err
+	}
+	var envelope struct {
+		Error    string `json:"error"`
+		MIMEType string `json:"mimeType"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return voice.Audio{}, fmt.Errorf("remote host returned invalid audio response: %w", err)
+	}
+	if envelope.Error != "" {
+		return voice.Audio{}, errors.New(envelope.Error)
+	}
+	data, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil {
+		return voice.Audio{}, fmt.Errorf("remote host returned undecodable audio: %w", err)
+	}
+	if len(data) == 0 {
+		return voice.Audio{}, errors.New("remote host returned no audio")
+	}
+	return voice.Audio{Data: data, MIMEType: envelope.MIMEType}, nil
 }
 
 // messageAudioCache owns all provider work and retained clips. The browser

@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +19,9 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/voice"
@@ -332,4 +337,115 @@ func fileMode(t *testing.T, name string) os.FileMode {
 		t.Fatal(err)
 	}
 	return info.Mode()
+}
+
+// federatedAudioLocal stands in for a slave's browser-protocol bridge: it
+// answers render_message_audio the way that host's own wsserver would.
+type federatedAudioLocal struct {
+	err string
+}
+
+func (federatedAudioLocal) Snapshot(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"t":"agents","agents":[]}`), nil
+}
+func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
+	var m struct {
+		T       string `json:"t"`
+		AgentID string `json:"agentId"`
+		Seq     int64  `json:"seq"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m.T != "render_message_audio" {
+		return nil, fmt.Errorf("unexpected command %q", m.T)
+	}
+	envelope := map[string]any{"t": "message_audio", "agentId": m.AgentID, "seq": m.Seq}
+	if l.err != "" {
+		envelope["error"] = l.err
+	} else {
+		envelope["mimeType"] = "audio/mpeg"
+		envelope["data"] = base64.StdEncoding.EncodeToString([]byte("remote-" + m.AgentID))
+	}
+	return json.Marshal(envelope)
+}
+
+// connectFederatedHost performs the real registration handshake so the test
+// exercises Call over a live tunnel rather than a stubbed transport.
+func connectFederatedHost(t *testing.T, local federation.Local) (*federation.Service, string) {
+	t.Helper()
+	masterStore, err := store.Open(filepath.Join(t.TempDir(), "master.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = masterStore.Close() })
+	center := notifications.New()
+	master, err := federation.New(federation.Options{Store: masterStore, Notifications: center})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(master)
+	t.Cleanup(server.Close)
+	slaveStore, err := store.Open(filepath.Join(t.TempDir(), "slave.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = slaveStore.Close() })
+	slave, err := federation.New(federation.Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: local, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- slave.RunSlave(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	var notification notifications.Notification
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := center.List(); len(got) > 0 {
+			notification = got[0]
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if notification.ID == "" {
+		t.Fatal("slave never requested registration")
+	}
+	if _, _, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	hostID := strings.TrimPrefix(notification.ID, "federation-registration-")
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if peer, _ := masterStore.FederationSlave(hostID); peer != nil && peer.Status == "connected" {
+			return master, hostID
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("slave never reached connected")
+	return nil, ""
+}
+
+func TestRemoteMessageAudioRendersOnTheOwningHost(t *testing.T) {
+	master, hostID := connectFederatedHost(t, federatedAudioLocal{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	audio, err := remoteMessageAudio(ctx, master, hostID, "faraday-66", 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio.Data) != "remote-faraday-66" || audio.MIMEType != "audio/mpeg" {
+		t.Fatalf("audio=%q %q", audio.Data, audio.MIMEType)
+	}
+}
+
+func TestRemoteMessageAudioSurfacesTheOwningHostsError(t *testing.T) {
+	master, hostID := connectFederatedHost(t, federatedAudioLocal{err: "voice rendering is not configured; run tandem setup"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := remoteMessageAudio(ctx, master, hostID, "faraday-66", 12)
+	if err == nil || err.Error() != "voice rendering is not configured; run tandem setup" {
+		t.Fatalf("err=%v", err)
+	}
 }

@@ -250,7 +250,8 @@ type ClientMsg =
   | { t: 'shell_input'; agentId: string; bytesB64: string }
   | { t: 'shell_resize'; agentId: string; cols: number; rows: number }
   | { t: 'shell_close'; agentId: string }
-  | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number }; // seq: 0 clears (see below)
+  | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number } // seq: 0 clears (see below)
+  | { t: 'render_message_audio'; agentId: string; seq: number };       // federation-only, see below
 
 type PromptBlock =
   | { type: 'text'; text: string }
@@ -302,7 +303,9 @@ type ServerMsg =
   | { t: 'browser_frame'; agentId: string; dataB64: string;             // CDP screencast JPEG
       meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; agentId: string; active: boolean;             // lifecycle + wheel
-      controlOwner: 'agent'|'user' };
+      controlOwner: 'agent'|'user' }
+  | { t: 'message_audio'; agentId: string; seq: number;                 // reply to render_message_audio
+      mimeType?: string; data?: string; error?: string };               // data: base64 clip bytes
 
 // WireEvent = AgentEvent plus:
 //   { kind:'raw_pty', dataB64: string }   // agent CLI / native PTY agent
@@ -319,6 +322,14 @@ clip written before duration computation existed and not yet re-read). Both fiel
 emitted together for backward compatibility; new clients should prefer `audioReady`.
 The live `audio_state` event carries the same optional `durationMs` for a clip that
 just finished rendering.
+
+Browsers fetch clip bytes from the authenticated HTTP audio route
+(`POST /api/agents/{id}/messages/{seq}/audio`), not over this socket. The
+`render_message_audio` command exists for federation: a federated agent's transcript
+lives on the host that owns it, so the master renders the clip there over the tunnel —
+which carries protocol JSON only, so the bytes come back base64-encoded in
+`message_audio` like `raw_pty` and `browser_frame` — and then serves them from its own
+audio route under the namespaced agent ID. A UI needs no federation-specific audio code.
 
 The audio player's playback position is daemon-owned so it survives a session switch or
 a closed tab: `set_audio_position` writes one row per agent (last-write-wins, not
