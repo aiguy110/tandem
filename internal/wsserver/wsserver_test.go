@@ -51,6 +51,10 @@ func (f *testFederation) Call(_ context.Context, hostID string, payload json.Raw
 	}
 	_ = json.Unmarshal(payload, &command)
 	switch command.T {
+	case "list_system_notifications":
+		return json.RawMessage(`{"t":"system_notifications","notifications":[{"id":"tandem-update","severity":"attention","title":"Tandem update available","actions":[{"id":"install","label":"Update","primary":true}]}]}`), nil
+	case "system_notification_action":
+		return json.RawMessage(`{"t":"ack"}`), nil
 	case "spawn_agent", "resume_session":
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
 	case "subscribe":
@@ -420,6 +424,71 @@ func TestSystemNotificationsSnapshotBroadcastAndAction(t *testing.T) {
 	}
 	if actedID != "update" || actedAction != "restart" {
 		t.Fatalf("action = %q %q", actedID, actedAction)
+	}
+}
+
+// A host's own update prompt must reach the master's notification panel
+// labelled with its host, and acting on it must run on that host rather than
+// against the master's local update service.
+func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	fed := &testFederation{hosts: []federation.Host{{ID: "host/one", Name: "builder", Status: "connected"}}}
+	center := notifications.New()
+	handler := New(Options{
+		Token: "secret", Registry: backend, Automation: db, Notifications: center, Federation: fed,
+		NotificationAction: func(context.Context, string, string) (string, error) {
+			t.Error("remote notification action was handled locally")
+			return "", nil
+		},
+	})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	// The first snapshot may race the host fetch, so read until the relayed
+	// notification arrives.
+	var remote map[string]any
+	send(t, c, map[string]any{"t": "list_system_notifications", "corrId": "list"})
+	for remote == nil {
+		got := recv(t, c)
+		if got["t"] != "system_notifications" {
+			t.Fatalf("unexpected message = %#v", got)
+		}
+		for _, item := range got["notifications"].([]any) {
+			remote = item.(map[string]any)
+		}
+	}
+	if remote["hostId"] != "host/one" || remote["hostName"] != "builder" || remote["title"] != "Tandem update available" {
+		t.Fatalf("relayed notification = %#v", remote)
+	}
+	id, _ := remote["id"].(string)
+	if id == "tandem-update" {
+		t.Fatal("remote notification kept the host's unqualified ID")
+	}
+
+	send(t, c, map[string]any{"t": "system_notification_action", "notificationId": id, "action": "install", "corrId": "act"})
+	if got := recv(t, c); got["t"] != "ack" || got["corrId"] != "act" || got["hostId"] != "host/one" {
+		t.Fatalf("action ack = %#v", got)
+	}
+	fed.mu.Lock()
+	last := string(fed.calls[len(fed.calls)-1])
+	fed.mu.Unlock()
+	if !strings.Contains(last, `"notificationId":"tandem-update"`) || strings.Contains(last, "host/one") {
+		t.Fatalf("forwarded action payload = %s", last)
+	}
+
+	// A host that drops off takes its notifications with it.
+	fed.hosts = []federation.Host{{ID: "host/one", Name: "builder", Status: "offline"}}
+	fed.mu.Lock()
+	subscriber := fed.subscriber
+	fed.mu.Unlock()
+	subscriber("host/one", json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	for {
+		got := recv(t, c)
+		if got["t"] == "system_notifications" && len(got["notifications"].([]any)) == 0 {
+			break
+		}
 	}
 }
 

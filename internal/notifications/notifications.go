@@ -17,6 +17,11 @@ type Notification struct {
 	Title    string   `json:"title"`
 	Message  string   `json:"message,omitempty"`
 	Actions  []Action `json:"actions,omitempty"`
+	// HostID/HostName are set only by a master relaying a notification that
+	// an agent host raised, so the UI can say which machine it came from.
+	// A daemon never sets them on its own notifications.
+	HostID   string `json:"hostId,omitempty"`
+	HostName string `json:"hostName,omitempty"`
 }
 
 // Center is an in-memory, daemon-owned notification snapshot. Subscribers are

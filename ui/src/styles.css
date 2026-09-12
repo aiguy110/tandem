@@ -303,7 +303,7 @@ body.dock-resizing .app { transition: none; }
 }
 .resume-host select:hover, .spawn-host select:hover { border-color: var(--border-strong); }
 .resume-host select:focus, .spawn-host select:focus { outline: none; border-color: var(--agent); }
-.resume-host-badge { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); }
+.resume-host-badge, .notification-host-badge { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); }
 .agent-rename-input {
   width: 100%; min-width: 0; padding: 1px 4px; font: inherit; color: var(--text);
   background: var(--surface); border: 1px solid var(--agent); border-radius: var(--r-sm);

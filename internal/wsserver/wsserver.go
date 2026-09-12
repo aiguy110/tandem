@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -118,13 +119,18 @@ type Handler struct {
 	connections           map[*connection]struct{}
 	unsubscribe           func()
 	unsubscribeFederation func()
+	// remoteNotifications holds each connected host's own notification
+	// snapshot, keyed by host ID. A master merges these into the list its
+	// browsers see so a host's update prompt is visible — and actionable —
+	// from mission control.
+	remoteNotifications map[string][]notifications.Notification
 }
 
 func New(opts Options) *Handler {
 	if opts.WriteQueue <= 0 {
 		opts.WriteQueue = 8192
 	}
-	h := &Handler{opts: opts, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, EnableCompression: false}, connections: map[*connection]struct{}{}}
+	h := &Handler{opts: opts, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, EnableCompression: false}, connections: map[*connection]struct{}{}, remoteNotifications: map[string][]notifications.Notification{}}
 	if opts.Notifications != nil {
 		h.unsubscribe = opts.Notifications.Subscribe(h.broadcastSystemNotifications)
 	}
@@ -161,7 +167,19 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 	if json.Unmarshal(payload, &envelope) != nil {
 		return
 	}
+	if envelope["t"] == "system_notifications" {
+		var relayed struct {
+			Notifications []notifications.Notification `json:"notifications"`
+		}
+		if json.Unmarshal(payload, &relayed) != nil {
+			return
+		}
+		h.setRemoteNotifications(hostID, relayed.Notifications)
+		h.broadcastSystemNotifications(nil)
+		return
+	}
 	if envelope["t"] == "federation_hosts_changed" {
+		h.syncHostNotifications()
 		h.mu.Lock()
 		connections := make([]*connection, 0, len(h.connections))
 		for c := range h.connections {
@@ -911,8 +929,18 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sess.ID)
 	case "list_system_notifications":
+		// Pick up any host that connected before this master cached its
+		// notifications; the reply below carries whatever is already known.
+		go c.server.syncHostNotifications()
 		c.sendSystemNotifications(m.CorrID)
 	case "system_notification_action":
+		// A host-namespaced ID belongs to the daemon that raised it, whose
+		// own update service owns the install/restart sequence.
+		if hostID, localID, ok := SplitRemoteAgentID(m.NotificationID); ok {
+			m.HostID, m.NotificationID = hostID, localID
+			c.forwardFederation(m)
+			return
+		}
 		if c.server.opts.NotificationAction == nil {
 			c.commandError(m, errors.New("notification actions are unavailable"))
 			return
@@ -1235,6 +1263,9 @@ func (c *connection) forwardFederation(m clientMessage) {
 	c.send(envelope)
 }
 
+// remoteAgentID namespaces a host-local identifier. Agent IDs are the main
+// use; system-notification IDs share the encoding so SplitRemoteAgentID can
+// route an action back to the host that raised it.
 func remoteAgentID(hostID, agentID string) string {
 	return "federation~" + base64.RawURLEncoding.EncodeToString([]byte(hostID)) + "~" + base64.RawURLEncoding.EncodeToString([]byte(agentID))
 }
@@ -1297,21 +1328,115 @@ func (h *Handler) agentSummaries() []any {
 }
 
 func (c *connection) sendSystemNotifications(corrID json.RawMessage) {
-	items := []notifications.Notification{}
-	if c.server.opts.Notifications != nil {
-		items = c.server.opts.Notifications.List()
-	}
-	c.send(withCorr(map[string]any{"t": "system_notifications", "notifications": items}, corrID))
+	c.send(withCorr(map[string]any{"t": "system_notifications", "notifications": c.server.systemNotifications()}, corrID))
 }
 
-func (h *Handler) broadcastSystemNotifications(items []notifications.Notification) {
+// systemNotifications merges this daemon's own notifications with those
+// relayed from connected agent hosts. A remote item keeps the host's title and
+// message but carries a host-namespaced ID, so acting on it routes back over
+// the tunnel to the daemon that raised it rather than hitting the master's own
+// update service.
+func (h *Handler) systemNotifications() []notifications.Notification {
+	items := []notifications.Notification{}
+	if h.opts.Notifications != nil {
+		items = h.opts.Notifications.List()
+	}
+	names := map[string]string{}
+	if h.opts.Federation != nil {
+		for _, host := range h.opts.Federation.Hosts() {
+			names[host.ID] = host.Name
+		}
+	}
+	h.mu.Lock()
+	hostIDs := make([]string, 0, len(h.remoteNotifications))
+	for hostID := range h.remoteNotifications {
+		hostIDs = append(hostIDs, hostID)
+	}
+	sort.Strings(hostIDs)
+	for _, hostID := range hostIDs {
+		for _, item := range h.remoteNotifications[hostID] {
+			item.ID = remoteAgentID(hostID, item.ID)
+			item.HostID, item.HostName = hostID, names[hostID]
+			items = append(items, item)
+		}
+	}
+	h.mu.Unlock()
+	return items
+}
+
+func (h *Handler) setRemoteNotifications(hostID string, items []notifications.Notification) {
+	h.mu.Lock()
+	h.remoteNotifications[hostID] = items
+	h.mu.Unlock()
+}
+
+// syncHostNotifications reconciles the relayed snapshots with the hosts that
+// are actually connected: a disconnected host's notifications are dropped, and
+// a newly connected one is asked for its current list. The initial fetch
+// matters because a host only pushes its notifications when they change, so an
+// update it noticed before this master's tunnel existed would be invisible.
+func (h *Handler) syncHostNotifications() {
+	if h.opts.Federation == nil {
+		return
+	}
+	connected := map[string]bool{}
+	for _, host := range h.opts.Federation.Hosts() {
+		if host.Status == "connected" {
+			connected[host.ID] = true
+		}
+	}
+	h.mu.Lock()
+	dropped := false
+	for hostID := range h.remoteNotifications {
+		if !connected[hostID] {
+			delete(h.remoteNotifications, hostID)
+			dropped = true
+		}
+	}
+	missing := make([]string, 0, len(connected))
+	for hostID := range connected {
+		if _, known := h.remoteNotifications[hostID]; !known {
+			missing = append(missing, hostID)
+		}
+	}
+	h.mu.Unlock()
+	if dropped {
+		h.broadcastSystemNotifications(nil)
+	}
+	for _, hostID := range missing {
+		go h.fetchHostNotifications(hostID)
+	}
+}
+
+func (h *Handler) fetchHostNotifications(hostID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	response, err := h.opts.Federation.Call(ctx, hostID, json.RawMessage(`{"t":"list_system_notifications"}`))
+	if err != nil {
+		return
+	}
+	var envelope struct {
+		T             string                       `json:"t"`
+		Notifications []notifications.Notification `json:"notifications"`
+	}
+	if json.Unmarshal(response, &envelope) != nil || envelope.T != "system_notifications" {
+		return
+	}
+	h.setRemoteNotifications(hostID, envelope.Notifications)
+	h.broadcastSystemNotifications(nil)
+}
+
+// broadcastSystemNotifications matches the notifications.Center subscriber
+// signature; the snapshot is recomputed here because it also folds in remote
+// hosts, which the Center itself knows nothing about.
+func (h *Handler) broadcastSystemNotifications([]notifications.Notification) {
+	message := map[string]any{"t": "system_notifications", "notifications": h.systemNotifications()}
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {
 		connections = append(connections, c)
 	}
 	h.mu.Unlock()
-	message := map[string]any{"t": "system_notifications", "notifications": items}
 	for _, c := range connections {
 		c.send(message)
 	}

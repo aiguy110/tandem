@@ -76,6 +76,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
         <div key={notification.id} className={`appr notification system-notification ${SEVERITY_CLASS[notification.severity]}`}>
           <div className="who">
             <span className={`dot ${SEVERITY_DOT[notification.severity]}`} /> Tandem
+            {notification.hostId && <span className="notification-host-badge">{notification.hostName || notification.hostId}</span>}
           </div>
           <div className="what">{notification.title}</div>
           {notification.message && <div className="notification-message">{notification.message}</div>}

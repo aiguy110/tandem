@@ -131,6 +131,9 @@ export interface SystemNotification {
   title: string;
   message?: string;
   actions?: SystemNotificationAction[];
+  // Set when a master relays a notification raised by one of its agent hosts.
+  hostId?: string;
+  hostName?: string;
 }
 
 export interface RepoInfo {
