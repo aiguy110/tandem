@@ -164,7 +164,8 @@ body.dock-resizing .app { transition: none; }
 .agents { grid-area: agents; }
 .approvals { grid-area: approvals; }
 .rail-head {
-  position: sticky; top: 0; z-index: 1;
+  /* Above the host dividers, which slide up underneath it as they push out. */
+  position: sticky; top: 0; z-index: 2;
   padding: 10px 12px 6px; font-size: var(--fs-xs); letter-spacing: .8px;
   text-transform: uppercase; color: var(--text-faint); background: var(--surface);
   display: flex; align-items: center; gap: 6px;
@@ -294,8 +295,17 @@ body.dock-resizing .app { transition: none; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 .agent-row .name { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
 .agent-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
-.agent-host-divider { display: flex; align-items: center; gap: 7px; margin: 7px 9px 3px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
-.agent-host-divider::before, .agent-host-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
+/* Host dividers are push-out sticky headers: each group is its own box, so a
+   pinned divider is shoved off the top by the next group's divider rather than
+   the two stacking up. They pin below the rail head, which is sticky at 0. */
+.agent-host-group { display: flow-root; }
+.agent-host-divider {
+  position: sticky; top: var(--rail-head-h, 34px); z-index: 1;
+  display: flex; align-items: center; gap: 7px; margin: 0; padding: 5px 12px;
+  background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 2px solid var(--border-strong);
+  color: var(--text-dim); font: 600 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .06em;
+}
+.agent-host-group:first-child .agent-host-divider { border-top: none; }
 .resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
 .resume-host select, .spawn-host select {
   flex: 1; height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border);

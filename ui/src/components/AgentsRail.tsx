@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePresence, useValuePresence } from '../transitions';
 import { LOCAL_HOST_ID, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
@@ -49,6 +49,21 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  // Host dividers stick just below the (already sticky) rail head, so the rail
+  // has to publish the head's measured height for the CSS `top` to key off.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const headRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const head = headRef.current;
+    if (!scroller || !head) return;
+    const sync = () => scroller.style.setProperty('--rail-head-h', `${head.offsetHeight}px`);
+    sync();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(sync);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [expandedMounted]);
 
   const requestDelete = async (id: string) => {
     setCloseError('');
@@ -98,7 +113,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
         </button>
       )}
       {expandedMounted && (
-      <div className={`rail-expanded${railClosing ? ' closing' : ' entering'}`} aria-hidden={railClosing}>
+      <div ref={scrollerRef} className={`rail-expanded${railClosing ? ' closing' : ' entering'}`} aria-hidden={railClosing}>
       <div
         className="dock-resize-handle dock-resize-handle-right"
         role="separator"
@@ -109,7 +124,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
           onResizeStart?.(event.clientX);
         }}
       />
-      <div className="rail-head">
+      <div ref={headRef} className="rail-head">
         <button className="rail-toggle-btn" title="Collapse agents" onClick={toggleCollapsed}>
           ‹
         </button>
@@ -126,7 +141,9 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
       ) : (
         <>
           {displayedGroups.map((group) => (
-            <Fragment key={group.hostId}>
+            // Each group is its own box so its divider sticks only for as long
+            // as the group is on screen: the next one pushes it out at the top.
+            <section className="agent-host-group" key={group.hostId}>
               {federationGrouping && <div className="agent-host-divider"><span>{group.label}</span></div>}
               {group.ids.map((id) => (
                 <Row
@@ -155,7 +172,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
                   }}
                 />
               ))}
-            </Fragment>
+            </section>
           ))}
           <div
             className={`agent-drop-end${draggedId ? ' active' : ''}`}
