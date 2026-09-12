@@ -66,6 +66,20 @@ Five separable pieces; keeping them decoupled is most of the battle.
 4. **Shared browser service** — joint agent+human browser control via CDP screencast.
 5. **Web UI** — the React front-end. See [`ui.md`](ui.md).
 
+## Multi-host federation
+
+An optional master/slave transport extends the daemon ownership boundary across hosts.
+A slave started with `tandem --master <url>` maintains an outbound authenticated link to
+one master. The master routes host-qualified spawn and agent-control messages across that
+link; the slave remains the source of truth for its processes, workspaces, event logs,
+terminals, and browser broker. Browser frames and input use the same federation link, so
+remote browser control preserves the existing control-owner semantics.
+
+First contact requires an explicit Accept action in the master's daemon-level
+notifications. Acceptance creates durable credentials for automatic reconnect. The
+topology is intentionally one level: a daemon configured as a slave refuses inbound slave
+registration. See [`federation.md`](federation.md) for the operational and security model.
+
 ## Agent integration (structured-first, ACP primary)
 
 Agents are reached through a normalized `AgentAdapter` interface with two implementations:

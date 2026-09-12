@@ -55,6 +55,8 @@ type Local interface {
 // state and screencast frames with no polling delay.
 type EventSource interface{ Events() <-chan json.RawMessage }
 
+type connectionResetter interface{ Reset() }
+
 type Options struct {
 	Store         *store.Store
 	Notifications *notifications.Center
@@ -143,7 +145,43 @@ func New(opts Options) (*Service, error) {
 			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
 		}
 	}
-	return &Service{store: opts.Store, notifications: opts.Notifications, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}, nil
+	service := &Service{store: opts.Store, notifications: opts.Notifications, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
+	// A prior process may have stopped without updating its connected peers.
+	// Until a new authenticated tunnel arrives, those durable records are
+	// offline rather than connected.
+	if master == "" {
+		peers, err := opts.Store.FederationSlaves()
+		if err != nil {
+			return nil, err
+		}
+		for _, peer := range peers {
+			if peer.Status == "pending" {
+				service.notifyPending(peer.ID, peer.Name, peer.Endpoint)
+			}
+			if peer.Status == "connected" {
+				peer.Status = "offline"
+				if err := opts.Store.UpsertFederationSlave(peer); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return service, nil
+}
+
+// trusted reports whether an approved slave record may authenticate with its
+// stored credential. Approval survives disconnects: the master demotes a
+// dropped tunnel to "offline", so requiring "accepted" here would make every
+// reconnection after the first one fail as unauthorized.
+func trusted(peer *store.FederationSlave) bool {
+	if peer == nil {
+		return false
+	}
+	switch peer.Status {
+	case "accepted", "connected", "offline":
+		return true
+	}
+	return false
 }
 
 // IsSlave is true once configured with or enrolled in an upstream. Such a
@@ -195,16 +233,19 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	done := make(chan result, 1)
 	s.mu.Lock()
 	s.waiters[id] = done
-	if tunnel := s.tunnels[hostID]; tunnel != nil {
+	tunnel := s.tunnels[hostID]
+	if tunnel == nil {
+		s.queues[hostID] = append(s.queues[hostID], command{ID: id, Payload: append(json.RawMessage(nil), payload...)})
+	}
+	s.mu.Unlock()
+	if tunnel != nil {
 		if err := tunnel.send(tunnelMessage{T: "command", ID: id, Payload: append(json.RawMessage(nil), payload...)}); err != nil {
+			s.mu.Lock()
 			delete(s.waiters, id)
 			s.mu.Unlock()
 			return nil, err
 		}
-	} else {
-		s.queues[hostID] = append(s.queues[hostID], command{ID: id, Payload: append(json.RawMessage(nil), payload...)})
 	}
-	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.waiters, id); s.mu.Unlock() }()
 	select {
 	case r := <-done:
@@ -253,9 +294,10 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if peer != nil && peer.Status == "accepted" {
-		// A host should heartbeat after initial acceptance. Do not reveal its
-		// existing credential to an unauthenticated registration request.
+	if trusted(peer) {
+		// A host should reconnect with its credential after acceptance. Do not
+		// reveal that credential to an unauthenticated registration request,
+		// and do not reset an established host back to pending approval.
 		writeJSON(w, http.StatusUnauthorized, registerResponse{Status: "rejected", Error: "host is already registered; use its stored credential"})
 		return
 	}
@@ -308,7 +350,7 @@ func (s *Service) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if peer == nil || peer.Status != "accepted" || !secretMatches(federationToken(r), peer.Credential) {
+	if !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -363,9 +405,13 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	if err = conn.ReadJSON(&hello); err != nil || hello.T != "hello" || hello.HostID == "" {
 		return
 	}
-	_ = conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+	conn.SetPingHandler(func(data string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
+	})
 	peer, err := s.store.FederationSlave(hello.HostID)
-	if err != nil || peer == nil || peer.Status != "accepted" || !secretMatches(federationToken(r), peer.Credential) {
+	if err != nil || !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
 		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: "unauthorized"})
 		return
 	}
@@ -382,6 +428,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	peer.Status = "connected"
 	peer.LastSeenAt = time.Now().UnixMilli()
 	_ = s.store.UpsertFederationSlave(*peer)
+	s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for _, cmd := range queued {
 		if t.send(tunnelMessage{T: "command", ID: cmd.ID, Payload: cmd.Payload}) != nil {
 			break
@@ -397,6 +444,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		if p != nil && p.Status == "connected" {
 			p.Status = "offline"
 			_ = s.store.UpsertFederationSlave(*p)
+			s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 		}
 	}()
 	for {
@@ -411,6 +459,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 			s.mu.Lock()
 			s.snapshots[hello.HostID] = append(json.RawMessage(nil), msg.Snapshot...)
 			s.mu.Unlock()
+			s.publish(hello.HostID, msg.Snapshot)
 		case "event":
 			s.publish(hello.HostID, msg.Payload)
 		}
@@ -429,6 +478,12 @@ func (s *Service) deliver(r result) {
 }
 func (s *Service) publish(hostID string, payload json.RawMessage) {
 	s.mu.Lock()
+	var envelope struct {
+		T string `json:"t"`
+	}
+	if json.Unmarshal(payload, &envelope) == nil && envelope.T == "agents" {
+		s.snapshots[hostID] = append(json.RawMessage(nil), payload...)
+	}
 	callbacks := make([]func(string, json.RawMessage), 0, len(s.subs))
 	for _, fn := range s.subs {
 		callbacks = append(callbacks, fn)
@@ -445,6 +500,12 @@ func (t *tunnel) send(message tunnelMessage) error {
 	err := t.conn.WriteJSON(message)
 	_ = t.conn.SetWriteDeadline(time.Time{})
 	return err
+}
+
+func (t *tunnel) ping() error {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	return t.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
 }
 
 // HandleNotificationAction accepts a master UI notification action. It
@@ -476,14 +537,14 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 			return "", true, e
 		}
 		s.removeNotification(hostID)
-		return hostID, true, nil
+		return "", true, nil
 	case "reject":
 		peer.Status = "rejected"
 		if e := s.store.UpsertFederationSlave(*peer); e != nil {
 			return "", true, e
 		}
 		s.removeNotification(hostID)
-		return hostID, true, nil
+		return "", true, nil
 	default:
 		return "", true, fmt.Errorf("unknown federation registration action %q", action)
 	}
@@ -521,7 +582,7 @@ func (s *Service) RunSlave(ctx context.Context) error {
 	}
 	hostID := ""
 	credential := ""
-	if master != nil {
+	if master != nil && strings.TrimRight(master.URL, "/") == s.masterURL {
 		hostID, credential = master.HostID, master.Credential
 	}
 	if hostID == "" {
@@ -586,6 +647,11 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		return err
 	}
 	defer conn.Close()
+	if resetter, ok := s.local.(connectionResetter); ok {
+		defer resetter.Reset()
+	}
+	attemptCtx, cancelAttempt := context.WithCancel(ctx)
+	defer cancelAttempt()
 	// ReadJSON cannot observe ctx directly. Closing this per-attempt socket on
 	// shutdown makes the reconnect loop and daemon teardown prompt.
 	stopClose := make(chan struct{})
@@ -613,21 +679,40 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		events = src.Events()
 	}
 	writeErr := make(chan error, 1)
+	reportWriteError := func(err error) {
+		select {
+		case writeErr <- err:
+		default:
+		}
+		_ = conn.Close()
+	}
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-attemptCtx.Done():
+				return
+			case <-ticker.C:
+				if err := t.ping(); err != nil {
+					reportWriteError(err)
+					return
+				}
+			}
+		}
+	}()
 	if events != nil {
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
+				case <-attemptCtx.Done():
 					return
 				case event, ok := <-events:
 					if !ok {
 						return
 					}
 					if err := t.send(tunnelMessage{T: "event", Payload: event}); err != nil {
-						select {
-						case writeErr <- err:
-						default:
-						}
+						reportWriteError(err)
 						return
 					}
 				}
@@ -635,7 +720,6 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		}()
 	}
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		var msg tunnelMessage
 		if err := conn.ReadJSON(&msg); err != nil {
 			return err
@@ -649,17 +733,14 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 			if s.local == nil {
 				execErr = errors.New("federation slave has no command handler")
 			} else {
-				data, execErr = s.local.Execute(ctx, msg.Payload)
+				data, execErr = s.local.Execute(attemptCtx, msg.Payload)
 			}
 			reply := tunnelMessage{T: "response", ID: msg.ID, Payload: data}
 			if execErr != nil {
 				reply.Error = execErr.Error()
 			}
 			if err := t.send(reply); err != nil {
-				select {
-				case writeErr <- err:
-				default:
-				}
+				reportWriteError(err)
 			}
 		}(msg)
 		select {

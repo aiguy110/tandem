@@ -59,6 +59,22 @@ repo discovery for the quick-spawn palette), and — Phase 5 — the browser cha
 yet"`) pending the diff/merge UI. Multiple concurrent clients and multiplexed multi-agent
 subscriptions on one socket are supported.
 
+### Host-scoped federation
+
+The browser may receive a host catalog and may qualify repository, agent-catalog,
+spawn-option, and spawn requests with a host identity. Omitting the host retains local,
+single-daemon behavior. Remote agent summaries carry their host identity and use a
+master-side namespaced agent ID; subsequent ordinary agent commands use that ID and are
+routed transparently. Live transcript, terminal, approval, lifecycle, and browser-channel
+traffic is proxied without exposing ACP or CDP details to the UI.
+
+Slave registration is a daemon-to-daemon protocol, not browser bearer-token
+authentication. First contact remains pending until the master accepts its system
+notification; later connections authenticate with the durable registration credential.
+See [`federation.md`](federation.md). Host-scoped `list_sessions`, `search_sessions`, and
+`resume_session` execute against the selected host's own history index and annotate their
+results with that host identity.
+
 ### `list_sessions` / `search_sessions` / `resume_session`
 
 `list_sessions` returns a catalog combining Tandem-owned sessions, external sessions

@@ -79,10 +79,14 @@ func (l *LoopbackLocal) Execute(ctx context.Context, payload json.RawMessage) (j
 	err = conn.WriteMessage(websocket.TextMessage, data)
 	l.writeMu.Unlock()
 	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	select {
-	case reply := <-wait:
+	case reply, ok := <-wait:
+		if !ok {
+			return nil, errors.New("federation loopback disconnected")
+		}
 		return reply, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -127,7 +131,15 @@ func (l *LoopbackLocal) read(conn *websocket.Conn) {
 		if l.conn == conn {
 			l.conn = nil
 		}
+		waiters := make([]chan json.RawMessage, 0, len(l.waiters))
+		for id, waiter := range l.waiters {
+			waiters = append(waiters, waiter)
+			delete(l.waiters, id)
+		}
 		l.mu.Unlock()
+		for _, waiter := range waiters {
+			close(waiter)
+		}
 		_ = conn.Close()
 	}()
 	for {
@@ -165,4 +177,18 @@ func (l *LoopbackLocal) Close() error {
 		return conn.Close()
 	}
 	return nil
+}
+
+// Reset drops the private browser-protocol connection without permanently
+// closing the bridge. This releases every local subscription when an upstream
+// tunnel ends; the next command reconnects and establishes only the master's
+// current subscriptions.
+func (l *LoopbackLocal) Reset() {
+	l.mu.Lock()
+	conn := l.conn
+	l.conn = nil
+	l.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }

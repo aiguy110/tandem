@@ -28,6 +28,11 @@ under `$TANDEM_HOME/runtime` (normally `~/.tandem/runtime`).
 Run `tandem setup` to configure Tandem, then run `tandem` to start it. The setup wizard
 can also install and enable Tandem as a systemd user service.
 
+To attach another host as an agent runner, start Tandem there with
+`tandem --master https://master.example.net`; accept its registration notification in
+the master's UI. See [master and slave deployments](docs/federation.md) for trust,
+security, reconnect, and remote session-history behavior.
+
 ## What it is
 
 - **Orchestrate multiple agents** from one browser UI, each in its own isolated workspace.
@@ -37,6 +42,8 @@ can also install and enable Tandem as a systemd user service.
   one browser session, with an explicit control-owner token for turn-taking.
 - **Survives disconnects by design**: a long-lived daemon owns all state; the browser is a
   pure view that can drop and reconnect without disturbing the agents.
+- **Scale across hosts**: one master UI can spawn and fully control agents, terminals,
+  approvals, and shared browsers on many approved slave instances.
 
 ## Quick start
 

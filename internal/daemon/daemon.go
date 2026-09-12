@@ -281,7 +281,11 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return fmt.Errorf("configure federation loopback: %w", err)
 	}
-	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, Name: displayHost, Endpoint: origin, Local: loopback})
+	federationName, hostnameErr := os.Hostname()
+	if hostnameErr != nil || strings.TrimSpace(federationName) == "" {
+		federationName = displayHost
+	}
+	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, Name: federationName, Endpoint: origin, Local: loopback})
 	if err != nil {
 		return err
 	}
