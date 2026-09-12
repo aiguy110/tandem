@@ -114,6 +114,42 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	}
 }
 
+func TestBriefHandoffModeIsPlumbedThroughTheSpec(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, _ := setup(t, f)
+	ctx := context.Background()
+
+	source, err := r.Spawn(ctx, existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go source.Prompt(ctx, []agentadapter.PromptBlock{{Type: "text", Text: "port the parser"}})
+	waitForUserMessage(t, db, source.ID)
+	f.adapters[source.ID].events <- eventlog.Event{
+		Kind:    "tool_call",
+		Payload: json.RawMessage(`{"kind":"tool_call","id":"t1","title":"Read parser.go","status":"completed"}`),
+	}
+	f.adapters[source.ID].events <- eventlog.Event{
+		Kind:    "message_chunk",
+		Payload: json.RawMessage(`{"kind":"message_chunk","text":"Half done."}`),
+	}
+
+	spec := existing(t.TempDir())
+	spec.HandoffFrom = source.ID
+	spec.HandoffMode = "brief"
+	received, err := r.Spawn(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := waitForUserMessage(t, db, received.ID)
+	if !strings.Contains(first, "1 tool call") || strings.Contains(first, "Read parser.go") {
+		t.Errorf("want a counted tool call, not a summarized one:\n%s", first)
+	}
+	if !strings.Contains(first, "Half done.") {
+		t.Errorf("brief hand-off dropped the turn's closing message:\n%s", first)
+	}
+}
+
 func TestHandoffFromAnUnknownAgentFailsBeforeProvisioning(t *testing.T) {
 	f := &fakeFactory{}
 	r, _, _ := setup(t, f)

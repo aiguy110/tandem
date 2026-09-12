@@ -300,6 +300,10 @@ export interface SpawnSpec {
   // Agent id whose transcript is rendered (without any model inference) into
   // this agent's first user message, so it can pick up where that agent stopped.
   handoffFrom?: string;
+  // 'full' (default) keeps every message verbatim with per-tool-call summaries;
+  // 'brief' keeps user messages and each turn's closing message, counting the
+  // tool calls in between.
+  handoffMode?: 'full' | 'brief';
   // Omitted for this daemon. A master forwards a non-local target to its
   // registered slave before creating the agent.
   hostId?: string;

@@ -106,7 +106,9 @@ type Spec struct {
 	// HandoffFrom is the agent id whose transcript should be rendered into this
 	// agent's first user message (see internal/handoff). It is recorded on the
 	// spec so a restored agent still shows where it came from.
-	HandoffFrom    string          `json:"handoffFrom,omitempty"`
+	HandoffFrom string `json:"handoffFrom,omitempty"`
+	// HandoffMode is "full" (default) or "brief"; see internal/handoff.Mode.
+	HandoffMode    string          `json:"handoffMode,omitempty"`
 	Profile        *ProfileSpec    `json:"profile,omitempty"`
 	ResolvedLaunch *ResolvedLaunch `json:"resolvedLaunch,omitempty"`
 }

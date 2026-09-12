@@ -52,7 +52,7 @@ func (r *Registry) sourceAgent(id string) (store.Agent, agentadapter.Spec, error
 
 // handoffMessage renders the source agent's transcript into the text that will
 // become the receiving agent's first user message. It never calls a model.
-func (r *Registry) handoffMessage(sourceID string) (string, error) {
+func (r *Registry) handoffMessage(sourceID, mode string) (string, error) {
 	rec, spec, err := r.sourceAgent(sourceID)
 	if err != nil {
 		return "", err
@@ -70,7 +70,7 @@ func (r *Registry) handoffMessage(sourceID string) (string, error) {
 		Harness:   r.harnessLabel(spec),
 		CWD:       rec.CWD,
 		Branch:    spec.Workspace.Branch,
-	})
+	}, handoff.ParseMode(mode))
 	if text == "" {
 		return "", fmt.Errorf("agent %s has no transcript to hand off", rec.Name)
 	}

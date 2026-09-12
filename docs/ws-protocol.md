@@ -121,9 +121,10 @@ existing dir. The UI warns and names the other occupants; see spawn-and-workspac
 "Sharing a worktree".
 
 `spawn_agent`'s `spec.handoffFrom` is an agent id whose transcript is rendered into the new
-agent's first user message (`internal/handoff`). The rendering is mechanical — no model is
-invoked — and the result is dispatched as a prompt rather than persisted onto the spec. An
-unknown or transcript-less source rejects the spawn before anything is provisioned.
+agent's first user message (`internal/handoff`), at the detail `spec.handoffMode` selects
+(`full`, the default, or `brief`). The rendering is mechanical — no model is invoked — and
+the result is dispatched as a prompt rather than persisted onto the spec. An unknown or
+transcript-less source rejects the spawn before anything is provisioned.
 
 `close_agent { force?, deinitSubmodules? }` removes the worktree checkout but **keeps the branch**. If the
 worktree has uncommitted changes and `force` isn't set, the close is **refused** — the agent

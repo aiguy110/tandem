@@ -56,6 +56,7 @@ interface SpawnSpec {
   name?: string;                          // auto: einstein-1, curie-2… (renamable)
   task?: string;                          // optional initial prompt, dispatched on spawn
   handoffFrom?: string;                   // agent id to continue from (see Hand-off)
+  handoffMode?: 'full' | 'brief';         // transcript detail; default full
   preset?: string;                        // reserved legacy field
 }
 ```
@@ -220,10 +221,20 @@ work in place, and the agent taking over needs to be standing in it.
 
 A hand-off moves a conversation to a different agent harness without asking any model to
 summarize it. `internal/handoff` walks the source agent's durable event log and renders a
-**Hand-off Transcript**: every user and assistant message verbatim and in order, each
-intervening tool call reduced to one `- <title> [status]` line, private reasoning dropped,
-runaway tool loops capped. A short preamble explains that the receiving agent is taking
-over an unfinished session and states the working directory and branch.
+**Hand-off Transcript**, in one of two modes:
+
+- **full** (default) — every user and assistant message verbatim and in order; each
+  intervening tool call reduced to one `- <title> [status]` line, with the target file and,
+  for reads, the line span appended from the call's raw input (`- Read — /w/x.go:40-59`);
+  private reasoning dropped; a run of more than 10 consecutive tool calls truncated with a
+  "… and N more tool calls" tail.
+- **brief** — every user message verbatim plus each turn's *closing* message; everything in
+  between collapses to `_[N tool calls]_`. The count is of the whole turn, so it is not
+  subject to full mode's cap.
+
+A short preamble explains that the receiving agent is taking over an unfinished session,
+states the working directory and branch, and says which mode produced the transcript so the
+reader knows what is missing.
 
 That text is dispatched as the new agent's first user message (with any task typed at spawn
 appended under "New instruction from the user"). It is deliberately not written into the

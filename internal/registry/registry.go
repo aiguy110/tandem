@@ -719,7 +719,7 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	// re-marshalled into the agent row on every restore.
 	var handoffText string
 	if spec.HandoffFrom != "" {
-		if handoffText, err = r.handoffMessage(spec.HandoffFrom); err != nil {
+		if handoffText, err = r.handoffMessage(spec.HandoffFrom, spec.HandoffMode); err != nil {
 			return nil, err
 		}
 	}
