@@ -540,6 +540,7 @@ func (r *Registry) ClosePreview(ctx context.Context, id string) (*workspace.Clos
 	if err != nil {
 		return nil, err
 	}
+	preview.Cohabitants = r.Cohabitants(cwd, id)
 	return &preview, nil
 }
 
@@ -642,19 +643,6 @@ func (r *Registry) Rename(agentID, name string) error {
 	return nil
 }
 
-func (r *Registry) occupant(dir string) (string, bool) {
-	target, _ := filepath.Abs(dir)
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for id, cwd := range r.cwds {
-		abs, _ := filepath.Abs(cwd)
-		if abs == target {
-			return id, true
-		}
-	}
-	return "", false
-}
-
 func (r *Registry) resolve(spec agentadapter.Spec) (agentadapter.Spec, error) {
 	if spec.Adapter == "" {
 		spec.Adapter = "acp"
@@ -725,9 +713,19 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	if err != nil {
 		return nil, err
 	}
+	// Rendered before anything is provisioned so a bad source id fails the
+	// spawn outright rather than leaving a worktree behind. It is deliberately
+	// not folded into spec.Task: the transcript can be large, and the spec is
+	// re-marshalled into the agent row on every restore.
+	var handoffText string
+	if spec.HandoffFrom != "" {
+		if handoffText, err = r.handoffMessage(spec.HandoffFrom); err != nil {
+			return nil, err
+		}
+	}
 	name := r.nextName(spec.Name)
 	id := name
-	provisioned, err := r.workspace.Provision(ctx, spec.Workspace, name, r.occupant)
+	provisioned, err := r.provisionOrJoin(ctx, spec.Workspace, name)
 	if err != nil {
 		r.releaseKnown(id)
 		return nil, err
@@ -744,27 +742,40 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	r.applyProfile(id, project, &spec)
 	raw, err := json.Marshal(spec)
 	if err != nil {
-		r.workspace.Rollback(ctx, spec.Workspace, provisioned.CWD, provisioned.CreatedBranch)
+		r.rollback(ctx, spec.Workspace, provisioned)
 		r.releaseKnown(id)
 		return nil, err
 	}
 	rec := store.Agent{ID: id, Name: name, Spec: raw, CWD: provisioned.CWD, Status: "idle", CreatedAt: time.Now().UnixMilli()}
 	if err = r.store.UpsertAgent(rec); err != nil {
-		r.workspace.Rollback(ctx, spec.Workspace, provisioned.CWD, provisioned.CreatedBranch)
+		r.rollback(ctx, spec.Workspace, provisioned)
 		r.releaseKnown(id)
 		return nil, err
 	}
 	s, err := r.start(ctx, rec, spec, "")
 	if err != nil {
 		_ = r.store.DeleteAgent(id)
-		r.workspace.Rollback(ctx, spec.Workspace, provisioned.CWD, provisioned.CreatedBranch)
+		r.rollback(ctx, spec.Workspace, provisioned)
 		r.releaseKnown(id)
 		return nil, err
 	}
-	if spec.Task != "" {
-		go s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: spec.Task}})
+	if prompt := firstPrompt(handoffText, spec.Task); prompt != "" {
+		go s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	}
 	return s, nil
+}
+
+// firstPrompt combines a hand-off transcript with the task the user typed at
+// spawn, keeping the user's own instruction last so it reads as the live ask
+// rather than as part of the handed-off history.
+func firstPrompt(handoffText, task string) string {
+	if handoffText == "" {
+		return task
+	}
+	if task == "" {
+		return handoffText
+	}
+	return handoffText + "\n\n## New instruction from the user\n\n" + task
 }
 
 func (r *Registry) start(ctx context.Context, rec store.Agent, spec agentadapter.Spec, resume string, captureReplay ...bool) (*session.Session, error) {
@@ -1515,7 +1526,7 @@ func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID, adap
 		return nil, err
 	}
 	name := r.nextName("")
-	p, err := r.workspace.Provision(ctx, spec.Workspace, name, r.occupant)
+	p, err := r.provisionOrJoin(ctx, spec.Workspace, name)
 	if err != nil {
 		r.releaseKnown(name)
 		return nil, err
@@ -1524,7 +1535,7 @@ func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID, adap
 	if adapter == "pty" {
 		terminal := spec.ResolvedLaunch.Terminal
 		if terminal == nil || len(terminal.ResumeArgs) == 0 {
-			r.workspace.Rollback(ctx, spec.Workspace, p.CWD, p.CreatedBranch)
+			r.rollback(ctx, spec.Workspace, p)
 			r.releaseKnown(name)
 			return nil, fmt.Errorf("agent has no resumable terminal command configured: %s", agent)
 		}
@@ -1544,7 +1555,7 @@ func (r *Registry) spawnResumed(ctx context.Context, agent, cwd, sessionID, adap
 		}
 	}
 	_ = r.store.DeleteAgent(name)
-	r.workspace.Rollback(ctx, spec.Workspace, p.CWD, p.CreatedBranch)
+	r.rollback(ctx, spec.Workspace, p)
 	r.releaseKnown(name)
 	return nil, err
 }
@@ -1710,7 +1721,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 		if err := json.Unmarshal(rec.Spec, &spec); err != nil {
 			return false, fmt.Errorf("decode orphaned agent workspace: %w", err)
 		}
-		if deleteWorktree {
+		if deleteWorktree && len(r.Cohabitants(rec.CWD, id)) == 0 {
 			if err := r.workspace.Teardown(ctx, spec.Workspace, rec.CWD, force, deinitSubmodules); err != nil {
 				return false, err
 			}
@@ -1723,7 +1734,10 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 		}
 		return true, nil
 	}
-	if deleteWorktree {
+	// A worktree can host several agents (a hand-off continues in place), so it
+	// only goes away with its last occupant. Everything else about the close
+	// proceeds normally; the UI warns beforehand that the checkout will stay.
+	if deleteWorktree && len(r.Cohabitants(cwd, id)) == 0 {
 		if err := r.workspace.Teardown(ctx, s.Spec.Workspace, cwd, force, deinitSubmodules); err != nil {
 			return false, err
 		}

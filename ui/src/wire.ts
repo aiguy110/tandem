@@ -279,6 +279,9 @@ export interface SpawnSpec {
   // Human-facing profile identity + browser snapshot seed. The daemon resolves
   // or creates a Profile from these and fills in `id`; snapshot '' = fresh state.
   profile?: { id?: string; model?: string; effort?: string; permission?: string; snapshot?: string };
+  // Agent id whose transcript is rendered (without any model inference) into
+  // this agent's first user message, so it can pick up where that agent stopped.
+  handoffFrom?: string;
 }
 
 // BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
@@ -380,6 +383,9 @@ export interface ClosePreview {
   behind?: number;
   notGitRepo?: boolean;
   submodules?: { path: string; uncommitted?: string; localCommits?: string }[];
+  // Other open agents working in the same directory. While any remain, closing
+  // this agent leaves the worktree in place.
+  cohabitants?: string[];
 }
 export interface WorkspaceDiff {
   uncommitted: string;
