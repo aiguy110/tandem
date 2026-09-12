@@ -56,7 +56,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -154,7 +154,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	keep := func(rows []schemaRow) []schemaRow {
 		out := make([]schemaRow, 0, len(rows))
 		for _, row := range rows {
-			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" {
+			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" || row.TableName == "federation_master" || row.TableName == "federation_slaves" {
 				continue
 			}
 			out = append(out, row)

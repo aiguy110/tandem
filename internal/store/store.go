@@ -537,6 +537,23 @@ CREATE INDEX IF NOT EXISTS annotations_agent ON annotations(agentId);`, "annotat
         positionMs INTEGER NOT NULL,
         updatedAt  INTEGER NOT NULL
       );`, "audio_position table"},
+		{`CREATE TABLE IF NOT EXISTS federation_master (
+        singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),
+        url         TEXT NOT NULL,
+        hostId      TEXT NOT NULL,
+        credential  TEXT NOT NULL,
+        updatedAt   INTEGER NOT NULL
+      );
+CREATE TABLE IF NOT EXISTS federation_slaves (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL DEFAULT '',
+        endpoint    TEXT NOT NULL DEFAULT '',
+        credential  TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL,
+        requestedAt INTEGER NOT NULL,
+        acceptedAt  INTEGER,
+        lastSeenAt  INTEGER
+      );`, "federation tables"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()
