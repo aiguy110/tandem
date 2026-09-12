@@ -24,6 +24,7 @@ import type {
   ClosePreview,
   ClientMsg,
   GitRefInfo,
+  FederationHost,
   Profile,
   RepoInfo,
   ResumableSession,
@@ -112,6 +113,8 @@ export interface AgentView {
   id: string;
   name: string;
   agent?: string;
+  hostId?: string;
+  hostName?: string;
   profile?: {
     id?: string;
     model?: string;
@@ -217,6 +220,11 @@ interface StoreState {
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
+  // Federation data is keyed by host ID. `dirs` and `agentCatalog` remain the
+  // local aliases so existing consumers and older daemons need no migration.
+  hosts: FederationHost[];
+  dirsByHost: Record<string, RepoInfo[]>;
+  agentCatalogByHost: Record<string, AgentCatalog | null>;
   // Captured browser snapshots (seed states), refreshed on demand.
   snapshots: BrowserSnapshot[];
   automationJobs: AutomationJob[];
@@ -226,6 +234,8 @@ interface StoreState {
   // Resume palette: the resumable-session catalog (null until first fetched) and
   // a loading flag while the daemon probes agents for external sessions.
   resumeCatalog: ResumeCatalog | null;
+  resumeCatalogByHost: Record<string, ResumeCatalog>;
+  resumePendingHostIds: Record<string, boolean>;
   resumeLoading: boolean;
   // Unsent prompt drafts, keyed by agentId. Lives here (not in the pane's local
   // state) so a draft survives tab switches and agent switches, which remount the
@@ -265,11 +275,14 @@ interface StoreState {
   // the daemon's stored position. Throttling is the caller's responsibility.
   setAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
+  refreshHostDirs: (hostId: string) => void;
+  refreshHosts: () => void;
+  refreshAgentCatalog: (hostId: string) => void;
   refreshAgents: () => void;
-  refreshSessions: () => void;
+  refreshSessions: (hostId?: string) => void;
   refreshAutomation: (repositoryId?: string) => Promise<void>;
   setAutomationEnabled: (id: string, enabled: boolean) => Promise<void>;
-  searchSessions: (query: string) => Promise<SessionSearchResult[]>;
+  searchSessions: (query: string, hostId?: string) => Promise<SessionSearchResult[]>;
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
   enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
   leaveTerminal: (agentId: string) => Promise<AckResult>;
@@ -278,8 +291,8 @@ interface StoreState {
   restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
-  getSpawnOptions: (agent: string, cwd: string, harness?: string) => Promise<SpawnOptions>;
-  listGitRefs: (repo: string) => Promise<GitRefInfo[]>;
+  getSpawnOptions: (agent: string, cwd: string, harness?: string, hostId?: string) => Promise<SpawnOptions>;
+  listGitRefs: (repo: string, hostId?: string) => Promise<GitRefInfo[]>;
   listWorkspaceEntries: (agentId: string, path: string) => Promise<WorkspaceEntry[]>;
   // Browser snapshots + agent profiles.
   captureSnapshot: (agentId: string, name: string) => Promise<BrowserSnapshot[]>;
@@ -347,6 +360,40 @@ export function __testApplyServerMsg(msg: ServerMsg): void {
 }
 
 const GIT_REFRESH_INTERVAL_MS = 15_000;
+export const LOCAL_HOST_ID = 'local';
+
+// Never put the synthesized local ID on the wire: an older daemon sees the
+// exact commands it has always seen. Federation-aware masters may explicitly
+// include their local host in the hosts list, so normalize that shape too.
+export function isLocalHost(hostId: string | undefined): boolean {
+  return !hostId || hostId === LOCAL_HOST_ID;
+}
+
+function normalizedHosts(hosts: FederationHost[]): FederationHost[] {
+  const local: FederationHost = { id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true };
+  const explicitLocal = hosts.find((host) => host.local || host.id === LOCAL_HOST_ID);
+  const remotes = hosts.filter((host) => host !== explicitLocal && host.id !== LOCAL_HOST_ID);
+  return [explicitLocal ? { ...local, ...explicitLocal, id: LOCAL_HOST_ID, local: true } : local, ...remotes];
+}
+
+function catalogForHost(catalog: ResumeCatalog, hostId: string, hosts: FederationHost[]): ResumeCatalog {
+  const host = hosts.find((entry) => entry.id === hostId);
+  return {
+    ...catalog,
+    sessions: catalog.sessions.map((session) => isLocalHost(hostId)
+      ? session
+      : { ...session, hostId, hostName: host?.name ?? hostId }),
+  };
+}
+
+function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog | null {
+  const values = Object.values(catalogs);
+  if (!values.length) return null;
+  return {
+    sessions: values.flatMap((catalog) => catalog.sessions),
+    adapters: values.flatMap((catalog) => catalog.adapters),
+  };
+}
 
 function rankAgents(agents: Record<string, AgentView>, order: string[]): string[] {
   // `order` is explicitly arranged by the user via the Agents rail. Filter
@@ -531,7 +578,13 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'dirs':
-        set({ dirs: msg.dirs });
+        set((st) => {
+          const hostId = msg.hostId ?? LOCAL_HOST_ID;
+          return {
+            dirs: isLocalHost(hostId) ? msg.dirs : st.dirs,
+            dirsByHost: { ...st.dirsByHost, [hostId]: msg.dirs },
+          };
+        });
         return;
       case 'git_refs': {
         const pending = msg.corrId ? pendingGitRefs.get(msg.corrId) : undefined;
@@ -552,7 +605,16 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'agent_catalog':
-        set({ agentCatalog: msg.catalog });
+        set((st) => {
+          const hostId = msg.hostId ?? LOCAL_HOST_ID;
+          return {
+            agentCatalog: isLocalHost(hostId) ? msg.catalog : st.agentCatalog,
+            agentCatalogByHost: { ...st.agentCatalogByHost, [hostId]: msg.catalog },
+          };
+        });
+        return;
+      case 'hosts':
+        set({ hosts: normalizedHosts(msg.hosts) });
         return;
       case 'spawn_options': {
         const pending = msg.corrId ? pendingSpawnOptions.get(msg.corrId) : undefined;
@@ -587,7 +649,19 @@ export const useStore = create<StoreState>((set, get) => {
         break;
       }
       case 'sessions':
-        set({ resumeCatalog: msg.catalog, resumeLoading: false });
+        set((st) => {
+          const hostId = msg.hostId ?? LOCAL_HOST_ID;
+          const tagged = catalogForHost(msg.catalog, hostId, st.hosts);
+          const resumeCatalogByHost = { ...st.resumeCatalogByHost, [hostId]: tagged };
+          const resumePendingHostIds = { ...st.resumePendingHostIds };
+          delete resumePendingHostIds[hostId];
+          return {
+            resumeCatalogByHost,
+            resumeCatalog: combinedCatalog(resumeCatalogByHost),
+            resumePendingHostIds,
+            resumeLoading: Object.keys(resumePendingHostIds).length > 0,
+          };
+        });
         return;
       case 'automation': {
         if (msg.error) {
@@ -899,6 +973,7 @@ export const useStore = create<StoreState>((set, get) => {
       // Rediscover agents (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
       client.send({ t: 'list_agent_catalog' });
+      client.send({ t: 'list_hosts' });
       client.send({ t: 'list_system_notifications' });
       // Also re-subscribe to anything we already track, immediately (idempotent).
       for (const id of get().order) subscribeAgent(id);
@@ -917,12 +992,17 @@ export const useStore = create<StoreState>((set, get) => {
     inspectorOpen: false,
     dirs: [],
     agentCatalog: null,
+    hosts: normalizedHosts([]),
+    dirsByHost: {},
+    agentCatalogByHost: {},
     snapshots: [],
     automationJobs: [],
     automationRuns: [],
     automationLoading: false,
     automationError: null,
     resumeCatalog: null,
+    resumeCatalogByHost: {},
+    resumePendingHostIds: {},
     resumeLoading: false,
     drafts: initialDrafts(),
     annotations: {},
@@ -1048,6 +1128,7 @@ export const useStore = create<StoreState>((set, get) => {
       if (m === 'spawn') {
         get().refreshDirs();
         client.send({ t: 'list_agent_catalog' });
+        get().refreshHosts();
       }
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
@@ -1060,10 +1141,19 @@ export const useStore = create<StoreState>((set, get) => {
     },
     setAudioPosition: (agentId, seq, positionMs) => client.send({ t: 'set_audio_position', agentId, seq, positionMs }),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
+    refreshHostDirs: (hostId) => client.send(isLocalHost(hostId) ? { t: 'list_dirs' } : { t: 'list_dirs', hostId }),
+    refreshHosts: () => client.send({ t: 'list_hosts' }),
+    refreshAgentCatalog: (hostId) => client.send(isLocalHost(hostId) ? { t: 'list_agent_catalog' } : { t: 'list_agent_catalog', hostId }),
     refreshAgents: () => client.send({ t: 'list_agents' }),
-    refreshSessions: () => {
-      set({ resumeLoading: true });
-      client.send({ t: 'list_sessions' });
+    refreshSessions: (hostId) => {
+      const targets = get().hosts.filter((host) => (hostId ? host.id === hostId : host.local || host.status === 'connected' || host.status === 'accepted'));
+      set({
+        resumeLoading: targets.length > 0,
+        resumeCatalogByHost: {},
+        resumeCatalog: null,
+        resumePendingHostIds: Object.fromEntries(targets.map((host) => [host.id, true])),
+      });
+      for (const host of targets) client.send(isLocalHost(host.id) ? { t: 'list_sessions' } : { t: 'list_sessions', hostId: host.id });
     },
     refreshAutomation: (repositoryId) =>
       new Promise<void>((resolve, reject) => {
@@ -1079,12 +1169,22 @@ export const useStore = create<StoreState>((set, get) => {
         set({ automationLoading: true, automationError: null });
         client.send({ t: 'set_automation_enabled', id, enabled, corrId });
       }),
-    searchSessions: (query) =>
-      new Promise<SessionSearchResult[]>((resolve, reject) => {
+    searchSessions: (query, hostId) => {
+      const targets = get().hosts.filter((host) => (hostId ? host.id === hostId : host.local || host.status === 'connected' || host.status === 'accepted'));
+      return Promise.all(targets.map((host) => new Promise<SessionSearchResult[]>((resolve, reject) => {
         const corrId = nextCorr();
-        pendingSessionSearches.set(corrId, { resolve, reject });
-        client.send({ t: 'search_sessions', query, limit: 30, maxHitsPerSession: 3, corrId });
-      }),
+        pendingSessionSearches.set(corrId, {
+          resolve: (results) => resolve(isLocalHost(host.id) ? results : results.map((result) => ({
+            ...result,
+            session: { ...result.session, hostId: host.id, hostName: host.name ?? host.id },
+          }))),
+          reject,
+        });
+        client.send(isLocalHost(host.id)
+          ? { t: 'search_sessions', query, limit: 30, maxHitsPerSession: 3, corrId }
+          : { t: 'search_sessions', query, limit: 30, maxHitsPerSession: 3, hostId: host.id, corrId });
+      }))).then((groups) => groups.flat());
+    },
     resumeSession: (session) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
@@ -1101,6 +1201,7 @@ export const useStore = create<StoreState>((set, get) => {
           source: session.source,
           agent: session.agent,
           cwd: session.cwd || undefined,
+          ...(isLocalHost(session.hostId) ? {} : { hostId: session.hostId }),
           corrId,
         });
       }),
@@ -1169,17 +1270,21 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'system_notification_action', notificationId, action, corrId });
       }),
-    getSpawnOptions: (agent, cwd, harness) =>
+    getSpawnOptions: (agent, cwd, harness, hostId) =>
       new Promise<SpawnOptions>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSpawnOptions.set(corrId, { resolve, reject });
-        client.send({ t: 'get_spawn_options', agent, harness, cwd, corrId });
+        client.send(isLocalHost(hostId)
+          ? { t: 'get_spawn_options', agent, harness, cwd, corrId }
+          : { t: 'get_spawn_options', agent, harness, cwd, hostId, corrId });
       }),
-    listGitRefs: (repo) =>
+    listGitRefs: (repo, hostId) =>
       new Promise<GitRefInfo[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingGitRefs.set(corrId, { resolve, reject });
-        client.send({ t: 'list_git_refs', repo, corrId });
+        client.send(isLocalHost(hostId)
+          ? { t: 'list_git_refs', repo, corrId }
+          : { t: 'list_git_refs', repo, hostId, corrId });
       }),
     listWorkspaceEntries: (agentId, path) =>
       new Promise<WorkspaceEntry[]>((resolve, reject) => {
@@ -1469,7 +1574,7 @@ function shell(id: string): AgentView {
 
 function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
+  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

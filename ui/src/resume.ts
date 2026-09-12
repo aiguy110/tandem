@@ -46,7 +46,7 @@ export interface ResumeGroup {
 }
 
 export function sessionKey(session: ResumableSession): string {
-  return `${session.agent}\0${session.sessionId || session.agentId || session.cwd}`;
+  return `${session.hostId ?? 'local'}\0${session.agent}\0${session.sessionId || session.agentId || session.cwd}`;
 }
 
 export function sessionName(session: ResumableSession): string {
@@ -98,6 +98,8 @@ export function sessionFromLiveAgent(agent: AgentView): ResumableSession {
     live: true,
     status: agent.status,
     resumable: true,
+    hostId: agent.hostId,
+    hostName: agent.hostName,
   };
 }
 

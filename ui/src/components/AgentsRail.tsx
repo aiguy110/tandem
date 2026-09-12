@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { usePresence, useValuePresence } from '../transitions';
-import { useStore, rankedOrder, agentBadge } from '../store';
+import { LOCAL_HOST_ID, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
 import type { ClosePreview } from '../wire';
@@ -17,6 +17,7 @@ const SEVERITY_CLASS: Record<NotifSeverity, string> = {
 export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
   const order = useStore(rankedOrder);
   const agents = useStore((s) => s.agents);
+  const hosts = useStore((s) => s.hosts);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
   const reorderAgent = useStore((s) => s.reorderAgent);
@@ -28,6 +29,13 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const renameAgent = useStore((s) => s.renameAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
+  // Keep the familiar uninterrupted rail until federation has at least one
+  // accepted/known slave. Once it does, every group (including local) has a
+  // labeled divider so the placement of remote controls is unambiguous.
+  const federationGrouping = hosts.some((host) => !host.local && ['connected', 'accepted', 'offline'].includes(host.status ?? ''));
+  const displayedGroups = federationGrouping
+    ? groupedAgentRows(order, agents, hosts)
+    : [{ hostId: 'all', label: '', ids: order }];
   // Keep the full dock alive until the grid has finished contracting, so its
   // contents stay clipped by the shrinking dock rather than disappearing at
   // the start of the transition.
@@ -114,31 +122,36 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
         </div>
       ) : (
         <>
-          {order.map((id) => (
-            <Row
-              key={id}
-              agent={agents[id]}
-              active={id === focusedId}
-              onClick={() => focus(id)}
-              onMarkUnread={() => markAgentUnread(id)}
-              onRename={(name) => renameAgent(id, name)}
-              onDelete={() => void requestDelete(id)}
-              dragging={id === draggedId}
-              dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
-              onDragStart={() => setDraggedId(id)}
-              onDragOver={(after) => {
-                if (draggedId && draggedId !== id) setDropTarget({ id, after });
-              }}
-              onDrop={(after) => {
-                if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
-                setDraggedId(null);
-                setDropTarget(null);
-              }}
-              onDragEnd={() => {
-                setDraggedId(null);
-                setDropTarget(null);
-              }}
-            />
+          {displayedGroups.map((group) => (
+            <Fragment key={group.hostId}>
+              {federationGrouping && <div className="agent-host-divider"><span>{group.label}</span></div>}
+              {group.ids.map((id) => (
+                <Row
+                  key={id}
+                  agent={agents[id]}
+                  active={id === focusedId}
+                  onClick={() => focus(id)}
+                  onMarkUnread={() => markAgentUnread(id)}
+                  onRename={(name) => renameAgent(id, name)}
+                  onDelete={() => void requestDelete(id)}
+                  dragging={id === draggedId}
+                  dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
+                  onDragStart={() => setDraggedId(id)}
+                  onDragOver={(after) => {
+                    if (draggedId && draggedId !== id) setDropTarget({ id, after });
+                  }}
+                  onDrop={(after) => {
+                    if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
+                    setDraggedId(null);
+                    setDropTarget(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedId(null);
+                    setDropTarget(null);
+                  }}
+                />
+              ))}
+            </Fragment>
           ))}
           <div
             className={`agent-drop-end${draggedId ? ' active' : ''}`}
@@ -240,6 +253,22 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
       )}
     </div>
   );
+}
+
+function groupedAgentRows(order: string[], agents: Record<string, AgentView>, hosts: { id: string; name?: string; local?: boolean }[]): { hostId: string; label: string; ids: string[] }[] {
+  const groups = new Map<string, { hostId: string; label: string; ids: string[] }>();
+  for (const id of order) {
+    const agent = agents[id];
+    if (!agent) continue;
+    const hostId = agent.hostId ?? LOCAL_HOST_ID;
+    const configured = hosts.find((host) => host.id === hostId);
+    const label = configured?.local || hostId === LOCAL_HOST_ID ? 'This host' : agent.hostName || configured?.name || hostId;
+    const group = groups.get(hostId) ?? { hostId, label, ids: [] };
+    group.ids.push(id);
+    groups.set(hostId, group);
+  }
+  const local = groups.get(LOCAL_HOST_ID);
+  return [...(local ? [local] : []), ...[...groups.values()].filter((group) => group.hostId !== LOCAL_HOST_ID)];
 }
 
 function Row({
@@ -411,6 +440,11 @@ function Row({
               }}
             />
           ) : agent.name}
+          {agent.hostId && (
+            <span className="agent-host-badge" title={`Running on ${agent.hostName || agent.hostId}`}>
+              {agent.hostName || agent.hostId}
+            </span>
+          )}
           {badge.count > 0 && badge.severity && (
             <span className={`count badge notification-badge ${SEVERITY_CLASS[badge.severity]}`}>{badge.count}</span>
           )}
@@ -528,6 +562,7 @@ function AgentDetails({
       </div>
       <div className="agent-details-body">
         <Detail label="Agent" value={agent.agent || 'Default agent'} />
+        {agent.hostId && <Detail label="Host" value={agent.hostName || agent.hostId} />}
         <Detail label="Profile" value={profileBits.join(' · ') || (profile?.id ? 'Saved profile' : 'No profile settings')} />
         {profile?.id && <Detail label="Profile ID" value={profile.id} mono />}
         {profile?.snapshot && <Detail label="Browser snapshot" value={profile.snapshot} mono />}

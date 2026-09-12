@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __testApplyServerMsg, notificationsSummary, useStore } from './store';
-import type { Annotation } from './wire';
+import { __testApplyServerMsg, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
+import type { AgentSummary, Annotation } from './wire';
 import { WsClient } from './ws/client';
 import {
   __getElementForTests as __getEngineElementForTests,
@@ -32,11 +32,52 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, drafts: {}, systemNotifications: [] });
+  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
   localStorage.removeItem('tandem.promptDrafts');
+});
+
+function summary(overrides: Partial<AgentSummary> = {}): AgentSummary {
+  return {
+    id: 'agent-1', name: 'Agent', workspace: { kind: 'existing', repo: 'repo', repoPath: '/repo', branch: 'main', cwd: '/repo' },
+    status: 'idle', pendingApprovals: 0, controlMode: 'transcript', adapter: 'acp', canHandoff: true,
+    ...overrides,
+  };
+}
+
+describe('federation projections', () => {
+  it('keeps host-scoped directories/catalogs separate and synthesizes local compatibility', () => {
+    __testApplyServerMsg({ t: 'hosts', hosts: [{ id: 'worker-1', name: 'Build host', status: 'connected' }] });
+    __testApplyServerMsg({ t: 'dirs', dirs: [{ path: '/remote/repo', name: 'repo', currentBranch: 'main', dirty: false, hasLiveAgent: false }], hostId: 'worker-1' });
+    __testApplyServerMsg({ t: 'agent_catalog', hostId: 'worker-1', catalog: { defaultAgent: 'pi', agents: [], harnesses: [] } });
+    __testApplyServerMsg({ t: 'dirs', dirs: [{ path: '/local/repo', name: 'local', currentBranch: 'main', dirty: false, hasLiveAgent: false }] });
+
+    const state = useStore.getState();
+    expect(state.hosts.map((host) => host.id)).toEqual([LOCAL_HOST_ID, 'worker-1']);
+    expect(state.dirs.map((dir) => dir.path)).toEqual(['/local/repo']);
+    expect(state.dirsByHost['worker-1'].map((dir) => dir.path)).toEqual(['/remote/repo']);
+    expect(state.agentCatalogByHost['worker-1']?.defaultAgent).toBe('pi');
+  });
+
+  it('retains remote host labels on normal agent summaries', () => {
+    __testApplyServerMsg({ t: 'agents', agents: [summary({ hostId: 'worker-1', hostName: 'Build host' })] });
+    expect(useStore.getState().agents['agent-1']).toMatchObject({ hostId: 'worker-1', hostName: 'Build host' });
+  });
+
+  it('keeps session discovery loading until every requested host replies', () => {
+    useStore.setState({
+      hosts: [{ id: LOCAL_HOST_ID, local: true }, { id: 'worker-1', name: 'Build host', status: 'connected' }],
+      resumeLoading: true,
+      resumePendingHostIds: { [LOCAL_HOST_ID]: true, 'worker-1': true },
+    });
+    __testApplyServerMsg({ t: 'sessions', catalog: { sessions: [], adapters: [] } });
+    expect(useStore.getState().resumeLoading).toBe(true);
+    __testApplyServerMsg({ t: 'sessions', hostId: 'worker-1', catalog: { sessions: [{ sessionId: 'remote', source: 'history', agent: 'pi', cwd: '/repo', resumable: true }], adapters: [] } });
+    expect(useStore.getState().resumeLoading).toBe(false);
+    expect(useStore.getState().resumeCatalog?.sessions[0]).toMatchObject({ hostId: 'worker-1', hostName: 'Build host' });
+  });
 });
 
 describe('system notifications', () => {
