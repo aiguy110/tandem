@@ -141,6 +141,7 @@ export function SpawnPalette() {
   // The two things a parent session offers — its transcript and its worktree —
   // are independent; either can be taken without the other.
   const [includeTranscript, setIncludeTranscript] = useState(true);
+  const [handoffMode, setHandoffMode] = useState<'full' | 'brief'>('full');
   const [sourceRef, setSourceRef] = useState('');
   const [attachBranchRef, setAttachBranchRef] = useState('');
   const [agentBranch, setAgentBranch] = useState('');
@@ -516,6 +517,7 @@ export function SpawnPalette() {
         snapshot: spawnSnapshot || undefined,
       },
       handoffFrom: parentSession && includeTranscript ? parentSession : undefined,
+      handoffMode: parentSession && includeTranscript ? handoffMode : undefined,
     };
     saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
     if (advanced && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
@@ -724,11 +726,23 @@ export function SpawnPalette() {
                   Start with a hand-off transcript of {parentAgent.name}'s conversation
                 </label>
                 {includeTranscript && (
-                  <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
-                    The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
-                    conversation — every user and assistant message verbatim, intervening tool calls summarized. It is
-                    built mechanically from the event log, so no model is asked to summarize anything.
-                  </div>
+                  <>
+                    <label style={{ gridColumn: '1 / -1' }}>
+                      Transcript detail
+                      <select value={handoffMode} onChange={(e) => setHandoffMode(e.target.value as 'full' | 'brief')}>
+                        <option value="full">Full — every message, each tool call summarized</option>
+                        <option value="brief">Brief — turn-end messages only, tool calls counted</option>
+                      </select>
+                    </label>
+                    <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                      The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
+                      conversation.{' '}
+                      {handoffMode === 'full'
+                        ? "Every user and assistant message is carried over verbatim, and each intervening tool call becomes one summary line naming the file it touched."
+                        : "Every user message is carried over verbatim, but only each turn's closing message is — the work in between appears as a count of tool calls."}
+                      {' '}It is built mechanically from the event log, so no model is asked to summarize anything.
+                    </div>
+                  </>
                 )}
               </>
             )}

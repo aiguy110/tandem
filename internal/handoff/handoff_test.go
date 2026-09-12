@@ -2,6 +2,7 @@ package handoff_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,18 +25,20 @@ func TestRenderCarriesMessagesVerbatimAndSummarizesTools(t *testing.T) {
 		event(t, 2, map[string]any{"kind": "thought_chunk", "text": "the user probably wants exponential backoff"}),
 		event(t, 3, map[string]any{"kind": "message_chunk", "text": "Sure. Let me "}),
 		event(t, 4, map[string]any{"kind": "message_chunk", "text": "read the uploader."}),
-		event(t, 5, map[string]any{"kind": "tool_call", "id": "t1", "title": "Read upload.go", "status": "pending"}),
-		event(t, 6, map[string]any{"kind": "tool_call_update", "id": "t1", "status": "completed"}),
-		event(t, 7, map[string]any{"kind": "tool_call", "id": "t2", "title": "Edit upload.go", "status": "failed"}),
+		event(t, 5, map[string]any{"kind": "tool_call", "id": "t1", "title": "Read", "status": "pending"}),
+		event(t, 6, map[string]any{"kind": "tool_call_update", "id": "t1", "status": "completed",
+			"rawInput": map[string]any{"file_path": "/w/repo/upload.go", "offset": 40, "limit": 20}}),
+		event(t, 7, map[string]any{"kind": "tool_call", "id": "t2", "title": "Edit", "status": "failed",
+			"rawInput": map[string]any{"file_path": "/w/repo/upload.go", "old_string": "x"}}),
 		event(t, 8, map[string]any{"kind": "message_chunk", "text": "The edit failed; retrying."}),
 	}
-	got := handoff.Render(history, handoff.Source{AgentName: "tesla-13", Harness: "Claude", CWD: "/w/repo", Branch: "tandem/master/tesla-13"})
+	got := handoff.Render(history, handoff.Source{AgentName: "tesla-13", Harness: "Claude", CWD: "/w/repo", Branch: "tandem/master/tesla-13"}, handoff.ModeFull)
 
 	for _, want := range []string{
 		"add a retry to the uploader",
-		"Sure. Let me read the uploader.", // chunks coalesce into one message
-		"- Read upload.go",                // a completed call needs no status suffix
-		"- Edit upload.go [failed]",
+		"Sure. Let me read the uploader.",  // chunks coalesce into one message
+		"- Read — /w/repo/upload.go:40-59", // the read's target and span, from its raw input
+		"- Edit — /w/repo/upload.go [failed]",
 		"The edit failed; retrying.",
 		"tesla-13",
 		"Claude",
@@ -62,7 +65,7 @@ func TestRenderReturnsEmptyForATranscriptWithNothingToCarry(t *testing.T) {
 		event(t, 1, map[string]any{"kind": "status", "status": "idle"}),
 		event(t, 2, map[string]any{"kind": "thought_chunk", "text": "hmm"}),
 	}
-	if got := handoff.Render(history, handoff.Source{}); got != "" {
+	if got := handoff.Render(history, handoff.Source{}, handoff.ModeFull); got != "" {
 		t.Errorf("want empty render, got %q", got)
 	}
 }
@@ -71,14 +74,64 @@ func TestRenderCapsARunawayToolLoop(t *testing.T) {
 	history := []eventlog.LoggedEvent{event(t, 0, map[string]any{"kind": "user_message", "text": "go"})}
 	for i := 1; i <= 100; i++ {
 		history = append(history, event(t, int64(i), map[string]any{
-			"kind": "tool_call", "id": string(rune('a'+i%26)) + strings.Repeat("x", i), "title": "Bash echo", "status": "completed",
+			"kind": "tool_call", "id": strconv.Itoa(i), "title": "Bash echo", "status": "completed",
 		}))
 	}
-	got := handoff.Render(history, handoff.Source{})
-	if lines := strings.Count(got, "- Bash echo"); lines != 40 {
-		t.Errorf("want 40 summarized tool lines, got %d", lines)
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeFull)
+	if lines := strings.Count(got, "- Bash echo"); lines != 10 {
+		t.Errorf("want 10 summarized tool lines, got %d", lines)
 	}
-	if !strings.Contains(got, "and 60 more tool call(s)") {
+	if !strings.Contains(got, "and 90 more tool calls") {
 		t.Errorf("dropped tool calls were not accounted for:\n%s", got)
+	}
+}
+
+func TestBriefModeKeepsOnlyTurnEndMessagesAndCountsTools(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "add a retry to the uploader"}),
+		event(t, 2, map[string]any{"kind": "message_chunk", "text": "Reading the uploader first."}),
+		event(t, 3, map[string]any{"kind": "tool_call", "id": "t1", "title": "Read upload.go", "status": "completed"}),
+		event(t, 4, map[string]any{"kind": "message_chunk", "text": "Now editing."}),
+		event(t, 5, map[string]any{"kind": "tool_call", "id": "t2", "title": "Edit upload.go", "status": "completed"}),
+		event(t, 6, map[string]any{"kind": "tool_call", "id": "t3", "title": "Bash go test", "status": "completed"}),
+		event(t, 7, map[string]any{"kind": "message_chunk", "text": "Done: retries with backoff, tests pass."}),
+		event(t, 8, map[string]any{"kind": "user_message", "text": "now do the downloader"}),
+		event(t, 9, map[string]any{"kind": "message_chunk", "text": "Starting on it."}),
+	}
+	got := handoff.Render(history, handoff.Source{AgentName: "tesla-13"}, handoff.ModeBrief)
+
+	for _, want := range []string{
+		"add a retry to the uploader",
+		"3 tool calls",
+		"Done: retries with backoff, tests pass.",
+		"now do the downloader",
+		"Starting on it.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("brief hand-off is missing %q:\n%s", want, got)
+		}
+	}
+	// Intermediate narration is exactly what brief mode trades away.
+	for _, unwanted := range []string{"Reading the uploader first.", "Now editing.", "Read upload.go"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("brief hand-off should not contain %q:\n%s", unwanted, got)
+		}
+	}
+	// The count is of the whole turn, so it is not subject to the full-mode cap.
+	if strings.Contains(got, "more tool call") {
+		t.Errorf("brief hand-off should count tool calls, not truncate them:\n%s", got)
+	}
+}
+
+func TestBriefModeCountsPastTheFullModeCap(t *testing.T) {
+	history := []eventlog.LoggedEvent{event(t, 0, map[string]any{"kind": "user_message", "text": "go"})}
+	for i := 1; i <= 100; i++ {
+		history = append(history, event(t, int64(i), map[string]any{
+			"kind": "tool_call", "id": strconv.Itoa(i), "title": "Bash echo", "status": "completed",
+		}))
+	}
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeBrief)
+	if !strings.Contains(got, "100 tool calls") {
+		t.Errorf("want the true total, got:\n%s", got)
 	}
 }
