@@ -26,6 +26,15 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// ProtocolVersion is this daemon's federation wire version. The transport
+// carries opaque browser-protocol envelopes, so adding a command or a field
+// costs nothing across versions and must NOT bump this. Bump it only for a
+// genuinely breaking change: new or reinterpreted tunnel/register/heartbeat
+// framing, changed credential handling, or an existing field whose meaning
+// changes. A peer reporting a different version still connects -- see
+// checkProtocol -- because most commands remain mutually intelligible.
+const ProtocolVersion = 1
+
 const (
 	RegisterPath  = "/internal/federation/register"
 	StatusPath    = "/internal/federation/registration"
@@ -42,6 +51,10 @@ type Host struct {
 	Status   string          `json:"status"`
 	LastSeen int64           `json:"lastSeenAt,omitempty"`
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+	// ProtocolVersion/BuildVersion are what the host reported when it last
+	// connected; both are absent for a host predating version reporting.
+	ProtocolVersion int    `json:"protocolVersion,omitempty"`
+	BuildVersion    string `json:"buildVersion,omitempty"`
 }
 
 // Local supplies a slave's local operations. Commands and snapshots are
@@ -74,6 +87,10 @@ type Options struct {
 	// process. SOCKS sits below TLS, so an https/wss master still terminates
 	// its own TLS end to end.
 	ProxyURL string
+	// BuildVersion is this daemon's release, reported to the peer alongside
+	// ProtocolVersion so a skew notification can name something a human can
+	// act on ("update builder to v0.5.0") rather than a bare number.
+	BuildVersion string
 }
 
 type Service struct {
@@ -86,6 +103,7 @@ type Service struct {
 	client        *http.Client
 	dialer        *websocket.Dialer
 	poll          time.Duration
+	buildVersion  string
 
 	mu        sync.Mutex
 	snapshots map[string]json.RawMessage
@@ -106,19 +124,26 @@ type result struct {
 	Error   string          `json:"error,omitempty"`
 }
 type registerRequest struct {
-	HostID   string `json:"hostId"`
-	Name     string `json:"name"`
-	Endpoint string `json:"endpoint,omitempty"`
+	HostID          string `json:"hostId"`
+	Name            string `json:"name"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	ProtocolVersion int    `json:"protocolVersion,omitempty"`
+	BuildVersion    string `json:"buildVersion,omitempty"`
 }
 type registerResponse struct {
 	Status     string `json:"status"`
 	Credential string `json:"credential,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// The master's own versions, so a host can report skew locally too.
+	ProtocolVersion int    `json:"protocolVersion,omitempty"`
+	BuildVersion    string `json:"buildVersion,omitempty"`
 }
 type heartbeat struct {
-	HostID   string          `json:"hostId"`
-	Snapshot json.RawMessage `json:"snapshot,omitempty"`
-	Results  []result        `json:"results,omitempty"`
+	HostID          string          `json:"hostId"`
+	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
+	Results         []result        `json:"results,omitempty"`
+	ProtocolVersion int             `json:"protocolVersion,omitempty"`
+	BuildVersion    string          `json:"buildVersion,omitempty"`
 }
 type heartbeatResponse struct {
 	Commands []command `json:"commands"`
@@ -131,6 +156,11 @@ type tunnelMessage struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 	Error    string          `json:"error,omitempty"`
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+	// Carried on "hello" (host to master) and "welcome" (master to host). The
+	// hello is the authoritative report: a long-registered host reconnects
+	// without ever registering again.
+	ProtocolVersion int    `json:"protocolVersion,omitempty"`
+	BuildVersion    string `json:"buildVersion,omitempty"`
 }
 type tunnel struct {
 	conn    *websocket.Conn
@@ -201,7 +231,7 @@ func New(opts Options) (*Service, error) {
 			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
 		}
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
+	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
@@ -259,7 +289,7 @@ func (s *Service) Hosts() []Host {
 	defer s.mu.Unlock()
 	out := make([]Host, 0, len(peers))
 	for _, p := range peers {
-		h := Host{ID: p.ID, Name: p.Name, Endpoint: p.Endpoint, Status: p.Status, LastSeen: p.LastSeenAt}
+		h := Host{ID: p.ID, Name: p.Name, Endpoint: p.Endpoint, Status: p.Status, LastSeen: p.LastSeenAt, ProtocolVersion: p.ProtocolVersion, BuildVersion: p.BuildVersion}
 		if b := s.snapshots[p.ID]; len(b) != 0 {
 			h.Snapshot = append(json.RawMessage(nil), b...)
 		}
@@ -358,12 +388,12 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UnixMilli()
-	if err := s.store.UpsertFederationSlave(store.FederationSlave{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now}); err != nil {
+	if err := s.store.UpsertFederationSlave(store.FederationSlave{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now, ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	s.notifyPending(req.HostID, req.Name, req.Endpoint)
-	writeJSON(w, http.StatusAccepted, registerResponse{Status: "pending"})
+	writeJSON(w, http.StatusAccepted, registerResponse{Status: "pending", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
 }
 
 func (s *Service) registrationStatus(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +411,7 @@ func (s *Service) registrationStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, registerResponse{Status: "rejected", Error: "registration not found"})
 		return
 	}
-	resp := registerResponse{Status: peer.Status}
+	resp := registerResponse{Status: peer.Status, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}
 	if peer.Status == "accepted" {
 		resp.Credential = peer.Credential
 	}
@@ -413,10 +443,14 @@ func (s *Service) heartbeat(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	peer.Status = "connected"
 	peer.LastSeenAt = now
+	if hb.ProtocolVersion != 0 || hb.BuildVersion != "" {
+		peer.ProtocolVersion, peer.BuildVersion = hb.ProtocolVersion, hb.BuildVersion
+	}
 	if err := s.store.UpsertFederationSlave(*peer); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	s.checkProtocol(*peer)
 	s.mu.Lock()
 	if len(hb.Snapshot) > 0 {
 		s.snapshots[hb.HostID] = append(json.RawMessage(nil), hb.Snapshot...)
@@ -483,7 +517,12 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	peer.Status = "connected"
 	peer.LastSeenAt = time.Now().UnixMilli()
+	peer.ProtocolVersion, peer.BuildVersion = hello.ProtocolVersion, hello.BuildVersion
 	_ = s.store.UpsertFederationSlave(*peer)
+	// A host predating the welcome message ignores unknown tunnel types, so
+	// this is safe to send unconditionally.
+	_ = t.send(tunnelMessage{T: "welcome", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
+	s.checkProtocol(*peer)
 	s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for _, cmd := range queued {
 		if t.send(tunnelMessage{T: "command", ID: cmd.ID, Payload: cmd.Payload}) != nil {
@@ -496,6 +535,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 			delete(s.tunnels, hello.HostID)
 		}
 		s.mu.Unlock()
+		s.removeProtocolNotification(hello.HostID)
 		p, _ := s.store.FederationSlave(hello.HostID)
 		if p != nil && p.Status == "connected" {
 			p.Status = "offline"
@@ -568,6 +608,22 @@ func (t *tunnel) ping() error {
 // returns handled=false for unrelated notification IDs so daemon code can
 // chain this with updater actions.
 func (s *Service) HandleNotificationAction(_ context.Context, id, action string) (agentID string, handled bool, err error) {
+	if id == masterProtocolNotificationID {
+		if action != "dismiss" {
+			return "", true, fmt.Errorf("unknown federation protocol action %q", action)
+		}
+		if s.notifications != nil {
+			s.notifications.Remove(masterProtocolNotificationID)
+		}
+		return "", true, nil
+	}
+	if strings.HasPrefix(id, protocolNotificationPrefix) {
+		if action != "dismiss" {
+			return "", true, fmt.Errorf("unknown federation protocol action %q", action)
+		}
+		s.removeProtocolNotification(strings.TrimPrefix(id, protocolNotificationPrefix))
+		return "", true, nil
+	}
 	const prefix = "federation-registration-"
 	if !strings.HasPrefix(id, prefix) {
 		return "", false, nil
@@ -620,6 +676,83 @@ func (s *Service) notifyPending(id, name, endpoint string) {
 	}
 	s.notifications.Upsert(notifications.Notification{ID: "federation-registration-" + id, Severity: "attention", Title: "Register agent host " + label, Message: message, Actions: []notifications.Action{{ID: "accept", Label: "Accept", Primary: true}, {ID: "reject", Label: "Reject"}}})
 }
+
+const protocolNotificationPrefix = "federation-protocol-"
+const masterProtocolNotificationID = "federation-master-protocol"
+
+// noteMasterProtocol is the slave-side half of skew reporting, so an operator
+// looking at the host's own UI sees the same fact the master's UI shows.
+func (s *Service) noteMasterProtocol(version int, build string) {
+	if s.notifications == nil {
+		return
+	}
+	if version == ProtocolVersion {
+		s.notifications.Remove(masterProtocolNotificationID)
+		return
+	}
+	remote := fmt.Sprintf("protocol %d", version)
+	if version == 0 {
+		remote = "a federation protocol predating version reporting"
+	}
+	if build != "" {
+		remote += " (" + build + ")"
+	}
+	action := "Update this host's Tandem to match its master."
+	if version < ProtocolVersion {
+		action = "Update the master's Tandem to match this host."
+	}
+	s.notifications.Upsert(notifications.Notification{
+		ID: masterProtocolNotificationID, Severity: "attention",
+		Title:   "This host's master is a different Tandem version",
+		Message: fmt.Sprintf("The master speaks %s; this Tandem speaks protocol %d. %s", remote, ProtocolVersion, action),
+		Actions: []notifications.Action{{ID: "dismiss", Label: "Dismiss"}},
+	})
+}
+
+// checkProtocol surfaces version skew as an ordinary notification instead of
+// letting it appear as commands that mysteriously do nothing. It deliberately
+// does not refuse the connection: the tunnel carries opaque browser envelopes,
+// so a peer one version off still handles every command both sides share.
+func (s *Service) checkProtocol(peer store.FederationSlave) {
+	if s.notifications == nil {
+		return
+	}
+	if peer.ProtocolVersion == ProtocolVersion {
+		s.removeProtocolNotification(peer.ID)
+		return
+	}
+	label := peer.Name
+	if label == "" {
+		label = peer.ID
+	}
+	remote := fmt.Sprintf("protocol %d", peer.ProtocolVersion)
+	stale := peer.ProtocolVersion < ProtocolVersion
+	if peer.ProtocolVersion == 0 {
+		remote = "a federation protocol predating version reporting"
+	}
+	if peer.BuildVersion != "" {
+		remote += " (" + peer.BuildVersion + ")"
+	}
+	action := "Update that host's Tandem to match this one."
+	if !stale {
+		action = "Update this Tandem to match that host."
+	}
+	message := fmt.Sprintf("%s speaks %s; this Tandem speaks protocol %d. Commands both versions share still work, but newer ones may fail on the older side. %s",
+		label, remote, ProtocolVersion, action)
+	s.notifications.Upsert(notifications.Notification{
+		ID: protocolNotificationPrefix + peer.ID, Severity: "attention",
+		Title:   "Agent host " + label + " is a different Tandem version",
+		Message: message,
+		Actions: []notifications.Action{{ID: "dismiss", Label: "Dismiss"}},
+	})
+}
+
+func (s *Service) removeProtocolNotification(hostID string) {
+	if s.notifications != nil {
+		s.notifications.Remove(protocolNotificationPrefix + hostID)
+	}
+}
+
 func (s *Service) removeNotification(id string) {
 	if s.notifications != nil {
 		s.notifications.Remove("federation-registration-" + id)
@@ -720,7 +853,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}()
 	defer close(stopClose)
 	t := &tunnel{conn: conn}
-	if err = t.send(tunnelMessage{T: "hello", HostID: hostID}); err != nil {
+	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}); err != nil {
 		return err
 	}
 	if s.local != nil {
@@ -780,6 +913,10 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		if err := conn.ReadJSON(&msg); err != nil {
 			return err
 		}
+		if msg.T == "welcome" {
+			s.noteMasterProtocol(msg.ProtocolVersion, msg.BuildVersion)
+			continue
+		}
 		if msg.T != "command" {
 			continue
 		}
@@ -809,7 +946,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 
 func (s *Service) registerWithMaster(ctx context.Context, id string) (registerResponse, error) {
 	var out registerResponse
-	code, err := s.request(ctx, http.MethodPost, RegisterPath, "", registerRequest{HostID: id, Name: s.name, Endpoint: s.endpoint}, &out)
+	code, err := s.request(ctx, http.MethodPost, RegisterPath, "", registerRequest{HostID: id, Name: s.name, Endpoint: s.endpoint, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}, &out)
 	if err != nil {
 		return out, err
 	}
@@ -823,7 +960,7 @@ func (s *Service) registerWithMaster(ctx context.Context, id string) (registerRe
 }
 func (s *Service) sendHeartbeat(ctx context.Context, id, credential string, snapshot json.RawMessage, results []result) ([]command, error) {
 	var out heartbeatResponse
-	_, err := s.request(ctx, http.MethodPost, HeartbeatPath, credential, heartbeat{HostID: id, Snapshot: snapshot, Results: results}, &out)
+	_, err := s.request(ctx, http.MethodPost, HeartbeatPath, credential, heartbeat{HostID: id, Snapshot: snapshot, Results: results, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}, &out)
 	return out.Commands, err
 }
 func (s *Service) execute(ctx context.Context, commands []command) []result {

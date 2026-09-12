@@ -49,6 +49,27 @@ Federation is deliberately one level deep. An instance started with `--master` r
 attempts by other slaves to register with it and returns an explanatory error. Masters
 may accept many directly connected slaves.
 
+## Protocol versions and skew
+
+Both peers report `protocolVersion` (the federation wire version, `federation.ProtocolVersion`)
+and `buildVersion` (the release) on every connection: in the registration request and
+response, in the tunnel `hello`/`welcome` messages, and in each heartbeat. The master
+stores the host's pair on its durable slave record and exposes it to the UI on each host
+entry; a host predating version reporting reports `0` and an empty build.
+
+**Bumping the version.** The tunnel carries opaque browser-protocol envelopes, which is
+why federation has survived many command additions without a protocol change. Preserve
+that: *add only*. A new command type or a new field costs nothing across versions and
+must not bump `ProtocolVersion`. Bump it only for a genuinely breaking change — new or
+reinterpreted tunnel/register/heartbeat framing, changed credential handling, or an
+existing field whose meaning changes.
+
+**Skew is reported, not refused.** A peer one version off still connects, because most
+commands stay mutually intelligible. Each side raises a notification naming the other's
+version and which end to update, so the failure mode is a readable message rather than a
+command that silently does nothing. The notice is dismissible, clears when a matching
+version connects, and is re-raised on the next connection if the skew persists.
+
 ## Spawning and control
 
 The spawn palette includes a host selector. Repository discovery, configured agents,

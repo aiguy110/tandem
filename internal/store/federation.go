@@ -27,6 +27,10 @@ type FederationSlave struct {
 	RequestedAt int64
 	AcceptedAt  int64
 	LastSeenAt  int64
+	// ProtocolVersion and BuildVersion are what the host reported on its most
+	// recent connection. Zero and "" mean a host too old to report either.
+	ProtocolVersion int
+	BuildVersion    string
 }
 
 func (s *Store) FederationMaster() (*FederationMaster, error) {
@@ -62,17 +66,17 @@ func (s *Store) UpsertFederationSlave(peer FederationSlave) error {
 	if peer.RequestedAt == 0 {
 		peer.RequestedAt = s.now().UnixMilli()
 	}
-	_, err := s.db.Exec(`INSERT INTO federation_slaves (id, name, endpoint, credential, status, requestedAt, acceptedAt, lastSeenAt)
-VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0))
-ON CONFLICT(id) DO UPDATE SET name=excluded.name, endpoint=excluded.endpoint, credential=CASE WHEN excluded.credential = '' THEN federation_slaves.credential ELSE excluded.credential END, status=excluded.status, requestedAt=excluded.requestedAt, acceptedAt=excluded.acceptedAt, lastSeenAt=excluded.lastSeenAt`,
-		peer.ID, peer.Name, peer.Endpoint, peer.Credential, peer.Status, peer.RequestedAt, peer.AcceptedAt, peer.LastSeenAt)
+	_, err := s.db.Exec(`INSERT INTO federation_slaves (id, name, endpoint, credential, status, requestedAt, acceptedAt, lastSeenAt, protocolVersion, buildVersion)
+VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0), ?, ?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name, endpoint=excluded.endpoint, credential=CASE WHEN excluded.credential = '' THEN federation_slaves.credential ELSE excluded.credential END, status=excluded.status, requestedAt=excluded.requestedAt, acceptedAt=excluded.acceptedAt, lastSeenAt=excluded.lastSeenAt, protocolVersion=excluded.protocolVersion, buildVersion=excluded.buildVersion`,
+		peer.ID, peer.Name, peer.Endpoint, peer.Credential, peer.Status, peer.RequestedAt, peer.AcceptedAt, peer.LastSeenAt, peer.ProtocolVersion, peer.BuildVersion)
 	return err
 }
 
 func (s *Store) FederationSlave(id string) (*FederationSlave, error) {
 	var peer FederationSlave
-	err := s.db.QueryRow(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0) FROM federation_slaves WHERE id = ?`, id).
-		Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt)
+	err := s.db.QueryRow(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0), protocolVersion, buildVersion FROM federation_slaves WHERE id = ?`, id).
+		Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt, &peer.ProtocolVersion, &peer.BuildVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -80,7 +84,7 @@ func (s *Store) FederationSlave(id string) (*FederationSlave, error) {
 }
 
 func (s *Store) FederationSlaves() ([]FederationSlave, error) {
-	rows, err := s.db.Query(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0) FROM federation_slaves ORDER BY requestedAt ASC`)
+	rows, err := s.db.Query(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0), protocolVersion, buildVersion FROM federation_slaves ORDER BY requestedAt ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +92,7 @@ func (s *Store) FederationSlaves() ([]FederationSlave, error) {
 	var peers []FederationSlave
 	for rows.Next() {
 		var peer FederationSlave
-		if err := rows.Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt); err != nil {
+		if err := rows.Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt, &peer.ProtocolVersion, &peer.BuildVersion); err != nil {
 			return nil, err
 		}
 		peers = append(peers, peer)

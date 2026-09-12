@@ -152,6 +152,10 @@ export interface FederationHost {
   name?: string;
   status?: 'connected' | 'accepted' | 'pending' | 'offline' | 'rejected';
   local?: boolean;
+  // Reported by the host on its last connection; absent for a host running a
+  // Tandem old enough not to report either.
+  protocolVersion?: number;
+  buildVersion?: string;
 }
 
 export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';

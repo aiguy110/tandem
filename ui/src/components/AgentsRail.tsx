@@ -545,6 +545,7 @@ function AgentDetails({
   onMove: (position: { x: number; y: number }) => void;
 }) {
   const drag = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const host = useStore((s) => s.hosts.find((candidate) => candidate.id === agent.hostId));
   const ws = agent.workspace;
   const profile = agent.profile;
   const gitState = ws.gitState === 'unknown' ? 'Unavailable' : (ws.gitState ?? 'Unavailable').replace(/_/g, ' ');
@@ -582,7 +583,12 @@ function AgentDetails({
       </div>
       <div className="agent-details-body">
         <Detail label="Agent" value={agent.agent || 'Default agent'} />
-        {agent.hostId && <Detail label="Host" value={agent.hostName || agent.hostId} />}
+        {agent.hostId && (
+          <Detail
+            label="Host"
+            value={`${agent.hostName || agent.hostId}${host?.buildVersion ? ` · ${host.buildVersion}` : ''}`}
+          />
+        )}
         <Detail label="Profile" value={profileBits.join(' · ') || (profile?.id ? 'Saved profile' : 'No profile settings')} />
         {profile?.id && <Detail label="Profile ID" value={profile.id} mono />}
         {profile?.snapshot && <Detail label="Browser snapshot" value={profile.snapshot} mono />}

@@ -552,8 +552,14 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
         status      TEXT NOT NULL,
         requestedAt INTEGER NOT NULL,
         acceptedAt  INTEGER,
-        lastSeenAt  INTEGER
+        lastSeenAt  INTEGER,
+        protocolVersion INTEGER NOT NULL DEFAULT 0,
+        buildVersion    TEXT NOT NULL DEFAULT ''
       );`, "federation tables"},
+		// These follow the CREATE above: a database predating the federation
+		// tables has nothing to alter until they exist.
+		{"ALTER TABLE federation_slaves ADD COLUMN protocolVersion INTEGER NOT NULL DEFAULT 0", "federation_slaves.protocolVersion"},
+		{"ALTER TABLE federation_slaves ADD COLUMN buildVersion TEXT NOT NULL DEFAULT ''", "federation_slaves.buildVersion"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()

@@ -219,3 +219,109 @@ func TestRegisterDoesNotDemoteTrustedHost(t *testing.T) {
 		t.Fatalf("re-registration re-requested approval: %#v", notices)
 	}
 }
+
+// Version skew used to surface only as commands that quietly failed on the
+// older side, so both peers now report their versions on every connection and
+// say so out loud when they disagree.
+func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
+	masterStore := openStore(t)
+	masterCenter := notifications.New()
+	master, err := New(Options{Store: masterStore, Notifications: masterCenter, BuildVersion: "v9.9.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(master)
+	defer server.Close()
+	slaveStore := openStore(t)
+	slaveCenter := notifications.New()
+	slave, err := New(Options{
+		Store: slaveStore, Notifications: slaveCenter, MasterURL: server.URL, Name: "build-host",
+		Local: testLocal{}, PollInterval: 10 * time.Millisecond, BuildVersion: "v9.9.9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- slave.RunSlave(ctx) }()
+
+	hostID := ""
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && hostID == "" {
+		for _, item := range masterCenter.List() {
+			if strings.HasPrefix(item.ID, "federation-registration-") {
+				hostID = strings.TrimPrefix(item.ID, "federation-registration-")
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if hostID == "" {
+		t.Fatal("registration notification was not published")
+	}
+	if _, _, err = master.HandleNotificationAction(context.Background(), "federation-registration-"+hostID, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	var peer *store.FederationSlave
+	for time.Now().Before(deadline) {
+		peer, _ = masterStore.FederationSlave(hostID)
+		if peer != nil && peer.Status == "connected" && peer.ProtocolVersion != 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if peer == nil || peer.ProtocolVersion != ProtocolVersion || peer.BuildVersion != "v9.9.9" {
+		t.Fatalf("recorded host versions = %#v", peer)
+	}
+	hosts := master.Hosts()
+	if len(hosts) != 1 || hosts[0].ProtocolVersion != ProtocolVersion || hosts[0].BuildVersion != "v9.9.9" {
+		t.Fatalf("hosts = %#v", hosts)
+	}
+	// Matching versions must stay silent on both sides.
+	for _, item := range append(masterCenter.List(), slaveCenter.List()...) {
+		if strings.Contains(item.ID, "protocol") {
+			t.Fatalf("unexpected skew notice for matched versions: %#v", item)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	// A host one version off is reported, not refused, and the notice can be
+	// dismissed.
+	skewed := *peer
+	skewed.ProtocolVersion = ProtocolVersion + 1
+	skewed.BuildVersion = "v10.0.0"
+	master.checkProtocol(skewed)
+	notice := notifications.Notification{}
+	for _, item := range masterCenter.List() {
+		if item.ID == protocolNotificationPrefix+hostID {
+			notice = item
+		}
+	}
+	if !strings.Contains(notice.Title, "build-host") || !strings.Contains(notice.Message, "v10.0.0") {
+		t.Fatalf("skew notice = %#v", notice)
+	}
+	if _, handled, err := master.HandleNotificationAction(context.Background(), notice.ID, "dismiss"); err != nil || !handled {
+		t.Fatalf("dismiss handled=%v err=%v", handled, err)
+	}
+	for _, item := range masterCenter.List() {
+		if item.ID == notice.ID {
+			t.Fatal("dismissed skew notice is still listed")
+		}
+	}
+
+	// The host's own UI reports the same fact about its master.
+	slave.noteMasterProtocol(ProtocolVersion+1, "v10.0.0")
+	if items := slaveCenter.List(); len(items) != 1 || items[0].ID != masterProtocolNotificationID {
+		t.Fatalf("slave-side notices = %#v", slaveCenter.List())
+	}
+	if _, handled, err := slave.HandleNotificationAction(context.Background(), masterProtocolNotificationID, "dismiss"); err != nil || !handled {
+		t.Fatalf("slave dismiss handled=%v err=%v", handled, err)
+	}
+	if items := slaveCenter.List(); len(items) != 0 {
+		t.Fatalf("slave notices after dismiss = %#v", items)
+	}
+}

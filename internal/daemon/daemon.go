@@ -273,7 +273,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if hostnameErr != nil || strings.TrimSpace(federationName) == "" {
 		federationName = displayHost
 	}
-	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, ProxyURL: cfg.MasterProxy, Name: federationName, Endpoint: origin, Local: loopback})
+	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, ProxyURL: cfg.MasterProxy, Name: federationName, Endpoint: origin, Local: loopback, BuildVersion: buildinfo.Version})
 	if err != nil {
 		return err
 	}
