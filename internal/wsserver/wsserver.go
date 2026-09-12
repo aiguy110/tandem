@@ -1238,6 +1238,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 func remoteAgentID(hostID, agentID string) string {
 	return "federation~" + base64.RawURLEncoding.EncodeToString([]byte(hostID)) + "~" + base64.RawURLEncoding.EncodeToString([]byte(agentID))
 }
+
 // SplitRemoteAgentID decodes a namespaced federated agent ID back into the
 // owning host and that host's local agent ID.
 func SplitRemoteAgentID(id string) (hostID, agentID string, ok bool) {
