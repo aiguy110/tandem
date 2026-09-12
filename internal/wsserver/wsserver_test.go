@@ -446,8 +446,9 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	t.Cleanup(server.Close)
 	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
 
-	// The first snapshot may race the host fetch, so read until the relayed
-	// notification arrives.
+	// The correlated reply and the broadcast that follows the host fetch race
+	// each other, and either may be the empty pre-fetch snapshot, so read
+	// until a list containing the relayed notification arrives.
 	var remote map[string]any
 	send(t, c, map[string]any{"t": "list_system_notifications", "corrId": "list"})
 	for remote == nil {
@@ -468,8 +469,16 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	}
 
 	send(t, c, map[string]any{"t": "system_notification_action", "notificationId": id, "action": "install", "corrId": "act"})
-	if got := recv(t, c); got["t"] != "ack" || got["corrId"] != "act" || got["hostId"] != "host/one" {
-		t.Fatalf("action ack = %#v", got)
+	for {
+		// A late snapshot broadcast may still be queued ahead of the ack.
+		got := recv(t, c)
+		if got["t"] == "system_notifications" {
+			continue
+		}
+		if got["t"] != "ack" || got["corrId"] != "act" || got["hostId"] != "host/one" {
+			t.Fatalf("action ack = %#v", got)
+		}
+		break
 	}
 	fed.mu.Lock()
 	last := string(fed.calls[len(fed.calls)-1])
