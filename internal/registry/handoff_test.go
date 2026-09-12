@@ -66,6 +66,32 @@ func waitForUserMessage(t *testing.T, db *store.Store, agentID string) string {
 	}
 }
 
+// waitForEventKind polls the durable log because events pushed onto the fake
+// adapter's channel are recorded asynchronously by the registry.
+func waitForEventKind(t *testing.T, db *store.Store, agentID, kind string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		log, err := eventlog.New(agentID, db, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history, err := log.FullHistory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, logged := range history {
+			if logged.Event.Kind == kind {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent %s never recorded a %q event", agentID, kind)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	f := &fakeFactory{}
 	r, db, _ := setup(t, f)
@@ -83,6 +109,7 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 		Kind:    "message_chunk",
 		Payload: json.RawMessage(`{"kind":"message_chunk","text":"Started on parser.go, not finished."}`),
 	}
+	waitForEventKind(t, db, source.ID, "message_chunk")
 
 	spec := existing(t.TempDir())
 	spec.HandoffFrom = source.ID
@@ -133,6 +160,7 @@ func TestBriefHandoffModeIsPlumbedThroughTheSpec(t *testing.T) {
 		Kind:    "message_chunk",
 		Payload: json.RawMessage(`{"kind":"message_chunk","text":"Half done."}`),
 	}
+	waitForEventKind(t, db, source.ID, "message_chunk")
 
 	spec := existing(t.TempDir())
 	spec.HandoffFrom = source.ID
