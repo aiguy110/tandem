@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/proxy"
 )
 
 const (
@@ -66,6 +68,12 @@ type Options struct {
 	Local         Local
 	HTTPClient    *http.Client
 	PollInterval  time.Duration
+	// ProxyURL routes this daemon's outbound dials to its master through a
+	// proxy, e.g. "socks5://127.0.0.1:1080". It affects the slave side only:
+	// a master never dials out, and the loopback transport never leaves the
+	// process. SOCKS sits below TLS, so an https/wss master still terminates
+	// its own TLS end to end.
+	ProxyURL string
 }
 
 type Service struct {
@@ -76,6 +84,7 @@ type Service struct {
 	endpoint      string
 	local         Local
 	client        *http.Client
+	dialer        *websocket.Dialer
 	poll          time.Duration
 
 	mu        sync.Mutex
@@ -128,12 +137,59 @@ type tunnel struct {
 	writeMu sync.Mutex
 }
 
+// proxyDialers builds the outbound dial path for a slave that reaches its
+// master through a proxy. gorilla's own Dialer.Proxy speaks HTTP CONNECT only,
+// so the websocket tunnel needs an explicit net dialer; net/http understands
+// socks5 proxy URLs directly. Hostnames are handed to the proxy unresolved
+// (socks5h semantics), so a master name that only resolves on the far side --
+// the common case behind an ssh -D tunnel -- still connects.
+func proxyDialers(raw string) (func(context.Context, string, string) (net.Conn, error), *http.Transport, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("federation: invalid proxy URL %q: %w", raw, err)
+	}
+	if u.Host == "" {
+		return nil, nil, fmt.Errorf("federation: invalid proxy URL %q: missing host", raw)
+	}
+	dialer, err := proxy.FromURL(u, proxy.Direct)
+	if err != nil {
+		return nil, nil, fmt.Errorf("federation: proxy %q: %w", raw, err)
+	}
+	ctxDialer, ok := dialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, nil, fmt.Errorf("federation: proxy scheme %q does not support cancellation", u.Scheme)
+	}
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, nil, errors.New("federation: default HTTP transport is not proxyable")
+	}
+	transport = transport.Clone()
+	transport.Proxy = http.ProxyURL(u)
+	return ctxDialer.DialContext, transport, nil
+}
+
 func New(opts Options) (*Service, error) {
 	if opts.Store == nil {
 		return nil, errors.New("federation: store is required")
 	}
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = time.Second
+	}
+	dialer := *websocket.DefaultDialer
+	if proxyURL := strings.TrimSpace(opts.ProxyURL); proxyURL != "" {
+		dial, transport, err := proxyDialers(proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		dialer.NetDialContext = dial
+		// NetDialContext already lands on the proxy; leaving the inherited
+		// ProxyFromEnvironment in place would stack an HTTP CONNECT on top.
+		dialer.Proxy = nil
+		// An injected client is the caller's to configure; only a client we
+		// construct ourselves gets the proxy transport.
+		if opts.HTTPClient == nil {
+			opts.HTTPClient = &http.Client{Timeout: 20 * time.Second, Transport: transport}
+		}
 	}
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 20 * time.Second}
@@ -145,7 +201,7 @@ func New(opts Options) (*Service, error) {
 			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
 		}
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
+	service := &Service{store: opts.Store, notifications: opts.Notifications, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
@@ -642,7 +698,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	u.Path = TunnelPath
 	head := http.Header{}
 	head.Set("Authorization", "Bearer "+credential)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), head)
+	conn, _, err := s.dialer.DialContext(ctx, u.String(), head)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -108,18 +109,23 @@ type MCPServer struct {
 }
 
 type Config struct {
-	Home           string                  `json:"home"`
-	RuntimeRoot    string                  `json:"runtimeRoot"`
-	ManagedRuntime bool                    `json:"managedRuntime"`
-	DBPath         string                  `json:"dbPath"`
-	TokenPath      string                  `json:"tokenPath"`
-	WorktreesDir   string                  `json:"worktreesDir"`
-	HomeBaseDir    string                  `json:"homeBaseDir"`
-	TandemRoot     string                  `json:"tandemRoot,omitempty"`
-	AssetsDir      string                  `json:"assetsDir"`
-	Host           string                  `json:"host"`
-	Port           int                     `json:"port"`
-	UIDir          string                  `json:"uiDir,omitempty"`
+	Home           string `json:"home"`
+	RuntimeRoot    string `json:"runtimeRoot"`
+	ManagedRuntime bool   `json:"managedRuntime"`
+	DBPath         string `json:"dbPath"`
+	TokenPath      string `json:"tokenPath"`
+	WorktreesDir   string `json:"worktreesDir"`
+	HomeBaseDir    string `json:"homeBaseDir"`
+	TandemRoot     string `json:"tandemRoot,omitempty"`
+	AssetsDir      string `json:"assetsDir"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	UIDir          string `json:"uiDir,omitempty"`
+	// MasterProxy optionally routes this daemon's outbound federation dials
+	// (when started with --master) through a proxy, e.g.
+	// "socks5://127.0.0.1:1080". It never affects inbound serving or any
+	// non-federation traffic.
+	MasterProxy    string                  `json:"masterProxy,omitempty"`
 	ProjectRoots   []string                `json:"projectRoots"`
 	DirScanDepth   int                     `json:"dirScanDepth"`
 	ACP            ACPConfig               `json:"acp"`
@@ -558,6 +564,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
 		WorktreesDir: filepath.Join(home, "worktrees"), HomeBaseDir: homeBase, TandemRoot: o.TandemRoot, AssetsDir: filepath.Join(home, "assets"),
 		Host: bind, Port: port, UIDir: env["TANDEM_UI_DIR"],
+		MasterProxy:  strings.TrimSpace(env["TANDEM_MASTER_PROXY"]),
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
@@ -1013,6 +1020,7 @@ func EnsureToken(path string) (string, error) {
 
 func Redacted(c Config) Config {
 	out := c
+	out.MasterProxy = redactURLCredentials(c.MasterProxy)
 	if out.Browser.SteelAPIKey != "" {
 		out.Browser.SteelAPIKey = "[REDACTED]"
 	}
@@ -1058,6 +1066,23 @@ func Redacted(c Config) Config {
 }
 
 func DebugJSON(c Config) ([]byte, error) { return json.MarshalIndent(Redacted(c), "", "  ") }
+
+// redactURLCredentials strips any password from a URL's userinfo so that
+// `tandem debug config` can be pasted into a bug report.
+func redactURLCredentials(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	if _, hasPassword := u.User.Password(); !hasPassword {
+		return raw
+	}
+	u.User = url.UserPassword(u.User.Username(), "[REDACTED]")
+	return u.String()
+}
 
 func redactMap(m map[string]string) map[string]string {
 	if m == nil {

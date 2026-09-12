@@ -373,7 +373,7 @@ func TestEnsureTokenCreationReuseAndPermissions(t *testing.T) {
 }
 
 func TestDebugJSONIsDeterministicAndRedacted(t *testing.T) {
-	o := options(t, map[string]string{"STEEL_API_KEY": "steel-secret", "STEEL_SESSION_OPTIONS": `{"nested":{"apiKey":"option-secret"}}`, "TANDEM_ACP_CMD": `["mock"]`})
+	o := options(t, map[string]string{"TANDEM_MASTER_PROXY": "socks5://operator:proxy-secret@127.0.0.1:1080", "STEEL_API_KEY": "steel-secret", "STEEL_SESSION_OPTIONS": `{"nested":{"apiKey":"option-secret"}}`, "TANDEM_ACP_CMD": `["mock"]`})
 	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte("agents:\n  custom:\n    acp:\n      command: custom\n      env: {PASSWORD: hidden}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestDebugJSONIsDeterministicAndRedacted(t *testing.T) {
 	if string(one) != string(two) {
 		t.Fatal("debug JSON is not deterministic")
 	}
-	if strings.Contains(string(one), "steel-secret") || strings.Contains(string(one), "option-secret") || strings.Contains(string(one), "hidden") || !strings.Contains(string(one), "[REDACTED]") {
+	if strings.Contains(string(one), "steel-secret") || strings.Contains(string(one), "option-secret") || strings.Contains(string(one), "hidden") || strings.Contains(string(one), "proxy-secret") || !strings.Contains(string(one), "[REDACTED]") {
 		t.Fatalf("debug JSON did not redact secrets: %s", one)
 	}
 	var decoded Config
@@ -542,5 +542,24 @@ func TestAddMCPServerPreservesGlobalConfiguration(t *testing.T) {
 	servers, err := LoadMCPServers(home, "")
 	if err != nil || servers["files"].Command != "npx" {
 		t.Fatalf("stored MCP server = %#v, %v", servers, err)
+	}
+}
+
+// The federation proxy is deployment configuration, not a setting: it must come
+// from the environment and leave every other daemon dial untouched.
+func TestMasterProxyFromEnvironment(t *testing.T) {
+	c, err := LoadWithOptions(options(t, map[string]string{"TANDEM_MASTER_PROXY": " socks5://127.0.0.1:1080 "}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MasterProxy != "socks5://127.0.0.1:1080" {
+		t.Fatalf("MasterProxy = %q", c.MasterProxy)
+	}
+	bare, err := LoadWithOptions(options(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.MasterProxy != "" {
+		t.Fatalf("unset MasterProxy = %q", bare.MasterProxy)
 	}
 }
