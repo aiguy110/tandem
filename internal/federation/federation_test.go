@@ -325,3 +325,31 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 		t.Fatalf("slave notices after dismiss = %#v", items)
 	}
 }
+
+func TestHostIDsAreShortAndReadable(t *testing.T) {
+	id, err := newHostID("Boremox.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(id, "boremox-local-") || len(id) != len("boremox-local-")+6 {
+		t.Fatalf("newHostID = %q", id)
+	}
+	if !ValidHostID(id) {
+		t.Fatalf("generated host ID %q rejected", id)
+	}
+	unnamed, err := newHostID("  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(unnamed, "host-") {
+		t.Fatalf("unnamed host ID = %q", unnamed)
+	}
+	for _, bad := range []string{"", "has~separator", "has/slash", "has space", strings.Repeat("a", 65)} {
+		if ValidHostID(bad) {
+			t.Fatalf("ValidHostID(%q) = true", bad)
+		}
+	}
+	if !legacyHostID(strings.Repeat("ab", 24)) || legacyHostID(id) {
+		t.Fatal("legacyHostID misclassified")
+	}
+}

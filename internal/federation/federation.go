@@ -375,6 +375,10 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, registerResponse{Error: "hostId is required"})
 		return
 	}
+	if !ValidHostID(req.HostID) {
+		writeJSON(w, http.StatusBadRequest, registerResponse{Error: "hostId must be at most 64 characters of letters, digits, '-', '_' or '.'"})
+		return
+	}
 	peer, err := s.store.FederationSlave(req.HostID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -648,6 +652,7 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		if e = s.store.UpsertFederationSlave(*peer); e != nil {
 			return "", true, e
 		}
+		s.pruneLegacyDuplicate(*peer)
 		s.removeNotification(hostID)
 		return "", true, nil
 	case "reject":
@@ -659,6 +664,24 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		return "", true, nil
 	default:
 		return "", true, fmt.Errorf("unknown federation registration action %q", action)
+	}
+}
+
+// pruneLegacyDuplicate drops the row a host left behind when it re-registered
+// under a short ID. Keyed on the endpoint the operator just approved, so the
+// only row removed is one this same host previously owned.
+func (s *Service) pruneLegacyDuplicate(accepted store.FederationSlave) {
+	if accepted.Endpoint == "" || legacyHostID(accepted.ID) {
+		return
+	}
+	peers, err := s.store.FederationSlaves()
+	if err != nil {
+		return
+	}
+	for _, p := range peers {
+		if p.ID != accepted.ID && p.Endpoint == accepted.Endpoint && legacyHostID(p.ID) {
+			_ = s.store.DeleteFederationSlave(p.ID)
+		}
 	}
 }
 
@@ -774,8 +797,15 @@ func (s *Service) RunSlave(ctx context.Context) error {
 	if master != nil && strings.TrimRight(master.URL, "/") == s.masterURL {
 		hostID, credential = master.HostID, master.Credential
 	}
+	if legacyHostID(hostID) {
+		// Upgrading past the long random host IDs: take a readable one and
+		// register again. The master sees an ordinary pending request, so the
+		// swap costs one approval and leaves the old row to be pruned once
+		// this host is accepted.
+		hostID, credential = "", ""
+	}
 	if hostID == "" {
-		hostID, err = randomID()
+		hostID, err = newHostID(s.name)
 		if err != nil {
 			return err
 		}
@@ -1029,6 +1059,72 @@ func federationToken(r *http.Request) string {
 func secretMatches(a, b string) bool {
 	return a != "" && len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
+
+// ValidHostID reports whether id is usable as a federation host ID. Host IDs
+// are embedded verbatim in the namespaced agent IDs the master hands the
+// browser, so they must stay short, printable, and free of the "~" separator
+// those IDs split on.
+func ValidHostID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// newHostID builds a host ID a human can read in the UI: the host's own name,
+// slugged, plus enough randomness to keep two same-named hosts from colliding
+// on one master. The ID is not a secret -- the credential issued on
+// acceptance is -- so it does not need to be unguessable.
+func newHostID(name string) (string, error) {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	slug := hostSlug(name)
+	if slug == "" {
+		slug = "host"
+	}
+	return slug + "-" + hex.EncodeToString(b), nil
+}
+
+func hostSlug(name string) string {
+	var out []rune
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out = append(out, r)
+		case len(out) > 0 && out[len(out)-1] != '-':
+			out = append(out, '-')
+		}
+		if len(out) >= 24 {
+			break
+		}
+	}
+	return strings.Trim(string(out), "-")
+}
+
+// legacyHostID matches the original 24-random-byte hex host IDs, which made
+// every federated agent ID in the UI unreadably long. A slave carrying one
+// re-registers under a short ID instead; see RunSlave.
+func legacyHostID(id string) bool {
+	if len(id) != 48 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func randomID() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {

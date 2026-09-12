@@ -64,8 +64,9 @@ subscriptions on one socket are supported.
 The browser may receive a host catalog and may qualify repository, agent-catalog,
 spawn-option, and spawn requests with a host identity. Omitting the host retains local,
 single-daemon behavior. Remote agent summaries carry their host identity and use a
-master-side namespaced agent ID; subsequent ordinary agent commands use that ID and are
-routed transparently. Live transcript, terminal, approval, lifecycle, and browser-channel
+master-side namespaced agent ID (`fed~<hostId>~<agentId>`; the older base64 form is still
+accepted so an open tab survives an upgrade); subsequent ordinary agent commands use that
+ID and are routed transparently. Live transcript, terminal, approval, lifecycle, and browser-channel
 traffic is proxied without exposing ACP or CDP details to the UI.
 
 Slave registration is a daemon-to-daemon protocol, not browser bearer-token

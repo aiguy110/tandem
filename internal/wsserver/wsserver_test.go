@@ -432,7 +432,7 @@ func TestSystemNotificationsSnapshotBroadcastAndAction(t *testing.T) {
 // against the master's local update service.
 func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	db, backend, _, _, _ := setupWS(t, 0)
-	fed := &testFederation{hosts: []federation.Host{{ID: "host/one", Name: "builder", Status: "connected"}}}
+	fed := &testFederation{hosts: []federation.Host{{ID: "host-one", Name: "builder", Status: "connected"}}}
 	center := notifications.New()
 	handler := New(Options{
 		Token: "secret", Registry: backend, Automation: db, Notifications: center, Federation: fed,
@@ -460,7 +460,7 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 			remote = item.(map[string]any)
 		}
 	}
-	if remote["hostId"] != "host/one" || remote["hostName"] != "builder" || remote["title"] != "Tandem update available" {
+	if remote["hostId"] != "host-one" || remote["hostName"] != "builder" || remote["title"] != "Tandem update available" {
 		t.Fatalf("relayed notification = %#v", remote)
 	}
 	id, _ := remote["id"].(string)
@@ -475,7 +475,7 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 		if got["t"] == "system_notifications" {
 			continue
 		}
-		if got["t"] != "ack" || got["corrId"] != "act" || got["hostId"] != "host/one" {
+		if got["t"] != "ack" || got["corrId"] != "act" || got["hostId"] != "host-one" {
 			t.Fatalf("action ack = %#v", got)
 		}
 		break
@@ -483,16 +483,16 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	fed.mu.Lock()
 	last := string(fed.calls[len(fed.calls)-1])
 	fed.mu.Unlock()
-	if !strings.Contains(last, `"notificationId":"tandem-update"`) || strings.Contains(last, "host/one") {
+	if !strings.Contains(last, `"notificationId":"tandem-update"`) || strings.Contains(last, "host-one") {
 		t.Fatalf("forwarded action payload = %s", last)
 	}
 
 	// A host that drops off takes its notifications with it.
-	fed.hosts = []federation.Host{{ID: "host/one", Name: "builder", Status: "offline"}}
+	fed.hosts = []federation.Host{{ID: "host-one", Name: "builder", Status: "offline"}}
 	fed.mu.Lock()
 	subscriber := fed.subscriber
 	fed.mu.Unlock()
-	subscriber("host/one", json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	subscriber("host-one", json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for {
 		got := recv(t, c)
 		if got["t"] == "system_notifications" && len(got["notifications"].([]any)) == 0 {
@@ -504,7 +504,7 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	db, backend, _, _, _ := setupWS(t, 0)
 	fed := &testFederation{hosts: []federation.Host{{
-		ID: "host/one", Name: "builder", Status: "connected",
+		ID: "host-one", Name: "builder", Status: "connected",
 		Snapshot: json.RawMessage(`{"t":"agents","agents":[{"id":"remote-agent","name":"Remote","adapter":"acp","canHandoff":true,"status":"idle","controlMode":"transcript"}]}`),
 	}}}
 	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})
@@ -521,33 +521,33 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	}
 	remote := agents[1].(map[string]any)
 	remoteID, _ := remote["id"].(string)
-	if remote["hostId"] != "host/one" || remote["hostName"] != "builder" || strings.Contains(remoteID, "/") {
+	if remote["hostId"] != "host-one" || remote["hostName"] != "builder" || remoteID != "fed~host-one~remote-agent" {
 		t.Fatalf("remote summary = %#v", remote)
 	}
 
-	send(t, c, map[string]any{"t": "spawn_agent", "spec": map[string]any{"hostId": "host/one", "adapter": "acp", "workspace": map[string]any{"kind": "existing", "cwd": "/repo"}}, "corrId": "spawn"})
+	send(t, c, map[string]any{"t": "spawn_agent", "spec": map[string]any{"hostId": "host-one", "adapter": "acp", "workspace": map[string]any{"kind": "existing", "cwd": "/repo"}}, "corrId": "spawn"})
 	got = recv(t, c)
-	if got["t"] != "ack" || got["agentId"] != remoteID || got["hostId"] != "host/one" {
+	if got["t"] != "ack" || got["agentId"] != remoteID || got["hostId"] != "host-one" {
 		t.Fatalf("spawn ack = %#v", got)
 	}
 	fed.mu.Lock()
 	spawnPayload := append(json.RawMessage(nil), fed.calls[len(fed.calls)-1]...)
 	fed.mu.Unlock()
-	if strings.Contains(string(spawnPayload), "host/one") {
+	if strings.Contains(string(spawnPayload), "host-one") {
 		t.Fatalf("slave payload retained federation route: %s", spawnPayload)
 	}
 
 	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript", "browser"}, "corrId": "sub"})
 	got = recv(t, c)
-	if got["t"] != "snapshot" || got["agentId"] != remoteID || got["hostId"] != "host/one" {
+	if got["t"] != "snapshot" || got["agentId"] != remoteID || got["hostId"] != "host-one" {
 		t.Fatalf("remote snapshot = %#v", got)
 	}
 	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != remoteID || got["corrId"] != "sub" {
 		t.Fatalf("subscribe ack = %#v", got)
 	}
 
-	send(t, c, map[string]any{"t": "search_sessions", "hostId": "host/one", "query": "work", "corrId": "search"})
-	if got = recv(t, c); got["t"] != "session_search" || got["hostId"] != "host/one" || got["corrId"] != "search" {
+	send(t, c, map[string]any{"t": "search_sessions", "hostId": "host-one", "query": "work", "corrId": "search"})
+	if got = recv(t, c); got["t"] != "session_search" || got["hostId"] != "host-one" || got["corrId"] != "search" {
 		t.Fatalf("remote history = %#v", got)
 	}
 }
@@ -1312,5 +1312,32 @@ func TestRenderMessageAudioWithoutRendererReportsConfiguration(t *testing.T) {
 	got := recv(t, c)
 	if got["t"] != "message_audio" || got["error"] != "voice rendering is not configured; run tandem setup" {
 		t.Fatalf("envelope=%#v", got)
+	}
+}
+
+func TestRemoteAgentIDRoundTrip(t *testing.T) {
+	id := remoteAgentID("boremox-3f9a1c", "einstein-401")
+	if id != "fed~boremox-3f9a1c~einstein-401" {
+		t.Fatalf("remoteAgentID = %q", id)
+	}
+	host, agent, ok := SplitRemoteAgentID(id)
+	if !ok || host != "boremox-3f9a1c" || agent != "einstein-401" {
+		t.Fatalf("split = %q/%q/%v", host, agent, ok)
+	}
+	// An agent name may contain the separator; the host ID never can.
+	host, agent, ok = SplitRemoteAgentID(remoteAgentID("h1", "odd~name"))
+	if !ok || host != "h1" || agent != "odd~name" {
+		t.Fatalf("split with separator in agent = %q/%q/%v", host, agent, ok)
+	}
+	// IDs minted by the previous base64 encoding still route, so a browser
+	// tab or queued notification action survives the upgrade.
+	host, agent, ok = SplitRemoteAgentID("federation~" + base64.RawURLEncoding.EncodeToString([]byte("h1")) + "~" + base64.RawURLEncoding.EncodeToString([]byte("dirac-7")))
+	if !ok || host != "h1" || agent != "dirac-7" {
+		t.Fatalf("legacy split = %q/%q/%v", host, agent, ok)
+	}
+	for _, bad := range []string{"", "einstein-401", "fed~h1", "fed~~a", "fed~h1~", "federation~h1~a"} {
+		if _, _, ok := SplitRemoteAgentID(bad); ok {
+			t.Fatalf("%q parsed as a federated ID", bad)
+		}
 	}
 }

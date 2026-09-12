@@ -11,7 +11,7 @@ export function Inspector() {
   return (
     <div className="inspector">
       <div className="insp-head">
-        Inspector{focusedId ? ` · ${focusedId}` : ''}
+        Inspector{agent ? ` · ${agent.name || agent.id}${agent.hostName ? ` @ ${agent.hostName}` : ''}` : focusedId ? ` · ${focusedId}` : ''}
         <button className="btn ghost insp-toggle" onClick={toggle}>
           {open ? 'hide ▾' : 'show ▴'}
         </button>

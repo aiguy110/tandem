@@ -496,7 +496,7 @@ describe('TranscriptPane composer completions', () => {
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
-    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@src/in', selectionStart: 7 } });
 
     const option = await waitFor(() => view.getByText('@src/index.ts'));
@@ -512,7 +512,7 @@ describe('TranscriptPane composer completions', () => {
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
-    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@../', selectionStart: 4 } });
 
     const option = await waitFor(() => view.getByText('@../sibling/'));
@@ -528,7 +528,7 @@ describe('TranscriptPane composer completions', () => {
       agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
-    const composer = view.getByPlaceholderText(/Prompt agent-1/i) as HTMLTextAreaElement;
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@~/Projects', selectionStart: 11 } });
 
     const option = await waitFor(() => view.getByText('@~/Projects/'));

@@ -41,9 +41,16 @@ the master's UI with **Accept** and **Reject** actions. Acceptance establishes d
 trust: Tandem generates and stores a credential at both ends and uses it to reconnect
 automatically after either daemon restarts. Rejection does not establish trust.
 
-The slave's hostname is its initial display name. Host identities, credentials, and
-approval state live under each daemon's `TANDEM_HOME`; deleting or changing that home
-therefore creates a new identity that requires approval.
+The slave's hostname is its initial display name, and also seeds its host ID — a slug of
+that name plus a short random suffix (`boremox-3f9a1c`), limited to letters, digits, `-`,
+`_` and `.`. Host IDs are not secrets (the credential issued on acceptance is), so they
+are kept short and readable: the master namespaces a remote agent as
+`fed~<hostId>~<agentId>`, and that string shows up in the UI. Hosts registered before
+this format re-register under a short ID on their next start, which costs one approval;
+the master prunes the stale row when the new one is accepted.
+
+Host identities, credentials, and approval state live under each daemon's `TANDEM_HOME`;
+deleting or changing that home therefore creates a new identity that requires approval.
 
 Federation is deliberately one level deep. An instance started with `--master` rejects
 attempts by other slaves to register with it and returns an explanatory error. Masters

@@ -1489,6 +1489,9 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const asideSupport = useStore((s) => s.agents[agentId]?.asideSupport ?? null);
   const steeringSupport = useStore((s) => s.agents[agentId]?.steeringSupport ?? null);
   const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
+  // A federated agent's ID is namespaced by its owning host, which reads as
+  // noise in a placeholder; its name is what the rail shows.
+  const agentLabel = useStore((s) => s.agents[agentId]?.name || agentId);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   // The draft is shared Zustand state so it survives pane remounts. Preserve
@@ -1917,8 +1920,8 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             ref={textRef}
             data-prompt-agent={agentId}
             placeholder={usesSoftKeyboard()
-              ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentId}…  (use the button to send)`)
-              : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentId}…  (Enter to send, Shift+Enter for newline)`)}
+              ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
+              : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`)}
             value={text}
             onPaste={(e) => {
               const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));

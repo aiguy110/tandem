@@ -1265,27 +1265,45 @@ func (c *connection) forwardFederation(m clientMessage) {
 
 // remoteAgentID namespaces a host-local identifier. Agent IDs are the main
 // use; system-notification IDs share the encoding so SplitRemoteAgentID can
-// route an action back to the host that raised it.
+// route an action back to the host that raised it. The parts stay readable
+// on purpose — these IDs surface in the UI, and a host ID never contains the
+// "~" separator (federation.ValidHostID enforces that), so the agent ID is
+// simply the remainder and may contain anything.
 func remoteAgentID(hostID, agentID string) string {
-	return "federation~" + base64.RawURLEncoding.EncodeToString([]byte(hostID)) + "~" + base64.RawURLEncoding.EncodeToString([]byte(agentID))
+	return remoteIDPrefix + hostID + "~" + agentID
 }
+
+const remoteIDPrefix = "fed~"
+
+// legacyRemoteIDPrefix is the original base64 encoding of the same pair. It is
+// still decoded so IDs held by an already-open browser tab (or an in-flight
+// notification action) keep routing after an upgrade.
+const legacyRemoteIDPrefix = "federation~"
 
 // SplitRemoteAgentID decodes a namespaced federated agent ID back into the
 // owning host and that host's local agent ID.
 func SplitRemoteAgentID(id string) (hostID, agentID string, ok bool) {
-	parts := strings.SplitN(id, "~", 3)
-	if len(parts) != 3 || parts[0] != "federation" || parts[1] == "" || parts[2] == "" {
+	if rest, found := strings.CutPrefix(id, remoteIDPrefix); found {
+		host, agent, split := strings.Cut(rest, "~")
+		if !split || host == "" || agent == "" {
+			return "", "", false
+		}
+		return host, agent, true
+	}
+	rest, found := strings.CutPrefix(id, legacyRemoteIDPrefix)
+	if !found {
 		return "", "", false
 	}
-	host, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
+	encodedHost, encodedAgent, split := strings.Cut(rest, "~")
+	if !split {
 		return "", "", false
 	}
-	agent, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
+	host, err := base64.RawURLEncoding.DecodeString(encodedHost)
+	if err != nil || len(host) == 0 {
 		return "", "", false
 	}
-	if len(host) == 0 || len(agent) == 0 {
+	agent, err := base64.RawURLEncoding.DecodeString(encodedAgent)
+	if err != nil || len(agent) == 0 {
 		return "", "", false
 	}
 	return string(host), string(agent), true
