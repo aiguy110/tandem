@@ -129,6 +129,11 @@ type registerRequest struct {
 	Endpoint        string `json:"endpoint,omitempty"`
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
+	// PreviousHostID names the record this host is replacing when it changes
+	// its own ID. The request carries that record's credential in the
+	// ordinary Authorization header, which is what proves the two IDs belong
+	// to the same host; see rotateIdentity.
+	PreviousHostID string `json:"previousHostId,omitempty"`
 }
 type registerResponse struct {
 	Status     string `json:"status"`
@@ -242,7 +247,7 @@ func New(opts Options) (*Service, error) {
 		}
 		for _, peer := range peers {
 			if peer.Status == "pending" {
-				service.notifyPending(peer.ID, peer.Name, peer.Endpoint)
+				service.notifyPending(peer)
 			}
 			if peer.Status == "connected" {
 				peer.Status = "offline"
@@ -391,12 +396,22 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, registerResponse{Status: "rejected", Error: "host is already registered; use its stored credential"})
 		return
 	}
-	now := time.Now().UnixMilli()
-	if err := s.store.UpsertFederationSlave(store.FederationSlave{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now, ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion}); err != nil {
+	rotated, err := s.rotateIdentity(req, federationToken(r))
+	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.notifyPending(req.HostID, req.Name, req.Endpoint)
+	if rotated != nil {
+		writeJSON(w, http.StatusOK, registerResponse{Status: "accepted", Credential: rotated.Credential, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
+		return
+	}
+	now := time.Now().UnixMilli()
+	pending := store.FederationSlave{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now, ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion}
+	if err := s.store.UpsertFederationSlave(pending); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.notifyPending(pending)
 	writeJSON(w, http.StatusAccepted, registerResponse{Status: "pending", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
 }
 
@@ -506,7 +521,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	})
 	peer, err := s.store.FederationSlave(hello.HostID)
 	if err != nil || !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
-		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: "unauthorized"})
+		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: unauthorizedTunnelError})
 		return
 	}
 	t := &tunnel{conn: conn}
@@ -641,7 +656,7 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		return "", true, errors.New("federation registration is no longer pending")
 	}
 	switch action {
-	case "accept":
+	case "accept", "accept_replace":
 		credential, e := randomID()
 		if e != nil {
 			return "", true, e
@@ -652,7 +667,11 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		if e = s.store.UpsertFederationSlave(*peer); e != nil {
 			return "", true, e
 		}
-		s.pruneLegacyDuplicate(*peer)
+		if action == "accept_replace" {
+			for _, stale := range s.supersededBy(*peer) {
+				s.forget(stale.ID)
+			}
+		}
 		s.removeNotification(hostID)
 		return "", true, nil
 	case "reject":
@@ -667,37 +686,115 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 	}
 }
 
-// pruneLegacyDuplicate drops the row a host left behind when it re-registered
-// under a short ID. Keyed on the endpoint the operator just approved, so the
-// only row removed is one this same host previously owned.
-func (s *Service) pruneLegacyDuplicate(accepted store.FederationSlave) {
-	if accepted.Endpoint == "" || legacyHostID(accepted.ID) {
-		return
+// rotateIdentity transfers an established host's trust to the new ID it just
+// generated for itself, and retires the record it is replacing. A host that
+// changes its ID -- the short-ID migration is the first instance, and any
+// future identity change behaves the same -- would otherwise leave a row
+// behind that nothing can ever reconnect to, and would cost a second
+// approval for a host the operator already approved.
+//
+// The old record's credential, presented the same way every other
+// authenticated federation call presents it, is what proves the two IDs are
+// one host; an unproven request falls through to ordinary approval.
+func (s *Service) rotateIdentity(req registerRequest, credential string) (*store.FederationSlave, error) {
+	if req.PreviousHostID == "" || req.PreviousHostID == req.HostID {
+		return nil, nil
+	}
+	previous, err := s.store.FederationSlave(req.PreviousHostID)
+	if err != nil {
+		return nil, err
+	}
+	if !trusted(previous) || !secretMatches(credential, previous.Credential) {
+		return nil, nil
+	}
+	issued, err := randomID()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UnixMilli()
+	rotated := store.FederationSlave{
+		ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Credential: issued,
+		Status: "accepted", RequestedAt: now, AcceptedAt: now,
+		ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion,
+	}
+	if err := s.store.UpsertFederationSlave(rotated); err != nil {
+		return nil, err
+	}
+	s.forget(previous.ID)
+	return &rotated, nil
+}
+
+// supersededBy reports the records that look like earlier identities of the
+// host just accepted: same reported name, not currently connected. The master
+// cannot prove this on its own -- two machines may legitimately share a
+// hostname -- so it is only ever offered to the operator as a choice, never
+// applied automatically.
+func (s *Service) supersededBy(accepted store.FederationSlave) []store.FederationSlave {
+	if strings.TrimSpace(accepted.Name) == "" {
+		return nil
 	}
 	peers, err := s.store.FederationSlaves()
 	if err != nil {
-		return
+		return nil
 	}
+	var out []store.FederationSlave
 	for _, p := range peers {
-		if p.ID != accepted.ID && p.Endpoint == accepted.Endpoint && legacyHostID(p.ID) {
-			_ = s.store.DeleteFederationSlave(p.ID)
+		if p.ID == accepted.ID || p.Status == "connected" || !strings.EqualFold(p.Name, accepted.Name) {
+			continue
 		}
+		out = append(out, p)
 	}
+	return out
 }
 
-func (s *Service) notifyPending(id, name, endpoint string) {
+// forget drops a host record and every piece of live state keyed to it. A
+// slave still holding the deleted credential is refused at the tunnel and
+// registers again, so forgetting a host cannot strand it.
+func (s *Service) forget(hostID string) {
+	_ = s.store.DeleteFederationSlave(hostID)
+	s.removeNotification(hostID)
+	s.removeProtocolNotification(hostID)
+	s.mu.Lock()
+	tunnel := s.tunnels[hostID]
+	delete(s.tunnels, hostID)
+	delete(s.queues, hostID)
+	delete(s.snapshots, hostID)
+	s.mu.Unlock()
+	if tunnel != nil {
+		_ = tunnel.conn.Close()
+	}
+	s.publish(hostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
+}
+
+func (s *Service) notifyPending(peer store.FederationSlave) {
 	if s.notifications == nil {
 		return
 	}
-	label := name
+	label := peer.Name
 	if label == "" {
-		label = id
+		label = peer.ID
 	}
 	message := "A Tandem agent host requests registration."
-	if endpoint != "" {
-		message += " Endpoint: " + endpoint
+	if peer.Endpoint != "" {
+		message += " Endpoint: " + peer.Endpoint
 	}
-	s.notifications.Upsert(notifications.Notification{ID: "federation-registration-" + id, Severity: "attention", Title: "Register agent host " + label, Message: message, Actions: []notifications.Action{{ID: "accept", Label: "Accept", Primary: true}, {ID: "reject", Label: "Reject"}}})
+	accept := notifications.Action{ID: "accept", Label: "Accept", Primary: true}
+	reject := notifications.Action{ID: "reject", Label: "Reject"}
+	actions := []notifications.Action{accept, reject}
+	// A host that registers under a new ID while a same-named record already
+	// exists is usually that record's replacement -- a reinstalled host, or
+	// one whose stored identity was lost. Accepting alone keeps both rows,
+	// which is right when the two really are different machines; the replace
+	// action is the way to say they are not.
+	if stale := s.supersededBy(peer); len(stale) != 0 {
+		ids := make([]string, 0, len(stale))
+		for _, p := range stale {
+			ids = append(ids, p.ID)
+		}
+		message += " This name already has a disconnected record (" + strings.Join(ids, ", ") + "); replace it if this host is its replacement."
+		actions = []notifications.Action{accept, {ID: "accept_replace", Label: "Accept and replace"}, reject}
+	}
+	s.notifications.Upsert(notifications.Notification{ID: "federation-registration-" + peer.ID, Severity: "attention", Title: "Register agent host " + label, Message: message, Actions: actions})
 }
 
 const protocolNotificationPrefix = "federation-protocol-"
@@ -794,14 +891,18 @@ func (s *Service) RunSlave(ctx context.Context) error {
 	}
 	hostID := ""
 	credential := ""
+	// The identity being replaced, sent only to the master that issued it, so
+	// that master can retire the record itself instead of keeping a row no
+	// host will ever reconnect to. See rotateIdentity.
+	previousID, previousCredential := "", ""
 	if master != nil && strings.TrimRight(master.URL, "/") == s.masterURL {
 		hostID, credential = master.HostID, master.Credential
 	}
 	if legacyHostID(hostID) {
-		// Upgrading past the long random host IDs: take a readable one and
-		// register again. The master sees an ordinary pending request, so the
-		// swap costs one approval and leaves the old row to be pruned once
-		// this host is accepted.
+		// Upgrading past the long random host IDs: take a readable one, and
+		// prove with the old credential that the new ID is the same host, so
+		// the swap is invisible to the operator.
+		previousID, previousCredential = hostID, credential
 		hostID, credential = "", ""
 	}
 	if hostID == "" {
@@ -815,7 +916,13 @@ func (s *Service) RunSlave(ctx context.Context) error {
 			return nil
 		}
 		if credential == "" {
-			status, e := s.registrationWithMaster(ctx, hostID)
+			status, e := s.registrationWithMaster(ctx, hostID, previousID, previousCredential)
+			if e == nil {
+				// The proof is good for one registration. A master that
+				// answered at all has already decided what the new ID is:
+				// rotated, or pending the operator's approval.
+				previousID, previousCredential = "", ""
+			}
 			if e == nil && status.Credential != "" {
 				credential = status.Credential
 				if e = s.store.SaveFederationMaster(store.FederationMaster{URL: s.masterURL, HostID: hostID, Credential: credential}); e != nil {
@@ -829,15 +936,37 @@ func (s *Service) RunSlave(ctx context.Context) error {
 			}
 			continue
 		}
-		_ = s.runTunnel(ctx, hostID, credential)
+		if errors.Is(s.runTunnel(ctx, hostID, credential), errCredentialRejected) {
+			// The master no longer knows this credential -- its record was
+			// replaced or deleted. Retrying it forever would leave this host
+			// permanently unreachable, so ask for registration again under
+			// the same ID. The stale credential stays on disk until a new one
+			// replaces it, which costs one refused dial after a restart and
+			// keeps the host's ID stable across one.
+			credential = ""
+		}
 		if !sleepContext(ctx, s.poll) {
 			return nil
 		}
 	}
 }
 
-func (s *Service) registrationWithMaster(ctx context.Context, id string) (registerResponse, error) {
+// errCredentialRejected reports that the master refused this host's stored
+// credential, as opposed to the ordinary transport failures the reconnect
+// loop retries through. unauthorizedTunnelError is how that refusal travels:
+// the master authenticates the tunnel after the websocket upgrade.
+var errCredentialRejected = errors.New("federation: master rejected the stored credential")
+
+const unauthorizedTunnelError = "unauthorized"
+
+func (s *Service) registrationWithMaster(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
 	var out registerResponse
+	if previousID != "" {
+		// A rotation has something to prove, and only the register call
+		// carries the proof: go straight to it even if a pending row for the
+		// new ID already exists from an earlier attempt.
+		return s.registerWithMaster(ctx, id, previousID, previousCredential)
+	}
 	code, err := s.request(ctx, http.MethodGet, StatusPath+"?hostId="+url.QueryEscape(id), "", nil, &out)
 	if err == nil {
 		return out, nil
@@ -845,7 +974,7 @@ func (s *Service) registrationWithMaster(ctx context.Context, id string) (regist
 	if code != http.StatusNotFound {
 		return out, err
 	}
-	return s.registerWithMaster(ctx, id)
+	return s.registerWithMaster(ctx, id, previousID, previousCredential)
 }
 
 func (s *Service) runTunnel(ctx context.Context, hostID, credential string) error {
@@ -947,6 +1076,11 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 			s.noteMasterProtocol(msg.ProtocolVersion, msg.BuildVersion)
 			continue
 		}
+		// The master authenticates after the upgrade, so a refused credential
+		// arrives as an ordinary tunnel message rather than an HTTP status.
+		if msg.T == "error" && msg.Error == unauthorizedTunnelError {
+			return errCredentialRejected
+		}
 		if msg.T != "command" {
 			continue
 		}
@@ -974,9 +1108,12 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}
 }
 
-func (s *Service) registerWithMaster(ctx context.Context, id string) (registerResponse, error) {
+// registerWithMaster asks for approval under id. previousID/previousCredential
+// are sent only when this host is replacing an identity the same master
+// issued, which lets the master retire that record without a second approval.
+func (s *Service) registerWithMaster(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
 	var out registerResponse
-	code, err := s.request(ctx, http.MethodPost, RegisterPath, "", registerRequest{HostID: id, Name: s.name, Endpoint: s.endpoint, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}, &out)
+	code, err := s.request(ctx, http.MethodPost, RegisterPath, previousCredential, registerRequest{HostID: id, Name: s.name, Endpoint: s.endpoint, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, PreviousHostID: previousID}, &out)
 	if err != nil {
 		return out, err
 	}

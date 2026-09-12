@@ -45,9 +45,7 @@ The slave's hostname is its initial display name, and also seeds its host ID —
 that name plus a short random suffix (`boremox-3f9a1c`), limited to letters, digits, `-`,
 `_` and `.`. Host IDs are not secrets (the credential issued on acceptance is), so they
 are kept short and readable: the master namespaces a remote agent as
-`fed~<hostId>~<agentId>`, and that string shows up in the UI. Hosts registered before
-this format re-register under a short ID on their next start, which costs one approval;
-the master prunes the stale row when the new one is accepted.
+`fed~<hostId>~<agentId>`, and that string shows up in the UI.
 
 Host identities, credentials, and approval state live under each daemon's `TANDEM_HOME`;
 deleting or changing that home therefore creates a new identity that requires approval.
@@ -55,6 +53,27 @@ deleting or changing that home therefore creates a new identity that requires ap
 Federation is deliberately one level deep. An instance started with `--master` rejects
 attempts by other slaves to register with it and returns an explanatory error. Masters
 may accept many directly connected slaves.
+
+## Changing a host's ID
+
+A host that generates a new ID for itself — hosts registered before the short-ID format
+do this once, on the first start after updating — replaces its old record rather than
+adding a second one. Its registration names the ID it is replacing and presents that
+record's credential as proof the two IDs are the same host. The master then transfers
+trust to the new ID and deletes the old row, so the change costs no approval and leaves
+nothing behind. The proof is offered only to the master that issued the credential, and
+an unproven claim is ignored: the request falls back to ordinary approval.
+
+A host that lost its stored identity altogether — a reinstall, a new `TANDEM_HOME` — has
+no credential left to prove anything with, so it arrives as a first-time registration.
+Because two machines may legitimately share a hostname, the master will not guess: when
+a pending registration's name matches an existing record that is not currently connected,
+the approval notification names that record and offers **Accept and replace** alongside
+**Accept**. Replacing deletes the superseded record; plain acceptance keeps both.
+
+A host whose record was deleted or replaced finds its credential refused at the tunnel
+and registers again under the same ID, so removing a record never strands the daemon
+running on that machine — it re-appears as a pending registration.
 
 ## Protocol versions and skew
 

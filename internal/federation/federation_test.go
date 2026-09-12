@@ -353,3 +353,188 @@ func TestHostIDsAreShortAndReadable(t *testing.T) {
 		t.Fatal("legacyHostID misclassified")
 	}
 }
+
+// A host that changes its own ID -- the short-ID migration is the first case
+// -- used to leave behind a record nothing could ever reconnect to, and cost a
+// second approval. Presenting the old record's credential proves the two IDs
+// are one host, so the master retires the old row by itself.
+func TestHostRotatesIdentityWithoutSecondApproval(t *testing.T) {
+	masterStore := openStore(t)
+	center := notifications.New()
+	master, err := New(Options{Store: masterStore, Notifications: center})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(master)
+	defer server.Close()
+	legacy := strings.Repeat("ab", 24)
+	if err := masterStore.UpsertFederationSlave(store.FederationSlave{ID: legacy, Name: "build-host", Endpoint: "http://127.0.0.1:7717", Credential: "secret-credential", Status: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	slaveStore := openStore(t)
+	if err := slaveStore.SaveFederationMaster(store.FederationMaster{URL: server.URL, HostID: legacy, Credential: "secret-credential"}); err != nil {
+		t.Fatal(err)
+	}
+	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- slave.RunSlave(ctx) }()
+	var peers []store.FederationSlave
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		peers, _ = masterStore.FederationSlaves()
+		if len(peers) == 1 && peers[0].Status == "connected" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("rotation left %d host records: %#v", len(peers), peers)
+	}
+	if peers[0].ID == legacy || !strings.HasPrefix(peers[0].ID, "build-host-") {
+		t.Fatalf("rotated record = %#v", peers[0])
+	}
+	if peers[0].Status != "connected" || peers[0].Credential == "" || peers[0].Credential == "secret-credential" {
+		t.Fatalf("rotated record did not take fresh durable trust: %#v", peers[0])
+	}
+	if notices := center.List(); len(notices) != 0 {
+		t.Fatalf("rotation asked for approval again: %#v", notices)
+	}
+	stored, _ := slaveStore.FederationMaster()
+	if stored == nil || stored.HostID != peers[0].ID || stored.Credential != peers[0].Credential {
+		t.Fatalf("slave trust = %#v", stored)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unproven rotation -- a host that lost its stored identity entirely, so it
+// has no credential to present -- is a judgement call the master cannot make
+// for itself, since two machines may share a hostname. It offers the operator
+// the choice instead of guessing or leaving an orphan behind forever.
+func TestPendingRegistrationOffersToReplaceASupersededRecord(t *testing.T) {
+	s := openStore(t)
+	center := notifications.New()
+	service, err := New(Options{Store: s, Notifications: center})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", RegisterPath, strings.NewReader(`{"hostId":"build-host-bbbbbb","name":"build-host"}`))
+	w := httptest.NewRecorder()
+	service.ServeHTTP(w, r)
+	if w.Code != 202 {
+		t.Fatalf("registration code = %d", w.Code)
+	}
+	notices := center.List()
+	if len(notices) != 1 {
+		t.Fatalf("notices = %#v", notices)
+	}
+	var labels []string
+	for _, action := range notices[0].Actions {
+		labels = append(labels, action.ID)
+	}
+	if strings.Join(labels, ",") != "accept,accept_replace,reject" {
+		t.Fatalf("actions = %v", labels)
+	}
+	if !strings.Contains(notices[0].Message, "build-host-aaaaaa") {
+		t.Fatalf("notice does not name the superseded record: %q", notices[0].Message)
+	}
+	if _, handled, err := service.HandleNotificationAction(context.Background(), notices[0].ID, "accept_replace"); err != nil || !handled {
+		t.Fatalf("accept_replace handled=%v err=%v", handled, err)
+	}
+	peers, _ := s.FederationSlaves()
+	if len(peers) != 1 || peers[0].ID != "build-host-bbbbbb" || peers[0].Status != "accepted" {
+		t.Fatalf("peers after replace = %#v", peers)
+	}
+	if notices := center.List(); len(notices) != 0 {
+		t.Fatalf("notices after replace = %#v", notices)
+	}
+}
+
+// Plain "accept" keeps both records: two machines really can share a hostname,
+// and the master must not delete a host the operator never asked it to.
+func TestAcceptKeepsASameNamedRecord(t *testing.T) {
+	s := openStore(t)
+	center := notifications.New()
+	service, err := New(Options{Store: s, Notifications: center})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-bbbbbb", Name: "build-host", Status: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := service.HandleNotificationAction(context.Background(), "federation-registration-build-host-bbbbbb", "accept"); err != nil || !handled {
+		t.Fatalf("accept handled=%v err=%v", handled, err)
+	}
+	peers, _ := s.FederationSlaves()
+	if len(peers) != 2 {
+		t.Fatalf("accept removed a record: %#v", peers)
+	}
+}
+
+// Forgetting a host must not strand the daemon running on it: its credential
+// stops working, so it asks for registration again rather than retrying a
+// credential the master will never honor.
+func TestForgottenHostRegistersAgain(t *testing.T) {
+	masterStore := openStore(t)
+	center := notifications.New()
+	master, err := New(Options{Store: masterStore, Notifications: center})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(master)
+	defer server.Close()
+	if err := masterStore.UpsertFederationSlave(store.FederationSlave{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	slaveStore := openStore(t)
+	if err := slaveStore.SaveFederationMaster(store.FederationMaster{URL: server.URL, HostID: "host-1", Credential: "secret-credential"}); err != nil {
+		t.Fatal(err)
+	}
+	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- slave.RunSlave(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if peer, _ := masterStore.FederationSlave("host-1"); peer != nil && peer.Status == "connected" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	master.forget("host-1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if peer, _ := masterStore.FederationSlave("host-1"); peer != nil && peer.Status == "pending" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	peer, _ := masterStore.FederationSlave("host-1")
+	if peer == nil || peer.Status != "pending" {
+		t.Fatalf("forgotten host did not register again: %#v", peer)
+	}
+	if notices := center.List(); len(notices) != 1 || notices[0].ID != "federation-registration-host-1" {
+		t.Fatalf("notices = %#v", notices)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
