@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from '../store';
+import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
 import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 import { usePresence } from '../transitions';
@@ -95,6 +95,11 @@ function proposedBranch(ref: GitRefInfo | undefined, name: string): string {
 //   ⌘/Ctrl+Enter        → reveal advanced (adapter / workspace mode / Git refs / name / hand-off)
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
+  const hosts = useStore((s) => s.hosts);
+  const dirsByHost = useStore((s) => s.dirsByHost);
+  const agentCatalogByHost = useStore((s) => s.agentCatalogByHost);
+  const refreshHostDirs = useStore((s) => s.refreshHostDirs);
+  const refreshAgentCatalog = useStore((s) => s.refreshAgentCatalog);
   const spawn = useStore((s) => s.spawn);
   const getSpawnOptions = useStore((s) => s.getSpawnOptions);
   const listGitRefs = useStore((s) => s.listGitRefs);
@@ -107,10 +112,15 @@ export function SpawnPalette() {
   const agents = useStore((s) => s.agents);
   const spawnHandoffFrom = useStore((s) => s.spawnHandoffFrom);
   const agentCatalog = useStore((s) => s.agentCatalog);
+  const [hostId, setHostId] = useState(LOCAL_HOST_ID);
+  const selectedHost = hosts.find((host) => host.id === hostId) ?? hosts[0];
+  const remote = !!selectedHost && !selectedHost.local && selectedHost.id !== LOCAL_HOST_ID;
+  const scopedDirs = remote ? (dirsByHost[hostId] ?? []) : dirs;
+  const scopedCatalog = remote ? (agentCatalogByHost[hostId] ?? null) : agentCatalog;
   const harnesses = useMemo(() => {
-    if (!agentCatalog) return FALLBACK_HARNESSES;
-    const agentsById = new Map(agentCatalog.agents.map((entry) => [entry.id, entry]));
-    const configured = agentCatalog.harnesses.map((harness) => {
+    if (!scopedCatalog) return FALLBACK_HARNESSES;
+    const agentsById = new Map(scopedCatalog.agents.map((entry) => [entry.id, entry]));
+    const configured = scopedCatalog.harnesses.map((harness) => {
       const definition = agentsById.get(harness.agent);
       return {
         id: `harness:${harness.id}`,
@@ -121,10 +131,10 @@ export function SpawnPalette() {
         hasTerminal: definition?.hasTerminal ?? false,
       };
     });
-    const implicit = agentCatalog.agents
+    const implicit = scopedCatalog.agents
       .map((entry) => ({ ...entry, id: `agent:${entry.id}`, agent: entry.id, harness: undefined as string | undefined }));
     return [...configured, ...implicit];
-  }, [agentCatalog]);
+  }, [scopedCatalog]);
 
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);
@@ -167,16 +177,39 @@ export function SpawnPalette() {
   const taskRef = useRef<HTMLInputElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
 
+  // Host discovery is intentionally lazy: opening the palette continues to
+  // work against an older daemon, while choosing a connected slave asks the
+  // master for that host's own repositories and launch catalog.
+  useEffect(() => {
+    refreshHostDirs(hostId);
+    refreshAgentCatalog(hostId);
+    setQuery('');
+    setSel(0);
+    setAdvanced(false);
+    // Profiles and browser snapshots are intentionally local-only for this
+    // first federation cut. A remote spawn still gets a fresh remote browser;
+    // sending a local snapshot/profile ID to a slave would be misleading.
+    setProfiles([]);
+    setProfileRecent([]);
+    setProfilesByRepo({});
+    setSnapshot('');
+    setAgent('agent:claude');
+    setModel('');
+    setEffort('');
+    setPermission('');
+    appliedDirRef.current = '';
+  }, [hostId, refreshHostDirs, refreshAgentCatalog]);
+
   const filtered = useMemo(() => {
     // Name first: the path's shared ~/Projects prefix otherwise matches every
     // repo just as well as a repo's own name does.
-    const matched = fuzzyFilterFields(query, dirs, (d) => [[d.name, 2], [d.path, 1]]);
+    const matched = fuzzyFilterFields(query, scopedDirs, (d) => [[d.name, 2], [d.path, 1]]);
     if (query) return matched;
     const recentPaths = loadRecentDirs();
-    const byPath = new Map(dirs.map((d) => [d.path, d]));
+    const byPath = new Map(scopedDirs.map((d) => [d.path, d]));
     const recent = recentPaths.map((p) => byPath.get(p)).filter((d): d is RepoInfo => !!d);
     return recent.length > 0 ? recent.slice(0, RECENT_DIRS_MAX) : matched.slice(0, RECENT_DIRS_MAX);
-  }, [query, dirs]);
+  }, [query, scopedDirs, hostId]);
   useEffect(() => setSel(0), [query]);
   const selectedDir = filtered[sel];
   const selectedHarness = harnesses.find((harness) => harness.id === agent) ?? harnesses[0];
@@ -224,9 +257,9 @@ export function SpawnPalette() {
 
   const harnessForProject = (project: string) => {
     const saved = loadProjectAgent(project);
-    const catalogDefault = agentCatalog?.defaultHarness
-      ? `harness:${agentCatalog.defaultHarness}`
-      : `agent:${agentCatalog?.defaultAgent ?? 'claude'}`;
+    const catalogDefault = scopedCatalog?.defaultHarness
+      ? `harness:${scopedCatalog.defaultHarness}`
+      : `agent:${scopedCatalog?.defaultAgent ?? 'claude'}`;
     return (saved
       ? harnesses.find((harness) => harness.id === saved)
         ?? harnesses.find((harness) => !harness.harness && harness.agent === saved)
@@ -307,7 +340,7 @@ export function SpawnPalette() {
       setPermission(defaults.permission);
     }
     // applyProfile/harnessForProject close over current harnesses; profilesByRepo drives re-runs.
-  }, [selectedDir?.path, profilesByRepo, harnesses, agentCatalog]);
+  }, [selectedDir?.path, profilesByRepo, harnesses, scopedCatalog, hostId]);
   useEffect(() => {
     if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
     if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
@@ -316,6 +349,7 @@ export function SpawnPalette() {
   // and auto-apply the latest-used profile once per selected directory.
   const appliedDirRef = useRef<string>('');
   useEffect(() => {
+    if (remote) return;
     let cancelled = false;
     const missing = filtered.filter((dir) => !profilesByRepo[dir.path]);
     if (missing.length === 0) return;
@@ -337,12 +371,12 @@ export function SpawnPalette() {
       });
     });
     return () => { cancelled = true; };
-  }, [filtered, profilesByRepo, listProfiles]);
+  }, [filtered, profilesByRepo, listProfiles, remote]);
   // On advanced open, refresh this repo's profiles + snapshots so the picker
   // reflects any newly-created profiles. Feeding profilesByRepo lets the seed
   // effect above project the fresh list (and apply it if not yet applied).
   useEffect(() => {
-    if (!advanced || !selectedDir) return;
+    if (remote || !advanced || !selectedDir) return;
     let cancelled = false;
     void listSnapshots().catch(() => {});
     void listProfiles(selectedDir.path).then(({ profiles: ps, recent }) => {
@@ -350,7 +384,7 @@ export function SpawnPalette() {
       setProfilesByRepo((current) => ({ ...current, [selectedDir.path]: { profiles: ps, recent } }));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [advanced, selectedDir?.path, listProfiles, listSnapshots]);
+  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, remote]);
   useEffect(() => {
     if (!advanced || adapter !== 'acp' || !selectedDir) {
       setSpawnOptions(null);
@@ -361,7 +395,7 @@ export function SpawnPalette() {
     setOptionsBusy(true);
     setOptionsError('');
     setSpawnOptions(null);
-    void getSpawnOptions(agentSlug, selectedDir.path, selectedHarness?.harness).then((options) => {
+    void getSpawnOptions(agentSlug, selectedDir.path, selectedHarness?.harness, hostId).then((options) => {
       if (cancelled) return;
       setSpawnOptions(options);
       // Clamp the current selections to what this harness actually offers; the
@@ -378,7 +412,7 @@ export function SpawnPalette() {
       }
     }).finally(() => { if (!cancelled) setOptionsBusy(false); });
     return () => { cancelled = true; };
-  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedHarness?.harness, getSpawnOptions]);
+  }, [advanced, agent, agentSlug, adapter, selectedDir?.path, selectedHarness?.harness, getSpawnOptions, hostId]);
   useEffect(() => {
     if (!advanced || !selectedDir) {
       setGitRefs([]);
@@ -388,7 +422,7 @@ export function SpawnPalette() {
     let cancelled = false;
     setGitRefsBusy(true);
     setGitRefsError('');
-    void listGitRefs(selectedDir.path).then((refs) => {
+    void listGitRefs(selectedDir.path, hostId).then((refs) => {
       if (cancelled) return;
       setGitRefs(refs);
       const remembered = loadBranchContext(selectedDir.path);
@@ -402,7 +436,7 @@ export function SpawnPalette() {
       if (!cancelled) setGitRefsError(error.message);
     }).finally(() => { if (!cancelled) setGitRefsBusy(false); });
     return () => { cancelled = true; };
-  }, [advanced, selectedDir?.path, listGitRefs, gitRefsRefresh]);
+  }, [advanced, selectedDir?.path, listGitRefs, gitRefsRefresh, hostId]);
   useEffect(() => {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
@@ -436,7 +470,7 @@ export function SpawnPalette() {
       // profile_recent (harness + settings), falling back to the per-project
       // harness hint and that harness's most-recent settings. The prefetch effect
       // usually has the list cached; fetch on a miss (row clicked before prefetch).
-      const data = profilesByRepo[dir.path] ?? await listProfiles(dir.path).catch(() => ({ profiles: [], recent: [] }));
+      const data = remote ? { profiles: [], recent: [] } : profilesByRepo[dir.path] ?? await listProfiles(dir.path).catch(() => ({ profiles: [], recent: [] }));
       const latest = data.profiles.find((p) => p.id === data.recent[0]);
       if (latest) {
         spawnHarness = harnessForProfile(latest);
@@ -458,7 +492,7 @@ export function SpawnPalette() {
     let effectiveOptions = advanced ? spawnOptions : null;
     if (spawnAdapter === 'acp' && !effectiveOptions) {
       try {
-        effectiveOptions = await getSpawnOptions(spawnAgent, dir.path, spawnHarnessID);
+        effectiveOptions = await getSpawnOptions(spawnAgent, dir.path, spawnHarnessID, hostId);
       } catch (cause) {
         setBusy(false);
         setError({ code: 'spawn_options', msg: cause instanceof Error ? cause.message : String(cause), dir });
@@ -473,8 +507,9 @@ export function SpawnPalette() {
       permission: defaults.permission && effectiveOptions?.modes?.availableModes.some((mode) => mode.id === defaults.permission)
         ? defaults.permission : '',
     } : EMPTY_HARNESS_DEFAULTS;
-    const spawnSnapshot = advanced ? snapshot : '';
+    const spawnSnapshot = advanced && !remote ? snapshot : '';
     const spec: SpawnSpec = {
+      ...(remote ? { hostId } : {}),
       adapter: spawnAdapter,
       agent: spawnAgent,
       harness: spawnHarnessID,
@@ -571,6 +606,18 @@ export function SpawnPalette() {
       <div className="modal" onKeyDown={onKey}>
         {!advanced && (
           <>
+            {hosts.length > 1 && (
+              <label className="spawn-host">
+                Host
+                <select value={hostId} onChange={(e) => setHostId(e.target.value)}>
+                  {hosts.map((host) => (
+                    <option key={host.id} value={host.id} disabled={!host.local && host.status !== 'connected' && host.status !== 'accepted'}>
+                      {host.name || host.id}{host.local ? ' (local)' : host.status && host.status !== 'connected' && host.status !== 'accepted' ? ` (${host.status})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <input
               className="q"
               autoFocus
@@ -628,7 +675,7 @@ export function SpawnPalette() {
             <div className="advanced-repo">
               <div>
                 <div className="primary">{selectedDir?.name}</div>
-                <div className="sub">{selectedDir?.path}</div>
+                <div className="sub">{selectedHost?.name || selectedHost?.id}{remote ? ' · remote host' : ''} · {selectedDir?.path}</div>
               </div>
               <span>{selectedDir?.currentBranch}</span>
             </div>
@@ -698,38 +745,44 @@ export function SpawnPalette() {
                 />
               </label>
             )}
-            <label>
-              Browser snapshot <span className="sub">(seed state)</span>
-              <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
-                <option value="">Fresh state</option>
-                {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </label>
-            <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Hand-off</div>
-            <label style={{ gridColumn: '1 / -1' }}>
-              Continue from session <span className="sub">(optional)</span>
-              <select value={parentSession} onChange={(e) => setParentSession(e.target.value)}>
-                <option value="">None — start a fresh conversation</option>
-                {parentCandidates.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.name}{candidate.workspace.branch ? ` · ${candidate.workspace.branch}` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {parentAgent && (
+            {!remote ? (
+              <label>
+                Browser snapshot <span className="sub">(seed state)</span>
+                <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+                  <option value="">Fresh state</option>
+                  {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+            ) : <div className="sub">Remote browser starts with a fresh state.</div>}
+            {!remote && (
               <>
-                <label className="delete-worktree-option" style={{ gridColumn: '1 / -1' }}>
-                  <input type="checkbox" checked={includeTranscript} onChange={(e) => setIncludeTranscript(e.target.checked)} />
-                  Start with a hand-off transcript of {parentAgent.name}'s conversation
-                </label>
-                {includeTranscript && (
-                  <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
-                    The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
-                    conversation — every user and assistant message verbatim, intervening tool calls summarized. It is
-                    built mechanically from the event log, so no model is asked to summarize anything.
-                  </div>
-                )}
+              <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Hand-off</div>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Continue from session <span className="sub">(optional)</span>
+                <select value={parentSession} onChange={(e) => setParentSession(e.target.value)}>
+                  <option value="">None — start a fresh conversation</option>
+                  {parentCandidates.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}{candidate.workspace.branch ? ` · ${candidate.workspace.branch}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {parentAgent && (
+                <>
+                  <label className="delete-worktree-option" style={{ gridColumn: '1 / -1' }}>
+                    <input type="checkbox" checked={includeTranscript} onChange={(e) => setIncludeTranscript(e.target.checked)} />
+                    Start with a hand-off transcript of {parentAgent.name}'s conversation
+                  </label>
+                  {includeTranscript && (
+                    <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                      The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
+                      conversation — every user and assistant message verbatim, intervening tool calls summarized. It is
+                      built mechanically from the event log, so no model is asked to summarize anything.
+                    </div>
+                  )}
+                </>
+              )}
               </>
             )}
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Repo settings</div>

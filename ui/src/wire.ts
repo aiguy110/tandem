@@ -141,6 +141,16 @@ export interface RepoInfo {
   hasLiveAgent: boolean;
 }
 
+// A host registered with this Tandem instance.  `local` is deliberately
+// optional: older daemons do not advertise hosts at all, in which case the UI
+// synthesizes the local host and keeps using the original unscoped commands.
+export interface FederationHost {
+  id: string;
+  name?: string;
+  status?: 'connected' | 'accepted' | 'pending' | 'offline' | 'rejected';
+  local?: boolean;
+}
+
 export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';
 export interface GitRefInfo {
   ref: string;
@@ -189,6 +199,10 @@ export interface AgentSummary {
   // the Chat tab should offer the ACP/CLI switch for this agent.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
+  // Set by a federation-aware master for agents running on a registered host.
+  // Agent IDs remain the routing identity for all ordinary controls.
+  hostId?: string;
+  hostName?: string;
   profile?: {
     id?: string;
     model?: string;
@@ -222,6 +236,10 @@ export interface ResumableSession {
   resumable: boolean;
   historyOnly?: boolean;
   resumeError?: string;
+  // Federation-aware catalog/search replies retain where a resumable session
+  // lives. Undefined remains the local daemon for old servers.
+  hostId?: string;
+  hostName?: string;
 }
 export interface ResumeAdapterInfo {
   agent: string;
@@ -282,6 +300,9 @@ export interface SpawnSpec {
   // Agent id whose transcript is rendered (without any model inference) into
   // this agent's first user message, so it can pick up where that agent stopped.
   handoffFrom?: string;
+  // Omitted for this daemon. A master forwards a non-local target to its
+  // registered slave before creating the agent.
+  hostId?: string;
 }
 
 // BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
@@ -423,7 +444,7 @@ export type ClientMsg =
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'list_system_notifications'; corrId?: string }
   | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
-  | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; corrId?: string }
+  | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
   | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; corrId?: string }
   | { t: 'delete_snapshot'; id: string; corrId?: string }
@@ -438,18 +459,19 @@ export type ClientMsg =
   | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
   | { t: 'restart_browser'; agentId: string; snapshotId?: string; corrId?: string }
   | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
-  | { t: 'list_dirs'; corrId?: string }
+  | { t: 'list_dirs'; hostId?: string; corrId?: string }
   | { t: 'list_workspace_entries'; agentId: string; path: string; corrId?: string }
-  | { t: 'list_git_refs'; repo: string; corrId?: string }
+  | { t: 'list_git_refs'; repo: string; hostId?: string; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
-  | { t: 'list_agent_catalog'; corrId?: string }
-  | { t: 'list_sessions'; corrId?: string }
+  | { t: 'list_agent_catalog'; hostId?: string; corrId?: string }
+  | { t: 'list_hosts'; corrId?: string }
+  | { t: 'list_sessions'; hostId?: string; corrId?: string }
   | { t: 'list_automation'; repositoryId?: string; corrId?: string }
   | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
-  | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; corrId?: string }
+  | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; hostId?: string; corrId?: string }
   | { t: 'refresh_history'; agent: string; reindex?: boolean; corrId?: string }
   | { t: 'history_status'; agent?: string; corrId?: string }
-  | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; corrId?: string }
+  | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; hostId?: string; corrId?: string }
   | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
   | { t: 'leave_terminal'; agentId: string; corrId?: string }
   | { t: 'shell_open'; agentId: string; cols: number; rows: number; corrId?: string }
@@ -482,17 +504,18 @@ export type ServerMsg =
   | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
   | { t: 'agent_closed'; agentId: string }
   | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
-  | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog }
+  | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
+  | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
-  | { t: 'dirs'; corrId?: string; dirs: RepoInfo[] }
+  | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; hostId?: string }
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
-  | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string }
-  | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string }
+  | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string; hostId?: string }
+  | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string; hostId?: string }
   | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string }
   | { t: 'profiles'; corrId?: string; profiles?: Profile[]; recent?: string[]; project?: string; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
-  | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog }
+  | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog; hostId?: string }
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }

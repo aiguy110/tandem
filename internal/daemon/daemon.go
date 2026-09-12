@@ -26,6 +26,7 @@ import (
 	"github.com/aiguy110/tandem/internal/buildinfo"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
@@ -40,8 +41,15 @@ import (
 	"github.com/aiguy110/tandem/internal/wsserver"
 )
 
+// RunOptions selects daemon runtime behavior without rewriting the user's
+// configuration file. MasterURL makes this daemon an agent-host slave.
+type RunOptions struct{ MasterURL string }
+
 // Run loads runtime configuration and serves until SIGINT or SIGTERM.
-func Run(stdout io.Writer) error {
+func Run(stdout io.Writer) error { return RunWithOptions(stdout, RunOptions{}) }
+
+// RunWithOptions is Run with ephemeral command-line options.
+func RunWithOptions(stdout io.Writer, opts RunOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -51,12 +59,17 @@ func Run(stdout io.Writer) error {
 	if _, statErr := os.Stat(config.ConfigFilePath(cfg.Home)); os.IsNotExist(statErr) {
 		fmt.Fprintf(stdout, "tandem: no configuration found at %s; using defaults. Run 'tandem setup' in a terminal to configure Tandem.\n", config.ConfigFilePath(cfg.Home))
 	}
-	return Serve(ctx, cfg, stdout)
+	return ServeWithOptions(ctx, cfg, stdout, opts)
 }
 
 // Serve runs the authenticated HTTP and UI surface until ctx is canceled. The
 // WebSocket protocol is intentionally not installed until the network phases.
 func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
+	return ServeWithOptions(ctx, cfg, stdout, RunOptions{})
+}
+
+// ServeWithOptions is Serve with ephemeral command-line options.
+func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, runOpts RunOptions) error {
 	token, err := config.EnsureToken(cfg.TokenPath)
 	if err != nil {
 		return fmt.Errorf("ensure bearer token: %w", err)
@@ -264,12 +277,28 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 	})
 	deferred := newDeferredShutdown(ctx, token, agents)
 	notificationCenter := notifications.New()
+	loopback, err := federation.NewLoopbackLocal(origin, token)
+	if err != nil {
+		return fmt.Errorf("configure federation loopback: %w", err)
+	}
+	federationName, hostnameErr := os.Hostname()
+	if hostnameErr != nil || strings.TrimSpace(federationName) == "" {
+		federationName = displayHost
+	}
+	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, Name: federationName, Endpoint: origin, Local: loopback})
+	if err != nil {
+		return err
+	}
 	updateService := updater.NewService(updater.ServiceOptions{
 		Updater: updater.Options{CurrentVersion: buildinfo.Version, Log: stdout},
 		Home:    cfg.Home, Center: notificationCenter, Agents: agents, Log: stdout,
 		Restart: func() { deferred.Request() },
 	})
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/federation/") {
+			federationService.ServeHTTP(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/internal/automation/run", "/internal/automation/evaluate", "/internal/automation/preapprove":
 			automationService.ServeHTTP(w, r)
@@ -318,12 +347,25 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 		}
 		httpHandler.ServeHTTP(w, r)
 	})
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: updateService.HandleAction, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
+	notificationAction := func(actionCtx context.Context, id, action string) (string, error) {
+		if agentID, handled, actionErr := federationService.HandleNotificationAction(actionCtx, id, action); handled {
+			return agentID, actionErr
+		}
+		return updateService.HandleAction(actionCtx, id, action)
+	}
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips})
 	defer handler.Close()
 	updateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
+	if runOpts.MasterURL != "" {
+		go func() {
+			if federationErr := federationService.RunSlave(ctx); federationErr != nil && ctx.Err() == nil {
+				fmt.Fprintf(stdout, "tandem: federation slave stopped: %v\n", federationErr)
+			}
+		}()
+	}
 
 	fmt.Fprintf(stdout, "tandem · http on %s:%d · home %s\n", cfg.Host, port, cfg.Home)
 	fmt.Fprintln(stdout, "websocket: authenticated subscriptions and replay enabled")

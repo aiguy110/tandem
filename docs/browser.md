@@ -11,6 +11,11 @@ by a **control-owner token**. Builds on D4 (CDP-screencast, Steel-based) and D13
 
 ## Topology
 
+In a federated deployment the browser broker and Chromium/Steel session remain on the
+slave that owns the agent. The master proxies screencast frames, input, takeover requests,
+and grab/release operations over the daemon link. Local and master UIs are peer clients;
+the same per-agent control-owner token continues to serialize human and agent input.
+
 ```
         ┌───────────── Steel session (self-hosted, Docker) · per agent ──────────┐
         │                        one Chromium, CDP endpoint                        │

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildResumeGroups, FIELD, flattenGroups, QUALITY } from './resume';
+import { buildResumeGroups, FIELD, flattenGroups, QUALITY, sessionKey } from './resume';
 import type { AgentView } from './store';
 import type { ResumableSession, SessionSearchResult } from './wire';
 
@@ -42,6 +42,13 @@ function result(value: ResumableSession, text: string, hitCount = 1): SessionSea
 }
 
 describe('buildResumeGroups grouping', () => {
+  it('keeps same session identifiers on different hosts distinct', () => {
+    const local = session({ sessionId: 'same' });
+    const remote = session({ sessionId: 'same', hostId: 'worker-1', hostName: 'Build host' });
+    expect(sessionKey(local)).not.toBe(sessionKey(remote));
+    expect(flattenGroups(buildResumeGroups('', [local, remote], [], []))).toHaveLength(2);
+  });
+
   it('groups sessions by repository', () => {
     const groups = buildResumeGroups(
       '',

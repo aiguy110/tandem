@@ -90,6 +90,9 @@ type ResolvedLaunch struct {
 	Terminal *TerminalLaunch `json:"terminal,omitempty"`
 }
 type Spec struct {
+	// HostID selects a registered federation host at the browser boundary. It
+	// is consumed by wsserver and ignored by the local registry.
+	HostID        string              `json:"hostId,omitempty"`
 	Adapter       string              `json:"adapter"`
 	Agent         string              `json:"agent,omitempty"`
 	Harness       string              `json:"harness,omitempty"`

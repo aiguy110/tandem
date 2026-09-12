@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aiguy110/tandem/internal/automationmcp"
 	"github.com/aiguy110/tandem/internal/buildinfo"
@@ -18,7 +19,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|update|version|debug config]"
+const usage = "usage: tandem [--master URL|setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -67,7 +68,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return addMCP(args[2:], stdout, stderr)
 	}
 	if len(args) == 0 {
-		return runDaemon(stdout, stderr)
+		return runDaemon(stdout, stderr, "")
+	}
+	if len(args) == 2 && args[0] == "--master" {
+		if strings.TrimSpace(args[1]) == "" {
+			fmt.Fprintln(stderr, "tandem: --master requires a URL")
+			return 2
+		}
+		return runDaemon(stdout, stderr, args[1])
 	}
 	if len(args) == 2 && args[0] == "setup" && args[1] == "--complete" {
 		if err := setup.Complete(stdout); err != nil {
@@ -225,8 +233,8 @@ func setupHome() (string, error) {
 	return filepath.Join(home, ".tandem"), nil
 }
 
-func runDaemon(stdout, stderr io.Writer) int {
-	if err := daemon.Run(stdout); err != nil {
+func runDaemon(stdout, stderr io.Writer, masterURL string) int {
+	if err := daemon.RunWithOptions(stdout, daemon.RunOptions{MasterURL: masterURL}); err != nil {
 		fmt.Fprintf(stderr, "run daemon: %v\n", err)
 		return 1
 	}

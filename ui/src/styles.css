@@ -293,6 +293,12 @@ body.dock-resizing .app { transition: none; }
 .dot.error { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 .agent-row .name { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
+.agent-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
+.agent-host-divider { display: flex; align-items: center; gap: 7px; margin: 7px 9px 3px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
+.agent-host-divider::before, .agent-host-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
+.resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--text-dim); font-size: var(--fs-sm); }
+.resume-host select, .spawn-host select { flex: 1; }
+.resume-host-badge { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); }
 .agent-rename-input {
   width: 100%; min-width: 0; padding: 1px 4px; font: inherit; color: var(--text);
   background: var(--surface); border: 1px solid var(--agent); border-radius: var(--r-sm);

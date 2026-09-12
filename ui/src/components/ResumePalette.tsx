@@ -50,6 +50,8 @@ function sourceLabel(entry: ResumeEntry): string {
 export function ResumePalette() {
   const catalog = useStore((s) => s.resumeCatalog);
   const loading = useStore((s) => s.resumeLoading);
+  const hosts = useStore((s) => s.hosts);
+  const refreshSessions = useStore((s) => s.refreshSessions);
   const agents = useStore((s) => s.agents);
   const order = useStore((s) => s.order);
   const searchSessions = useStore((s) => s.searchSessions);
@@ -58,18 +60,21 @@ export function ResumePalette() {
   const setModal = useStore((s) => s.setModal);
   const setPane = useStore((s) => s.setPane);
   const [query, setQuery] = useState('');
+  const [hostScope, setHostScope] = useState('');
   const [historyResults, setHistoryResults] = useState<SessionSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [sel, setSel] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchGeneration = useRef(0);
+  const initialHostScope = useRef(true);
   const rowsRef = useRef<HTMLDivElement | null>(null);
 
-  const sessions = catalog?.sessions ?? [];
+  const sessions = useMemo(() => (catalog?.sessions ?? []).filter((session) => !hostScope || (session.hostId ?? 'local') === hostScope), [catalog, hostScope]);
   const liveAgents = useMemo(
-    () => order.map((id) => agents[id]).filter((agent): agent is NonNullable<typeof agent> => !!agent),
-    [order, agents],
+    () => order.map((id) => agents[id]).filter((agent): agent is NonNullable<typeof agent> => !!agent)
+      .filter((agent) => !hostScope || (agent.hostId ?? 'local') === hostScope),
+    [order, agents, hostScope],
   );
   const groups = useMemo(
     () => buildResumeGroups(query, sessions, liveAgents, historyResults),
@@ -90,7 +95,7 @@ export function ResumePalette() {
     setHistoryResults([]);
     setSearching(true);
     const timer = window.setTimeout(() => {
-      void searchSessions(trimmed).then(
+      void searchSessions(trimmed, hostScope || undefined).then(
         (next) => {
           if (searchGeneration.current !== generation) return;
           setHistoryResults(next);
@@ -105,7 +110,17 @@ export function ResumePalette() {
       );
     }, 125);
     return () => window.clearTimeout(timer);
-  }, [query, searchSessions]);
+  }, [query, searchSessions, hostScope]);
+
+  useEffect(() => {
+    // App.setModal('resume') already starts the all-host refresh. Avoid a
+    // duplicate request on mount (and keep the palette render-only in tests).
+    if (initialHostScope.current) {
+      initialHostScope.current = false;
+      return;
+    }
+    refreshSessions(hostScope || undefined);
+  }, [hostScope, refreshSessions]);
 
   useEffect(() => {
     if (sel >= flat.length) setSel(Math.max(0, flat.length - 1));
@@ -167,6 +182,17 @@ export function ResumePalette() {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
+        {hosts.length > 1 && (
+          <label className="resume-host">
+            Host
+            <select value={hostScope} onChange={(event) => setHostScope(event.target.value)}>
+              <option value="">All connected hosts</option>
+              {hosts.filter((host) => host.local || host.status === 'connected' || host.status === 'accepted').map((host) => (
+                <option key={host.id} value={host.id}>{host.name || host.id}{host.local ? ' (local)' : ''}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="rows" ref={rowsRef}>
           {loading && sessions.length === 0 && <div className="empty">Discovering sessions…</div>}
           {!loading && !searching && flat.length === 0 && <div className="empty">No matching sessions found.</div>}
@@ -198,6 +224,7 @@ export function ResumePalette() {
                           <div className="primary">
                             {sessionName(session)}
                             {entry.liveAgentId && <span className="resume-badge">active</span>}
+                            {session.hostId && <span className="resume-host-badge">{session.hostName || session.hostId}</span>}
                           </div>
                           <div className="sub">{session.cwd}{session.branch ? ` · ${session.branch}` : ''}</div>
                         </div>

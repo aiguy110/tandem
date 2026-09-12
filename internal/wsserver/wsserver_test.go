@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
@@ -22,6 +24,44 @@ import (
 	"github.com/aiguy110/tandem/internal/workspace"
 	"github.com/gorilla/websocket"
 )
+
+type testFederation struct {
+	hosts      []federation.Host
+	mu         sync.Mutex
+	calls      []json.RawMessage
+	subscriber func(string, json.RawMessage)
+}
+
+func (f *testFederation) Hosts() []federation.Host { return f.hosts }
+func (f *testFederation) Subscribe(fn func(string, json.RawMessage)) func() {
+	f.mu.Lock()
+	f.subscriber = fn
+	f.mu.Unlock()
+	return func() {}
+}
+func (f *testFederation) Call(_ context.Context, hostID string, payload json.RawMessage) (json.RawMessage, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, append(json.RawMessage(nil), payload...))
+	subscriber := f.subscriber
+	f.mu.Unlock()
+	var command struct {
+		T string `json:"t"`
+	}
+	_ = json.Unmarshal(payload, &command)
+	switch command.T {
+	case "spawn_agent", "resume_session":
+		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
+	case "subscribe":
+		if subscriber != nil {
+			subscriber(hostID, json.RawMessage(`{"t":"snapshot","agentId":"remote-agent","seq":0,"transcript":[],"status":"idle","pendingApprovals":[]}`))
+		}
+		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
+	case "search_sessions":
+		return json.RawMessage(`{"t":"session_search","query":"work","results":[]}`), nil
+	default:
+		return json.RawMessage(`{"t":"ack"}`), nil
+	}
+}
 
 type testBackend struct {
 	mu       sync.RWMutex
@@ -370,6 +410,78 @@ func TestSystemNotificationsSnapshotBroadcastAndAction(t *testing.T) {
 	}
 	if actedID != "update" || actedAction != "restart" {
 		t.Fatalf("action = %q %q", actedID, actedAction)
+	}
+}
+
+func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	fed := &testFederation{hosts: []federation.Host{{
+		ID: "host/one", Name: "builder", Status: "connected",
+		Snapshot: json.RawMessage(`{"t":"agents","agents":[{"id":"remote-agent","name":"Remote","adapter":"acp","canHandoff":true,"status":"idle","controlMode":"transcript"}]}`),
+	}}}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	send(t, c, map[string]any{"t": "list_agents", "corrId": "agents"})
+	got := recv(t, c)
+	agents := got["agents"].([]any)
+	if len(agents) != 2 {
+		t.Fatalf("agents = %#v", got)
+	}
+	remote := agents[1].(map[string]any)
+	remoteID, _ := remote["id"].(string)
+	if remote["hostId"] != "host/one" || remote["hostName"] != "builder" || strings.Contains(remoteID, "/") {
+		t.Fatalf("remote summary = %#v", remote)
+	}
+
+	send(t, c, map[string]any{"t": "spawn_agent", "spec": map[string]any{"hostId": "host/one", "adapter": "acp", "workspace": map[string]any{"kind": "existing", "cwd": "/repo"}}, "corrId": "spawn"})
+	got = recv(t, c)
+	if got["t"] != "ack" || got["agentId"] != remoteID || got["hostId"] != "host/one" {
+		t.Fatalf("spawn ack = %#v", got)
+	}
+	fed.mu.Lock()
+	spawnPayload := append(json.RawMessage(nil), fed.calls[len(fed.calls)-1]...)
+	fed.mu.Unlock()
+	if strings.Contains(string(spawnPayload), "host/one") {
+		t.Fatalf("slave payload retained federation route: %s", spawnPayload)
+	}
+
+	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript", "browser"}, "corrId": "sub"})
+	got = recv(t, c)
+	if got["t"] != "snapshot" || got["agentId"] != remoteID || got["hostId"] != "host/one" {
+		t.Fatalf("remote snapshot = %#v", got)
+	}
+	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != remoteID || got["corrId"] != "sub" {
+		t.Fatalf("subscribe ack = %#v", got)
+	}
+
+	send(t, c, map[string]any{"t": "search_sessions", "hostId": "host/one", "query": "work", "corrId": "search"})
+	if got = recv(t, c); got["t"] != "session_search" || got["hostId"] != "host/one" || got["corrId"] != "search" {
+		t.Fatalf("remote history = %#v", got)
+	}
+}
+
+func TestFederationWebSocketUpgradeUsesFallbackRouter(t *testing.T) {
+	_, backend, _, _, _ := setupWS(t, 0)
+	called := make(chan struct{}, 1)
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called <- struct{}{}
+		http.Error(w, "federation route", http.StatusTeapot)
+	})
+	server := httptest.NewServer(New(Options{Token: "browser-secret", Registry: backend, Fallback: fallback}))
+	t.Cleanup(server.Close)
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/internal/federation/tunnel"
+	_, response, err := websocket.DefaultDialer.Dial(url, nil)
+	if err == nil || response == nil || response.StatusCode != http.StatusTeapot {
+		t.Fatalf("dial err=%v response=%#v", err, response)
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("federation fallback was not called")
 	}
 }
 

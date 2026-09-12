@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
@@ -70,12 +72,25 @@ type Options struct {
 	Automation         AutomationStore
 	Notifications      *notifications.Center
 	NotificationAction func(context.Context, string, string) (string, error)
+	Federation         Federation
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
 	// AudioReady is AudioReadySeqs plus each clip's known duration (0 means
 	// unknown), for spacing timeline tick marks without downloading audio.
 	AudioReady func(string) []store.MessageAudioClip
+}
+
+// Federation is the master-side transport used for host-qualified browser
+// protocol requests. The payload is intentionally an opaque browser envelope
+// so new commands (including history/resume and browser controls) do not need
+// a parallel federation RPC definition.
+type Federation interface {
+	Hosts() []federation.Host
+	Call(context.Context, string, json.RawMessage) (json.RawMessage, error)
+}
+type FederationEvents interface {
+	Subscribe(func(string, json.RawMessage)) func()
 }
 
 type AutomationStore interface {
@@ -91,11 +106,12 @@ type HistoryLifecycle interface {
 }
 
 type Handler struct {
-	opts        Options
-	upgrader    websocket.Upgrader
-	mu          sync.Mutex
-	connections map[*connection]struct{}
-	unsubscribe func()
+	opts                  Options
+	upgrader              websocket.Upgrader
+	mu                    sync.Mutex
+	connections           map[*connection]struct{}
+	unsubscribe           func()
+	unsubscribeFederation func()
 }
 
 func New(opts Options) *Handler {
@@ -106,6 +122,9 @@ func New(opts Options) *Handler {
 	if opts.Notifications != nil {
 		h.unsubscribe = opts.Notifications.Subscribe(h.broadcastSystemNotifications)
 	}
+	if source, ok := opts.Federation.(FederationEvents); ok {
+		h.unsubscribeFederation = source.Subscribe(h.broadcastFederationEvent)
+	}
 	return h
 }
 
@@ -115,6 +134,10 @@ func (h *Handler) Close() {
 	if h.unsubscribe != nil {
 		h.unsubscribe()
 		h.unsubscribe = nil
+	}
+	if h.unsubscribeFederation != nil {
+		h.unsubscribeFederation()
+		h.unsubscribeFederation = nil
 	}
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
@@ -127,7 +150,66 @@ func (h *Handler) Close() {
 	}
 }
 
+func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessage) {
+	var envelope map[string]any
+	if json.Unmarshal(payload, &envelope) != nil {
+		return
+	}
+	if envelope["t"] == "federation_hosts_changed" {
+		h.mu.Lock()
+		connections := make([]*connection, 0, len(h.connections))
+		for c := range h.connections {
+			connections = append(connections, c)
+		}
+		h.mu.Unlock()
+		for _, c := range connections {
+			c.send(map[string]any{"t": "hosts", "hosts": h.opts.Federation.Hosts()})
+		}
+		return
+	}
+	if envelope["t"] == "agents" {
+		h.broadcastAgents()
+		return
+	}
+	remoteID := ""
+	if agentID, ok := envelope["agentId"].(string); ok && agentID != "" {
+		remoteID = remoteAgentID(hostID, agentID)
+		envelope["agentId"] = remoteID
+	}
+	envelope["hostId"] = hostID
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	for _, c := range connections {
+		if remoteID != "" {
+			c.mu.Lock()
+			_, subscribed := c.remoteSubs[remoteID]
+			if envelope["t"] == "agent_closed" {
+				delete(c.remoteSubs, remoteID)
+			}
+			c.mu.Unlock()
+			if !subscribed {
+				continue
+			}
+		}
+		if envelope["t"] == "browser_frame" && remoteID != "" {
+			c.sendFrame(remoteID, envelope)
+			continue
+		}
+		c.send(envelope)
+	}
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Federation has its own WebSocket authentication and must reach the
+	// daemon's fallback router before the browser-socket upgrader below.
+	if strings.HasPrefix(r.URL.Path, "/internal/federation/") && h.opts.Fallback != nil {
+		h.opts.Fallback.ServeHTTP(w, r)
+		return
+	}
 	if !websocket.IsWebSocketUpgrade(r) {
 		if h.opts.Fallback != nil {
 			h.opts.Fallback.ServeHTTP(w, r)
@@ -208,6 +290,7 @@ type clientMessage struct {
 	Path             string                     `json:"path"`
 	PositionMs       int64                      `json:"positionMs"`
 	NotificationID   string                     `json:"notificationId"`
+	HostID           string                     `json:"hostId"`
 }
 
 type connection struct {
@@ -221,6 +304,7 @@ type connection struct {
 	closeOnce    sync.Once
 	mu           sync.Mutex
 	subs         map[string]*subscription
+	remoteSubs   map[string]struct{}
 	audioFocusID string
 }
 
@@ -229,7 +313,7 @@ func newConnection(h *Handler, ws *websocket.Conn) *connection {
 		server: h, ws: ws,
 		out:        make(chan []byte, h.opts.WriteQueue),
 		frameReady: make(chan string, 16), latestFrames: make(map[string][]byte),
-		done: make(chan struct{}), subs: map[string]*subscription{},
+		done: make(chan struct{}), subs: map[string]*subscription{}, remoteSubs: map[string]struct{}{},
 	}
 }
 
@@ -405,13 +489,33 @@ func (c *connection) sendAutomation(repositoryID string, corrID json.RawMessage)
 }
 
 func (c *connection) handle(m clientMessage) {
+	if m.T == "list_hosts" {
+		if c.server.opts.Federation == nil {
+			c.send(withCorr(map[string]any{"t": "hosts", "hosts": []any{}}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.opts.Federation.Hosts()}, m.CorrID))
+		return
+	}
+	if m.HostID == "" {
+		m.HostID = m.Spec.HostID
+	}
+	if m.HostID == "" && m.AgentID != "" {
+		if hostID, agentID, ok := splitRemoteAgentID(m.AgentID); ok {
+			m.HostID, m.AgentID = hostID, agentID
+		}
+	}
+	if m.HostID != "" {
+		c.forwardFederation(m)
+		return
+	}
 	switch m.T {
 	case "subscribe":
 		c.subscribe(m)
 	case "unsubscribe":
 		c.unsubscribe(m)
 	case "list_agents":
-		c.send(withCorr(map[string]any{"t": "agents", "agents": c.server.opts.Registry.Summaries(context.Background())}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "agents", "agents": c.server.agentSummaries()}, m.CorrID))
 	case "list_dirs":
 		dirs, err := c.server.opts.Registry.ListDirs(context.Background())
 		if err != nil {
@@ -767,6 +871,9 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
+		if c.server.opts.Federation != nil {
+			c.server.broadcastAgents()
+		}
 		c.commandAck(m, sess.ID)
 	case "list_system_notifications":
 		c.sendSystemNotifications(m.CorrID)
@@ -781,6 +888,9 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.commandAck(m, agentID)
+		if c.server.opts.Federation != nil {
+			c.send(map[string]any{"t": "hosts", "hosts": c.server.opts.Federation.Hosts()})
+		}
 	case "get_spawn_options":
 		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
 		if err != nil {
@@ -892,6 +1002,9 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.server.broadcastClosed(m.AgentID)
+		if c.server.opts.Federation != nil {
+			c.server.broadcastAgents()
+		}
 		c.commandAck(m, m.AgentID)
 	case "browser_control":
 		if c.server.opts.Browser == nil {
@@ -1023,6 +1136,126 @@ func (c *connection) handle(m clientMessage) {
 	}
 }
 
+// forwardFederation carries a host-qualified browser request over the
+// persistent slave tunnel. The slave's loopback bridge returns the ordinary
+// browser response unchanged, which preserves commands added after this code.
+func (c *connection) forwardFederation(m clientMessage) {
+	if c.server.opts.Federation == nil {
+		c.commandError(m, errors.New("remote hosts are unavailable"))
+		return
+	}
+	hostID := m.HostID
+	remoteID := ""
+	if m.AgentID != "" {
+		remoteID = remoteAgentID(hostID, m.AgentID)
+	}
+	if m.T == "subscribe" && remoteID != "" {
+		// The slave sends the replay snapshot before its correlated subscribe
+		// acknowledgement, so install the filter before making the call.
+		c.mu.Lock()
+		c.remoteSubs[remoteID] = struct{}{}
+		c.mu.Unlock()
+	}
+	// The slave must execute locally; prevent its own wsserver from treating
+	// this already-routed request as another federation hop.
+	m.HostID, m.Spec.HostID = "", ""
+	payload, err := json.Marshal(m)
+	if err != nil {
+		c.commandError(m, err)
+		return
+	}
+	callCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	response, err := c.server.opts.Federation.Call(callCtx, hostID, payload)
+	if err != nil {
+		if m.T == "subscribe" && remoteID != "" {
+			c.mu.Lock()
+			delete(c.remoteSubs, remoteID)
+			c.mu.Unlock()
+		}
+		c.commandError(m, err)
+		return
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		c.commandError(m, fmt.Errorf("remote host returned invalid protocol response: %w", err))
+		return
+	}
+	// Master corrIds are authoritative. A stale or malicious slave response
+	// must not satisfy a different browser request.
+	if m.CorrID != nil {
+		envelope["corrId"] = json.RawMessage(append([]byte(nil), m.CorrID...))
+	}
+	if agentID, ok := envelope["agentId"].(string); ok && agentID != "" {
+		envelope["agentId"] = remoteAgentID(hostID, agentID)
+	}
+	envelope["hostId"] = hostID
+	if m.T == "unsubscribe" && remoteID != "" {
+		c.mu.Lock()
+		delete(c.remoteSubs, remoteID)
+		c.mu.Unlock()
+	}
+	c.send(envelope)
+}
+
+func remoteAgentID(hostID, agentID string) string {
+	return "federation~" + base64.RawURLEncoding.EncodeToString([]byte(hostID)) + "~" + base64.RawURLEncoding.EncodeToString([]byte(agentID))
+}
+func splitRemoteAgentID(id string) (hostID, agentID string, ok bool) {
+	parts := strings.SplitN(id, "~", 3)
+	if len(parts) != 3 || parts[0] != "federation" || parts[1] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	host, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", false
+	}
+	agent, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", false
+	}
+	if len(host) == 0 || len(agent) == 0 {
+		return "", "", false
+	}
+	return string(host), string(agent), true
+}
+
+// agentSummaries combines local agents with the current snapshots received
+// from slave tunnels. Remote IDs are namespaced, avoiding collisions between
+// otherwise ordinary local agent names on different hosts.
+func (h *Handler) agentSummaries() []any {
+	local := h.opts.Registry.Summaries(context.Background())
+	out := make([]any, 0, len(local))
+	for _, summary := range local {
+		out = append(out, summary)
+	}
+	if h.opts.Federation == nil {
+		return out
+	}
+	for _, host := range h.opts.Federation.Hosts() {
+		if len(host.Snapshot) == 0 {
+			continue
+		}
+		var snapshot struct {
+			Agents []map[string]any `json:"agents"`
+		}
+		if json.Unmarshal(host.Snapshot, &snapshot) != nil {
+			continue
+		}
+		for _, agent := range snapshot.Agents {
+			id, _ := agent["id"].(string)
+			if id == "" {
+				continue
+			}
+			agent["id"] = remoteAgentID(host.ID, id)
+			agent["hostId"] = host.ID
+			agent["hostName"] = host.Name
+			out = append(out, agent)
+		}
+	}
+	return out
+}
+
 func (c *connection) sendSystemNotifications(corrID json.RawMessage) {
 	items := []notifications.Notification{}
 	if c.server.opts.Notifications != nil {
@@ -1149,7 +1382,7 @@ func (h *Handler) broadcastAudioPosition(agentID string, seq, positionMs, update
 }
 
 func (h *Handler) broadcastAgents() {
-	agents := h.opts.Registry.Summaries(context.Background())
+	agents := h.agentSummaries()
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {
