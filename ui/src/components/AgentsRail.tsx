@@ -26,6 +26,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const getClosePreview = useStore((s) => s.getClosePreview);
   const closeAgent = useStore((s) => s.closeAgent);
   const renameAgent = useStore((s) => s.renameAgent);
+  const handOffAgent = useStore((s) => s.handOffAgent);
   const collapsed = useStore((s) => s.agentsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
   // Keep the full dock alive until the grid has finished contracting, so its
@@ -45,7 +46,9 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
     setCloseError('');
     try {
       const preview = await getClosePreview(id);
-      if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged) {
+      // A shared worktree always warrants the dialog: the user needs to be told
+      // the checkout is staying behind, and who is still in it.
+      if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged && !preview.cohabitants?.length) {
         const result = await closeAgent(id, false, true);
         if (result.error?.startsWith('submodules_block_worktree_removal')) {
           setDeleteWorktree(true);
@@ -123,6 +126,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
               onMarkUnread={() => markAgentUnread(id)}
               onRename={(name) => renameAgent(id, name)}
               onDelete={() => void requestDelete(id)}
+              onHandOff={() => handOffAgent(id)}
               dragging={id === draggedId}
               dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
               onDragStart={() => setDraggedId(id)}
@@ -204,7 +208,18 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
                   {confirmation.preview.targetRef && (
                     <section><strong>Integration target</strong><pre>{confirmation.preview.targetRef.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, '')}{typeof confirmation.preview.ahead === 'number' ? `\n${confirmation.preview.ahead} ahead · ${confirmation.preview.behind ?? 0} behind` : ''}</pre></section>
                   )}
-                  {confirmation.preview.kind === 'worktree' && (
+                  {confirmation.preview.cohabitants?.length ? (
+                    <section>
+                      <strong>Worktree is shared</strong>
+                      <p>
+                        {confirmation.preview.cohabitants.length === 1 ? 'Agent' : 'Agents'}{' '}
+                        <b>{confirmation.preview.cohabitants.join(', ')}</b>{' '}
+                        {confirmation.preview.cohabitants.length === 1 ? 'is' : 'are'} still working in{' '}
+                        <code>{agents[confirmation.id].workspace.cwd}</code>. Deleting this agent leaves the worktree and
+                        its branch in place; it is removed with the last agent that occupies it.
+                      </p>
+                    </section>
+                  ) : confirmation.preview.kind === 'worktree' && (
                     <label className="delete-worktree-option">
                       <input type="checkbox" checked={deleteWorktree} onChange={(e) => setDeleteWorktree(e.target.checked)} />
                       Delete worktree
@@ -249,6 +264,7 @@ function Row({
   onMarkUnread,
   onRename,
   onDelete,
+  onHandOff,
   dragging,
   dropPosition,
   onDragStart,
@@ -262,6 +278,7 @@ function Row({
   onMarkUnread: () => void;
   onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
+  onHandOff: () => void;
   dragging: boolean;
   dropPosition: 'before' | 'after' | null;
   onDragStart: () => void;
@@ -463,6 +480,9 @@ function Row({
           </button>
           <button type="button" role="menuitem" onClick={() => { beginRename(); setContextMenu(null); }}>
             Edit name
+          </button>
+          <button type="button" role="menuitem" onClick={() => { onHandOff(); setContextMenu(null); }}>
+            Hand off…
           </button>
           <button type="button" role="menuitem" onClick={() => openDetails(contextMenu)}>
             View details

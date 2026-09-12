@@ -90,18 +90,22 @@ type ResolvedLaunch struct {
 	Terminal *TerminalLaunch `json:"terminal,omitempty"`
 }
 type Spec struct {
-	Adapter        string              `json:"adapter"`
-	Agent          string              `json:"agent,omitempty"`
-	Harness        string              `json:"harness,omitempty"`
-	ACPArgs        []string            `json:"acpArgs,omitempty"`
-	TerminalArgs   []string            `json:"terminalArgs,omitempty"`
-	Workspace      workspace.Workspace `json:"workspace"`
-	Name           string              `json:"name,omitempty"`
-	Task           string              `json:"task,omitempty"`
-	SessionConfig  json.RawMessage     `json:"sessionConfig,omitempty"`
-	Preset         string              `json:"preset,omitempty"`
-	Profile        *ProfileSpec        `json:"profile,omitempty"`
-	ResolvedLaunch *ResolvedLaunch     `json:"resolvedLaunch,omitempty"`
+	Adapter       string              `json:"adapter"`
+	Agent         string              `json:"agent,omitempty"`
+	Harness       string              `json:"harness,omitempty"`
+	ACPArgs       []string            `json:"acpArgs,omitempty"`
+	TerminalArgs  []string            `json:"terminalArgs,omitempty"`
+	Workspace     workspace.Workspace `json:"workspace"`
+	Name          string              `json:"name,omitempty"`
+	Task          string              `json:"task,omitempty"`
+	SessionConfig json.RawMessage     `json:"sessionConfig,omitempty"`
+	Preset        string              `json:"preset,omitempty"`
+	// HandoffFrom is the agent id whose transcript should be rendered into this
+	// agent's first user message (see internal/handoff). It is recorded on the
+	// spec so a restored agent still shows where it came from.
+	HandoffFrom    string          `json:"handoffFrom,omitempty"`
+	Profile        *ProfileSpec    `json:"profile,omitempty"`
+	ResolvedLaunch *ResolvedLaunch `json:"resolvedLaunch,omitempty"`
 }
 
 // ProfileSpec carries the human-facing settings that identify and name a

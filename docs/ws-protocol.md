@@ -94,15 +94,28 @@ and only resizes when it is already running. Output and exit are durable `shell_
 
 `spawn_agent`'s `workspace.kind:'worktree'` provisions a real `git worktree` (by default a
 context-qualified `tandem/<feature>/<name>` branch) under
-`$TANDEM_HOME/worktrees/<repo>/<agent>/`; `kind:'existing'` validates the dir exists and
-isn't already occupied by a live agent. A failed provision (missing dir, git error, or a
-`kind:'existing'` collision) rejects the `spawn_agent` call — no agent is registered — with
-a structured error message (see below).
+`$TANDEM_HOME/worktrees/<repo>/<agent>/`; `kind:'existing'` validates only that the dir
+exists. A failed provision (missing dir, git error) rejects the `spawn_agent` call — no
+agent is registered — with a structured error message (see below).
+
+Naming a directory another open agent already works in is allowed and **shares** it: if
+that occupant holds a Tandem worktree, the new agent inherits its whole workspace
+descriptor (repo, branch, integration target) instead of degrading to an anonymous
+existing dir. The UI warns and names the other occupants; see spawn-and-workspaces.md's
+"Sharing a worktree".
+
+`spawn_agent`'s `spec.handoffFrom` is an agent id whose transcript is rendered into the new
+agent's first user message (`internal/handoff`). The rendering is mechanical — no model is
+invoked — and the result is dispatched as a prompt rather than persisted onto the spec. An
+unknown or transcript-less source rejects the spawn before anything is provisioned.
 
 `close_agent { force?, deinitSubmodules? }` removes the worktree checkout but **keeps the branch**. If the
 worktree has uncommitted changes and `force` isn't set, the close is **refused** — the agent
 keeps running, no `agent_closed` is broadcast — with a `dirty_worktree` error; `force:true`
-overrides and removes the checkout anyway. `kind:'existing'` workspaces just detach (no-op).
+overrides and removes the checkout anyway. `kind:'existing'` workspaces just detach (no-op). A worktree
+shared with other open agents is also kept: it is removed with its last occupant.
+`get_close_preview` returns `cohabitants`, the names of the other open agents in the same
+directory, so the UI can say so before the close.
 If Git refuses removal because initialized submodules are present, Tandem returns
 `submodules_block_worktree_removal`. A subsequent `force:true, deinitSubmodules:true` request
 explicitly runs `git submodule deinit -f --all` before retrying; callers must show the
@@ -110,9 +123,7 @@ submodule preflight because this can discard uncommitted submodule changes.
 
 **Structured errors:** today `ack.error` is still a plain string (no wire shape change), but
 WorkspaceManager errors are conventionally prefixed `"<code>: <detail>"` so a client can
-`error.split(':')[0]` to branch on the reason. Codes in use: `no_such_dir`, `dir_occupied`
-(the UI's cue to offer "open a worktree instead" / "attach to the existing agent" — see
-spawn-and-workspaces.md's Collision section), `dirty_worktree`, `worktree_exists`,
+`error.split(':')[0]` to branch on the reason. Codes in use: `no_such_dir`, `dirty_worktree`, `worktree_exists`,
 `ref_not_found`, `invalid_branch`, `branch_exists`, `branch_missing`, and
 `branch_checked_out`.
 

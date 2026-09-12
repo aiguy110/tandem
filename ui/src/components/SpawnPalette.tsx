@@ -92,8 +92,7 @@ function proposedBranch(ref: GitRefInfo | undefined, name: string): string {
 // Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs.
 //   Enter               → spawn worktree defaults + focus jumps
 //   Tab → type task → Enter → spawn AND dispatch
-//   ⌘/Ctrl+Enter        → reveal advanced (adapter / workspace mode / Git refs / name)
-// Structured spawn errors (dir_occupied) offer worktree-instead / attach.
+//   ⌘/Ctrl+Enter        → reveal advanced (adapter / workspace mode / Git refs / name / hand-off)
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
   const spawn = useStore((s) => s.spawn);
@@ -106,6 +105,7 @@ export function SpawnPalette() {
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.agents);
+  const spawnHandoffFrom = useStore((s) => s.spawnHandoffFrom);
   const agentCatalog = useStore((s) => s.agentCatalog);
   const harnesses = useMemo(() => {
     if (!agentCatalog) return FALLBACK_HARNESSES;
@@ -134,7 +134,13 @@ export function SpawnPalette() {
   const [adapter, setAdapter] = useState<'acp' | 'pty'>('acp');
   const [agent, setAgent] = useState<string>('agent:claude');
   const [terminalArgsText, setTerminalArgsText] = useState('');
-  const [workspaceMode, setWorkspaceMode] = useState<'create' | 'attach' | 'existing'>('create');
+  const [workspaceMode, setWorkspaceMode] = useState<'create' | 'attach' | 'existing' | 'join'>('create');
+  // Agent whose transcript seeds the new agent's first message ('' = none, the
+  // default). Pre-set when the rail's "Hand off" action opened this palette.
+  const [parentSession, setParentSession] = useState(spawnHandoffFrom ?? '');
+  // The two things a parent session offers — its transcript and its worktree —
+  // are independent; either can be taken without the other.
+  const [includeTranscript, setIncludeTranscript] = useState(true);
   const [sourceRef, setSourceRef] = useState('');
   const [attachBranchRef, setAttachBranchRef] = useState('');
   const [agentBranch, setAgentBranch] = useState('');
@@ -177,6 +183,45 @@ export function SpawnPalette() {
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
   const agentSlug = selectedHarness?.agent ?? agent.replace(/^agent:/, '');
+  const parentAgent = parentSession ? agents[parentSession] : undefined;
+  // Sessions offered as a hand-off source, newest names last is unhelpful here,
+  // so order them the way the rail does: alphabetically by display name.
+  const parentCandidates = useMemo(
+    () => Object.values(agents).sort((a, b) => a.name.localeCompare(b.name)),
+    [agents],
+  );
+  const joinCwd = parentAgent?.workspace.cwd ?? '';
+  // Agents already working in whichever directory this spawn would land in.
+  // Sharing is allowed (that is the point of a hand-off), but it is never
+  // implicit, so the form says who else is there.
+  const targetCwd = workspaceMode === 'join' ? joinCwd : workspaceMode === 'existing' ? (selectedDir?.path ?? '') : '';
+  // "existing" and "join" both adopt a checkout as-is, so the ref pickers (start
+  // point, merge target, agent branch) only apply to the two provisioning modes.
+  const usesGitRefs = workspaceMode === 'create' || workspaceMode === 'attach';
+  const cohabitants = targetCwd
+    ? Object.values(agents).filter((a) => a.workspace.cwd === targetCwd).map((a) => a.name).sort()
+    : [];
+  // The rail's "Hand off" action opens this palette with a source already
+  // chosen. A hand-off is never a quick-spawn — it needs the source session and
+  // usually its worktree — so jump straight to the advanced form on that repo.
+  const handoffSeeded = useRef(false);
+  useEffect(() => {
+    if (handoffSeeded.current || !spawnHandoffFrom) return;
+    const source = agents[spawnHandoffFrom];
+    if (!source || dirs.length === 0) return;
+    handoffSeeded.current = true;
+    setParentSession(spawnHandoffFrom);
+    const dir = dirs.find((d) => d.path === source.workspace.repoPath);
+    if (dir) setQuery(dir.path);
+    setAdvanced(true);
+    if (source.workspace.cwd) setWorkspaceMode('join');
+  }, [spawnHandoffFrom, agents, dirs]);
+  // "Continue in the source's worktree" stops meaning anything once the source
+  // is cleared; fall back to the ordinary isolated worktree.
+  useEffect(() => {
+    if (workspaceMode === 'join' && !joinCwd) setWorkspaceMode('create');
+  }, [workspaceMode, joinCwd]);
+
   const harnessForProject = (project: string) => {
     const saved = loadProjectAgent(project);
     const catalogDefault = agentCatalog?.defaultHarness
@@ -405,7 +450,10 @@ export function SpawnPalette() {
     const spawnHarnessID = spawnHarness?.harness;
     const spawnAdapter = advanced ? adapter : (spawnHarness?.hasAcp ? 'acp' : 'pty');
     const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : advanced ? workspaceMode : 'create';
-    const cwd = existingCwd ?? dir.path;
+    // "join" resolves to the source agent's checkout: the daemon recognizes an
+    // already-occupied directory and lets the new agent share that workspace
+    // (branch, merge target and all) instead of provisioning its own.
+    const cwd = existingCwd ?? (mode === 'join' ? joinCwd : dir.path);
     const workSource = advanced ? (mode === 'attach' ? selectedAttachRef : selectedGitRef) : undefined;
     let effectiveOptions = advanced ? spawnOptions : null;
     if (spawnAdapter === 'acp' && !effectiveOptions) {
@@ -433,7 +481,7 @@ export function SpawnPalette() {
       terminalArgs: spawnAdapter === 'pty'
         ? (advanced ? terminalArgsText : '').split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
-      workspace: mode === 'existing'
+      workspace: mode === 'existing' || mode === 'join'
         ? { kind: 'existing', cwd }
         : {
             kind: 'worktree',
@@ -467,6 +515,7 @@ export function SpawnPalette() {
           : {}),
         snapshot: spawnSnapshot || undefined,
       },
+      handoffFrom: parentSession && includeTranscript ? parentSession : undefined,
     };
     saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
     if (advanced && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
@@ -656,6 +705,33 @@ export function SpawnPalette() {
                 {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>
+            <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Hand-off</div>
+            <label style={{ gridColumn: '1 / -1' }}>
+              Continue from session <span className="sub">(optional)</span>
+              <select value={parentSession} onChange={(e) => setParentSession(e.target.value)}>
+                <option value="">None — start a fresh conversation</option>
+                {parentCandidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}{candidate.workspace.branch ? ` · ${candidate.workspace.branch}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {parentAgent && (
+              <>
+                <label className="delete-worktree-option" style={{ gridColumn: '1 / -1' }}>
+                  <input type="checkbox" checked={includeTranscript} onChange={(e) => setIncludeTranscript(e.target.checked)} />
+                  Start with a hand-off transcript of {parentAgent.name}'s conversation
+                </label>
+                {includeTranscript && (
+                  <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                    The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
+                    conversation — every user and assistant message verbatim, intervening tool calls summarized. It is
+                    built mechanically from the event log, so no model is asked to summarize anything.
+                  </div>
+                )}
+              </>
+            )}
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Repo settings</div>
             <label>
               Name
@@ -675,6 +751,9 @@ export function SpawnPalette() {
                 <option value="create">New agent branch</option>
                 <option value="attach">Continue existing branch</option>
                 <option value="existing">Use existing checkout</option>
+                <option value="join" disabled={!joinCwd}>
+                    {parentAgent ? `Continue in ${parentAgent.name}'s worktree` : "Continue in the parent session's worktree"}
+                </option>
               </select>
             </label>
             {workspaceMode === 'attach' && (
@@ -692,7 +771,7 @@ export function SpawnPalette() {
                 />
               </label>
             )}
-            {workspaceMode !== 'existing' && (
+            {usesGitRefs && (
               <label style={{ gridColumn: '1 / -1' }}>
                 {workspaceMode === 'attach' ? 'Merge target' : 'Start from / merge target'}
                 <GitRefPicker refs={gitRefs} value={sourceRef} onChange={setSourceRef} busy={gitRefsBusy} />
@@ -709,7 +788,20 @@ export function SpawnPalette() {
                 The agent will use <code>{selectedDir?.path}</code> directly. No isolated branch is created.
               </div>
             )}
-            {workspaceMode !== 'existing' && selectedGitRef && (
+            {workspaceMode === 'join' && (
+              <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
+                The agent will work in <code>{joinCwd}</code>, the checkout {parentAgent?.name} is already using —
+                including any uncommitted changes left there. No new worktree or branch is created.
+              </div>
+            )}
+            {cohabitants.length > 0 && (
+              <div className="branch-warning" style={{ gridColumn: '1 / -1' }}>
+                This worktree is already occupied by {cohabitants.length === 1 ? 'agent' : 'agents'}{' '}
+                <b>{cohabitants.join(', ')}</b>. Agents sharing a checkout can overwrite each other's edits, and the
+                worktree will not be removed until the last of them is deleted.
+              </div>
+            )}
+            {usesGitRefs && selectedGitRef && (
               <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
                 <div>
                   {workspaceMode === 'create' ? <>Starting at <b>{selectedGitRef.displayName}</b> @ <code>{selectedGitRef.commit.slice(0, 8)}</code></> : <>Attaching <b>{selectedAttachRef?.displayName ?? '—'}</b>; merge target <b>{selectedGitRef.displayName}</b></>}
@@ -734,8 +826,8 @@ export function SpawnPalette() {
                 )}
               </div>
             )}
-            {gitRefsError && workspaceMode !== 'existing' && <div className="modal-err" style={{ gridColumn: '1 / -1' }}>{gitRefsError}</div>}
-            {workspaceMode !== 'existing' && (
+            {gitRefsError && usesGitRefs && <div className="modal-err" style={{ gridColumn: '1 / -1' }}>{gitRefsError}</div>}
+            {usesGitRefs && (
               <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end' }}>
                 <button type="button" className="btn ghost" onClick={() => setGitRefsRefresh((value) => value + 1)} disabled={gitRefsBusy}>Refresh local refs</button>
               </div>
@@ -746,21 +838,6 @@ export function SpawnPalette() {
         {error && (
           <div className="modal-err">
             {error.msg}
-            {error.code === 'dir_occupied' && (
-              <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={() => void doSpawn(error.dir, true)}>
-                  Open a worktree instead
-                </button>
-                {(() => {
-                  const occ = Object.values(agents).find((a) => a.workspace.cwd === error.dir.path);
-                  return occ ? (
-                    <button className="btn" onClick={() => { focus(occ.id); setModal('none'); }}>
-                      Attach to {occ.name}
-                    </button>
-                  ) : null;
-                })()}
-              </div>
-            )}
           </div>
         )}
         {advanced ? (

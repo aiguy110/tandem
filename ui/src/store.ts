@@ -214,6 +214,9 @@ interface StoreState {
   panesByAgent: Record<string, PaneId>;
   pane: PaneId;
   modal: ModalKind;
+  // Agent the spawn palette should offer to hand off from ('' / null = none).
+  // Set by the rail's "Hand off" action; cleared whenever the modal changes.
+  spawnHandoffFrom: string | null;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
@@ -257,6 +260,8 @@ interface StoreState {
   toggleAgentsRail: () => void;
   toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
+  // Open the spawn palette pre-selected to hand off from this agent.
+  handOffAgent: (agentId: string) => void;
   toggleInspector: () => void;
   toggleThreadAudio: (agentId: string) => void;
   // The durable half of playback-position restore: ui/src/audio/engine.ts
@@ -914,6 +919,7 @@ export const useStore = create<StoreState>((set, get) => {
     panesByAgent: initialAgentPanes(),
     pane: 'chat',
     modal: 'none',
+    spawnHandoffFrom: null,
     inspectorOpen: false,
     dirs: [],
     agentCatalog: null,
@@ -1051,7 +1057,11 @@ export const useStore = create<StoreState>((set, get) => {
       }
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
-      set({ modal: m });
+      set({ modal: m, spawnHandoffFrom: null });
+    },
+    handOffAgent: (agentId) => {
+      get().setModal('spawn');
+      set({ spawnHandoffFrom: agentId });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
     toggleThreadAudio: (agentId) => {

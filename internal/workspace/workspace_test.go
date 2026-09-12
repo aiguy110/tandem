@@ -62,18 +62,21 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 	ctx := context.Background()
 	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
 
-	t.Run("existing directory validation and collision", func(t *testing.T) {
-		_, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindExisting, CWD: filepath.Join(f.root, "missing")}, "x", nil)
+	t.Run("existing directory validation", func(t *testing.T) {
+		_, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindExisting, CWD: filepath.Join(f.root, "missing")}, "x")
 		if !workspace.IsCode(err, "no_such_dir") {
 			t.Fatalf("got %v", err)
 		}
-		got, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindExisting, CWD: f.repo}, "x", func(dir string) (string, bool) { return "live-1", dir == f.repo })
-		if !workspace.IsCode(err, "dir_occupied") {
+		// Occupancy is no longer refused here: two agents may share a checkout
+		// (a hand-off picks up uncommitted work in place), and the registry
+		// owns both the warning and the shared-teardown accounting.
+		got, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindExisting, CWD: f.repo}, "x")
+		if err != nil || got.CWD != f.repo {
 			t.Fatalf("got result=%+v err=%v", got, err)
 		}
 	})
 
-	a, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "wt-a", nil)
+	a, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "wt-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +90,7 @@ func TestWorkspaceLifecycleBlackBox(t *testing.T) {
 		t.Fatalf("source checkout changed: %s", got)
 	}
 
-	b, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "wt-b", nil)
+	b, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "wt-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +151,7 @@ func TestTeardownDeinitializesSubmodulesOnlyAfterExplicitConfirmation(t *testing
 	git(t, f.repo, "commit", "-qam", "add submodule")
 
 	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
-	wt, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "with-submodule", nil)
+	wt, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "with-submodule")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +202,7 @@ func TestDiffSeparatesUncommittedAndCommittedChanges(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
-	provisioned, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "diff-agent", nil)
+	provisioned, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "diff-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,13 +251,13 @@ func TestFeatureAwareProvisionDiscoveryAndState(t *testing.T) {
 	if main == nil || !main.IsCurrent || main.CheckedOutAt != f.repo || feature == nil || feature.Commit != f.feature || feature.Kind != workspace.RefLocalBranch {
 		t.Fatalf("refs=%+v", refs)
 	}
-	_, err = m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, Branch: "main", BranchMode: "attach"}, "checked", nil)
+	_, err = m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, Branch: "main", BranchMode: "attach"}, "checked")
 	if !workspace.IsCode(err, "branch_checked_out") {
 		t.Fatalf("got %v", err)
 	}
 
 	ws := workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "create", Source: &workspace.Source{Ref: "refs/heads/feature/migration"}, Integration: &workspace.Integration{Kind: workspace.RefLocalBranch, Ref: "refs/heads/feature/migration"}}
-	result, err := m.Provision(ctx, ws, "wt-feature", nil)
+	result, err := m.Provision(ctx, ws, "wt-feature")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,14 +287,14 @@ func TestFeatureAwareProvisionDiscoveryAndState(t *testing.T) {
 	if p.Ahead == nil || *p.Ahead != 1 || p.Behind == nil || *p.Behind != 1 || !strings.Contains(p.Unmerged, "agent feature work") {
 		t.Fatalf("preview=%+v", p)
 	}
-	_, err = m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "create", Branch: result.Workspace.Branch, Source: &workspace.Source{Ref: f.feature}}, "collision", nil)
+	_, err = m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "create", Branch: result.Workspace.Branch, Source: &workspace.Source{Ref: f.feature}}, "collision")
 	if !workspace.IsCode(err, "branch_exists") {
 		t.Fatalf("got %v", err)
 	}
 	if err = m.Teardown(ctx, result.Workspace, result.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
-	attached, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "attach", Branch: result.Workspace.Branch, Integration: result.Workspace.Integration}, "attached", nil)
+	attached, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo, BranchMode: "attach", Branch: result.Workspace.Branch, Integration: result.Workspace.Integration}, "attached")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +308,7 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 	ctx := context.Background()
 	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
 	git(t, f.repo, "branch", "tandem/main/auto", "main")
-	auto, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "auto", nil)
+	auto, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "auto")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +318,7 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 	if err = m.Teardown(ctx, auto.Workspace, auto.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
-	first, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same", nil)
+	first, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +326,7 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 	if err = m.Teardown(ctx, first.Workspace, first.CWD, false, false); err != nil {
 		t.Fatal(err)
 	}
-	second, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same-2", nil)
+	second, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "same-2")
 	if err != nil {
 		t.Fatal(err)
 	}

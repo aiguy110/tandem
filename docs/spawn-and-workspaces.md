@@ -55,6 +55,7 @@ interface SpawnSpec {
     | { kind: 'existing'; cwd: string };  // reuse a dir as-is (non-git, or opt-in)
   name?: string;                          // auto: einstein-1, curie-2… (renamable)
   task?: string;                          // optional initial prompt, dispatched on spawn
+  handoffFrom?: string;                   // agent id to continue from (see Hand-off)
   preset?: string;                        // reserved legacy field
 }
 ```
@@ -200,10 +201,40 @@ never clobber each other. It's still just a different host directory.
 
 Just `cd` into the directory (`kind: 'existing'`).
 
-### Collision
+### Sharing a worktree
 
-Targeting a dir already occupied by a live agent (or a non-git dir with one) → warn and
-offer "open a worktree instead" or "attach to the existing agent."
+Targeting a dir another open agent already works in is allowed, not refused. The joining
+agent **inherits that agent's workspace descriptor** — repo, branch, merge target — so a
+shared Tandem worktree keeps behaving like the worktree it is, rather than collapsing into
+an anonymous existing dir.
+
+Sharing is never implicit: the spawn form names the other occupants before launching, and
+the delete dialog names them again when a worktree is being left behind. The checkout is
+torn down with its **last** occupant; until then a close removes the agent and keeps the
+worktree and branch (`ClosePreview.cohabitants` is what the warning is built from).
+
+The motivating case is a hand-off: an agent that stops mid-turn usually leaves uncommitted
+work in place, and the agent taking over needs to be standing in it.
+
+## Hand-off
+
+A hand-off moves a conversation to a different agent harness without asking any model to
+summarize it. `internal/handoff` walks the source agent's durable event log and renders a
+**Hand-off Transcript**: every user and assistant message verbatim and in order, each
+intervening tool call reduced to one `- <title> [status]` line, private reasoning dropped,
+runaway tool loops capped. A short preamble explains that the receiving agent is taking
+over an unfinished session and states the working directory and branch.
+
+That text is dispatched as the new agent's first user message (with any task typed at spawn
+appended under "New instruction from the user"). It is deliberately not written into the
+persisted `SpawnSpec` — the transcript can be large, and the spec is re-marshalled on every
+restore.
+
+Surfaces: the spawn form's "Continue from session" picker (default: none), and **Hand off…**
+in the right-click menu on a rail agent card, which opens that form with the session already
+chosen and its worktree pre-selected. The two things a parent session offers — its
+transcript and its worktree — are independent: the transcript is a checkbox, the worktree a
+Git-workspace mode, and either can be taken without the other.
 
 ## Lifecycle
 

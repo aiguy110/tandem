@@ -58,11 +58,14 @@ type Manager struct {
 	worktreesDir string
 	git          GitRunner
 }
-type OccupantFunc func(absDir string) (agentName string, occupied bool)
 type ProvisionResult struct {
 	CWD           string
 	Workspace     Workspace
 	CreatedBranch bool
+	// Shared marks a checkout this agent joined rather than provisioned. It is
+	// owned by an earlier agent, so neither rollback nor teardown may touch it
+	// on this agent's behalf.
+	Shared bool
 }
 
 type Error struct{ Code, Detail string }
@@ -100,9 +103,9 @@ func NewWithGit(config Config, git GitRunner) *Manager {
 	return &Manager{worktreesDir: config.WorktreesDir, git: git}
 }
 
-func (m *Manager) Provision(ctx context.Context, ws Workspace, agentName string, occupant OccupantFunc) (ProvisionResult, error) {
+func (m *Manager) Provision(ctx context.Context, ws Workspace, agentName string) (ProvisionResult, error) {
 	if ws.Kind == KindExisting {
-		return m.provisionExisting(ws, occupant)
+		return m.provisionExisting(ws)
 	}
 	if ws.Kind != KindWorktree {
 		return ProvisionResult{}, &Error{"invalid_workspace", fmt.Sprintf("unknown workspace kind: %s", ws.Kind)}
@@ -110,7 +113,7 @@ func (m *Manager) Provision(ctx context.Context, ws Workspace, agentName string,
 	return m.provisionWorktree(ctx, ws, agentName)
 }
 
-func (m *Manager) provisionExisting(ws Workspace, occupant OccupantFunc) (ProvisionResult, error) {
+func (m *Manager) provisionExisting(ws Workspace) (ProvisionResult, error) {
 	cwd, err := filepath.Abs(ws.CWD)
 	if err != nil {
 		return ProvisionResult{}, err
@@ -118,11 +121,6 @@ func (m *Manager) provisionExisting(ws Workspace, occupant OccupantFunc) (Provis
 	info, statErr := os.Stat(cwd)
 	if statErr != nil || !info.IsDir() {
 		return ProvisionResult{}, &Error{"no_such_dir", "directory does not exist: " + cwd}
-	}
-	if occupant != nil {
-		if name, ok := occupant(cwd); ok {
-			return ProvisionResult{}, &Error{"dir_occupied", fmt.Sprintf(`%s is already in use by agent %q — open a worktree instead, or attach to the existing agent`, cwd, name)}
-		}
 	}
 	return ProvisionResult{CWD: cwd, Workspace: Workspace{Kind: KindExisting, CWD: cwd}}, nil
 }
@@ -289,6 +287,9 @@ type ClosePreview struct {
 	Ahead       *int                    `json:"ahead,omitempty"`
 	Behind      *int                    `json:"behind,omitempty"`
 	NotGitRepo  bool                    `json:"notGitRepo,omitempty"`
+	// Cohabitants names other open agents working in the same directory. While
+	// any remain, closing this agent leaves the checkout in place.
+	Cohabitants []string `json:"cohabitants,omitempty"`
 }
 
 // SubmoduleClosePreview identifies work that could be lost when a submodule is
