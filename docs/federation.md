@@ -12,6 +12,27 @@ The URL is the master's normal HTTP origin. `https://` uses an encrypted WebSock
 agent traffic, terminal contents, and browser frames are then unencrypted. Prefer TLS
 or a private authenticated network such as Tailscale whenever traffic leaves one host.
 
+## Reaching a master through a proxy
+
+When a slave cannot dial its master directly -- a NAT'd or firewalled network, or a
+master reachable only inside an SSH tunnel -- set `TANDEM_MASTER_PROXY` to a SOCKS5
+URL on the slave:
+
+```sh
+TANDEM_MASTER_PROXY=socks5://127.0.0.1:1080 tandem --master https://tandem.example.net
+```
+
+Credentials are accepted as URL userinfo (`socks5://user:pass@host:1080`) and are
+redacted by `tandem debug config`. Both halves of the transport honor the setting: the
+registration/status calls and the durable WebSocket tunnel. Nothing else changes --
+inbound serving, agent processes, and the browser subsystem dial as they always did,
+and a master never dials out at all.
+
+Host names in the master URL are resolved by the proxy rather than locally, so a name
+that only resolves on the far side of the tunnel still works. SOCKS5 sits below TLS, so
+an `https://` master still terminates its own TLS end to end and the proxy sees only
+ciphertext.
+
 ## Registration and trust
 
 The slave makes an outbound connection to the master, so the master does not need to

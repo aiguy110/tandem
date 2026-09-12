@@ -44,6 +44,7 @@ For Go changes, run the relevant package tests or `go test ./...`.
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_UI_DIR` | — | Static UI dist to serve (else a placeholder page) |
+| `TANDEM_MASTER_PROXY` | — | SOCKS5 URL for a slave's outbound dials to its `--master` (e.g. `socks5://127.0.0.1:1080`) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
 | `TANDEM_NODE_CMD` | `node` | Node launcher for external ACP and browser adapters |
 | `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches (primarily compatibility tests) |
