@@ -296,8 +296,13 @@ body.dock-resizing .app { transition: none; }
 .agent-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
 .agent-host-divider { display: flex; align-items: center; gap: 7px; margin: 7px 9px 3px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
 .agent-host-divider::before, .agent-host-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
-.resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--text-dim); font-size: var(--fs-sm); }
-.resume-host select, .spawn-host select { flex: 1; }
+.resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
+.resume-host select, .spawn-host select {
+  flex: 1; height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text); font: inherit; font-size: var(--fs-sm); font-family: var(--font-mono);
+}
+.resume-host select:hover, .spawn-host select:hover { border-color: var(--border-strong); }
+.resume-host select:focus, .spawn-host select:focus { outline: none; border-color: var(--agent); }
 .resume-host-badge { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); }
 .agent-rename-input {
   width: 100%; min-width: 0; padding: 1px 4px; font: inherit; color: var(--text);
