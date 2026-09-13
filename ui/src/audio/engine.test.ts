@@ -55,6 +55,29 @@ describe('audio engine', () => {
     await vi.waitFor(() => expect(el!.src).toContain('20'));
   });
 
+  it('replays an already-played section without re-fetching or loading a revoked URL', async () => {
+    setPlaylist('agent-1', [10, 20]);
+
+    play('agent-1', 10);
+    const el = __getElementForTests()!;
+    await vi.waitFor(() => expect(el.src).toContain('10'));
+    const firstUrl = el.src;
+
+    // A second section takes the element over -- exactly what a freshly
+    // rendered live reply does when it interrupts an earlier one.
+    play('agent-1', 20);
+    await vi.waitFor(() => expect(el.src).toContain('20'));
+
+    // The first clip is still the cache entry for seq 10, so it must not have
+    // been revoked out from under a replay.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(firstUrl);
+
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(el.src).toBe(firstUrl));
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    expect(mockRenderMessageAudio).toHaveBeenCalledTimes(2); // cache hit, not a third render
+  });
+
   it('advances to the next playlist entry when a section ends', async () => {
     setPlaylist('agent-1', [10, 20]);
     play('agent-1', 10);

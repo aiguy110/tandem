@@ -518,8 +518,16 @@ export function seedDurations(agentId: string, durations: Record<number, number>
   setState({ durations: { ...durations, ...state.durations } });
 }
 
+// Object URLs in `urlCache` are the cache — a clip is replayable precisely
+// because its URL is still resolvable. Revoking the outgoing clip's URL when
+// the next section loaded (it stays in `urlCache` under its own key) made any
+// replay of an already-played section load a dead blob: silent failure, or a
+// 'Playback failed' error. So a URL is only ever revoked once it is no longer
+// the cache entry for its clip (superseded by a re-render) and no longer the
+// one the element is pointing at.
 function revokeIfUnused(url: string | null) {
   if (!url || url === liveUrl) return;
+  for (const cached of urlCache.values()) if (cached === url) return;
   URL.revokeObjectURL(url);
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getGlobalDuration, play, seekGlobal, setKeepaliveEnabled, skip, subscribeFrame, toggle, useEngineState } from '../../audio/engine';
 import { formatAudioTime } from './InlineAudioBar';
 
@@ -44,20 +44,25 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
   const isPlaying = active && s.status === 'playing';
   const sectionLabel = active && s.index >= 0 ? `${s.index + 1} / ${playlist.length}` : `– / ${playlist.length}`;
 
+  // Shared by the rAF loop and by dragging: while a drag is in flight the
+  // frame loop is suppressed (the element's currentTime lags the seeks we're
+  // issuing, so it would fight the thumb), which means the drag itself has to
+  // paint — otherwise the track sits frozen until the pointer is released.
+  const write = useCallback((global: number) => {
+    const dur = totalDuration;
+    const fraction = dur > 0 ? Math.min(1, Math.max(0, global / dur)) : 0;
+    trackRef.current?.style.setProperty('--played', String(fraction));
+    if (elapsedRef.current) elapsedRef.current.textContent = formatAudioTime(global);
+    if (remainingRef.current) remainingRef.current.textContent = `-${formatAudioTime(Math.max(0, dur - global))}`;
+  }, [totalDuration]);
+
   useEffect(() => {
     if (!active) return;
-    const write = (global: number) => {
-      const dur = totalDuration;
-      const fraction = dur > 0 ? Math.min(1, Math.max(0, global / dur)) : 0;
-      trackRef.current?.style.setProperty('--played', String(fraction));
-      if (elapsedRef.current) elapsedRef.current.textContent = formatAudioTime(global);
-      if (remainingRef.current) remainingRef.current.textContent = `-${formatAudioTime(Math.max(0, dur - global))}`;
-    };
     return subscribeFrame((_position, global) => {
       if (dragging.current) return;
       write(global);
     });
-  }, [active, totalDuration, s.index]);
+  }, [active, write, s.index]);
 
   if (!active || playlist.length === 0) return null;
 
@@ -66,7 +71,9 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
     if (!track) return;
     const rect = track.getBoundingClientRect();
     const fraction = rect.width > 0 ? Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)) : 0;
-    seekGlobal(fraction * totalDuration);
+    const global = fraction * totalDuration;
+    write(global);
+    seekGlobal(global);
   };
 
   if (collapsed) {
