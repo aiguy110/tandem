@@ -306,6 +306,16 @@ body.dock-resizing .app { transition: none; }
   color: var(--text-dim); font: 600 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .06em;
 }
 .agent-host-group:first-child .agent-host-divider { border-top: none; }
+.agent-host-link {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 1px 6px 1px 5px; border: 1px solid var(--border); border-radius: 999px;
+  font: 600 var(--fs-xs) var(--font-mono); letter-spacing: .04em;
+}
+.agent-host-link-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.agent-host-link.link-online { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.agent-host-link.link-pending { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.agent-host-link.link-rejected { color: var(--err); background: var(--err-soft); border-color: transparent; }
+.agent-host-link.link-offline { color: var(--text-faint); }
 .resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
 .resume-host select, .spawn-host select {
   flex: 1; height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border);

@@ -3,7 +3,7 @@ import { usePresence, useValuePresence } from '../transitions';
 import { LOCAL_HOST_ID, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { AgentView } from '../store';
-import type { ClosePreview } from '../wire';
+import type { ClosePreview, FederationHost } from '../wire';
 
 // Badge color per severity, matching the Notifications panel (red > yellow > green).
 const SEVERITY_CLASS: Record<NotifSeverity, string> = {
@@ -36,7 +36,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const federationGrouping = hosts.some((host) => !host.local && ['connected', 'accepted', 'offline'].includes(host.status ?? ''));
   const displayedGroups = federationGrouping
     ? groupedAgentRows(order, agents, hosts)
-    : [{ hostId: 'all', label: '', ids: order }];
+    : [{ hostId: 'all', label: '', link: null, ids: order }];
   // Keep the full dock alive until the grid has finished contracting, so its
   // contents stay clipped by the shrinking dock rather than disappearing at
   // the start of the transition.
@@ -144,7 +144,17 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
             // Each group is its own box so its divider sticks only for as long
             // as the group is on screen: the next one pushes it out at the top.
             <section className="agent-host-group" key={group.hostId}>
-              {federationGrouping && <div className="agent-host-divider"><span>{group.label}</span></div>}
+              {federationGrouping && (
+                <div className="agent-host-divider">
+                  <span>{group.label}</span>
+                  {group.link && (
+                    <span className={`agent-host-link ${group.link.tone}`} title={group.link.title}>
+                      <span className="agent-host-link-dot" />
+                      {group.link.label}
+                    </span>
+                  )}
+                </div>
+              )}
               {group.ids.map((id) => (
                 <Row
                   key={id}
@@ -287,15 +297,35 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   );
 }
 
-function groupedAgentRows(order: string[], agents: Record<string, AgentView>, hosts: { id: string; name?: string; local?: boolean }[]): { hostId: string; label: string; ids: string[] }[] {
-  const groups = new Map<string, { hostId: string; label: string; ids: string[] }>();
+// A remote host's rows survive its tunnel dropping (the master keeps the last
+// snapshot), so each remote divider carries a link badge saying whether what
+// is listed under it is live or the last thing that host reported.
+function hostLinkBadge(status: FederationHost['status']): HostLink {
+  switch (status) {
+    case 'connected':
+      return { label: 'online', tone: 'link-online', title: 'Connected — this host is reachable and its agents are live' };
+    case 'pending':
+      return { label: 'pending', tone: 'link-pending', title: 'Awaiting approval — this host has requested to join' };
+    case 'rejected':
+      return { label: 'rejected', tone: 'link-rejected', title: 'Rejected — this host was refused' };
+    default:
+      return { label: 'offline', tone: 'link-offline', title: 'Disconnected — showing the last state this host reported' };
+  }
+}
+
+type HostLink = { label: string; tone: string; title: string };
+type HostGroup = { hostId: string; label: string; link: HostLink | null; ids: string[] };
+
+function groupedAgentRows(order: string[], agents: Record<string, AgentView>, hosts: FederationHost[]): HostGroup[] {
+  const groups = new Map<string, HostGroup>();
   for (const id of order) {
     const agent = agents[id];
     if (!agent) continue;
     const hostId = agent.hostId ?? LOCAL_HOST_ID;
     const configured = hosts.find((host) => host.id === hostId);
-    const label = configured?.local || hostId === LOCAL_HOST_ID ? 'This host' : agent.hostName || configured?.name || hostId;
-    const group = groups.get(hostId) ?? { hostId, label, ids: [] };
+    const local = configured?.local || hostId === LOCAL_HOST_ID;
+    const label = local ? 'This host' : agent.hostName || configured?.name || hostId;
+    const group = groups.get(hostId) ?? { hostId, label, link: local ? null : hostLinkBadge(configured?.status), ids: [] };
     group.ids.push(id);
     groups.set(hostId, group);
   }
