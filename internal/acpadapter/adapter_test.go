@@ -326,6 +326,19 @@ func TestAsideForksAndWrapsForkUpdates(t *testing.T) {
 	}
 }
 
+// An interrupt that lands before the prompt is dispatched settles the turn as
+// cancelled, and must not carry over into the turn the user sends next.
+func TestInterruptedTurnDoesNotLeakIntoTheNextPrompt(t *testing.T) {
+	a := startMock(t, nil)
+	if err := a.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := a.Aside(context.Background(), "aside-after-interrupt", []PromptBlock{{Type: "text", Text: "DERISK_ASIDE"}})
+	if err != nil || stop != "end_turn" {
+		t.Fatalf("Aside() after an idle interrupt = %q, %v", stop, err)
+	}
+}
+
 func TestInterruptCancelsActiveAsideFork(t *testing.T) {
 	a := startMock(t, nil)
 	done := make(chan error, 1)
@@ -337,7 +350,12 @@ func TestInterruptCancelsActiveAsideFork(t *testing.T) {
 		done <- err
 	}()
 
-	waitEvent(t, a, "status", func(e map[string]any) bool { return e["status"] == "working" })
+	// Wait for the fork's turn to be in flight rather than for the local
+	// "working" status, which the adapter emits before session/prompt is sent.
+	waitEvent(t, a, "aside_event", func(event map[string]any) bool {
+		inner, _ := event["event"].(map[string]any)
+		return event["asideId"] == "aside-cancel" && inner["text"] == "Working on it."
+	})
 	if err := a.Interrupt(); err != nil {
 		t.Fatal(err)
 	}

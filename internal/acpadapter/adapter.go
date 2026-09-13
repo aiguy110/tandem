@@ -136,6 +136,7 @@ type Adapter struct {
 	serviceWG      sync.WaitGroup
 	serviceDone    bool
 	turnSessionID  string
+	turnCancelled  bool
 	asideID        string
 	asideSessionID string
 	fatal          error
@@ -417,6 +418,7 @@ func (a *Adapter) promptSession(ctx context.Context, sessionID string, blocks []
 	defer stopServices()
 	a.mu.Lock()
 	a.turnSessionID = sessionID
+	a.turnCancelled = false
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); a.turnSessionID = ""; a.mu.Unlock() }()
 	wire, err := a.resolvePrompt(blocks)
@@ -431,6 +433,17 @@ func (a *Adapter) promptSession(ctx context.Context, sessionID string, blocks []
 	// process can remain healthy and accept another turn.
 	if emitStatus {
 		defer a.emit(map[string]any{"kind": "status", "status": "idle"})
+	}
+	// The turn is interruptible from the moment it reports "working", which is
+	// before session/prompt reaches the agent. ACP cancellation is scoped to a
+	// turn the agent has actually started, so an agent rightly ignores a
+	// session/cancel that arrives first; sending the prompt anyway would run a
+	// turn the user already interrupted. Settle it here instead.
+	a.mu.RLock()
+	cancelled := a.turnCancelled
+	a.mu.RUnlock()
+	if cancelled {
+		return "cancelled", nil
 	}
 	var response struct {
 		StopReason string `json:"stopReason"`
@@ -580,6 +593,7 @@ func (a *Adapter) Interrupt() error {
 	if sessionID == "" {
 		sessionID = a.sessionID
 	}
+	a.turnCancelled = true
 	// Keep the cancelled context installed until the next Prompt resets it.
 	// Service requests already emitted by the agent can arrive after the
 	// interrupt and must be rejected as part of the interrupted turn.

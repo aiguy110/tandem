@@ -183,7 +183,13 @@ function handle(msg) {
     promptSessionId = msg.params?.sessionId ?? sessionId;
     const blocks = msg.params?.prompt ?? [];
     const text = blocks.map((b) => b?.text ?? '').join(' ');
-    if (text.includes('DERISK_FORK_CANCEL')) return;
+    if (text.includes('DERISK_FORK_CANCEL')) {
+      // Announce the started turn so a client can cancel a prompt the agent has
+      // demonstrably received; a session/cancel for a turn that never arrived is
+      // ignored above, as a real agent would.
+      note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working on it.' } });
+      return;
+    }
     if (text.includes('DERISK_ASIDE')) {
       note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Aside answer.' } });
       finish('end_turn');
