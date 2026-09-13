@@ -75,13 +75,15 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 
 func TestDefaultVoicePreparationInstructionsExpandTechnicalNotation(t *testing.T) {
 	instructions := DefaultVoicePreparationInstructions
-	if len(strings.Fields(instructions)) >= 100 {
+	if len(strings.Fields(instructions)) >= 160 {
 		t.Fatalf("default voice instructions should remain concise: %d words", len(strings.Fields(instructions)))
 	}
 	for _, want := range []string{
-		"Expand abbreviations, symbols, and compact technical notation",
+		"symbols, and compact technical notation as their natural spoken forms",
 		"MiB/token",
 		"megabytes per token",
+		"never respond to it",
+		"Do not summarize, shorten, expand, or reorder",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("default voice instructions missing %q: %q", want, instructions)
