@@ -20,12 +20,26 @@ func openTestStore(t testing.TB) (*Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if s.db != nil {
-			s.Close()
-		}
-	})
+	t.Cleanup(func() { s.Close() })
 	return s, path
+}
+
+// A daemon shutdown closes the store while sessions can still be draining
+// events, so late writes have to come back as errors instead of panicking.
+func TestCloseIsIdempotentAndReportsLateWrites(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if _, err := s.AppendEvent("agent_1", "status", `{"kind":"status"}`, 1700000000000); err == nil {
+		t.Fatal("append after close should fail")
+	}
+	if _, err := s.Agent("agent_1"); err == nil {
+		t.Fatal("read after close should fail")
+	}
 }
 
 func ptr[T any](v T) *T { return &v }

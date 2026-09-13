@@ -252,8 +252,10 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	terminal = f.adapters[s.ID]
 	f.mu.Unlock()
 	terminal.SendInput([]byte("exit"))
+	// The reload runs asynchronously through "switching", so wait for the
+	// settled state rather than for the terminal mode to merely be left.
 	deadline = time.Now().Add(time.Second)
-	for s.ControlMode() == "terminal" && time.Now().Before(deadline) {
+	for (s.ControlMode() != "transcript" || s.Status() != session.Error) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if s.ControlMode() != "transcript" {

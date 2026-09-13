@@ -47,6 +47,7 @@ type Session struct {
 	adapterEpoch     uint64
 	disposeOnce      sync.Once
 	disposeErr       error
+	disposed         bool
 	done             chan struct{}
 
 	promptMu      sync.Mutex
@@ -151,7 +152,9 @@ func (s *Session) pump(adapter agentadapter.Adapter, epoch uint64, onExit func()
 		}
 	}
 	s.mu.RLock()
-	current := epoch == s.adapterEpoch
+	// A disposed session is on its way out with its store already closing;
+	// the exit hook exists to recover a live handoff, not to resurrect one.
+	current := epoch == s.adapterEpoch && !s.disposed
 	s.mu.RUnlock()
 	if current && onExit != nil {
 		onExit()
@@ -761,6 +764,10 @@ func (s *Session) SetControlMode(mode string) {
 // the same time. A caller can invoke SwapAdapter again to recover a failed start.
 func (s *Session) SwapAdapter(ctx context.Context, start func() (agentadapter.Adapter, error), mode string, onExit func()) error {
 	s.mu.Lock()
+	if s.disposed {
+		s.mu.Unlock()
+		return errors.New("session: disposed")
+	}
 	s.adapterEpoch++
 	old := s.adapter
 	s.mu.Unlock()
@@ -806,6 +813,7 @@ func (s *Session) Dispose(ctx context.Context) error {
 		s.ClearPromptQueue()
 		s.mu.Lock()
 		s.adapterEpoch++
+		s.disposed = true
 		a := s.adapter
 		s.mu.Unlock()
 		s.disposeErr = a.Close(ctx)

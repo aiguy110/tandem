@@ -241,6 +241,8 @@ type Store struct {
 	db      *sql.DB
 	now     func() time.Time
 	eventMu sync.Mutex
+	closeMu sync.Mutex
+	closed  bool
 }
 
 // MessageAudio is a durable daemon-owned clip for one completed message.
@@ -1148,12 +1150,19 @@ func (s *Store) DeleteAnnotationsForAgent(agentID string) (int, error) {
 }
 
 // Close checkpoints WAL contents into the main file for clean handoff to Node.
+//
+// The handle is deliberately left in place rather than cleared: sessions and
+// their pump goroutines can still be draining when the daemon shuts down, and
+// a closed *sql.DB reports "sql: database is closed" to those late writers,
+// while a nil one panics the process on the way out.
 func (s *Store) Close() error {
-	if s.db == nil {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
 		return nil
 	}
+	s.closed = true
 	_, checkpointErr := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	closeErr := s.db.Close()
-	s.db = nil
 	return errors.Join(checkpointErr, closeErr)
 }
