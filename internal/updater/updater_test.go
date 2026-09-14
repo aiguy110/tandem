@@ -180,6 +180,24 @@ func TestDevelopmentBuildCannotSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestDefaultHTTPClientBoundsRequestSetupNotDownloadDuration(t *testing.T) {
+	opts := Options{}
+	setDefaults(&opts)
+	if opts.HTTPClient.Timeout != 0 {
+		t.Fatalf("HTTP client timeout = %s, want no whole-response deadline", opts.HTTPClient.Timeout)
+	}
+	transport, ok := opts.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("HTTP client transport = %T, want *http.Transport", opts.HTTPClient.Transport)
+	}
+	if transport.TLSHandshakeTimeout != updateSetupTimeout {
+		t.Fatalf("TLS handshake timeout = %s, want %s", transport.TLSHandshakeTimeout, updateSetupTimeout)
+	}
+	if transport.ResponseHeaderTimeout != updateSetupTimeout {
+		t.Fatalf("response header timeout = %s, want %s", transport.ResponseHeaderTimeout, updateSetupTimeout)
+	}
+}
+
 func releaseServer(t *testing.T, binary []byte, downloads *atomic.Int32) *httptest.Server {
 	t.Helper()
 	sha := fmt.Sprintf("%x", sha256.Sum256(binary))

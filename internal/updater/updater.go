@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 )
 
 const defaultRepository = "aiguy110/tandem"
+
+const updateSetupTimeout = 5 * time.Second
 
 var developmentVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+\.[0-9a-f]{8}$`)
 
@@ -163,7 +166,7 @@ func setDefaults(opts *Options) {
 		opts.Log = os.Stderr
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: 5 * time.Second}
+		opts.HTTPClient = newHTTPClient()
 	}
 	if opts.Executable == "" {
 		executable, err := os.Executable()
@@ -171,6 +174,18 @@ func setDefaults(opts *Options) {
 			opts.Executable = executable
 		}
 	}
+}
+
+// newHTTPClient bounds establishing an update request without imposing a
+// deadline on its body. Release binaries can take longer than the connection
+// setup budget to download on a slow link, and an http.Client Timeout covers
+// the entire response body.
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: updateSetupTimeout, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = updateSetupTimeout
+	transport.ResponseHeaderTimeout = updateSetupTimeout
+	return &http.Client{Transport: transport}
 }
 
 func fetchLatest(ctx context.Context, opts Options) (release, error) {
