@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
 import { useStore, LOCAL_HOST_ID } from '../store';
 import type { FederationHost } from '../wire';
 
@@ -85,7 +86,7 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
       parentId: parentByID.get(host.id),
       depth: position.depth,
       x: PADDING_X + NODE_WIDTH / 2 + position.x * (NODE_WIDTH + COLUMN_GAP),
-      y: PADDING_Y + position.depth * (NODE_HEIGHT + ROW_GAP),
+      y: PADDING_Y + NODE_HEIGHT / 2 + position.depth * (NODE_HEIGHT + ROW_GAP),
     };
   });
   const edges = nodes.flatMap((node) => node.parentId ? [{ slaveId: node.host.id, masterId: node.parentId }] : []);
@@ -114,6 +115,45 @@ export function FleetView() {
   const refreshHosts = useStore((state) => state.refreshHosts);
   const fleet = useMemo(() => projectFleet(hosts), [hosts]);
   const nodeByID = useMemo(() => new Map(fleet.nodes.map((node) => [node.host.id, node])), [fleet.nodes]);
+  const panStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [panning, setPanning] = useState(false);
+
+  const beginPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const canvas = event.currentTarget;
+    panStart.current = { x: event.clientX, y: event.clientY, offsetX: panOffset.x, offsetY: panOffset.y };
+    canvas.setPointerCapture(event.pointerId);
+    setPanning(true);
+  };
+
+  const movePan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!panning) return;
+    const start = panStart.current;
+    setPanOffset({
+      x: start.offsetX + event.clientX - start.x,
+      y: start.offsetY + event.clientY - start.y,
+    });
+  };
+
+  const endPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setPanning(false);
+  };
+
+  const panWithKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    const distance = event.shiftKey ? 120 : 40;
+    const offsets: Record<string, [number, number]> = {
+      ArrowLeft: [-distance, 0],
+      ArrowRight: [distance, 0],
+      ArrowUp: [0, -distance],
+      ArrowDown: [0, distance],
+    };
+    const offset = offsets[event.key];
+    if (!offset) return;
+    event.preventDefault();
+    setPanOffset((current) => ({ x: current.x - offset[0], y: current.y - offset[1] }));
+  };
 
   return (
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && setModal('none')}>
@@ -126,9 +166,18 @@ export function FleetView() {
           <button type="button" className="fleet-close" onClick={() => setModal('none')} aria-label="Close Fleet View">×</button>
         </div>
         <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from slave to master</div>
-        <div className="fleet-canvas" aria-label="Fleet topology graph">
-          <div className="fleet-stage">
-          <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from slaves to masters">
+        <div
+          className={`fleet-canvas${panning ? ' panning' : ''}`}
+          aria-label="Fleet topology graph. Drag or use arrow keys to pan."
+          tabIndex={0}
+          onKeyDown={panWithKeyboard}
+          onPointerDown={beginPan}
+          onPointerMove={movePan}
+          onPointerUp={endPan}
+          onPointerCancel={endPan}
+        >
+          <div className="fleet-stage" style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}>
+            <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from slaves to masters">
             <defs>
               <marker id="fleet-master-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead" />
@@ -171,9 +220,9 @@ export function FleetView() {
                 </g>
               ))}
             </g>
-          </svg>
-        </div>
+            </svg>
           </div>
+        </div>
         <div className="foot fleet-foot">
           <span>{fleet.nodes.length} {fleet.nodes.length === 1 ? 'node' : 'nodes'} · {fleet.edges.length} {fleet.edges.length === 1 ? 'link' : 'links'}</span>
           <button type="button" onClick={refreshHosts}>Refresh</button>
