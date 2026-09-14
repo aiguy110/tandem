@@ -89,7 +89,7 @@ func (a *phaseAdapter) Interrupt() error {
 }
 func (a *phaseAdapter) Close(context.Context) error { a.stop(); return nil }
 func (a *phaseAdapter) stop()                       { a.once.Do(func() { close(a.events); close(a.done) }) }
-func (a *phaseAdapter) ExternalSessionID() string           { return a.sid }
+func (a *phaseAdapter) ExternalSessionID() string   { return a.sid }
 func (a *phaseAdapter) PID() int                    { return 1 }
 
 func phaseSetup(t *testing.T, factory *phaseFactory, launch config.Launch) (*Registry, *store.Store, config.Config) {
@@ -279,5 +279,28 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	if !found {
 		b, _ := json.Marshal(history)
 		t.Fatalf("missing reload error: %s", b)
+	}
+}
+
+func TestRestartHarnessReplacesAdapterAndResumesSession(t *testing.T) {
+	f := &phaseFactory{}
+	r, _, _ := phaseSetup(t, f, config.Launch{Cmd: "fake"})
+	s, err := r.Spawn(context.Background(), agentadapter.Spec{Adapter: "acp", Agent: "fake", Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RestartHarness(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) != 2 {
+		t.Fatalf("starts = %d, want 2", len(f.requests))
+	}
+	if got := f.requests[1].ResumeSessionID; got != "sess_mock" {
+		t.Fatalf("restart resume id = %q, want sess_mock", got)
+	}
+	if f.requests[1].CaptureReplay {
+		t.Fatal("harness restart should not replay an unchanged transcript")
 	}
 }

@@ -1670,6 +1670,75 @@ func (r *Registry) reloadACP(ctx context.Context, s *session.Session, cwd, exter
 	return err
 }
 
+// RestartHarness replaces a session's agent process while retaining its durable
+// Tandem row and, when available, its upstream session. Starting a new adapter
+// intentionally re-evaluates Tandem's MCP server callback and runs the normal
+// harness provisioning path, so newly configured servers and installed harness
+// updates are picked up without restarting Tandem itself.
+func (r *Registry) RestartHarness(ctx context.Context, id string) error {
+	lock := r.handoffLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s := r.Get(id)
+	if s == nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	rec, err := r.store.Session(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil || rec.ClosedAt != nil {
+		return fmt.Errorf("no such agent: %s", id)
+	}
+	// A replacement cannot safely continue an in-flight request. Match the
+	// explicit ACP/CLI handoff behavior: cancel it and clear queued prompts
+	// before the old process exits.
+	if s.ActiveTurn() {
+		wait, cancel := context.WithTimeout(ctx, 4*time.Second)
+		err = s.InterruptAndWait(wait)
+		cancel()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+	}
+
+	spec := cloneSpec(s.Spec)
+	resume := ""
+	if spec.Adapter == "acp" {
+		if rec.ExternalSessionID != nil {
+			resume = *rec.ExternalSessionID
+		}
+		if resume == "" {
+			resume = s.ExternalSessionID()
+		}
+	} else if spec.ResolvedLaunch != nil && spec.ResolvedLaunch.Terminal != nil {
+		// StartArgs may contain an old expansion. Rebuild them for this process;
+		// prefer the resume command when the agent exposes one.
+		args := spec.ResolvedLaunch.Terminal.StartArgs
+		if len(spec.ResolvedLaunch.Terminal.ResumeArgs) > 0 && rec.ExternalSessionID != nil {
+			args = spec.ResolvedLaunch.Terminal.ResumeArgs
+			resume = *rec.ExternalSessionID
+		}
+		spec.ResolvedLaunch.Terminal.StartArgs = expand(args, id, s.DisplayName(), rec.CWD, resume)
+	}
+	start := func() (agentadapter.Adapter, error) {
+		return r.factory.Start(ctx, agentadapter.StartRequest{SessionID: id, CWD: rec.CWD, ResumeSessionID: resume, Spec: spec, Log: s.Log})
+	}
+	if err := s.SwapAdapter(ctx, start, "transcript", nil); err != nil {
+		// The old process is already gone. Make that visible durably rather
+		// than leaving the session looking idle with no live harness behind it.
+		s.SetControlMode("transcript")
+		s.SetStatus(session.Error)
+		payload, _ := json.Marshal(map[string]any{"kind": "error", "message": "failed to restart harness: " + err.Error()})
+		s.PushEvent(eventlog.Event{Kind: "error", Payload: payload})
+		return fmt.Errorf("restart harness: %w", err)
+	}
+	if sid := s.ExternalSessionID(); sid != "" {
+		_ = r.store.SetExternalSessionID(id, sid)
+	}
+	return nil
+}
+
 func (r *Registry) LeaveTerminal(ctx context.Context, id string) error {
 	lock := r.handoffLock(id)
 	lock.Lock()

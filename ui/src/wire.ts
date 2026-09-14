@@ -470,6 +470,7 @@ export type ClientMsg =
   | { t: 'merge_back'; sessionId: string; mode: 'merge' | 'pr'; corrId?: string }
   | { t: 'browser_control'; sessionId: string; action: 'grab' | 'release'; corrId?: string }
   | { t: 'restart_browser'; sessionId: string; snapshotId?: string; corrId?: string }
+  | { t: 'restart_harness'; sessionId: string; corrId?: string }
   | { t: 'browser_input'; sessionId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; hostId?: string; corrId?: string }
   | { t: 'list_workspace_entries'; sessionId: string; path: string; corrId?: string }

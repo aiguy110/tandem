@@ -28,6 +28,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const closeAgent = useStore((s) => s.closeAgent);
   const renameAgent = useStore((s) => s.renameAgent);
   const handOffAgent = useStore((s) => s.handOffAgent);
+  const restartHarness = useStore((s) => s.restartHarness);
 	const collapsed = useStore((s) => s.sessionsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleSessionsRail);
   // Keep the familiar uninterrupted rail until federation has at least one
@@ -165,6 +166,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onRename={(name) => renameAgent(id, name)}
                   onDelete={() => void requestDelete(id)}
                   onHandOff={() => handOffAgent(id)}
+                  onRestartHarness={() => restartHarness(id)}
                   dragging={id === draggedId}
                   dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
                   onDragStart={() => setDraggedId(id)}
@@ -341,6 +343,7 @@ function Row({
   onRename,
   onDelete,
   onHandOff,
+  onRestartHarness,
   dragging,
   dropPosition,
   onDragStart,
@@ -355,6 +358,7 @@ function Row({
   onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
   onHandOff: () => void;
+  onRestartHarness: () => Promise<{ error?: string }>;
   dragging: boolean;
   dropPosition: 'before' | 'after' | null;
   onDragStart: () => void;
@@ -365,6 +369,8 @@ function Row({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
+  const [restartError, setRestartError] = useState('');
+  const [restartingHarness, setRestartingHarness] = useState(false);
   const [mouseHovered, setMouseHovered] = useState(false);
   const [pendingContextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingDetails, setDetails] = useState<{ x: number; y: number } | null>(null);
@@ -565,6 +571,16 @@ function Row({
           <button type="button" role="menuitem" onClick={() => { onHandOff(); setContextMenu(null); }}>
             Hand off…
           </button>
+          <button type="button" role="menuitem" disabled={restartingHarness} onClick={() => {
+            setRestartingHarness(true);
+            setRestartError('');
+            void onRestartHarness().then((result) => {
+              if (result.error) setRestartError(result.error);
+              else setContextMenu(null);
+            }).finally(() => setRestartingHarness(false));
+          }}>
+            {restartingHarness ? 'Restarting harness…' : 'Restart harness'}
+          </button>
           <button type="button" role="menuitem" onClick={() => openDetails(contextMenu)}>
             View details
           </button>
@@ -574,6 +590,7 @@ function Row({
         </div>
       )}
       {details && <AgentDetails agent={agent} position={details} closing={detailsClosing} onClose={() => setDetails(null)} onMove={setDetails} />}
+      {restartError && <div className="session-rename-error">{restartError}</div>}
     </div>
   );
 }

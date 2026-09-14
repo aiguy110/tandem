@@ -50,6 +50,7 @@ type Backend interface {
 	ListSnapshots() ([]store.BrowserSnapshot, error)
 	DeleteSnapshot(string) error
 	RestartBrowser(context.Context, string, string) error
+	RestartHarness(context.Context, string) error
 	ListProfiles(string) ([]store.Profile, []string, error)
 	RenameProfile(string, string) error
 	DeleteProfile(string) error
@@ -1147,6 +1148,16 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
+		c.commandAck(m, m.SessionID)
+	case "restart_harness":
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		if err := c.server.opts.Registry.RestartHarness(context.Background(), m.SessionID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
 		c.commandAck(m, m.SessionID)
 	case "browser_input":
 		if c.server.opts.Browser == nil {

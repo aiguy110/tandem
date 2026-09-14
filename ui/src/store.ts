@@ -331,6 +331,7 @@ interface StoreState {
   setBrowserSub: (sessionId: string | null) => void;
   browserControl: (sessionId: string, action: 'grab' | 'release') => void;
   restartBrowser: (sessionId: string, snapshotId?: string) => Promise<AckResult>;
+  restartHarness: (sessionId: string) => Promise<AckResult>;
   browserInput: (sessionId: string, event: BrowserInputWire) => void;
   toggleWheel: (sessionId: string) => void;
 }
@@ -1475,6 +1476,15 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'restart_browser', sessionId, snapshotId, corrId });
+      }),
+    restartHarness: (sessionId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          if (!result.error) get().refreshAgents();
+          resolve(result);
+        });
+        client.send({ t: 'restart_harness', sessionId, corrId });
       }),
     browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, event }),
     toggleWheel: (sessionId) => {

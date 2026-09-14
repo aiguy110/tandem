@@ -187,6 +187,7 @@ func (b *testBackend) CaptureSnapshot(context.Context, string, string) (store.Br
 func (b *testBackend) ListSnapshots() ([]store.BrowserSnapshot, error)        { return nil, nil }
 func (b *testBackend) DeleteSnapshot(string) error                            { return nil }
 func (b *testBackend) RestartBrowser(context.Context, string, string) error   { return nil }
+func (b *testBackend) RestartHarness(context.Context, string) error           { return nil }
 func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
 func (b *testBackend) RenameProfile(string, string) error                     { return nil }
 func (b *testBackend) DeleteProfile(string) error                             { return nil }
@@ -338,7 +339,7 @@ func (a *testAdapter) Close(context.Context) error {
 	return nil
 }
 func (*testAdapter) ExternalSessionID() string { return "" }
-func (*testAdapter) PID() int          { return 0 }
+func (*testAdapter) PID() int                  { return 0 }
 
 func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
 	return setupWSHistory(t, queue, nil)
