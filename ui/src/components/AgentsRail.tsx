@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePresence, useValuePresence } from '../transitions';
-import { LOCAL_HOST_ID, useStore, rankedOrder, agentBadge } from '../store';
+import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { SessionView } from '../store';
 import type { ClosePreview, FederationHost } from '../wire';
@@ -34,7 +34,13 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   // Keep the familiar uninterrupted rail until federation has at least one
   // accepted/known slave. Once it does, every group (including local) has a
   // labeled divider so the placement of remote controls is unambiguous.
-  const federationGrouping = hosts.some((host) => !host.local && ['connected', 'accepted', 'offline'].includes(host.status ?? ''));
+  // A host update can briefly replace the host list before the master has
+  // refreshed it. Keep grouping whenever a retained session belongs to a
+  // remote host, rather than flattening those sessions into the local rail
+  // during that gap. `groupedAgentRows` deliberately renders an unknown host
+  // as offline, using its last reported name from the session.
+  const federationGrouping = hosts.some((host) => !host.local && ['connected', 'accepted', 'offline'].includes(host.status ?? ''))
+    || Object.values(agents).some((agent) => !isLocalHost(agent.hostId));
   const displayedGroups = federationGrouping
     ? groupedAgentRows(order, agents, hosts)
     : [{ hostId: 'all', label: '', link: null, ids: order }];
