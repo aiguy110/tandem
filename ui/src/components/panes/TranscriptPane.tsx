@@ -206,13 +206,22 @@ function citationTargetId(seq: number, index: number) {
 // making the exact source text clickable. Re-run from the pristine React DOM
 // whenever the row's text or links change.
 function applyQuoteHighlights(container: HTMLElement, links: QuoteLink[]) {
+  // Only re-merge text where a previous pass split it. Normalizing the whole
+  // container would also merge adjacent React-owned text nodes (e.g. `Loading
+  // {name}…`), and React then crashes with a removeChild NotFoundError the next
+  // time it updates them.
+  const unwrappedParents = new Set<Node>();
   for (const mark of Array.from(container.querySelectorAll('.annotation-quote-highlight'))) {
+    if (mark.parentNode) unwrappedParents.add(mark.parentNode);
     mark.replaceWith(...Array.from(mark.childNodes));
   }
-  container.normalize();
+  for (const parent of unwrappedParents) parent.normalize();
   if (links.length === 0) return;
 
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode: (candidate) =>
+      candidate.parentElement?.closest('[data-quote-ignore]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
   const nodes: { node: Text; start: number; end: number }[] = [];
   let text = '';
   let node: Text | null;
@@ -1094,8 +1103,8 @@ function TranscriptImage({ block }: { block: Extract<PromptBlock, { type: 'image
     };
   }, [sessionId, block.assetId]);
 
-  if (failed) return <div className="transcript-image-failed">Image unavailable: {block.name ?? 'attachment'}</div>;
-  if (!src) return <div className="transcript-image-loading">Loading {block.name ?? 'image'}…</div>;
+  if (failed) return <div className="transcript-image-failed" data-quote-ignore>{`Image unavailable: ${block.name ?? 'attachment'}`}</div>;
+  if (!src) return <div className="transcript-image-loading" data-quote-ignore>{`Loading ${block.name ?? 'image'}…`}</div>;
   return <img className="transcript-image" src={src} alt={block.name ?? 'Uploaded image'} />;
 }
 

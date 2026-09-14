@@ -86,6 +86,23 @@ describe('TranscriptPane voice rendering', () => {
     await waitFor(() => expect(view.getByText('-1:05')).toBeTruthy());
   });
 
+  it('shows a failed image in a user prompt without corrupting React text nodes', async () => {
+    const withImage = agent();
+    withImage.events = [{
+      seq: 1,
+      event: { kind: 'user_message', blocks: [{ type: 'text', text: 'look' }, { type: 'image', assetId: 'missing', mimeType: 'image/png', name: 'shot.png' }] },
+    }];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withImage }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+
+    await waitFor(() => expect(view.getByText('Image unavailable: shot.png')).toBeTruthy());
+  });
+
   it('shows complete command and output when an execute tool call is expanded', () => {
     const withTool = agent();
     const command = 'cd /a/very/long/path && npm run a-command-with-a-long-name -- --verbose';
