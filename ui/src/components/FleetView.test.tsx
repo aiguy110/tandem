@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStore, LOCAL_HOST_ID } from '../store';
 import { FleetView, projectFleet } from './FleetView';
@@ -50,7 +50,16 @@ describe('FleetView', () => {
     expect(screen.getByText('Arrows point from slave to master')).toBeTruthy();
 
     expect(view.container.querySelector('.fleet-stage')).toBeTruthy();
-    expect(screen.getByLabelText('Fleet topology graph. Drag or use arrow keys to pan.').getAttribute('tabindex')).toBe('0');
+    const canvas = screen.getByLabelText('Fleet topology graph. Drag or use arrow keys to pan.');
+    const stage = view.container.querySelector<HTMLElement>('.fleet-stage')!;
+    const recenter = screen.getByRole('button', { name: 'Recenter' }) as HTMLButtonElement;
+    expect(canvas.getAttribute('tabindex')).toBe('0');
+    expect(recenter.disabled).toBe(true);
+    fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+    expect(stage.style.transform).toBe('translate(-40px, 0px)');
+    expect(recenter.disabled).toBe(false);
+    fireEvent.click(recenter);
+    expect(stage.style.transform).toBe('translate(0px, 0px)');
     expect(view.container.querySelector('.fleet-graph')?.getAttribute('width')).toBeTruthy();
     expect(view.container.querySelectorAll('clipPath')).toHaveLength(3);
     expect(view.container.querySelectorAll('.fleet-node > g[clip-path]')).toHaveLength(3);

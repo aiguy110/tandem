@@ -225,7 +225,10 @@ export function FleetView() {
         </div>
         <div className="foot fleet-foot">
           <span>{fleet.nodes.length} {fleet.nodes.length === 1 ? 'node' : 'nodes'} · {fleet.edges.length} {fleet.edges.length === 1 ? 'link' : 'links'}</span>
-          <button type="button" onClick={refreshHosts}>Refresh</button>
+          <div className="fleet-actions">
+            <button type="button" disabled={panOffset.x === 0 && panOffset.y === 0} onClick={() => setPanOffset({ x: 0, y: 0 })}>Recenter</button>
+            <button type="button" onClick={refreshHosts}>Refresh</button>
+          </div>
         </div>
       </div>
     </div>

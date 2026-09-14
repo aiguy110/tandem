@@ -985,7 +985,7 @@ body.dock-resizing .app { transition: none; }
 .fleet-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: 22px; line-height: 1; }
 .fleet-legend { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
 .fleet-arrow { color: var(--agent); font-size: 16px; line-height: 1; }
-.fleet-canvas { max-height: min(60vh, 560px); overflow: auto; background: var(--bg); cursor: grab; touch-action: none; user-select: none; }
+.fleet-canvas { max-height: min(60vh, 560px); overflow: hidden; background: var(--bg); cursor: grab; touch-action: none; user-select: none; }
 .fleet-canvas.panning { cursor: grabbing; }
 .fleet-canvas:focus-visible { outline: 1px solid var(--agent); outline-offset: -1px; }
 .fleet-stage { display: flex; align-items: center; justify-content: center; width: max-content; min-width: 100%; min-height: 270px; will-change: transform; }
@@ -1001,6 +1001,7 @@ body.dock-resizing .app { transition: none; }
 .fleet-version { fill: var(--text-dim); font: 10px var(--font-mono); }
 .fleet-status { fill: var(--text-faint); font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; }
 .fleet-foot { justify-content: space-between; }
+.fleet-actions { display: flex; gap: 8px; }
 @media (max-width: 560px) {
   .automation-row { align-items: flex-start; }
   .automation-details { align-items: flex-start; flex-direction: column; gap: 2px; }
