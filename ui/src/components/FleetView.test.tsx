@@ -14,7 +14,6 @@ describe('projectFleet', () => {
 
     expect(topology.edges).toEqual([{ slaveId: 'worker', masterId: LOCAL_HOST_ID }]);
   });
-});
 
   it('keeps every node fully inside the graph bounds', () => {
     const topology = projectFleet([
@@ -22,8 +21,14 @@ describe('projectFleet', () => {
       { id: 'worker', name: 'Worker' },
     ]);
 
-    expect(topology.nodes.every((node) => node.x >= 130 && node.x <= topology.width - 130)).toBe(true);
+    expect(topology.nodes.every((node) => (
+      node.x >= 130
+      && node.x <= topology.width - 130
+      && node.y >= 33
+      && node.y <= topology.height - 33
+    ))).toBe(true);
   });
+});
 
 describe('FleetView', () => {
   it('displays node versions and directs every rendered edge from slave to master', () => {
@@ -45,6 +50,7 @@ describe('FleetView', () => {
     expect(screen.getByText('Arrows point from slave to master')).toBeTruthy();
 
     expect(view.container.querySelector('.fleet-stage')).toBeTruthy();
+    expect(screen.getByLabelText('Fleet topology graph. Drag or use arrow keys to pan.').getAttribute('tabindex')).toBe('0');
     expect(view.container.querySelector('.fleet-graph')?.getAttribute('width')).toBeTruthy();
     expect(view.container.querySelectorAll('clipPath')).toHaveLength(3);
     expect(view.container.querySelectorAll('.fleet-node > g[clip-path]')).toHaveLength(3);
