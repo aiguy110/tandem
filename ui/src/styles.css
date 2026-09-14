@@ -239,13 +239,18 @@ body.dock-resizing .app { transition: none; }
    phantom extra row while a card is being dragged. */
 .agent-drop-end.active { min-height: 32px; }
 .agent-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+/* The actions float over the row's own text, so they carry an opaque chip of
+   their own rather than trying to read against whatever they overlap. Covering
+   a few characters of the name is preferable to an invisible pencil. */
 .agent-actions {
-  position: absolute; right: 12px; top: 9px;
-  display: flex; gap: 2px;
+  position: absolute; right: 8px; top: 6px;
+  display: flex; gap: 2px; padding: 2px;
+  background: var(--surface-3); border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); box-shadow: 0 2px 8px rgba(0, 0, 0, .28);
 }
 .agent-row .delete-btn, .agent-row .rename-btn {
-  align-self: center; background: transparent; border: none; padding: 2px 4px;
-  font-size: var(--fs-sm); line-height: 1; color: var(--text-faint);
+  align-self: center; background: transparent; border: none; padding: 2px 5px;
+  font-size: var(--fs-sm); line-height: 1; color: var(--text-dim);
   border-radius: var(--r-sm);
 }
 .agent-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
