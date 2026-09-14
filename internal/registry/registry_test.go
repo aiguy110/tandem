@@ -93,7 +93,7 @@ func (a *regAdapter) Close(context.Context) error {
 	return nil
 }
 func (a *regAdapter) ExternalSessionID() string { return a.sid }
-func (a *regAdapter) PID() int          { return 1 }
+func (a *regAdapter) PID() int                  { return 1 }
 
 func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config) {
 	t.Helper()

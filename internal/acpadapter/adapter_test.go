@@ -65,7 +65,7 @@ func startMock(t *testing.T, mutate func(*AdapterConfig)) *Adapter {
 	}
 	cfg := AdapterConfig{
 		SessionID: "api-1",
-		Cwd:     t.TempDir(),
+		Cwd:       t.TempDir(),
 		Transport: acp.Config{
 			Command: node,
 			Args:    []string{mockPath(t)},

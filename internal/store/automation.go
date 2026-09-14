@@ -73,7 +73,7 @@ type AutomationRun struct {
 type AutomationWakeup struct {
 	RunID        string          `json:"runId"`
 	JobID        *string         `json:"jobId,omitempty"`
-	SessionID      *string         `json:"sessionId,omitempty"`
+	SessionID    *string         `json:"sessionId,omitempty"`
 	AgentProfile string          `json:"agentProfile"`
 	Prompt       string          `json:"prompt"`
 	Reason       string          `json:"reason"`

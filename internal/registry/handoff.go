@@ -67,9 +67,9 @@ func (r *Registry) handoffMessage(sourceID, mode string) (string, error) {
 	}
 	text := handoff.Render(history, handoff.Source{
 		SessionName: rec.Name,
-		Harness:   r.harnessLabel(spec),
-		CWD:       rec.CWD,
-		Branch:    spec.Workspace.Branch,
+		Harness:     r.harnessLabel(spec),
+		CWD:         rec.CWD,
+		Branch:      spec.Workspace.Branch,
 	}, handoff.ParseMode(mode))
 	if text == "" {
 		return "", fmt.Errorf("agent %s has no transcript to hand off", rec.Name)

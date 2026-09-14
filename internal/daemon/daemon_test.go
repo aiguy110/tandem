@@ -350,9 +350,9 @@ func (federatedAudioLocal) Snapshot(context.Context) (json.RawMessage, error) {
 }
 func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
 	var m struct {
-		T       string `json:"t"`
+		T         string `json:"t"`
 		SessionID string `json:"sessionId"`
-		Seq     int64  `json:"seq"`
+		Seq       int64  `json:"seq"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err

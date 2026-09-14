@@ -184,18 +184,18 @@ type ResumableSession struct {
 	// ExternalSessionID is the upstream agent's own session id (Claude's /
 	// Codex's UUID), not a Tandem session id.
 	ExternalSessionID string `json:"sessionId"`
-	Source    string `json:"source"`
-	Agent     string `json:"agent"`
-	Adapter   string `json:"adapter,omitempty"`
-	CWD       string `json:"cwd"`
+	Source            string `json:"source"`
+	Agent             string `json:"agent"`
+	Adapter           string `json:"adapter,omitempty"`
+	CWD               string `json:"cwd"`
 	// Repo/RepoPath attribute the session to a source repository so the Resume
 	// palette can group by it. RepoPath is the grouping identity; Repo the label.
 	Repo        string         `json:"repo,omitempty"`
 	RepoPath    string         `json:"repoPath,omitempty"`
 	Title       string         `json:"title,omitempty"`
 	UpdatedAt   string         `json:"updatedAt,omitempty"`
-	SessionID     string         `json:"agentId,omitempty"`
-	SessionName   string         `json:"sessionName,omitempty"`
+	SessionID   string         `json:"agentId,omitempty"`
+	SessionName string         `json:"sessionName,omitempty"`
 	Branch      string         `json:"branch,omitempty"`
 	Live        *bool          `json:"live,omitempty"`
 	Closed      *bool          `json:"closed,omitempty"`

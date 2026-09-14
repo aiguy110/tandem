@@ -705,8 +705,8 @@ type GitRefInfo struct {
 }
 
 type GitRefTandem struct {
-	SessionID         string  `json:"agentId"`
-	SessionName       string  `json:"sessionName"`
+	SessionID       string  `json:"agentId"`
+	SessionName     string  `json:"sessionName"`
 	IntegrationRef  string  `json:"integrationRef,omitempty"`
 	IntegrationKind RefKind `json:"integrationKind,omitempty"`
 	Live            bool    `json:"live"`

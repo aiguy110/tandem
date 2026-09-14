@@ -41,14 +41,14 @@ type Service struct {
 }
 
 type RunRequest struct {
-	SessionID      string   `json:"agentId"`
+	SessionID    string   `json:"agentId"`
 	WorkspaceCWD string   `json:"workspaceCwd"`
 	Path         string   `json:"path"`
 	Args         []string `json:"args,omitempty"`
 }
 
 type EvaluateRequest struct {
-	SessionID      string           `json:"agentId"`
+	SessionID    string           `json:"agentId"`
 	WorkspaceCWD string           `json:"workspaceCwd"`
 	Source       string           `json:"source"`
 	Args         []string         `json:"args,omitempty"`
@@ -57,7 +57,7 @@ type EvaluateRequest struct {
 }
 
 type PreapproveRequest struct {
-	SessionID          string `json:"agentId"`
+	SessionID        string `json:"agentId"`
 	WorkspaceCWD     string `json:"workspaceCwd"`
 	Path             string `json:"path"`
 	RegisterSchedule bool   `json:"registerSchedule,omitempty"`

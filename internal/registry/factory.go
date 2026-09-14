@@ -237,7 +237,7 @@ func (a *acpAdapter) Close(ctx context.Context) error {
 type ptyAdapter struct{ *ptyadapter.Adapter }
 
 func (a *ptyAdapter) Capabilities() agentadapter.Capabilities { return agentadapter.Capabilities{} }
-func (a *ptyAdapter) ExternalSessionID() string                       { return "" }
+func (a *ptyAdapter) ExternalSessionID() string               { return "" }
 func (a *ptyAdapter) Prompt(context.Context, []agentadapter.PromptBlock) (string, error) {
 	return "", errors.New("PTY adapter does not support structured prompts")
 }

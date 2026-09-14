@@ -23,7 +23,7 @@ type HistorySession struct {
 	Source          string
 	Agent           string
 	ExternalID      string
-	SessionID         string
+	SessionID       string
 	CWD             string
 	Title           string
 	CreatedAt       *int64

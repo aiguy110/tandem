@@ -94,7 +94,7 @@ func (f *fakeAdapter) Close(context.Context) error {
 	return nil
 }
 func (f *fakeAdapter) ExternalSessionID() string { return "s" }
-func (f *fakeAdapter) PID() int          { return 1 }
+func (f *fakeAdapter) PID() int                  { return 1 }
 
 func testSession(t *testing.T) (*Session, *fakeAdapter, *store.Store) {
 	t.Helper()

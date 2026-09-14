@@ -125,13 +125,13 @@ type Replay struct {
 // Log serializes append and ring mutation. Store allocation is independently
 // serialized, protecting sequence uniqueness across multiple Log instances.
 type Log struct {
-	mu      sync.RWMutex
+	mu        sync.RWMutex
 	sessionID string
-	store   *store.Store
-	cap     int
-	ring    []LoggedEvent
-	head    int64
-	now     func() time.Time
+	store     *store.Store
+	cap       int
+	ring      []LoggedEvent
+	head      int64
+	now       func() time.Time
 }
 
 func New(sessionID string, backing *store.Store, capacity int) (*Log, error) {

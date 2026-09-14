@@ -43,9 +43,9 @@ func ParseMode(raw string) Mode {
 // the preamble only mentions what is known.
 type Source struct {
 	SessionName string // the Tandem agent's display name ("einstein-3")
-	Harness   string // human label for the previous harness ("Claude", "Codex")
-	CWD       string
-	Branch    string
+	Harness     string // human label for the previous harness ("Claude", "Codex")
+	CWD         string
+	Branch      string
 }
 
 // maxToolLines caps a single run of tool calls so one runaway loop cannot

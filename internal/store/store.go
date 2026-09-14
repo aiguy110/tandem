@@ -352,7 +352,7 @@ type Store struct {
 // computation and has not yet been read (see MessageAudio's lazy backfill
 // note below).
 type MessageAudio struct {
-	SessionID    string
+	SessionID  string
 	Seq        int64
 	MIMEType   string
 	Data       []byte
@@ -426,7 +426,7 @@ func (s *Store) UpdateMessageAudioDuration(sessionID string, seq int64, duration
 // player — one row per agent (not per message), last-write-wins, so the
 // player can resume across a session switch or a closed tab.
 type AudioPosition struct {
-	SessionID    string
+	SessionID  string
 	Seq        int64
 	PositionMs int64
 	UpdatedAt  int64
@@ -517,14 +517,14 @@ type StoredEvent struct {
 }
 
 type Session struct {
-	ID           string
-	Name         string
-	Spec         json.RawMessage
-	CWD          string
+	ID                string
+	Name              string
+	Spec              json.RawMessage
+	CWD               string
 	ExternalSessionID *string
-	Status       string
-	CreatedAt    int64
-	ClosedAt     *int64
+	Status            string
+	CreatedAt         int64
+	ClosedAt          *int64
 }
 
 type Asset struct {
@@ -561,7 +561,7 @@ type BrowserSnapshot struct {
 // on send (see docs/transcript-annotations.md).
 type Annotation struct {
 	ID        string `json:"id"`
-	SessionID   string `json:"sessionId"`
+	SessionID string `json:"sessionId"`
 	Seq       int64  `json:"seq"`
 	Role      string `json:"role"`
 	Quote     string `json:"quote"`

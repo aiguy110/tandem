@@ -129,9 +129,9 @@ type ProfileSpec struct {
 
 type StartRequest struct {
 	SessionID, CWD, ResumeSessionID string
-	CaptureReplay                 bool
-	Spec                          Spec
-	Log                           *eventlog.Log
+	CaptureReplay                   bool
+	Spec                            Spec
+	Log                             *eventlog.Log
 }
 type Factory interface {
 	Start(context.Context, StartRequest) (Adapter, error)

@@ -43,7 +43,7 @@ type MCPServer struct {
 
 type AdapterConfig struct {
 	Transport       acp.Config
-	SessionID         string
+	SessionID       string
 	Cwd             string
 	ResumeSessionID string
 	CaptureReplay   bool
@@ -283,7 +283,7 @@ func (a *Adapter) cwd() string {
 }
 
 func (a *Adapter) Capabilities() Capabilities { a.mu.RLock(); defer a.mu.RUnlock(); return a.caps }
-func (a *Adapter) ExternalSessionID() string          { a.mu.RLock(); defer a.mu.RUnlock(); return a.sessionID }
+func (a *Adapter) ExternalSessionID() string  { a.mu.RLock(); defer a.mu.RUnlock(); return a.sessionID }
 func (a *Adapter) SessionState() SessionState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
