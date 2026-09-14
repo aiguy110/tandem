@@ -36,11 +36,11 @@ func gitRepo(t *testing.T) string {
 
 // waitForUserMessage polls the durable log because the spawn-time prompt is
 // dispatched on its own goroutine.
-func waitForUserMessage(t *testing.T, db *store.Store, agentID string) string {
+func waitForUserMessage(t *testing.T, db *store.Store, sessionID string) string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		log, err := eventlog.New(agentID, db, 1)
+		log, err := eventlog.New(sessionID, db, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func waitForUserMessage(t *testing.T, db *store.Store, agentID string) string {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("agent %s never recorded a first user message", agentID)
+			t.Fatalf("agent %s never recorded a first user message", sessionID)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -68,11 +68,11 @@ func waitForUserMessage(t *testing.T, db *store.Store, agentID string) string {
 
 // waitForEventKind polls the durable log because events pushed onto the fake
 // adapter's channel are recorded asynchronously by the registry.
-func waitForEventKind(t *testing.T, db *store.Store, agentID, kind string) {
+func waitForEventKind(t *testing.T, db *store.Store, sessionID, kind string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		log, err := eventlog.New(agentID, db, 1)
+		log, err := eventlog.New(sessionID, db, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func waitForEventKind(t *testing.T, db *store.Store, agentID, kind string) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("agent %s never recorded a %q event", agentID, kind)
+			t.Fatalf("agent %s never recorded a %q event", sessionID, kind)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -132,7 +132,7 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	}
 	// The transcript is dispatched, not persisted onto the spec: the agent row
 	// would otherwise carry a copy of the whole conversation.
-	rec, err := db.Agent(received.ID)
+	rec, err := db.Session(received.ID)
 	if err != nil || rec == nil {
 		t.Fatalf("agent row: %v", err)
 	}

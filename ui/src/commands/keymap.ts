@@ -2,6 +2,8 @@
 // keybindings.json model: keys → stable command IDs, resolved by the current
 // scope so a bare `c` spawns an agent globally but types "c" in a prompt field.
 
+// Kept as a persisted keymap value for backward compatibility. It means that
+// a Tandem session is focused; command IDs and stored bindings remain stable.
 export type Scope = 'global' | 'agent-focused' | 'modal-open' | 'text-input';
 
 // A binding is a chord: space-separated steps, each step a '+'-joined combo.

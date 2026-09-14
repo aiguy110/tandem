@@ -90,14 +90,14 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 	var fake, other *ResumableSession
 	for i := range catalog.Sessions {
 		s := &catalog.Sessions[i]
-		if s.Agent == "fake" && s.SessionID == "sess_mock" {
+		if s.Agent == "fake" && s.ExternalSessionID == "sess_mock" {
 			fake = s
 		}
-		if s.Agent == "other" && s.SessionID == "sess_mock" {
+		if s.Agent == "other" && s.ExternalSessionID == "sess_mock" {
 			other = s
 		}
 	}
-	if fake == nil || fake.Source != "tandem" || fake.AgentID != live.ID ||
+	if fake == nil || fake.Source != "tandem" || fake.SessionID != live.ID ||
 		fake.Title != "Named in Agents rail" || !fake.Resumable {
 		t.Fatalf("Tandem precedence failed: %#v", fake)
 	}
@@ -113,8 +113,8 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range catalog.Sessions {
-		if s.Agent == "fake" && s.SessionID == "sess_mock" &&
-			(s.Source != "tandem" || s.AgentID != live.ID || s.Closed == nil || !*s.Closed) {
+		if s.Agent == "fake" && s.ExternalSessionID == "sess_mock" &&
+			(s.Source != "tandem" || s.SessionID != live.ID || s.Closed == nil || !*s.Closed) {
 			t.Fatalf("closed Tandem precedence failed: %#v", s)
 		}
 	}
@@ -130,7 +130,7 @@ func TestHistoryCatalogIdentityPrecedenceAndEnrichment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range catalog.Sessions {
-		if s.Agent == "fake" && s.SessionID == "sess_mock" && s.AgentID != newLive.ID {
+		if s.Agent == "fake" && s.ExternalSessionID == "sess_mock" && s.SessionID != newLive.ID {
 			t.Fatalf("live did not outrank closed Tandem row: %#v", s)
 		}
 	}
@@ -153,7 +153,7 @@ func TestHistoryOnlyFailureExplanations(t *testing.T) {
 			if s.Resumable || !s.HistoryOnly {
 				t.Fatalf("expected history-only session: %#v", s)
 			}
-			reasons[s.SessionID] = s.ResumeError
+			reasons[s.ExternalSessionID] = s.ResumeError
 		}
 	}
 	if !strings.Contains(reasons["history-only"], "resumeArgs") ||
@@ -193,7 +193,7 @@ func TestSearchSessionsGroupsHitsAndUsesCatalogResumeState(t *testing.T) {
 	if results[0].Hits[0].EntryID != "one" || results[0].Hits[1].EntryID != "three" {
 		t.Fatalf("duplicate excerpts were not collapsed: %#v", results[0].Hits)
 	}
-	if results[0].Session.SessionID != "grouped" || results[0].Session.Resumable ||
+	if results[0].Session.ExternalSessionID != "grouped" || results[0].Session.Resumable ||
 		!results[0].Session.HistoryOnly || !strings.Contains(results[0].Session.ResumeError, "resumeArgs") {
 		t.Fatalf("catalog resume state was not applied: %#v", results[0].Session)
 	}
@@ -218,8 +218,8 @@ func TestSearchSessionsMapsTandemIndexIdentityToResumeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Session.SessionID != "sess_mock" ||
-		results[0].Session.AgentID != live.ID || results[0].Session.Source != "tandem" {
+	if len(results) != 1 || results[0].Session.ExternalSessionID != "sess_mock" ||
+		results[0].Session.SessionID != live.ID || results[0].Session.Source != "tandem" {
 		t.Fatalf("search did not preserve resumable identity: %#v", results)
 	}
 }
@@ -247,8 +247,8 @@ func TestHistoryTerminalResumeUsesConfiguredArgs(t *testing.T) {
 	if strings.Join(args, " ") != "--resume terminal-session --cwd "+cwd {
 		t.Fatalf("terminal args = %#v", args)
 	}
-	rec, _ := db.Agent(s.ID)
-	if rec == nil || rec.ACPSessionID == nil || *rec.ACPSessionID != "terminal-session" {
+	rec, _ := db.Session(s.ID)
+	if rec == nil || rec.ExternalSessionID == nil || *rec.ExternalSessionID != "terminal-session" {
 		t.Fatalf("durable terminal resume = %#v", rec)
 	}
 }
@@ -266,7 +266,7 @@ func TestHistoryAutoACPFailureCleansUpBeforeTerminalFallback(t *testing.T) {
 	if s.Spec.Adapter != "pty" {
 		t.Fatalf("fallback adapter = %q", s.Spec.Adapter)
 	}
-	rows, err := db.AllAgents()
+	rows, err := db.AllSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,8 +290,8 @@ func TestHistoryExplicitACPResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Spec.Adapter != "acp" || s.SessionID() != "acp-session" {
-		t.Fatalf("ACP resume = adapter %q session %q", s.Spec.Adapter, s.SessionID())
+	if s.Spec.Adapter != "acp" || s.ExternalSessionID() != "acp-session" {
+		t.Fatalf("ACP resume = adapter %q session %q", s.Spec.Adapter, s.ExternalSessionID())
 	}
 }
 
@@ -328,7 +328,7 @@ func TestResumeCatalogAttributesSessionsToRepositories(t *testing.T) {
 	}
 	for _, session := range catalog.Sessions {
 		if session.RepoPath != repo || session.Repo != filepath.Base(repo) {
-			t.Fatalf("session %s attributed to %q/%q, want %q/%q", session.SessionID, session.Repo, session.RepoPath, filepath.Base(repo), repo)
+			t.Fatalf("session %s attributed to %q/%q, want %q/%q", session.ExternalSessionID, session.Repo, session.RepoPath, filepath.Base(repo), repo)
 		}
 	}
 }

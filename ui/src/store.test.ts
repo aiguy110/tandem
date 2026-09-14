@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testApplyServerMsg, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
-import type { AgentSummary, Annotation } from './wire';
+import type { SessionSummary, Annotation } from './wire';
 import { WsClient } from './ws/client';
 import {
   __getElementForTests as __getEngineElementForTests,
@@ -20,7 +20,7 @@ import {
 function annotation(overrides: Partial<Annotation> = {}): Annotation {
   return {
     id: 'a1',
-    agentId: 'agent-1',
+    sessionId: 'session-1',
     seq: 5,
     role: 'assistant',
     quote: 'quoted text',
@@ -32,16 +32,16 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ agents: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesByAgent: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
+  useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
   localStorage.removeItem('tandem.promptDrafts');
 });
 
-function summary(overrides: Partial<AgentSummary> = {}): AgentSummary {
+function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
-    id: 'agent-1', name: 'Agent', workspace: { kind: 'existing', repo: 'repo', repoPath: '/repo', branch: 'main', cwd: '/repo' },
+    id: 'session-1', name: 'Agent', workspace: { kind: 'existing', repo: 'repo', repoPath: '/repo', branch: 'main', cwd: '/repo' },
     status: 'idle', pendingApprovals: 0, controlMode: 'transcript', adapter: 'acp', canHandoff: true,
     ...overrides,
   };
@@ -62,8 +62,8 @@ describe('federation projections', () => {
   });
 
   it('retains remote host labels on normal agent summaries', () => {
-    __testApplyServerMsg({ t: 'agents', agents: [summary({ hostId: 'worker-1', hostName: 'Build host' })] });
-    expect(useStore.getState().agents['agent-1']).toMatchObject({ hostId: 'worker-1', hostName: 'Build host' });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ hostId: 'worker-1', hostName: 'Build host' })] });
+    expect(useStore.getState().sessions['session-1']).toMatchObject({ hostId: 'worker-1', hostName: 'Build host' });
   });
 
   it('keeps session discovery loading until every requested host replies', () => {
@@ -74,7 +74,7 @@ describe('federation projections', () => {
     });
     __testApplyServerMsg({ t: 'sessions', catalog: { sessions: [], adapters: [] } });
     expect(useStore.getState().resumeLoading).toBe(true);
-    __testApplyServerMsg({ t: 'sessions', hostId: 'worker-1', catalog: { sessions: [{ sessionId: 'remote', source: 'history', agent: 'pi', cwd: '/repo', resumable: true }], adapters: [] } });
+    __testApplyServerMsg({ t: 'sessions', hostId: 'worker-1', catalog: { sessions: [{ externalSessionId: 'remote', source: 'history', agent: 'pi', cwd: '/repo', resumable: true }], adapters: [] } });
     expect(useStore.getState().resumeLoading).toBe(false);
     expect(useStore.getState().resumeCatalog?.sessions[0]).toMatchObject({ hostId: 'worker-1', hostName: 'Build host' });
   });
@@ -101,115 +101,115 @@ describe('agent ordering', () => {
 
     useStore.getState().reorderAgent('three', 'two', true);
     expect(useStore.getState().order).toEqual(['two', 'three', 'one']);
-    expect(JSON.parse(localStorage.getItem('tandem.agentOrder') ?? '[]')).toEqual(['two', 'three', 'one']);
+    expect(JSON.parse(localStorage.getItem('tandem.sessionOrder') ?? '[]')).toEqual(['two', 'three', 'one']);
   });
 });
 
 describe('thread audio preference', () => {
   it('defaults thread audio to daemon-owned disabled state', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    expect(useStore.getState().agents['agent-1'].audioOnTurnEnd).toBe(false);
-    expect(useStore.getState().agents['agent-2'].audioOnTurnEnd).toBe(false);
+    expect(useStore.getState().sessions['session-1'].audioOnTurnEnd).toBe(false);
+    expect(useStore.getState().sessions['session-2'].audioOnTurnEnd).toBe(false);
   });
 
   it('does not notify when a focused agent completes its turn', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
-    useStore.setState({ focusedId: 'agent-1' });
+    useStore.setState({ focusedId: 'session-1' });
 
-    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'idle' } });
 
-    expect(useStore.getState().agents['agent-1'].turnNotifications).toHaveLength(0);
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(0);
   });
 
   it('keeps only the latest completed-turn notification for a background agent', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 2, event: { kind: 'status', status: 'idle' } });
-    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 3, event: { kind: 'status', status: 'working' } });
-    __testApplyServerMsg({ t: 'event', agentId: 'agent-1', seq: 4, event: { kind: 'status', status: 'error' } });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 3, event: { kind: 'status', status: 'working' } });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 4, event: { kind: 'status', status: 'error' } });
 
-    const notifications = useStore.getState().agents['agent-1'].turnNotifications;
+    const notifications = useStore.getState().sessions['session-1'].turnNotifications;
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toMatchObject({ seq: 4, severity: 'failure' });
   });
 
   it('persists the focused agent', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
 
-    expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-1');
+    expect(localStorage.getItem('tandem.focusedSession')).toBe('session-1');
   });
 
   it('persists focus changes made by keyboard navigation', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
     useStore.getState().nav(1);
 
-    expect(useStore.getState().focusedId).toBe('agent-2');
-    expect(localStorage.getItem('tandem.focusedAgent')).toBe('agent-2');
+    expect(useStore.getState().focusedId).toBe('session-2');
+    expect(localStorage.getItem('tandem.focusedSession')).toBe('session-2');
   });
 
   it('persists every unsent prompt draft', () => {
-    useStore.getState().setDraft('agent-1', 'Keep this prompt after refreshing.');
-    useStore.getState().setDraft('agent-2', 'And this one too.');
+    useStore.getState().setDraft('session-1', 'Keep this prompt after refreshing.');
+    useStore.getState().setDraft('session-2', 'And this one too.');
 
     expect(JSON.parse(localStorage.getItem('tandem.promptDrafts') ?? '{}')).toEqual({
-      'agent-1': 'Keep this prompt after refreshing.',
-      'agent-2': 'And this one too.',
+      'session-1': 'Keep this prompt after refreshing.',
+      'session-2': 'And this one too.',
     });
   });
 
   it('restores the selected pane for each focused agent', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
 
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
     useStore.getState().setPane('diff');
-    useStore.getState().focus('agent-2');
+    useStore.getState().focus('session-2');
     expect(useStore.getState().pane).toBe('chat');
 
     useStore.getState().setPane('shell');
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
     expect(useStore.getState().pane).toBe('diff');
-    expect(JSON.parse(localStorage.getItem('tandem.agentPanes') ?? '{}')).toEqual({ 'agent-1': 'diff', 'agent-2': 'shell' });
+    expect(JSON.parse(localStorage.getItem('tandem.sessionPanes') ?? '{}')).toEqual({ 'session-1': 'diff', 'session-2': 'shell' });
   });
 
   it('hydrates daemon-owned audio preference and ready state from transcript events', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 3, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 3, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
       transcript: [
         { seq: 1, event: { kind: 'audio_preference', enabled: true } },
         { seq: 2, event: { kind: 'audio_state', state: 'rendering', seq: 9 } },
         { seq: 3, event: { kind: 'audio_state', state: 'ready', seq: 9 } },
       ],
     });
-    const agent = useStore.getState().agents['agent-1'];
+    const agent = useStore.getState().sessions['session-1'];
     expect(agent.audioOnTurnEnd).toBe(true);
     expect(agent.audioState).toBe('ready');
     expect(agent.audioSeq).toBe(9);
@@ -220,7 +220,7 @@ describe('annotations store reducer', () => {
   it('hydrates annotations from the snapshot message', () => {
     __testApplyServerMsg({
       t: 'snapshot',
-      agentId: 'agent-1',
+      sessionId: 'session-1',
       seq: 5,
       transcript: [],
       status: 'idle',
@@ -229,13 +229,13 @@ describe('annotations store reducer', () => {
       queuedPrompts: [],
       annotations: [annotation()],
     });
-    expect(useStore.getState().annotations['agent-1']).toEqual([annotation()]);
+    expect(useStore.getState().annotations['session-1']).toEqual([annotation()]);
   });
 
   it('defaults to an empty list when the snapshot omits annotations', () => {
     __testApplyServerMsg({
       t: 'snapshot',
-      agentId: 'agent-2',
+      sessionId: 'session-2',
       seq: 0,
       transcript: [],
       status: 'idle',
@@ -243,13 +243,13 @@ describe('annotations store reducer', () => {
       pendingApprovals: [],
       queuedPrompts: [],
     });
-    expect(useStore.getState().annotations['agent-2']).toEqual([]);
+    expect(useStore.getState().annotations['session-2']).toEqual([]);
   });
 
   it('replaces the annotation list wholesale on the annotations broadcast', () => {
     __testApplyServerMsg({
       t: 'snapshot',
-      agentId: 'agent-1',
+      sessionId: 'session-1',
       seq: 5,
       transcript: [],
       status: 'idle',
@@ -261,19 +261,19 @@ describe('annotations store reducer', () => {
 
     __testApplyServerMsg({
       t: 'annotations',
-      agentId: 'agent-1',
+      sessionId: 'session-1',
       annotations: [annotation({ id: 'a2', comment: 'edited' })],
     });
 
-    expect(useStore.getState().annotations['agent-1']).toEqual([annotation({ id: 'a2', comment: 'edited' })]);
+    expect(useStore.getState().annotations['session-1']).toEqual([annotation({ id: 'a2', comment: 'edited' })]);
   });
 
-  it('only replaces annotations for the targeted agent, keyed by agentId', () => {
-    __testApplyServerMsg({ t: 'annotations', agentId: 'agent-1', annotations: [annotation()] });
-    __testApplyServerMsg({ t: 'annotations', agentId: 'agent-2', annotations: [] });
+  it('only replaces annotations for the targeted agent, keyed by sessionId', () => {
+    __testApplyServerMsg({ t: 'annotations', sessionId: 'session-1', annotations: [annotation()] });
+    __testApplyServerMsg({ t: 'annotations', sessionId: 'session-2', annotations: [] });
 
-    expect(useStore.getState().annotations['agent-1']).toEqual([annotation()]);
-    expect(useStore.getState().annotations['agent-2']).toEqual([]);
+    expect(useStore.getState().annotations['session-1']).toEqual([annotation()]);
+    expect(useStore.getState().annotations['session-2']).toEqual([]);
   });
 });
 
@@ -284,7 +284,7 @@ describe('context usage', () => {
   it('rebuilds usage from the replayed transcript with the daemon timestamp', () => {
     __testApplyServerMsg({
       t: 'snapshot',
-      agentId: 'agent-1',
+      sessionId: 'session-1',
       seq: 2,
       transcript: [
         { seq: 1, event: { kind: 'usage', used: 100, size: 1000, updatedAt: 1_700_000_000_000 } },
@@ -296,7 +296,7 @@ describe('context usage', () => {
       queuedPrompts: [],
     });
 
-    expect(useStore.getState().agents['agent-1'].usage).toEqual({
+    expect(useStore.getState().sessions['session-1'].usage).toEqual({
       used: 250,
       size: 1000,
       cost: { amount: 0.5, currency: 'USD' },
@@ -306,13 +306,13 @@ describe('context usage', () => {
 
   it('keeps the daemon timestamp for live usage events instead of arrival time', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
     __testApplyServerMsg({
-      t: 'event', agentId: 'agent-1', seq: 1, event: { kind: 'usage', used: 42, size: 1000, updatedAt: 1_700_000_000_000 },
+      t: 'event', sessionId: 'session-1', seq: 1, event: { kind: 'usage', used: 42, size: 1000, updatedAt: 1_700_000_000_000 },
     });
 
-    expect(useStore.getState().agents['agent-1'].usage?.updatedAt).toBe(1_700_000_000_000);
+    expect(useStore.getState().sessions['session-1'].usage?.updatedAt).toBe(1_700_000_000_000);
   });
 });
 
@@ -338,58 +338,58 @@ describe('audio focus retention on a hidden document', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
 
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
-    useStore.setState({ order: ['agent-1'], pane: 'chat', focusedId: null });
+    useStore.setState({ order: ['session-1'], pane: 'chat', focusedId: null });
 
     // Prime the store's internal audioFocusAgent tracking to a known (null)
     // baseline first: syncAudioFocus short-circuits when nothing changed, so
     // asserting on the very first call would be at the mercy of whatever
     // earlier tests in this file left it pointing at.
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    useStore.getState().focus('agent-1'); // hidden + idle engine -> null baseline
+    useStore.getState().focus('session-1'); // hidden + idle engine -> null baseline
 
     const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
 
-    setEnginePlaylist('agent-1', [1]);
-    enginePlay('agent-1', 1);
+    setEnginePlaylist('session-1', [1]);
+    enginePlay('session-1', 1);
     await vi.waitFor(() => expect(getEngineState().status).toBe('playing'));
 
-    useStore.getState().focus('agent-1'); // still hidden, now actually listening
+    useStore.getState().focus('session-1'); // still hidden, now actually listening
 
-    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: true });
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', sessionId: 'session-1', focused: true });
 
     // Paused mid-section (not an idle/never-started engine) — still counts
     // as listening, so focus must stay pinned.
     enginePause();
     __getEngineElementForTests()!.dispatchEvent(new Event('pause'));
     sendSpy.mockClear();
-    useStore.getState().focus('agent-1');
-    expect(sendSpy).not.toHaveBeenCalled(); // already pinned to agent-1; nothing changed
+    useStore.getState().focus('session-1');
+    expect(sendSpy).not.toHaveBeenCalled(); // already pinned to session-1; nothing changed
 
     // Now the engine is genuinely torn down (e.g. the chat closed) — a
     // hidden document with nothing playing/armed must not keep pre-rendering
     // pinned forever.
-    setEnginePlaylist('agent-1', []);
-    useStore.getState().focus('agent-1');
-    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: false });
+    setEnginePlaylist('session-1', []);
+    useStore.getState().focus('session-1');
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', sessionId: 'session-1', focused: false });
   });
 
   it('still uses the plain visible/chat-pane rule when not hidden', () => {
     __testApplyServerMsg({
-      t: 'snapshot', agentId: 'agent-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
     });
-    useStore.setState({ order: ['agent-1'], pane: 'chat', focusedId: null });
+    useStore.setState({ order: ['session-1'], pane: 'chat', focusedId: null });
 
     // Prime to a known (null) baseline first — see note in the previous test.
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
 
     const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
 
-    useStore.getState().focus('agent-1');
+    useStore.getState().focus('session-1');
 
-    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', agentId: 'agent-1', focused: true });
+    expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', sessionId: 'session-1', focused: true });
   });
 });

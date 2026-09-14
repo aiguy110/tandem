@@ -37,8 +37,8 @@ func (discardEvents) Append(event eventlog.Event) (eventlog.LoggedEvent, error) 
 	return eventlog.LoggedEvent{Event: event}, nil
 }
 
-func (f fakeAssets) Get(agentID, assetID string) (assets.Stored, error) {
-	if agentID != "api-1" || assetID != f.stored.AssetID {
+func (f fakeAssets) Get(sessionID, assetID string) (assets.Stored, error) {
+	if sessionID != "api-1" || assetID != f.stored.AssetID {
 		return assets.Stored{}, assets.ErrNotFound
 	}
 	return f.stored, nil
@@ -64,7 +64,7 @@ func startMock(t *testing.T, mutate func(*AdapterConfig)) *Adapter {
 		t.Skip("node is required for the shared ACP mock")
 	}
 	cfg := AdapterConfig{
-		AgentID: "api-1",
+		SessionID: "api-1",
 		Cwd:     t.TempDir(),
 		Transport: acp.Config{
 			Command: node,
@@ -99,7 +99,7 @@ func TestConfiguredMCPServersAreDeclaredForNewAndLoadedSessions(t *testing.T) {
 				cfg.MCPServers = []MCPServer{{Name: "playwright", Command: "/tools/node", Args: []string{"playwright-mcp"}}}
 				cfg.Transport.Env = append(cfg.Transport.Env, "TANDEM_MOCK_EXPECT_MCP=true")
 			})
-			if a.SessionID() == "" {
+			if a.ExternalSessionID() == "" {
 				t.Fatal("session was not initialized")
 			}
 		})
@@ -157,7 +157,7 @@ func TestNormalizeToolImagesIntoDurableAssets(t *testing.T) {
 	if err := png.Encode(&pngData, img); err != nil {
 		t.Fatal(err)
 	}
-	a := &Adapter{cfg: AdapterConfig{AgentID: "api-1", Cwd: root, Assets: assetStore}}
+	a := &Adapter{cfg: AdapterConfig{SessionID: "api-1", Cwd: root, Assets: assetStore}}
 
 	inline, _ := json.Marshal([]any{map[string]any{"type": "content", "content": map[string]any{
 		"type": "image", "data": base64.StdEncoding.EncodeToString(pngData.Bytes()), "mimeType": "image/png",
@@ -236,8 +236,8 @@ func waitEvent(t *testing.T, a *Adapter, kind string, match func(map[string]any)
 
 func TestLifecycleApprovalAndNormalizedUpdates(t *testing.T) {
 	a := startMock(t, nil)
-	if a.SessionID() != "sess_mock" {
-		t.Fatalf("session ID = %q", a.SessionID())
+	if a.ExternalSessionID() != "sess_mock" {
+		t.Fatalf("session ID = %q", a.ExternalSessionID())
 	}
 	if caps := a.Capabilities(); !caps.Structured || !caps.LoadSession || !caps.ForkSession || !caps.Image || !caps.Steering {
 		t.Fatalf("capabilities = %#v", caps)
@@ -321,8 +321,8 @@ func TestAsideForksAndWrapsForkUpdates(t *testing.T) {
 	if inner["text"] != "Aside answer." {
 		t.Fatalf("aside event = %#v", got)
 	}
-	if a.SessionID() != "sess_mock" {
-		t.Fatalf("parent session changed to %q", a.SessionID())
+	if a.ExternalSessionID() != "sess_mock" {
+		t.Fatalf("parent session changed to %q", a.ExternalSessionID())
 	}
 }
 
@@ -569,14 +569,14 @@ func TestInterruptCorrelatesPermissionAndCancelsLiveTools(t *testing.T) {
 
 func TestLoadSessionCapturesIDAndSuppressesReplay(t *testing.T) {
 	a := startMock(t, func(cfg *AdapterConfig) { cfg.ResumeSessionID = "sess_external" })
-	if a.SessionID() != "sess_external" {
-		t.Fatalf("loaded session = %q", a.SessionID())
+	if a.ExternalSessionID() != "sess_external" {
+		t.Fatalf("loaded session = %q", a.ExternalSessionID())
 	}
 	if err := a.LoadSession(context.Background(), "sess_second", false); err != nil {
 		t.Fatal(err)
 	}
-	if a.SessionID() != "sess_second" {
-		t.Fatalf("reloaded session = %q", a.SessionID())
+	if a.ExternalSessionID() != "sess_second" {
+		t.Fatalf("reloaded session = %q", a.ExternalSessionID())
 	}
 }
 
@@ -736,7 +736,7 @@ func TestConfigOptionsFlattenGroups(t *testing.T) {
 // AdapterConfig.ParentToolCallIDPath.
 func newUpdateAdapter(parentPath []string) *Adapter {
 	return &Adapter{
-		cfg:           AdapterConfig{AgentID: "api-1"},
+		cfg:           AdapterConfig{SessionID: "api-1"},
 		ctx:           context.Background(),
 		events:        make(chan eventlog.Event, 16),
 		liveTools:     map[string]struct{}{},

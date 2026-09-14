@@ -92,24 +92,24 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .app {
   display: grid;
   grid-template-rows: 46px 1fr auto;
-  grid-template-columns: var(--agents-rail-width, 240px) minmax(0, 1fr) var(--approvals-rail-width, 300px);
+  grid-template-columns: var(--sessions-rail-width, 240px) minmax(0, 1fr) var(--approvals-rail-width, 300px);
   grid-template-areas:
     'bar bar bar'
-    'agents focus approvals'
+    'sessions focus approvals'
     'inspector inspector inspector';
   height: 100%;
   transition: grid-template-columns .225s ease;
 }
-.app.agents-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 300px); }
-.app.approvals-collapsed { grid-template-columns: var(--agents-rail-width, 240px) minmax(0, 1fr) 34px; }
-.app.agents-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
+.app.sessions-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 300px); }
+.app.approvals-collapsed { grid-template-columns: var(--sessions-rail-width, 240px) minmax(0, 1fr) 34px; }
+.app.sessions-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
 
 /* Below this width, both rails collapse by default (toggleable regardless). */
 @media (max-width: 860px) {
-  .app { grid-template-columns: var(--agents-rail-width, 200px) minmax(0, 1fr) var(--approvals-rail-width, 260px); }
-  .app.agents-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 260px); }
-  .app.approvals-collapsed { grid-template-columns: var(--agents-rail-width, 200px) minmax(0, 1fr) 34px; }
-  .app.agents-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
+  .app { grid-template-columns: var(--sessions-rail-width, 200px) minmax(0, 1fr) var(--approvals-rail-width, 260px); }
+  .app.sessions-collapsed { grid-template-columns: 34px minmax(0, 1fr) var(--approvals-rail-width, 260px); }
+  .app.approvals-collapsed { grid-template-columns: var(--sessions-rail-width, 200px) minmax(0, 1fr) 34px; }
+  .app.sessions-collapsed.approvals-collapsed { grid-template-columns: 34px 1fr 34px; }
 }
 
 /* ---- conductor bar ---- */
@@ -161,7 +161,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .dock-resize-handle:hover, body.dock-resizing .dock-resize-handle { background: var(--agent); opacity: .45; }
 body.dock-resizing { cursor: col-resize; user-select: none; }
 body.dock-resizing .app { transition: none; }
-.agents { grid-area: agents; }
+.sessions { grid-area: sessions; }
 .approvals { grid-area: approvals; }
 .rail-head {
   /* Above the host dividers, which slide up underneath it as they push out. */
@@ -203,14 +203,14 @@ body.dock-resizing .app { transition: none; }
 .rail.collapsed .rail-expanded {
   position: absolute;
   inset: 0 auto 0 0;
-  width: var(--agents-rail-width, 240px);
+  width: var(--sessions-rail-width, 240px);
   overflow: hidden;
   pointer-events: none;
 }
 .rail-r.collapsed .rail-expanded { inset: 0 0 0 auto; width: var(--approvals-rail-width, 300px); }
 /* Working dots otherwise remain visible at the rail's anchored edge until the
    final unmount. Let them leave over the same interval as the dock instead. */
-.rail-expanded.closing .agent-row .dot { animation: rail-status-out .195s var(--ease-in) both; }
+.rail-expanded.closing .session-row .dot { animation: rail-status-out .195s var(--ease-in) both; }
 @keyframes rail-status-out { from { opacity: 1; } to { opacity: 0; } }
 .count {
   min-width: 18px; text-align: center; padding: 0 5px; border-radius: 9px;
@@ -222,105 +222,105 @@ body.dock-resizing .app { transition: none; }
 .count.sev-attention { background: var(--warn-soft); color: var(--warn); }
 .count.sev-failure { background: var(--err-soft); color: var(--err); }
 
-.agent-row {
+.session-row {
   display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px;
   padding: 9px 12px; border-bottom: 1px solid var(--border);
   cursor: grab; align-items: start; position: relative;
 }
-.agent-row:hover { background: var(--surface-2); }
-.agent-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
-.agent-row.dragging { opacity: .45; cursor: grabbing; }
-.agent-row.drop-before { box-shadow: inset 0 3px 0 var(--agent); }
-.agent-row.drop-after { box-shadow: inset 0 -3px 0 var(--agent); }
-.agent-row.active.drop-before { box-shadow: inset 2px 0 0 var(--agent), inset 0 3px 0 var(--agent); }
-.agent-row.active.drop-after { box-shadow: inset 2px 0 0 var(--agent), inset 0 -3px 0 var(--agent); }
-.agent-drop-end { min-height: 0; }
+.session-row:hover { background: var(--surface-2); }
+.session-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
+.session-row.dragging { opacity: .45; cursor: grabbing; }
+.session-row.drop-before { box-shadow: inset 0 3px 0 var(--agent); }
+.session-row.drop-after { box-shadow: inset 0 -3px 0 var(--agent); }
+.session-row.active.drop-before { box-shadow: inset 2px 0 0 var(--agent), inset 0 3px 0 var(--agent); }
+.session-row.active.drop-after { box-shadow: inset 2px 0 0 var(--agent), inset 0 -3px 0 var(--agent); }
+.session-drop-end { min-height: 0; }
 /* Keep an unintrusive drop target after the final card without suggesting a
    phantom extra row while a card is being dragged. */
-.agent-drop-end.active { min-height: 32px; }
-.agent-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+.session-drop-end.active { min-height: 32px; }
+.session-row .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
 /* The actions float over the row's own text, so they carry an opaque chip of
    their own rather than trying to read against whatever they overlap. Covering
    a few characters of the name is preferable to an invisible pencil. */
-.agent-actions {
+.session-actions {
   position: absolute; right: 8px; top: 6px;
   display: flex; gap: 2px; padding: 2px;
   background: var(--surface-3); border: 1px solid var(--border-strong);
   border-radius: var(--r-sm); box-shadow: 0 2px 8px rgba(0, 0, 0, .28);
 }
-.agent-row .delete-btn, .agent-row .rename-btn {
+.session-row .delete-btn, .session-row .rename-btn {
   align-self: center; background: transparent; border: none; padding: 2px 5px;
   font-size: var(--fs-sm); line-height: 1; color: var(--text-dim);
   border-radius: var(--r-sm);
 }
-.agent-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
-.agent-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
-.agent-context-menu {
+.session-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
+.session-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
+.session-context-menu {
   position: fixed; z-index: 20; min-width: 150px; padding: 4px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
   box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
 }
-.agent-context-menu button {
+.session-context-menu button {
   display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); text-align: left;
 }
-.agent-context-menu button:hover { background: var(--surface-2); }
-.agent-context-menu button.danger { color: var(--err); }
-.agent-context-menu button.danger:hover { background: var(--err-soft); }
-.agent-details-popover {
+.session-context-menu button:hover { background: var(--surface-2); }
+.session-context-menu button.danger { color: var(--err); }
+.session-context-menu button.danger:hover { background: var(--err-soft); }
+.session-details-popover {
   position: fixed; z-index: 21; width: min(390px, calc(100vw - 16px)); max-height: min(430px, calc(100vh - 16px));
   overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
   box-shadow: 0 16px 38px rgba(0, 0, 0, .38); transform-origin: top left;
-  animation: agent-details-in .24s cubic-bezier(.2, .8, .2, 1) both;
+  animation: session-details-in .24s cubic-bezier(.2, .8, .2, 1) both;
 }
-@keyframes agent-details-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: scale(1); } }
-.agent-details-head {
+@keyframes session-details-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: scale(1); } }
+.session-details-head {
   position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 10px;
   padding: 10px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: grab; user-select: none;
 }
-.agent-details-head:active { cursor: grabbing; }
-.agent-details-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-details-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
-.agent-details-head button { border: 0; background: transparent; color: var(--text-faint); font-size: 20px; line-height: 1; padding: 0 3px; cursor: pointer; }
-.agent-details-head button:hover { color: var(--text); }
-.agent-details-status { padding: 2px 6px; border-radius: 999px; color: var(--text); background: var(--surface-3); font-size: var(--fs-xs); text-transform: capitalize; }
-.agent-details-status.working { color: var(--working); }
-.agent-details-status.blocked { color: var(--warn); }
-.agent-details-status.error { color: var(--err); }
-.agent-details-body { padding: 5px 12px 12px; }
-.agent-detail { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
-.agent-detail:last-child { border-bottom: 0; }
-.agent-detail > span { color: var(--text-faint); }
-.agent-detail code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font: var(--fs-xs)/1.45 var(--font-mono); }
-.agent-detail code.plain { font-family: inherit; font-size: var(--fs-sm); }
+.session-details-head:active { cursor: grabbing; }
+.session-details-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.session-details-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.session-details-head button { border: 0; background: transparent; color: var(--text-faint); font-size: 20px; line-height: 1; padding: 0 3px; cursor: pointer; }
+.session-details-head button:hover { color: var(--text); }
+.session-details-status { padding: 2px 6px; border-radius: 999px; color: var(--text); background: var(--surface-3); font-size: var(--fs-xs); text-transform: capitalize; }
+.session-details-status.working { color: var(--working); }
+.session-details-status.blocked { color: var(--warn); }
+.session-details-status.error { color: var(--err); }
+.session-details-body { padding: 5px 12px 12px; }
+.session-detail { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.session-detail:last-child { border-bottom: 0; }
+.session-detail > span { color: var(--text-faint); }
+.session-detail code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font: var(--fs-xs)/1.45 var(--font-mono); }
+.session-detail code.plain { font-family: inherit; font-size: var(--fs-sm); }
 .dot.idle { background: var(--ok); }
 .dot.working { background: var(--working); box-shadow: 0 0 0 3px var(--working-soft); animation: pulse 2.1s infinite; }
 .dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
 .dot.error { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
-.agent-row .name { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
-.agent-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
+.session-row .name { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
+.session-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
 /* Host dividers are push-out sticky headers: each group is its own box, so a
    pinned divider is shoved off the top by the next group's divider rather than
    the two stacking up. They pin below the rail head, which is sticky at 0. */
-.agent-host-group { display: flow-root; }
-.agent-host-divider {
+.session-host-group { display: flow-root; }
+.session-host-divider {
   position: sticky; top: var(--rail-head-h, 34px); z-index: 1;
   display: flex; align-items: center; gap: 7px; margin: 0; padding: 5px 12px;
   background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 2px solid var(--border-strong);
   color: var(--text-dim); font: 600 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .06em;
 }
-.agent-host-group:first-child .agent-host-divider { border-top: none; }
-.agent-host-link {
+.session-host-group:first-child .session-host-divider { border-top: none; }
+.session-host-link {
   margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none;
   padding: 1px 6px 1px 5px; border: 1px solid var(--border); border-radius: 999px;
   font: 600 var(--fs-xs) var(--font-mono); letter-spacing: .04em;
 }
-.agent-host-link-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.agent-host-link.link-online { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
-.agent-host-link.link-pending { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
-.agent-host-link.link-rejected { color: var(--err); background: var(--err-soft); border-color: transparent; }
-.agent-host-link.link-offline { color: var(--text-faint); }
+.session-host-link-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.session-host-link.link-online { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+.session-host-link.link-pending { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.session-host-link.link-rejected { color: var(--err); background: var(--err-soft); border-color: transparent; }
+.session-host-link.link-offline { color: var(--text-faint); }
 .resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
 .resume-host select, .spawn-host select {
   flex: 1; height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border);
@@ -329,14 +329,14 @@ body.dock-resizing .app { transition: none; }
 .resume-host select:hover, .spawn-host select:hover { border-color: var(--border-strong); }
 .resume-host select:focus, .spawn-host select:focus { outline: none; border-color: var(--agent); }
 .resume-host-badge, .notification-host-badge { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font: 500 var(--fs-xs) var(--font-mono); }
-.agent-rename-input {
+.session-rename-input {
   width: 100%; min-width: 0; padding: 1px 4px; font: inherit; color: var(--text);
   background: var(--surface); border: 1px solid var(--agent); border-radius: var(--r-sm);
 }
-.agent-rename-error { color: var(--err); font-size: var(--fs-xs); margin-top: 2px; }
-.agent-row .ws { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 5px; min-width: 0; }
-.agent-row .ws-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent-row .badge { margin-left: auto; }
+.session-rename-error { color: var(--err); font-size: var(--fs-xs); margin-top: 2px; }
+.session-row .ws { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.session-row .ws-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-row .badge { margin-left: auto; }
 .git-state { flex: none; width: 6px; height: 6px; border-radius: 50%; }
 .git-state.dirty { background: var(--err); }
 .git-state.ahead, .git-state.diverged, .git-state.target_missing { background: var(--warn); }
@@ -1157,15 +1157,15 @@ body.dock-resizing .app { transition: none; }
 .git-ref-results { transform-origin: top center; animation: popup-in var(--motion-in) var(--ease-out) both; }
 .git-ref-results.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
 /* Nothing on the way out should still be clickable. */
-.git-ref-results.closing, .agent-context-menu.closing, .attachment-menu.closing,
-.annotation-popover.closing, .agent-details-popover.closing { pointer-events: none; }
-.agent-context-menu { transform-origin: top left; animation: popup-in var(--motion-in) var(--ease-out) both; }
-.agent-context-menu.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+.git-ref-results.closing, .session-context-menu.closing, .attachment-menu.closing,
+.annotation-popover.closing, .session-details-popover.closing { pointer-events: none; }
+.session-context-menu { transform-origin: top left; animation: popup-in var(--motion-in) var(--ease-out) both; }
+.session-context-menu.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
 .attachment-menu { transform-origin: bottom right; animation: popup-in var(--motion-in) var(--ease-out) both; }
 .attachment-menu.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
 .annotation-popover { transform-origin: top left; animation: popup-in var(--motion-in) var(--ease-out) both; }
 .annotation-popover.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
-.agent-details-popover.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
+.session-details-popover.closing { animation: popup-out var(--motion-out) var(--ease-in) both; }
 
 /* Transcript: user messages and tool calls fade up as they arrive, and pulse
    when they change (a tool call flipping pending -> completed, say). Only rows
@@ -1176,9 +1176,9 @@ body.dock-resizing .app { transition: none; }
 .is-updated-b { animation: ev-updated .825s ease-out; }
 
 @media (prefers-reduced-motion: reduce) {
-  .modal-scrim, .modal-scrim .modal, .git-ref-results, .agent-context-menu,
-  .attachment-menu, .annotation-popover, .agent-details-popover,
-  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded.closing .agent-row .dot,
+  .modal-scrim, .modal-scrim .modal, .git-ref-results, .session-context-menu,
+  .attachment-menu, .annotation-popover, .session-details-popover,
+  .ev-enter, .is-updated-a, .is-updated-b, .rail-expanded.closing .session-row .dot,
   .rail-toggle { animation-duration: 1ms; }
   .card-body-wrap, .card-body { transition-duration: 1ms; }
 }

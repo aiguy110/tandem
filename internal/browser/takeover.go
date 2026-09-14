@@ -11,13 +11,13 @@ import (
 type TakeoverOptions struct {
 	Token       string
 	AgentExists func(string) bool
-	OnRequest   func(agentID, reqID, reason string)
-	OnResolved  func(agentID, reqID string)
+	OnRequest   func(sessionID, reqID, reason string)
+	OnResolved  func(sessionID, reqID string)
 }
 
 type takeover struct {
-	agentID  string
-	resolved bool
+	sessionID string
+	resolved  bool
 }
 
 // Takeovers is the authenticated HTTP state behind tandem mcp-control. The WS
@@ -40,8 +40,11 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPost:
-		agentID := r.URL.Query().Get("agentId")
-		if agentID == "" || t.opts.AgentExists == nil || !t.opts.AgentExists(agentID) {
+		sessionID := r.URL.Query().Get("sessionId")
+		if sessionID == "" {
+			sessionID = r.URL.Query().Get("agentId")
+		}
+		if sessionID == "" || t.opts.AgentExists == nil || !t.opts.AgentExists(sessionID) {
 			takeoverJSON(w, http.StatusNotFound, map[string]string{"error": "no such agent or browser disabled"})
 			return
 		}
@@ -55,10 +58,10 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.mu.Lock()
 		t.seq++
 		reqID := fmt.Sprintf("tk_%d", t.seq)
-		t.requests[reqID] = &takeover{agentID: agentID}
+		t.requests[reqID] = &takeover{sessionID: sessionID}
 		t.mu.Unlock()
 		if t.opts.OnRequest != nil {
-			t.opts.OnRequest(agentID, reqID, body.Reason)
+			t.opts.OnRequest(sessionID, reqID, body.Reason)
 		}
 		takeoverJSON(w, http.StatusOK, map[string]string{"reqId": reqID})
 	case http.MethodGet:
@@ -79,11 +82,11 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (t *Takeovers) Release(agentID string) {
+func (t *Takeovers) Release(sessionID string) {
 	var resolved []string
 	t.mu.Lock()
 	for reqID, request := range t.requests {
-		if request.agentID == agentID && !request.resolved {
+		if request.sessionID == sessionID && !request.resolved {
 			request.resolved = true
 			resolved = append(resolved, reqID)
 		}
@@ -91,7 +94,7 @@ func (t *Takeovers) Release(agentID string) {
 	t.mu.Unlock()
 	if t.opts.OnResolved != nil {
 		for _, reqID := range resolved {
-			t.opts.OnResolved(agentID, reqID)
+			t.opts.OnResolved(sessionID, reqID)
 		}
 	}
 }

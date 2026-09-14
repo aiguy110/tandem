@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
-import type { AgentView } from '../../store';
+import type { SessionView } from '../../store';
 import { findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
 import { __resetForTests } from '../../audio/engine';
 import { AudioEngineRoot } from '../audio/AudioEngineRoot';
@@ -16,9 +16,9 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
 });
 
-function agent(): AgentView {
+function agent(): SessionView {
   return {
-    id: 'agent-1',
+    id: 'session-1',
     name: 'Mobile test',
     workspace: { kind: 'existing', repo: 'repo', repoPath: '/repo', branch: 'main', cwd: '/repo' },
     status: 'idle',
@@ -81,7 +81,7 @@ describe('TranscriptPane voice rendering', () => {
     withTool.lastSeq = 1;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -105,7 +105,7 @@ describe('TranscriptPane voice rendering', () => {
     withTool.lastSeq = 1;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -130,7 +130,7 @@ describe('TranscriptPane voice rendering', () => {
     withTool.lastSeq = 3;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -152,7 +152,7 @@ describe('TranscriptPane voice rendering', () => {
     withTool.lastSeq = 1;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withTool }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -172,7 +172,7 @@ describe('TranscriptPane voice rendering', () => {
     vi.stubGlobal('fetch', fetchMock);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
@@ -182,7 +182,7 @@ describe('TranscriptPane voice rendering', () => {
     // engine, see ui/src/audio/engine.ts) -- readiness now shows up as the
     // row's InlineAudioBar play control.
     await waitFor(() => expect(view.getByRole('button', { name: 'Play response audio' })).toBeTruthy());
-    expect(fetchMock).toHaveBeenCalledWith('/api/agents/agent-1/messages/1/audio', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/agents/session-1/messages/1/audio', {
       method: 'POST', headers: { Authorization: 'Bearer test-token' },
     });
   });
@@ -197,7 +197,7 @@ describe('TranscriptPane voice rendering', () => {
     vi.stubGlobal('fetch', fetchMock);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': ready }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
@@ -218,16 +218,16 @@ describe('TranscriptPane voice rendering', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': ready }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': ready }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
     act(() => {
       useStore.setState((state) => ({
-        agents: {
-          ...state.agents,
-          'agent-1': {
-            ...state.agents['agent-1'],
+        sessions: {
+          ...state.sessions,
+          'session-1': {
+            ...state.sessions['session-1'],
             audioState: 'ready', audioSeq: 1, audioReadySeqs: [1], audioReadyRevision: 1,
           },
         },
@@ -241,9 +241,9 @@ describe('TranscriptPane voice rendering', () => {
 
     act(() => {
       useStore.setState((state) => ({
-        agents: {
-          ...state.agents,
-          'agent-1': { ...state.agents['agent-1'], audioReadyRevision: 2 },
+        sessions: {
+          ...state.sessions,
+          'session-1': { ...state.sessions['session-1'], audioReadyRevision: 2 },
         },
       }));
     });
@@ -268,7 +268,7 @@ describe('TranscriptPane voice rendering', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
@@ -309,7 +309,7 @@ describe('TranscriptPane voice rendering', () => {
     const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
@@ -347,7 +347,7 @@ describe('TranscriptPane tool diffs', () => {
     }];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': edited }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': edited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -369,7 +369,7 @@ describe('TranscriptPane tool diffs', () => {
     }];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': edited }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': edited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -393,15 +393,15 @@ describe('TranscriptPane composer completions', () => {
     const sendAside = vi.fn().mockResolvedValue({});
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
-      drafts: { 'agent-1': '/btw Why SQLite?' }, aside: sendAside,
+      sessions: { 'session-1': withAside }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': '/btw Why SQLite?' }, aside: sendAside,
     }, true);
 
     const view = render(<TranscriptPane />);
     expect(view.getByText('Aside · excluded from future turns')).toBeTruthy();
     expect(view.getByText('It keeps deployment self-contained.')).toBeTruthy();
     fireEvent.keyDown(view.getByRole('textbox'), { key: 'Enter' });
-    await waitFor(() => expect(sendAside).toHaveBeenCalledWith('agent-1', 'Why SQLite?'));
+    await waitFor(() => expect(sendAside).toHaveBeenCalledWith('session-1', 'Why SQLite?'));
   });
 
   it('only recognizes slash commands at a message or whitespace boundary', () => {
@@ -424,7 +424,7 @@ describe('TranscriptPane composer completions', () => {
     withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Run /help then src/help.' } }];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': withCommand }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -437,8 +437,8 @@ describe('TranscriptPane composer completions', () => {
     withCommand.commands = [{ name: 'help', description: 'Show help' }];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
-      drafts: { 'agent-1': 'Run /help then src/help.' },
+      sessions: { 'session-1': withCommand }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'Run /help then src/help.' },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -452,8 +452,8 @@ describe('TranscriptPane composer completions', () => {
     withAside.asideSupport = true;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
-      drafts: { 'agent-1': '/btw Is this isolated?' },
+      sessions: { 'session-1': withAside }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': '/btw Is this isolated?' },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -465,8 +465,8 @@ describe('TranscriptPane composer completions', () => {
     withAside.asideSupport = true;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withAside }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
-      drafts: { 'agent-1': 'Ask first, then /btw this.' },
+      sessions: { 'session-1': withAside }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'Ask first, then /btw this.' },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -479,8 +479,8 @@ describe('TranscriptPane composer completions', () => {
     withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Read @FIX_ME.md then /help.' } }];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withCommand }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
-      drafts: { 'agent-1': 'Read @FIX_ME.md then /help.' },
+      sessions: { 'session-1': withCommand }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'Read @FIX_ME.md then /help.' },
     }, true);
 
     const view = render(<TranscriptPane />);
@@ -493,14 +493,14 @@ describe('TranscriptPane composer completions', () => {
     const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: 'src/index.ts', isDir: false }]);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
     const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@src/in', selectionStart: 7 } });
 
     const option = await waitFor(() => view.getByText('@src/index.ts'));
-    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', 'src');
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('session-1', 'src');
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@src/index.ts ');
   });
@@ -509,14 +509,14 @@ describe('TranscriptPane composer completions', () => {
     const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: '../sibling', isDir: true }]);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
     const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@../', selectionStart: 4 } });
 
     const option = await waitFor(() => view.getByText('@../sibling/'));
-    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', '..');
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('session-1', '..');
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@../sibling/');
   });
@@ -525,14 +525,14 @@ describe('TranscriptPane composer completions', () => {
     const listWorkspaceEntries = vi.fn().mockResolvedValue([{ path: '~/Projects', isDir: true }]);
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] }, listWorkspaceEntries,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, listWorkspaceEntries,
     }, true);
     const view = render(<TranscriptPane />);
     const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '@~/Projects', selectionStart: 11 } });
 
     const option = await waitFor(() => view.getByText('@~/Projects/'));
-    expect(listWorkspaceEntries).toHaveBeenCalledWith('agent-1', '~');
+    expect(listWorkspaceEntries).toHaveBeenCalledWith('session-1', '~');
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@~/Projects/');
   });
@@ -547,11 +547,11 @@ describe('TranscriptPane annotations', () => {
     ];
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': withPlan },
-      order: ['agent-1'],
-      focusedId: 'agent-1',
+      sessions: { 'session-1': withPlan },
+      order: ['session-1'],
+      focusedId: 'session-1',
       annotations: {
-        'agent-1': [{ id: 'annotation-1', agentId: 'agent-1', seq: 1, role: 'assistant', quote: 'Select these words', comment: 'Clarify this.', createdAt: 1, updatedAt: 1 }],
+        'session-1': [{ id: 'annotation-1', sessionId: 'session-1', seq: 1, role: 'assistant', quote: 'Select these words', comment: 'Clarify this.', createdAt: 1, updatedAt: 1 }],
       },
     }, true);
 
@@ -570,10 +570,10 @@ describe('TranscriptPane annotations', () => {
     const addAnnotation = vi.fn().mockResolvedValue({});
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() },
-      order: ['agent-1'],
-      focusedId: 'agent-1',
-      annotations: { 'agent-1': [] },
+      sessions: { 'session-1': agent() },
+      order: ['session-1'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [] },
       addAnnotation,
     }, true);
     const view = render(<TranscriptPane />);
@@ -615,7 +615,7 @@ describe('TranscriptPane annotations', () => {
     fireEvent.click(view.getByRole('button', { name: 'Add' }));
 
     expect(addAnnotation).toHaveBeenCalledWith(
-      'agent-1',
+      'session-1',
       { seq: 1, role: 'assistant', quote: 'Select these words' },
       'Please clarify.',
     );
@@ -626,10 +626,10 @@ describe('TranscriptPane annotations', () => {
     const addAnnotation = vi.fn().mockResolvedValue({});
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': agent() },
-      order: ['agent-1'],
-      focusedId: 'agent-1',
-      annotations: { 'agent-1': [] },
+      sessions: { 'session-1': agent() },
+      order: ['session-1'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [] },
       addAnnotation,
     }, true);
     const view = render(<TranscriptPane />);
@@ -654,7 +654,7 @@ describe('TranscriptPane annotations', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(addAnnotation).toHaveBeenCalledWith(
-      'agent-1',
+      'session-1',
       { seq: 1, role: 'assistant', quote: 'Select these words' },
       'First line\nSecond line',
     );
@@ -669,7 +669,7 @@ describe('TranscriptPane steering', () => {
     working.steeringSupport = true;
     useStore.setState({
       ...initialState,
-      agents: { 'agent-1': working }, order: ['agent-1'], focusedId: 'agent-1', annotations: { 'agent-1': [] },
+      sessions: { 'session-1': working }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
     }, true);
 
     const view = render(<TranscriptPane />);

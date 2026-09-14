@@ -35,17 +35,17 @@ func (r *Registry) harnessLabel(spec agentadapter.Spec) string {
 // sourceAgent resolves a hand-off/workspace-sharing source by id, whether or
 // not it is still live. A closed agent is deliberately still usable as a
 // source: its transcript survives in the event log.
-func (r *Registry) sourceAgent(id string) (store.Agent, agentadapter.Spec, error) {
+func (r *Registry) sourceAgent(id string) (store.Session, agentadapter.Spec, error) {
 	var spec agentadapter.Spec
-	rec, err := r.store.Agent(id)
+	rec, err := r.store.Session(id)
 	if err != nil {
-		return store.Agent{}, spec, err
+		return store.Session{}, spec, err
 	}
 	if rec == nil {
-		return store.Agent{}, spec, fmt.Errorf("no such agent: %s", id)
+		return store.Session{}, spec, fmt.Errorf("no such agent: %s", id)
 	}
 	if err := json.Unmarshal(rec.Spec, &spec); err != nil {
-		return store.Agent{}, spec, fmt.Errorf("decode source agent spec: %w", err)
+		return store.Session{}, spec, fmt.Errorf("decode source agent spec: %w", err)
 	}
 	return *rec, spec, nil
 }
@@ -66,7 +66,7 @@ func (r *Registry) handoffMessage(sourceID, mode string) (string, error) {
 		return "", err
 	}
 	text := handoff.Render(history, handoff.Source{
-		AgentName: rec.Name,
+		SessionName: rec.Name,
 		Harness:   r.harnessLabel(spec),
 		CWD:       rec.CWD,
 		Branch:    spec.Workspace.Branch,
@@ -85,7 +85,7 @@ func (r *Registry) Cohabitants(dir, excludeID string) []string {
 	if err != nil || dir == "" {
 		return nil
 	}
-	rows, err := r.store.AllAgents()
+	rows, err := r.store.AllSessions()
 	if err != nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (r *Registry) sharedWorkspace(ws workspace.Workspace) (workspace.Workspace,
 	if err != nil {
 		return workspace.Workspace{}, "", false
 	}
-	rows, err := r.store.AllAgents()
+	rows, err := r.store.AllSessions()
 	if err != nil {
 		return workspace.Workspace{}, "", false
 	}

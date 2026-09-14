@@ -37,7 +37,7 @@ func TestCloseIsIdempotentAndReportsLateWrites(t *testing.T) {
 	if _, err := s.AppendEvent("agent_1", "status", `{"kind":"status"}`, 1700000000000); err == nil {
 		t.Fatal("append after close should fail")
 	}
-	if _, err := s.Agent("agent_1"); err == nil {
+	if _, err := s.Session("agent_1"); err == nil {
 		t.Fatal("read after close should fail")
 	}
 }
@@ -72,58 +72,58 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants", "session_assets", "session_audio_settings", "sessions"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
-	a1 := Agent{ID: "api-2", Name: "old", Spec: json.RawMessage(`{"adapter":"acp"}`), CWD: "/tmp/a", Status: "working", CreatedAt: 1700000000000}
-	a2 := Agent{ID: "api-10", Name: "ten", Spec: json.RawMessage(`{"adapter":"acp","workspace":{"kind":"existing","cwd":"/tmp"}}`), CWD: "/tmp", ACPSessionID: ptr("session-shared"), Status: "error", CreatedAt: 1700000001000, ClosedAt: ptr(int64(1700000002000))}
-	if err := s.UpsertAgent(a1); err != nil {
+	a1 := Session{ID: "api-2", Name: "old", Spec: json.RawMessage(`{"adapter":"acp"}`), CWD: "/tmp/a", Status: "working", CreatedAt: 1700000000000}
+	a2 := Session{ID: "api-10", Name: "ten", Spec: json.RawMessage(`{"adapter":"acp","workspace":{"kind":"existing","cwd":"/tmp"}}`), CWD: "/tmp", ExternalSessionID: ptr("session-shared"), Status: "error", CreatedAt: 1700000001000, ClosedAt: ptr(int64(1700000002000))}
+	if err := s.UpsertSession(a1); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertAgent(a2); err != nil {
+	if err := s.UpsertSession(a2); err != nil {
 		t.Fatal(err)
 	}
-	a1.Name, a1.Status, a1.ACPSessionID = "new", "blocked", ptr("session-shared")
-	if err := s.UpsertAgent(a1); err != nil {
+	a1.Name, a1.Status, a1.ExternalSessionID = "new", "blocked", ptr("session-shared")
+	if err := s.UpsertSession(a1); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.Agent("api-2")
+	got, err := s.Session("api-2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "new" || got.CreatedAt != a1.CreatedAt || got.ACPSessionID == nil {
+	if got.Name != "new" || got.CreatedAt != a1.CreatedAt || got.ExternalSessionID == nil {
 		t.Fatalf("unexpected upsert result: %#v", got)
 	}
-	bySession, err := s.AgentBySessionID("session-shared")
+	bySession, err := s.SessionByExternalSessionID("session-shared")
 	if err != nil || bySession.ID != "api-10" {
 		t.Fatalf("latest session row=%#v err=%v", bySession, err)
 	}
 	if err := s.SetStatus(a1.ID, "error"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetSessionID(a1.ID, "session-new"); err != nil {
+	if err := s.SetExternalSessionID(a1.ID, "session-new"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CloseAgent(a1.ID); err != nil {
+	if err := s.CloseSession(a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = s.Agent(a1.ID)
+	got, _ = s.Session(a1.ID)
 	if got.Status != "idle" || got.ClosedAt == nil || *got.ClosedAt != 1700000009999 {
 		t.Fatalf("close result: %#v", got)
 	}
-	if err := s.ReopenAgent(a1.ID); err != nil {
+	if err := s.ReopenSession(a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	live, err := s.LiveAgents()
+	live, err := s.LiveSessions()
 	if err != nil || len(live) != 1 || live[0].ID != a1.ID {
 		t.Fatalf("live=%#v err=%v", live, err)
 	}
-	all, err := s.AllAgents()
+	all, err := s.AllSessions()
 	if err != nil || len(all) != 2 || all[0].ID != a2.ID {
 		t.Fatalf("all=%#v err=%v", all, err)
 	}
-	max, err := s.MaxAgentSuffix()
+	max, err := s.MaxSessionSuffix()
 	if err != nil || max != 10 {
 		t.Fatalf("max=%d err=%v", max, err)
 	}
@@ -170,7 +170,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	keep := func(rows []schemaRow) []schemaRow {
 		out := make([]schemaRow, 0, len(rows))
 		for _, row := range rows {
-			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" || row.TableName == "federation_master" || row.TableName == "federation_slaves" {
+			if row.TableName == "session_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" || row.TableName == "federation_master" || row.TableName == "federation_slaves" {
 				continue
 			}
 			out = append(out, row)
@@ -198,7 +198,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 func TestAssetAssociationsAndDeleteAgent(t *testing.T) {
 	s, _ := openTestStore(t)
 	for _, id := range []string{"api-1", "api-2"} {
-		if err := s.UpsertAgent(Agent{ID: id, Name: id, Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+		if err := s.UpsertSession(Session{ID: id, Name: id, Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -206,44 +206,44 @@ func TestAssetAssociationsAndDeleteAgent(t *testing.T) {
 	if err := s.PutAsset("api-1", asset); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.AgentAsset("api-1", asset.ID); err != nil || got == nil || *got != asset {
+	if got, err := s.SessionAsset("api-1", asset.ID); err != nil || got == nil || *got != asset {
 		t.Fatalf("owned asset=%#v err=%v", got, err)
 	}
-	if got, err := s.AgentAsset("api-2", asset.ID); err != nil || got != nil {
+	if got, err := s.SessionAsset("api-2", asset.ID); err != nil || got != nil {
 		t.Fatalf("cross-agent asset=%#v err=%v", got, err)
 	}
 	if err := s.PutAsset("api-2", asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteAgent("api-1"); err != nil {
+	if err := s.DeleteSession("api-1"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.Agent("api-1"); got != nil {
+	if got, _ := s.Session("api-1"); got != nil {
 		t.Fatalf("deleted agent remains: %#v", got)
 	}
-	if got, err := s.AgentAsset("api-2", asset.ID); err != nil || got == nil {
+	if got, err := s.SessionAsset("api-2", asset.ID); err != nil || got == nil {
 		t.Fatalf("shared physical asset removed: %#v %v", got, err)
 	}
 }
 
 func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "audio-1", Name: "audio", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "audio-1", Name: "audio", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, after, err := s.AgentAudioEnabled("audio-1"); err != nil || enabled || after != 0 {
+	if enabled, after, err := s.SessionAudioEnabled("audio-1"); err != nil || enabled || after != 0 {
 		t.Fatalf("default enabled=%v after=%d err=%v", enabled, after, err)
 	}
-	if err := s.SetAgentAudioEnabled("audio-1", true, 6); err != nil {
+	if err := s.SetSessionAudioEnabled("audio-1", true, 6); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, after, err := s.AgentAudioEnabled("audio-1"); err != nil || !enabled || after != 6 {
+	if enabled, after, err := s.SessionAudioEnabled("audio-1"); err != nil || !enabled || after != 6 {
 		t.Fatalf("saved enabled=%v after=%d err=%v", enabled, after, err)
 	}
-	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-1", Seq: 9, MIMEType: "audio/mpeg", Data: []byte("later")}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-1", Seq: 9, MIMEType: "audio/mpeg", Data: []byte("later")}); err != nil {
 		t.Fatal(err)
 	}
 	if seqs, err := s.MessageAudioSeqs("audio-1"); err != nil || !reflect.DeepEqual(seqs, []int64{7, 9}) {
@@ -253,7 +253,7 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 	if err != nil || got == nil || string(got.Data) != "clip" {
 		t.Fatalf("audio=%#v err=%v", got, err)
 	}
-	if err := s.DeleteAgent("audio-1"); err != nil {
+	if err := s.DeleteSession("audio-1"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.MessageAudio("audio-1", 7); err != nil || got != nil {
@@ -263,7 +263,7 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 
 func TestBrowserSessionPersistence(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveBrowserSession("a-1", "sess-1", "prof-1", "ws://host/1"); err != nil {
@@ -277,32 +277,32 @@ func TestBrowserSessionPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0] != (BrowserSession{AgentID: "a-1", SessionID: "sess-2", ProfileID: "prof-2", CDPURL: "ws://host/2"}) {
+	if len(got) != 1 || got[0] != (BrowserSession{SessionID: "a-1", DriverSessionID: "sess-2", ProfileID: "prof-2", CDPURL: "ws://host/2"}) {
 		t.Fatalf("sessions = %#v", got)
 	}
 	// Deleting the agent cascades to its browser session.
 	if err := s.SaveBrowserSession("a-2", "sess-3", "", ""); err != nil {
-		// a-2 has no agents row; the session table has no FK, so this still saves.
+		// a-2 has no sessions row; the table has no FK, so this still saves.
 		t.Fatal(err)
 	}
 	if err := s.DeleteBrowserSession("a-1"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.ListBrowserSessions()
-	if len(got) != 1 || got[0].AgentID != "a-2" {
+	if len(got) != 1 || got[0].SessionID != "a-2" {
 		t.Fatalf("after delete = %#v", got)
 	}
 }
 
 func TestDeleteAgentRemovesBrowserSession(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveBrowserSession("a-1", "sess-1", "prof-1", "ws://host/1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteAgent("a-1"); err != nil {
+	if err := s.DeleteSession("a-1"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.ListBrowserSessions(); len(got) != 0 {
@@ -312,11 +312,11 @@ func TestDeleteAgentRemovesBrowserSession(t *testing.T) {
 
 func TestAnnotationCRUD(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	a1 := Annotation{ID: "ann-1", AgentID: "a-1", Seq: 5, Role: "assistant", Quote: "hello", Comment: "clarify this", CreatedAt: 100, UpdatedAt: 100}
-	a2 := Annotation{ID: "ann-2", AgentID: "a-1", Seq: 3, Role: "user", Quote: "world", Comment: "", CreatedAt: 50, UpdatedAt: 50}
+	a1 := Annotation{ID: "ann-1", SessionID: "a-1", Seq: 5, Role: "assistant", Quote: "hello", Comment: "clarify this", CreatedAt: 100, UpdatedAt: 100}
+	a2 := Annotation{ID: "ann-2", SessionID: "a-1", Seq: 3, Role: "user", Quote: "world", Comment: "", CreatedAt: 50, UpdatedAt: 50}
 	if err := s.UpsertAnnotation(a1); err != nil {
 		t.Fatal(err)
 	}
@@ -351,10 +351,10 @@ func TestAnnotationCRUD(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != "ann-1" {
 		t.Fatalf("after single delete = %#v err=%v", got, err)
 	}
-	if err := s.UpsertAnnotation(Annotation{ID: "ann-3", AgentID: "a-1", Seq: 1, Role: "tool", Quote: "q", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+	if err := s.UpsertAnnotation(Annotation{ID: "ann-3", SessionID: "a-1", Seq: 1, Role: "tool", Quote: "q", CreatedAt: 1, UpdatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := s.DeleteAnnotationsForAgent("a-1")
+	n, err := s.DeleteAnnotationsForSession("a-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,13 +369,13 @@ func TestAnnotationCRUD(t *testing.T) {
 
 func TestDeleteAgentRemovesAnnotations(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertAnnotation(Annotation{ID: "ann-1", AgentID: "a-1", Seq: 1, Role: "assistant", Quote: "q", Comment: "c", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+	if err := s.UpsertAnnotation(Annotation{ID: "ann-1", SessionID: "a-1", Seq: 1, Role: "assistant", Quote: "q", Comment: "c", CreatedAt: 1, UpdatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteAgent("a-1"); err != nil {
+	if err := s.DeleteSession("a-1"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.ListAnnotations("a-1")
@@ -387,7 +387,7 @@ func TestDeleteAgentRemovesAnnotations(t *testing.T) {
 func TestAudioPositionRoundTripAndClear(t *testing.T) {
 	s, _ := openTestStore(t)
 	s.now = func() time.Time { return time.UnixMilli(5000) }
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
@@ -420,13 +420,13 @@ func TestAudioPositionRoundTripAndClear(t *testing.T) {
 
 func TestDeleteAgentRemovesAudioPosition(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "a-1", Name: "a-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SetAudioPosition("a-1", 3, 1000); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteAgent("a-1"); err != nil {
+	if err := s.DeleteSession("a-1"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.AudioPosition("a-1"); err != nil || got != nil {
@@ -481,7 +481,7 @@ INSERT INTO agents VALUES ('legacy-1','legacy-1','{}',NULL,'idle',123,NULL)`)
 		t.Fatal(err)
 	}
 	defer s.Close()
-	a, err := s.Agent("legacy-1")
+	a, err := s.Session("legacy-1")
 	if err != nil || a.CWD != "" {
 		t.Fatalf("legacy row=%#v err=%v", a, err)
 	}
@@ -556,7 +556,7 @@ INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES ('leg
 	}
 	// A subsequent write with a known duration must persist through the
 	// migrated column.
-	if err := s.PutMessageAudio(MessageAudio{AgentID: "legacy-1", Seq: 4, MIMEType: "audio/mpeg", Data: []byte{1, 2}, DurationMs: 1500}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "legacy-1", Seq: 4, MIMEType: "audio/mpeg", Data: []byte{1, 2}, DurationMs: 1500}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.MessageAudio("legacy-1", 4); err != nil || got.DurationMs != 1500 {
@@ -570,7 +570,7 @@ INSERT INTO message_audio (agentId, seq, mimeType, data, createdAt) VALUES ('leg
 // leave freshly written durations alone.
 func TestOpenResetsStaleMessageAudioDurationsOnce(t *testing.T) {
 	s, path := openTestStore(t)
-	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-3", Seq: 2, MIMEType: "audio/mpeg", Data: []byte("clip"), DurationMs: 5903}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-3", Seq: 2, MIMEType: "audio/mpeg", Data: []byte("clip"), DurationMs: 5903}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec("PRAGMA user_version = 0"); err != nil {
@@ -603,7 +603,7 @@ func TestOpenResetsStaleMessageAudioDurationsOnce(t *testing.T) {
 
 func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.PutMessageAudio(MessageAudio{AgentID: "audio-2", Seq: 1, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-2", Seq: 1, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.MessageAudio("audio-2", 1); err != nil || got.DurationMs != 0 {
@@ -623,23 +623,23 @@ func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
 
 func TestMalformedRowsAreReported(t *testing.T) {
 	s, _ := openTestStore(t)
-	if _, err := s.db.Exec("INSERT INTO agents VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
+	if _, err := s.db.Exec("INSERT INTO sessions VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Agent("bad-json"); err == nil || !strings.Contains(err.Error(), "malformed spec JSON") {
+	if _, err := s.Session("bad-json"); err == nil || !strings.Contains(err.Error(), "malformed spec JSON") {
 		t.Fatalf("bad JSON error=%v", err)
 	}
-	if _, err := s.Agent("bad-time"); err == nil {
+	if _, err := s.Session("bad-time"); err == nil {
 		t.Fatal("malformed timestamp was accepted")
 	}
-	if err := s.UpsertAgent(Agent{ID: "x", Spec: json.RawMessage(`{`)}); err == nil {
+	if err := s.UpsertSession(Session{ID: "x", Spec: json.RawMessage(`{`)}); err == nil {
 		t.Fatal("malformed spec write was accepted")
 	}
 }
 
 func TestCloseCheckpointsWAL(t *testing.T) {
 	s, path := openTestStore(t)
-	if err := s.UpsertAgent(Agent{ID: "api-1", Name: "api-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
+	if err := s.UpsertSession(Session{ID: "api-1", Name: "api-1", Spec: json.RawMessage(`{}`), Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path + "-wal"); err != nil {
@@ -657,7 +657,7 @@ func TestCloseCheckpointsWAL(t *testing.T) {
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow("SELECT count(*) FROM agents").Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("checkpointed count=%d err=%v", count, err)
 	}
 }

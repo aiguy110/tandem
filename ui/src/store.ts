@@ -11,8 +11,8 @@ import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
 import type {
-  AgentStatus,
-  AgentSummary,
+  SessionStatus,
+  SessionSummary,
   AgentCatalog,
   Annotation,
   Approval,
@@ -50,7 +50,7 @@ import type {
 // agent's terminal history before the user asks to see it.
 const BASE_CHANNELS: Channel[] = ['transcript', 'terminals', 'status'];
 
-// A pending agent-initiated takeover (browser.request_takeover) for the rail.
+// A pending session-initiated takeover (browser.request_takeover) for the rail.
 export interface Takeover {
   reqId: string;
   reason: string;
@@ -86,7 +86,7 @@ export interface TurnNotification {
 // or browser takeover surfaces its own actionable card and contributes
 // 'attention' to the badges directly (see agentBadge), so 'blocked' itself is
 // intentionally not notified here to avoid duplicate cards.
-function turnNotificationSeverity(prev: AgentStatus, next: AgentStatus): NotifSeverity | null {
+function turnNotificationSeverity(prev: SessionStatus, next: SessionStatus): NotifSeverity | null {
   if (next === 'error' && prev !== 'error') return 'failure';
   if (next === 'idle' && prev === 'working') return 'success';
   return null;
@@ -96,7 +96,7 @@ function turnNotificationSeverity(prev: AgentStatus, next: AgentStatus): NotifSe
 // living under it (unread turns + pending approvals + browser takeovers) and
 // the highest severity among them, so the badge can be colored red > yellow >
 // green.
-export function agentBadge(agent: AgentView): { count: number; severity: NotifSeverity | null } {
+export function agentBadge(agent: SessionView): { count: number; severity: NotifSeverity | null } {
   const severities = agent.turnNotifications.map((n) => n.severity);
   const attention = agent.pendingApprovals.length + agent.takeovers.length;
   for (let i = 0; i < attention; i++) severities.push('attention');
@@ -109,7 +109,7 @@ export function agentBadge(agent: AgentView): { count: number; severity: NotifSe
 export type PaneId = 'chat' | 'shell' | 'diff' | 'browser';
 export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
 
-export interface AgentView {
+export interface SessionView {
   id: string;
   name: string;
   agent?: string;
@@ -135,7 +135,7 @@ export interface AgentView {
     targetKind?: 'local-branch' | 'remote-branch' | 'detached';
     startCommit?: string;
   };
-  status: AgentStatus;
+  status: SessionStatus;
   events: { seq: number; event: WireEvent }[]; // transcript/terminals channel, seq-ordered
   lastSeq: number;
   pendingApprovals: Approval[];
@@ -146,20 +146,20 @@ export interface AgentView {
   shellExited: boolean;
   shellExitMessage: string | null;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
-  // holds the wheel, plus any pending agent-initiated takeover requests.
+  // holds the wheel, plus any pending session-initiated takeover requests.
   browserActive: boolean;
   browserOwner: 'agent' | 'user';
-  // True while the user is satisfying an agent-requested takeover. This keeps
+  // True while the user is satisfying an session-requested takeover. This keeps
   // the hand-back action visually distinct from an unsolicited manual grab.
   browserTakeoverHeld: boolean;
   takeovers: Takeover[];
   // Permission-mode + config-option (incl. model selector) state, from the last
-  // session_config event. Null until the ACP agent reports it (or for pty agents,
+  // session_config event. Null until the ACP agent reports it (or for pty sessions,
   // which never do) — the picker bar hides itself in that case.
   sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
   usage: { used: number; size: number; cost?: { amount: number; currency: string } | null; updatedAt: number } | null;
   // The agent's slash-command menu (ACP available_commands_update), for the
-  // fuzzy-find popup in PromptBar. Empty for pty agents / until first reported.
+  // fuzzy-find popup in PromptBar. Empty for pty sessions / until first reported.
   commands: SlashCommand[];
   // null until the adapter reports ACP prompt capabilities.
   imagePromptSupport: boolean | null;
@@ -197,7 +197,7 @@ export interface AgentView {
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
 
 export interface AckResult {
-  agentId?: string;
+  sessionId?: string;
   error?: string;
   promptId?: string;
   disposition?: 'started' | 'queued' | 'steered';
@@ -208,13 +208,13 @@ export interface AckResult {
 interface StoreState {
   conn: ConnState;
   theme: 'dark' | 'light';
-  agents: Record<string, AgentView>;
+  sessions: Record<string, SessionView>;
   order: string[];
   focusedId: string | null;
   // The selected pane belongs to an agent/session, rather than to the focus
   // area. `pane` remains the currently focused agent's pane for consumers that
   // need a simple current-view value.
-  panesByAgent: Record<string, PaneId>;
+  panesBySession: Record<string, PaneId>;
   pane: PaneId;
   modal: ModalKind;
   // Agent the spawn palette should offer to hand off from ('' / null = none).
@@ -235,16 +235,16 @@ interface StoreState {
   automationLoading: boolean;
   automationError: string | null;
   // Resume palette: the resumable-session catalog (null until first fetched) and
-  // a loading flag while the daemon probes agents for external sessions.
+  // a loading flag while the daemon probes sessions for external sessions.
   resumeCatalog: ResumeCatalog | null;
   resumeCatalogByHost: Record<string, ResumeCatalog>;
   resumePendingHostIds: Record<string, boolean>;
   resumeLoading: boolean;
-  // Unsent prompt drafts, keyed by agentId. Lives here (not in the pane's local
+  // Unsent prompt drafts, keyed by sessionId. Lives here (not in the pane's local
   // state) so a draft survives tab switches and agent switches, which remount the
   // TranscriptPane.
   drafts: Record<string, string>;
-  // Pending transcript annotations (review tray), keyed by agentId. Daemon-owned:
+  // Pending transcript annotations (review tray), keyed by sessionId. Daemon-owned:
   // hydrated from `snapshot` and replaced wholesale by `annotations` broadcasts —
   // actions never mutate this locally, they only send the WS message and wait
   // for the echo (cross-device correctness).
@@ -254,7 +254,7 @@ interface StoreState {
   browserSubAgent: string | null;
   // Left/right rail collapse (mobile-friendly docking). Defaults from a
   // matchMedia breakpoint at boot, then user-toggleable regardless of width.
-  agentsRailCollapsed: boolean;
+	sessionsRailCollapsed: boolean;
   approvalsRailCollapsed: boolean;
   // Daemon-owned operational notifications, including self-update actions.
   systemNotifications: SystemNotification[];
@@ -267,18 +267,18 @@ interface StoreState {
   markAgentUnread: (id: string) => void;
   setPane: (p: PaneId) => void;
   toggleTheme: () => void;
-  toggleAgentsRail: () => void;
+  toggleSessionsRail: () => void;
   toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
   // Open the spawn palette pre-selected to hand off from this agent.
-  handOffAgent: (agentId: string) => void;
+  handOffAgent: (sessionId: string) => void;
   toggleInspector: () => void;
-  toggleThreadAudio: (agentId: string) => void;
+  toggleThreadAudio: (sessionId: string) => void;
   // The durable half of playback-position restore: ui/src/audio/engine.ts
   // calls this (via a sender it's handed at app root) on its throttled /
   // flush-on-teardown schedule. `seq: 0` means "no active section" and clears
   // the daemon's stored position. Throttling is the caller's responsibility.
-  setAudioPosition: (agentId: string, seq: number, positionMs: number) => void;
+  setAudioPosition: (sessionId: string, seq: number, positionMs: number) => void;
   refreshDirs: () => void;
   refreshHostDirs: (hostId: string) => void;
   refreshHosts: () => void;
@@ -289,50 +289,50 @@ interface StoreState {
   setAutomationEnabled: (id: string, enabled: boolean) => Promise<void>;
   searchSessions: (query: string, hostId?: string) => Promise<SessionSearchResult[]>;
   resumeSession: (s: ResumableSession) => Promise<AckResult>;
-  enterTerminal: (agentId: string, interrupt?: boolean) => Promise<AckResult>;
-  leaveTerminal: (agentId: string) => Promise<AckResult>;
+  enterTerminal: (sessionId: string, interrupt?: boolean) => Promise<AckResult>;
+  leaveTerminal: (sessionId: string) => Promise<AckResult>;
   // User escape-hatch shell (Terminal tab).
-  openShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
-  restartShell: (agentId: string, cols: number, rows: number) => Promise<AckResult>;
+  openShell: (sessionId: string, cols: number, rows: number) => Promise<AckResult>;
+  restartShell: (sessionId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
   getSpawnOptions: (agent: string, cwd: string, harness?: string, hostId?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string, hostId?: string) => Promise<GitRefInfo[]>;
-  listWorkspaceEntries: (agentId: string, path: string) => Promise<WorkspaceEntry[]>;
+  listWorkspaceEntries: (sessionId: string, path: string) => Promise<WorkspaceEntry[]>;
   // Browser snapshots + agent profiles.
-  captureSnapshot: (agentId: string, name: string) => Promise<BrowserSnapshot[]>;
+  captureSnapshot: (sessionId: string, name: string) => Promise<BrowserSnapshot[]>;
   listSnapshots: () => Promise<BrowserSnapshot[]>;
   deleteSnapshot: (id: string) => Promise<BrowserSnapshot[]>;
   listProfiles: (project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
-  renameAgent: (agentId: string, name: string) => Promise<AckResult>;
+  renameAgent: (sessionId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
-  prompt: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
-  steer: (agentId: string, input: string | PromptBlock[]) => Promise<AckResult>;
-  aside: (agentId: string, question: string) => Promise<AckResult>;
-  removeQueuedPrompt: (agentId: string, promptId: string) => Promise<AckResult>;
-  clearPromptQueue: (agentId: string) => Promise<AckResult>;
-  interruptAndClearQueue: (agentId: string) => Promise<AckResult>;
-  addAnnotation: (agentId: string, anchor: { seq: number; role: string; quote: string }, comment: string) => Promise<AckResult>;
-  updateAnnotation: (agentId: string, id: string, comment: string) => Promise<AckResult>;
-  removeAnnotation: (agentId: string, id: string) => Promise<AckResult>;
-  clearAnnotations: (agentId: string) => Promise<AckResult>;
-  setDraft: (agentId: string, text: string) => void;
-  interrupt: (agentId: string) => void;
-  respond: (agentId: string, reqId: string, optionId: string) => void;
-  setMode: (agentId: string, modeId: string) => void;
-  setConfigOption: (agentId: string, configId: string, value: string | boolean) => void;
-  getClosePreview: (agentId: string) => Promise<ClosePreview>;
-  getDiff: (agentId: string) => Promise<WorkspaceDiff>;
-  closeAgent: (agentId: string, force?: boolean, deleteWorktree?: boolean, deinitSubmodules?: boolean) => Promise<AckResult>;
+  prompt: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  steer: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  aside: (sessionId: string, question: string) => Promise<AckResult>;
+  removeQueuedPrompt: (sessionId: string, promptId: string) => Promise<AckResult>;
+  clearPromptQueue: (sessionId: string) => Promise<AckResult>;
+  interruptAndClearQueue: (sessionId: string) => Promise<AckResult>;
+  addAnnotation: (sessionId: string, anchor: { seq: number; role: string; quote: string }, comment: string) => Promise<AckResult>;
+  updateAnnotation: (sessionId: string, id: string, comment: string) => Promise<AckResult>;
+  removeAnnotation: (sessionId: string, id: string) => Promise<AckResult>;
+  clearAnnotations: (sessionId: string) => Promise<AckResult>;
+  setDraft: (sessionId: string, text: string) => void;
+  interrupt: (sessionId: string) => void;
+  respond: (sessionId: string, reqId: string, optionId: string) => void;
+  setMode: (sessionId: string, modeId: string) => void;
+  setConfigOption: (sessionId: string, configId: string, value: string | boolean) => void;
+  getClosePreview: (sessionId: string) => Promise<ClosePreview>;
+  getDiff: (sessionId: string) => Promise<WorkspaceDiff>;
+  closeAgent: (sessionId: string, force?: boolean, deleteWorktree?: boolean, deinitSubmodules?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
   nav: (dir: 1 | -1) => void;
   // Browser pane control (Phase 5).
-  setBrowserSub: (agentId: string | null) => void;
-  browserControl: (agentId: string, action: 'grab' | 'release') => void;
-  restartBrowser: (agentId: string, snapshotId?: string) => Promise<AckResult>;
-  browserInput: (agentId: string, event: BrowserInputWire) => void;
-  toggleWheel: (agentId: string) => void;
+  setBrowserSub: (sessionId: string | null) => void;
+  browserControl: (sessionId: string, action: 'grab' | 'release') => void;
+  restartBrowser: (sessionId: string, snapshotId?: string) => Promise<AckResult>;
+  browserInput: (sessionId: string, event: BrowserInputWire) => void;
+  toggleWheel: (sessionId: string) => void;
 }
 
 // ---- ack correlation (spawn/close want structured results) ----
@@ -400,10 +400,10 @@ function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog
   };
 }
 
-function rankAgents(agents: Record<string, AgentView>, order: string[]): string[] {
-  // `order` is explicitly arranged by the user via the Agents rail. Filter
+function rankSessions(sessions: Record<string, SessionView>, order: string[]): string[] {
+  // `order` is explicitly arranged by the user via the Sessions rail. Filter
   // stale entries rather than applying a status-based sort over that order.
-  return order.filter((id) => !!agents[id]);
+  return order.filter((id) => !!sessions[id]);
 }
 
 const initialTheme = (): 'dark' | 'light' => {
@@ -411,36 +411,38 @@ const initialTheme = (): 'dark' | 'light' => {
   return saved === 'light' ? 'light' : 'dark';
 };
 
-const AGENT_ORDER_STORAGE_KEY = 'tandem.agentOrder';
-const initialAgentOrder = (): string[] => {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(AGENT_ORDER_STORAGE_KEY) ?? '[]');
+const SESSION_ORDER_STORAGE_KEY = 'tandem.sessionOrder';
+const LEGACY_AGENT_ORDER_STORAGE_KEY = 'tandem.agentOrder';
+const initialSessionOrder = (): string[] => {
+	try {
+		const saved: unknown = JSON.parse(localStorage.getItem(SESSION_ORDER_STORAGE_KEY) ?? localStorage.getItem(LEGACY_AGENT_ORDER_STORAGE_KEY) ?? '[]');
     return Array.isArray(saved) && saved.every((id) => typeof id === 'string') ? saved : [];
   } catch {
     return [];
   }
 };
-const saveAgentOrder = (order: string[]) => {
-  try {
-    localStorage.setItem(AGENT_ORDER_STORAGE_KEY, JSON.stringify(order));
+const saveSessionOrder = (order: string[]) => {
+	try {
+		localStorage.setItem(SESSION_ORDER_STORAGE_KEY, JSON.stringify(order));
   } catch {
     // Reordering still works when browser storage is unavailable.
   }
 };
 
-const FOCUSED_AGENT_STORAGE_KEY = 'tandem.focusedAgent';
-const initialFocusedAgent = (): string | null => {
-  try {
-    const saved = localStorage.getItem(FOCUSED_AGENT_STORAGE_KEY);
+const FOCUSED_SESSION_STORAGE_KEY = 'tandem.focusedSession';
+const LEGACY_FOCUSED_AGENT_STORAGE_KEY = 'tandem.focusedAgent';
+const initialFocusedSession = (): string | null => {
+	try {
+		const saved = localStorage.getItem(FOCUSED_SESSION_STORAGE_KEY) ?? localStorage.getItem(LEGACY_FOCUSED_AGENT_STORAGE_KEY);
     return saved && saved.trim() ? saved : null;
   } catch {
     return null;
   }
 };
-const saveFocusedAgent = (agentId: string | null): void => {
-  try {
-    if (agentId) localStorage.setItem(FOCUSED_AGENT_STORAGE_KEY, agentId);
-    else localStorage.removeItem(FOCUSED_AGENT_STORAGE_KEY);
+const saveFocusedSession = (sessionId: string | null): void => {
+	try {
+		if (sessionId) localStorage.setItem(FOCUSED_SESSION_STORAGE_KEY, sessionId);
+		else localStorage.removeItem(FOCUSED_SESSION_STORAGE_KEY);
   } catch {
     // Focusing still works when browser storage is unavailable.
   }
@@ -470,10 +472,11 @@ const saveDrafts = (drafts: Record<string, string>): void => {
   }
 };
 
-const AGENT_PANES_STORAGE_KEY = 'tandem.agentPanes';
-const initialAgentPanes = (): Record<string, PaneId> => {
+const SESSION_PANES_STORAGE_KEY = 'tandem.sessionPanes';
+const LEGACY_AGENT_PANES_STORAGE_KEY = 'tandem.agentPanes';
+const initialSessionPanes = (): Record<string, PaneId> => {
   try {
-    const saved: unknown = JSON.parse(localStorage.getItem(AGENT_PANES_STORAGE_KEY) ?? '{}');
+		const saved: unknown = JSON.parse(localStorage.getItem(SESSION_PANES_STORAGE_KEY) ?? localStorage.getItem(LEGACY_AGENT_PANES_STORAGE_KEY) ?? '{}');
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
     return Object.fromEntries(
       Object.entries(saved).filter((entry): entry is [string, PaneId] =>
@@ -483,9 +486,9 @@ const initialAgentPanes = (): Record<string, PaneId> => {
     return {};
   }
 };
-const saveAgentPanes = (panes: Record<string, PaneId>) => {
+const saveSessionPanes = (panes: Record<string, PaneId>) => {
   try {
-    localStorage.setItem(AGENT_PANES_STORAGE_KEY, JSON.stringify(panes));
+		localStorage.setItem(SESSION_PANES_STORAGE_KEY, JSON.stringify(panes));
   } catch {
     // Switching panes still works when browser storage is unavailable.
   }
@@ -511,9 +514,9 @@ export const useStore = create<StoreState>((set, get) => {
     const visible = document.visibilityState === 'visible' && state.pane === 'chat';
     const next = visible ? state.focusedId : getListeningAgentId();
     if (next === audioFocusAgent) return;
-    if (audioFocusAgent) client.send({ t: 'set_audio_focus', agentId: audioFocusAgent, focused: false });
+    if (audioFocusAgent) client.send({ t: 'set_audio_focus', sessionId: audioFocusAgent, focused: false });
     audioFocusAgent = next;
-    if (next) client.send({ t: 'set_audio_focus', agentId: next, focused: true });
+    if (next) client.send({ t: 'set_audio_focus', sessionId: next, focused: true });
   }
   // Channels to subscribe for an agent: base always; browser only for the
   // focused Browser pane; and terminal bytes only when the user is looking at
@@ -523,7 +526,7 @@ export const useStore = create<StoreState>((set, get) => {
     const state = get();
     if (state.focusedId !== id) return false;
     if (state.pane === 'shell') return true;
-    const agent = state.agents[id];
+    const agent = state.sessions[id];
     return state.pane === 'chat' && !!agent && (agent.adapter === 'pty' || agent.controlMode === 'terminal');
   };
   const channelsFor = (id: string): Channel[] => {
@@ -536,11 +539,11 @@ export const useStore = create<StoreState>((set, get) => {
     // Terminal output was deliberately skipped while this agent was in the
     // background. Request its full channel history only on the first visit to
     // a terminal surface; normal re-subscriptions continue incrementally.
-    const sinceSeq = replayPty ? 0 : get().agents[id]?.lastSeq ?? 0;
-    client.send({ t: 'subscribe', agentId: id, channels: channelsFor(id), sinceSeq });
+    const sinceSeq = replayPty ? 0 : get().sessions[id]?.lastSeq ?? 0;
+    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq });
   }
   function replayPtyFor(id: string): void {
-    if (!get().agents[id]) return;
+    if (!get().sessions[id]) return;
     // A full terminal replay replaces prior terminal state. Clear the client
     // buffers first so re-visiting a pane never appends duplicate scrollback.
     ptyHub.clear(id);
@@ -552,33 +555,33 @@ export const useStore = create<StoreState>((set, get) => {
   // the daemon (actions mutate only local UI concerns like focus/pane/theme).
   const apply = (msg: ServerMsg): void => {
     switch (msg.t) {
-      case 'agents': {
-        const newlyDiscovered = msg.agents.filter((s) => !get().agents[s.id]).map((s) => s.id);
+		case 'agents': {
+        const newlyDiscovered = msg.sessions.filter((s) => !get().sessions[s.id]).map((s) => s.id);
         set((st) => {
-          const agents = { ...st.agents };
-          // Retain a saved order only for agents that still exist locally or
+          const sessions = { ...st.sessions };
+          // Retain a saved order only for sessions that still exist locally or
           // were included by the daemon; this also discards old browser state.
-          const live = new Set(msg.agents.map((a) => a.id));
-          const order = st.order.filter((id) => live.has(id) || !!agents[id]);
-          for (const s of msg.agents) {
-            const prev = agents[s.id];
-            agents[s.id] = mergeSummary(prev, s);
+          const live = new Set(msg.sessions.map((a) => a.id));
+          const order = st.order.filter((id) => live.has(id) || !!sessions[id]);
+          for (const s of msg.sessions) {
+            const prev = sessions[s.id];
+            sessions[s.id] = mergeSummary(prev, s);
             if (!order.includes(s.id)) order.push(s.id);
           }
           // Drop any local agent the daemon no longer reports (e.g. closed elsewhere).
           for (const id of order.slice()) {
-            if (!live.has(id) && agents[id] && agents[id].events.length === 0) {
-              delete agents[id];
+            if (!live.has(id) && sessions[id] && sessions[id].events.length === 0) {
+              delete sessions[id];
               order.splice(order.indexOf(id), 1);
             }
           }
-          const focusedId = st.focusedId && agents[st.focusedId] ? st.focusedId : order[0] ?? null;
-          const pane = focusedId ? st.panesByAgent[focusedId] ?? 'chat' : 'chat';
-          if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
-          return { agents, order, focusedId, pane };
+          const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : order[0] ?? null;
+          const pane = focusedId ? st.panesBySession[focusedId] ?? 'chat' : 'chat';
+          if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
+          return { sessions, order, focusedId, pane };
         });
-        // The reconnect path already re-subscribes tracked agents. Summary
-        // refreshes only need to subscribe agents discovered for the first time.
+        // The reconnect path already re-subscribes tracked sessions. Summary
+        // refreshes only need to subscribe sessions discovered for the first time.
         for (const id of newlyDiscovered) subscribeAgent(id);
         return;
       }
@@ -716,11 +719,11 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'browser_frame':
         // Frames bypass the reactive store (browserHub) to avoid re-render storms.
-        browserHub.push(msg.agentId, { dataB64: msg.dataB64, meta: msg.meta });
+        browserHub.push(msg.sessionId, { dataB64: msg.dataB64, meta: msg.meta });
         return;
       case 'browser_state': {
         set((st) => {
-          const a = st.agents[msg.agentId];
+          const a = st.sessions[msg.sessionId];
           if (!a) return st;
           // Only an actual grab acknowledges the attention item. Re-subscribing
           // while changing panes can refresh agent ownership and must not dismiss
@@ -731,9 +734,9 @@ export const useStore = create<StoreState>((set, get) => {
           const takeovers = takeoverGrab ? [] : a.takeovers;
           const browserTakeoverHeld = msg.controlOwner === 'user' && (a.browserTakeoverHeld || takeoverGrab);
           return {
-            agents: {
-              ...st.agents,
-              [msg.agentId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, browserTakeoverHeld, takeovers },
+            sessions: {
+              ...st.sessions,
+              [msg.sessionId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, browserTakeoverHeld, takeovers },
             },
           };
         });
@@ -742,7 +745,7 @@ export const useStore = create<StoreState>((set, get) => {
       case 'ack': {
         if (msg.corrId && pendingAcks.has(msg.corrId)) {
           pendingAcks.get(msg.corrId)!({
-            agentId: msg.agentId,
+            sessionId: msg.sessionId,
             error: msg.error,
             promptId: msg.promptId,
             disposition: msg.disposition,
@@ -755,30 +758,30 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'agent_closed': {
         set((st) => {
-          if (!st.agents[msg.agentId]) return st;
-          const agents = { ...st.agents };
-          delete agents[msg.agentId];
-          const order = st.order.filter((id) => id !== msg.agentId);
-          const focusedId = st.focusedId === msg.agentId ? order[0] ?? null : st.focusedId;
-          const pane = focusedId ? st.panesByAgent[focusedId] ?? 'chat' : 'chat';
-          if (focusedId !== st.focusedId) saveFocusedAgent(focusedId);
+          if (!st.sessions[msg.sessionId]) return st;
+          const sessions = { ...st.sessions };
+          delete sessions[msg.sessionId];
+          const order = st.order.filter((id) => id !== msg.sessionId);
+          const focusedId = st.focusedId === msg.sessionId ? order[0] ?? null : st.focusedId;
+          const pane = focusedId ? st.panesBySession[focusedId] ?? 'chat' : 'chat';
+          if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
           const annotations = { ...st.annotations };
-          delete annotations[msg.agentId];
-          return { agents, order, focusedId, pane, annotations };
+          delete annotations[msg.sessionId];
+          return { sessions, order, focusedId, pane, annotations };
         });
-        ptyHub.clear(msg.agentId);
-        shellHub.clear(msg.agentId);
-        browserHub.clear(msg.agentId);
+        ptyHub.clear(msg.sessionId);
+        shellHub.clear(msg.sessionId);
+        browserHub.clear(msg.sessionId);
         // Tear the engine's playlist down if it was this (now-closed) chat's
         // — otherwise a silence keepalive (or pinned audio focus) could keep
         // running for a chat that no longer exists.
-        if (getEngineState().agentId === msg.agentId) setEnginePlaylist(msg.agentId, []);
+        if (getEngineState().sessionId === msg.sessionId) setEnginePlaylist(msg.sessionId, []);
         return;
       }
       case 'snapshot': {
         set((st) => {
-          const agents = { ...st.agents };
-          const prev = agents[msg.agentId] ?? shell(msg.agentId);
+          const sessions = { ...st.sessions };
+          const prev = sessions[msg.sessionId] ?? shell(msg.sessionId);
           // raw_pty (agent CLI) and shell_pty/shell_exit (user Terminal shell)
           // are byte/lifecycle streams routed to their hubs, not the transcript.
           const transcript = msg.transcript.filter(
@@ -786,8 +789,8 @@ export const useStore = create<StoreState>((set, get) => {
           );
           // Feed any pty frames in the snapshot into the terminal hubs (rehydrate).
           for (const e of msg.transcript) {
-            if (e.event.kind === 'raw_pty') ptyHub.push(msg.agentId, e.event.dataB64);
-            else if (e.event.kind === 'shell_pty') shellHub.push(msg.agentId, e.event.dataB64);
+            if (e.event.kind === 'raw_pty') ptyHub.push(msg.sessionId, e.event.dataB64);
+            else if (e.event.kind === 'shell_pty') shellHub.push(msg.sessionId, e.event.dataB64);
           }
           // The shell is exited iff its last lifecycle event is shell_exit (a
           // restart appends fresh shell_pty after it).
@@ -830,7 +833,7 @@ export const useStore = create<StoreState>((set, get) => {
               if (index !== -1) replayedTakeovers.splice(index, 1);
             }
           }
-          agents[msg.agentId] = {
+          sessions[msg.sessionId] = {
             ...prev,
             status: msg.status,
             controlMode: msg.controlMode,
@@ -873,53 +876,53 @@ export const useStore = create<StoreState>((set, get) => {
             audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
             audioPosition: msg.audioPosition ?? null,
           };
-          const order = st.order.includes(msg.agentId) ? st.order : [...st.order, msg.agentId];
+          const order = st.order.includes(msg.sessionId) ? st.order : [...st.order, msg.sessionId];
           return {
-            agents,
+            sessions,
             order,
-            focusedId: st.focusedId ?? msg.agentId,
-            annotations: { ...st.annotations, [msg.agentId]: msg.annotations ?? [] },
+            focusedId: st.focusedId ?? msg.sessionId,
+            annotations: { ...st.annotations, [msg.sessionId]: msg.annotations ?? [] },
           };
         });
         syncAudioFocus();
         return;
       }
       case 'event': {
-        const { agentId, seq, event } = msg;
+        const { sessionId, seq, event } = msg;
         if (event.kind === 'raw_pty') {
-          ptyHub.push(agentId, event.dataB64);
+          ptyHub.push(sessionId, event.dataB64);
           set((st) => {
-            const a = st.agents[agentId];
+            const a = st.sessions[sessionId];
             if (!a || (a.hasPty && seq <= a.lastSeq)) return st;
-            return { agents: { ...st.agents, [agentId]: { ...a, hasPty: true, lastSeq: Math.max(a.lastSeq, seq) } } };
+            return { sessions: { ...st.sessions, [sessionId]: { ...a, hasPty: true, lastSeq: Math.max(a.lastSeq, seq) } } };
           });
           return;
         }
         if (event.kind === 'shell_pty') {
-          shellHub.push(agentId, event.dataB64);
+          shellHub.push(sessionId, event.dataB64);
           set((st) => {
-            const a = st.agents[agentId];
+            const a = st.sessions[sessionId];
             if (!a) return st;
             // Live output implies a running shell; clear any stale exited flag.
             if (!a.shellExited && seq <= a.lastSeq) return st;
-            return { agents: { ...st.agents, [agentId]: { ...a, shellExited: false, shellExitMessage: null, lastSeq: Math.max(a.lastSeq, seq) } } };
+            return { sessions: { ...st.sessions, [sessionId]: { ...a, shellExited: false, shellExitMessage: null, lastSeq: Math.max(a.lastSeq, seq) } } };
           });
           return;
         }
         if (event.kind === 'shell_exit') {
           const message = event.message;
           set((st) => {
-            const a = st.agents[agentId];
+            const a = st.sessions[sessionId];
             if (!a) return st;
-            return { agents: { ...st.agents, [agentId]: { ...a, shellExited: true, shellExitMessage: message, lastSeq: Math.max(a.lastSeq, seq) } } };
+            return { sessions: { ...st.sessions, [sessionId]: { ...a, shellExited: true, shellExitMessage: message, lastSeq: Math.max(a.lastSeq, seq) } } };
           });
           return;
         }
         set((st) => {
-          const a = st.agents[agentId] ?? shell(agentId);
-          if (seq <= a.lastSeq && st.agents[agentId]) return st; // already applied (dedupe)
+          const a = st.sessions[sessionId] ?? shell(sessionId);
+          if (seq <= a.lastSeq && st.sessions[sessionId]) return st; // already applied (dedupe)
           const prevStatus = a.status;
-          const next: AgentView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
+          const next: SessionView = { ...a, events: [...a.events, { seq, event }], lastSeq: Math.max(a.lastSeq, seq) };
           applyEventToView(next, event);
           if (event.kind === 'audio_state' && event.state === 'ready') {
             next.audioReadySeqs = [...new Set([...next.audioReadySeqs, event.seq])].sort((a, b) => a - b);
@@ -933,34 +936,34 @@ export const useStore = create<StoreState>((set, get) => {
           // snapshot replay never resurrects ones the user has already read.
           // The focused thread is already visible, so it does not need a card.
           const severity = turnNotificationSeverity(prevStatus, next.status);
-          if (severity && st.focusedId !== agentId) {
+          if (severity && st.focusedId !== sessionId) {
             next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
           }
-          const agents = { ...st.agents, [agentId]: next };
-          const order = st.order.includes(agentId) ? st.order : [...st.order, agentId];
-          return { agents, order };
+          const sessions = { ...st.sessions, [sessionId]: next };
+          const order = st.order.includes(sessionId) ? st.order : [...st.order, sessionId];
+          return { sessions, order };
         });
         return;
       }
       case 'prompt_queue':
         set((st) => {
-          const agent = st.agents[msg.agentId];
+          const agent = st.sessions[msg.sessionId];
           if (!agent) return st;
-          return { agents: { ...st.agents, [msg.agentId]: { ...agent, queuedPrompts: msg.queuedPrompts } } };
+          return { sessions: { ...st.sessions, [msg.sessionId]: { ...agent, queuedPrompts: msg.queuedPrompts } } };
         });
         return;
       case 'annotations':
-        set((st) => ({ annotations: { ...st.annotations, [msg.agentId]: msg.annotations } }));
+        set((st) => ({ annotations: { ...st.annotations, [msg.sessionId]: msg.annotations } }));
         return;
       case 'audio_position':
         // Cross-device sync only: the daemon never echoes this back to the
         // connection that sent set_audio_position, so this only ever reflects
         // another client's playback moving the shared position.
         set((st) => {
-          const agent = st.agents[msg.agentId];
+          const agent = st.sessions[msg.sessionId];
           if (!agent) return st;
           const audioPosition = msg.seq === 0 ? null : { seq: msg.seq, positionMs: msg.positionMs, updatedAt: msg.updatedAt };
-          return { agents: { ...st.agents, [msg.agentId]: { ...agent, audioPosition } } };
+          return { sessions: { ...st.sessions, [msg.sessionId]: { ...agent, audioPosition } } };
         });
         return;
     }
@@ -975,7 +978,7 @@ export const useStore = create<StoreState>((set, get) => {
       // always re-announce the active chat after reconnecting.
       audioFocusAgent = null;
       syncAudioFocus();
-      // Rediscover agents (and their metadata) and re-subscribe with sinceSeq.
+      // Rediscover sessions (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
       client.send({ t: 'list_agent_catalog' });
       client.send({ t: 'list_hosts' });
@@ -988,10 +991,10 @@ export const useStore = create<StoreState>((set, get) => {
   return {
     conn: 'connecting',
     theme: initialTheme(),
-    agents: {},
-    order: initialAgentOrder(),
-    focusedId: initialFocusedAgent(),
-    panesByAgent: initialAgentPanes(),
+    sessions: {},
+    order: initialSessionOrder(),
+    focusedId: initialFocusedSession(),
+    panesBySession: initialSessionPanes(),
     pane: 'chat',
     modal: 'none',
     spawnHandoffFrom: null,
@@ -1013,7 +1016,7 @@ export const useStore = create<StoreState>((set, get) => {
     drafts: initialDrafts(),
     annotations: {},
     browserSubAgent: null,
-    agentsRailCollapsed: isNarrowViewport(),
+	sessionsRailCollapsed: isNarrowViewport(),
     approvalsRailCollapsed: isNarrowViewport(),
     systemNotifications: [],
 
@@ -1062,12 +1065,12 @@ export const useStore = create<StoreState>((set, get) => {
       const previous = get().focusedId;
       const previousHadPty = previous ? wantsPty(previous) : false;
       set((st) => {
-        const agent = st.agents[id];
-        const pane = st.panesByAgent[id] ?? 'chat';
+        const agent = st.sessions[id];
+        const pane = st.panesBySession[id] ?? 'chat';
         if (!agent || agent.turnNotifications.length === 0) return { focusedId: id, pane };
-        return { focusedId: id, pane, agents: { ...st.agents, [id]: { ...agent, turnNotifications: [] } } };
+        return { focusedId: id, pane, sessions: { ...st.sessions, [id]: { ...agent, turnNotifications: [] } } };
       });
-      if (get().agents[id]) saveFocusedAgent(id);
+      if (get().sessions[id]) saveFocusedSession(id);
       syncAudioFocus();
       if (previous && previous !== id && previousHadPty) subscribeAgent(previous);
       if (wantsPty(id)) replayPtyFor(id);
@@ -1080,14 +1083,14 @@ export const useStore = create<StoreState>((set, get) => {
       order.splice(from, 1);
       const nextTarget = order.indexOf(targetId);
       order.splice(nextTarget + (after ? 1 : 0), 0, id);
-      saveAgentOrder(order);
+      saveSessionOrder(order);
       set({ order });
     },
     // A user can restore the completed-turn badge after acknowledging it. This
     // is deliberately browser-local, like notifications created from live
     // status transitions, and is idempotent while the agent is already unread.
     markAgentUnread: (id) => set((st) => {
-      const agent = st.agents[id];
+      const agent = st.sessions[id];
       if (!agent || agent.turnNotifications.length > 0) return st;
       const notification: TurnNotification = {
         seq: agent.lastSeq,
@@ -1095,8 +1098,8 @@ export const useStore = create<StoreState>((set, get) => {
         severity: 'success',
       };
       return {
-        agents: {
-          ...st.agents,
+        sessions: {
+          ...st.sessions,
           [id]: { ...agent, turnNotifications: [...agent.turnNotifications, notification] },
         },
       };
@@ -1110,9 +1113,9 @@ export const useStore = create<StoreState>((set, get) => {
       const hadPty = id ? wantsPty(id) : false;
       if (id) {
         set((st) => {
-          const panesByAgent = { ...st.panesByAgent, [id]: p };
-          saveAgentPanes(panesByAgent);
-          return { pane: p, panesByAgent };
+          const panesBySession = { ...st.panesBySession, [id]: p };
+          saveSessionPanes(panesBySession);
+          return { pane: p, panesBySession };
         });
       } else {
         set({ pane: p });
@@ -1128,7 +1131,7 @@ export const useStore = create<StoreState>((set, get) => {
         localStorage.setItem('tandem.theme', theme);
         return { theme };
       }),
-    toggleAgentsRail: () => set((st) => ({ agentsRailCollapsed: !st.agentsRailCollapsed })),
+	toggleSessionsRail: () => set((st) => ({ sessionsRailCollapsed: !st.sessionsRailCollapsed })),
     toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {
       if (m === 'spawn') {
@@ -1140,16 +1143,16 @@ export const useStore = create<StoreState>((set, get) => {
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
       set({ modal: m, spawnHandoffFrom: null });
     },
-    handOffAgent: (agentId) => {
+    handOffAgent: (sessionId) => {
       get().setModal('spawn');
-      set({ spawnHandoffFrom: agentId });
+      set({ spawnHandoffFrom: sessionId });
     },
     toggleInspector: () => set((st) => ({ inspectorOpen: !st.inspectorOpen })),
-    toggleThreadAudio: (agentId) => {
-      const agent = get().agents[agentId];
-      if (agent) client.send({ t: 'set_audio_enabled', agentId, enabled: !agent.audioOnTurnEnd });
+    toggleThreadAudio: (sessionId) => {
+      const agent = get().sessions[sessionId];
+      if (agent) client.send({ t: 'set_audio_enabled', sessionId, enabled: !agent.audioOnTurnEnd });
     },
-    setAudioPosition: (agentId, seq, positionMs) => client.send({ t: 'set_audio_position', agentId, seq, positionMs }),
+    setAudioPosition: (sessionId, seq, positionMs) => client.send({ t: 'set_audio_position', sessionId, seq, positionMs }),
     refreshDirs: () => client.send({ t: 'list_dirs' }),
     refreshHostDirs: (hostId) => client.send(isLocalHost(hostId) ? { t: 'list_dirs' } : { t: 'list_dirs', hostId }),
     refreshHosts: () => client.send({ t: 'list_hosts' }),
@@ -1199,15 +1202,15 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
-          if (r.agentId && !r.error) {
+          if (r.sessionId && !r.error) {
             get().refreshAgents();
-            set({ focusedId: r.agentId, modal: 'none', pane: 'chat' });
+            set({ focusedId: r.sessionId, modal: 'none', pane: 'chat' });
           }
           resolve(r);
         });
         client.send({
           t: 'resume_session',
-          sessionId: session.sessionId,
+		  externalSessionId: session.externalSessionId,
           source: session.source,
           agent: session.agent,
           cwd: session.cwd || undefined,
@@ -1215,54 +1218,54 @@ export const useStore = create<StoreState>((set, get) => {
           corrId,
         });
       }),
-    enterTerminal: (agentId, interrupt = false) =>
+    enterTerminal: (sessionId, interrupt = false) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
           // The CLI switch is an explicit request to view terminal output. It
           // may emit control_state before its ack, so opt into PTY replay here
           // rather than waiting for a later pane change.
-          if (!result.error) replayPtyFor(agentId);
+          if (!result.error) replayPtyFor(sessionId);
           resolve(result);
         });
-        client.send({ t: 'enter_terminal', agentId, interrupt, corrId });
+        client.send({ t: 'enter_terminal', sessionId, interrupt, corrId });
       }),
-    leaveTerminal: (agentId) =>
+    leaveTerminal: (sessionId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
-          if (!result.error && !wantsPty(agentId)) subscribeAgent(agentId);
+          if (!result.error && !wantsPty(sessionId)) subscribeAgent(sessionId);
           resolve(result);
         });
-        client.send({ t: 'leave_terminal', agentId, corrId });
+        client.send({ t: 'leave_terminal', sessionId, corrId });
       }),
-    openShell: (agentId, cols, rows) =>
+    openShell: (sessionId, cols, rows) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'shell_open', agentId, cols, rows, corrId });
+        client.send({ t: 'shell_open', sessionId, cols, rows, corrId });
       }),
-    restartShell: (agentId, cols, rows) => {
+    restartShell: (sessionId, cols, rows) => {
       // Clear the exited flag + prior scrollback so the fresh shell starts clean.
-      shellHub.reset(agentId);
+      shellHub.reset(sessionId);
       set((st) => {
-        const a = st.agents[agentId];
+        const a = st.sessions[sessionId];
         if (!a) return st;
-        return { agents: { ...st.agents, [agentId]: { ...a, shellExited: false, shellExitMessage: null } } };
+        return { sessions: { ...st.sessions, [sessionId]: { ...a, shellExited: false, shellExitMessage: null } } };
       });
       return new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'shell_open', agentId, cols, rows, corrId });
+        client.send({ t: 'shell_open', sessionId, cols, rows, corrId });
       });
     },
     spawn: (spec) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
-          if (r.agentId && !r.error) {
+          if (r.sessionId && !r.error) {
             get().refreshAgents();
-            set({ focusedId: r.agentId, modal: 'none', pane: 'chat' });
+            set({ focusedId: r.sessionId, modal: 'none', pane: 'chat' });
           }
           resolve(r);
         });
@@ -1272,9 +1275,9 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
-          if (result.agentId && !result.error) {
+          if (result.sessionId && !result.error) {
             get().refreshAgents();
-            set({ focusedId: result.agentId, pane: 'chat' });
+            set({ focusedId: result.sessionId, pane: 'chat' });
           }
           resolve(result);
         });
@@ -1296,17 +1299,17 @@ export const useStore = create<StoreState>((set, get) => {
           ? { t: 'list_git_refs', repo, corrId }
           : { t: 'list_git_refs', repo, hostId, corrId });
       }),
-    listWorkspaceEntries: (agentId, path) =>
+    listWorkspaceEntries: (sessionId, path) =>
       new Promise<WorkspaceEntry[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingWorkspaceEntries.set(corrId, { resolve, reject });
-        client.send({ t: 'list_workspace_entries', agentId, path, corrId });
+        client.send({ t: 'list_workspace_entries', sessionId, path, corrId });
       }),
-    captureSnapshot: (agentId, name) =>
+    captureSnapshot: (sessionId, name) =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSnapshots.set(corrId, { resolve, reject });
-        client.send({ t: 'capture_snapshot', agentId, name, corrId });
+        client.send({ t: 'capture_snapshot', sessionId, name, corrId });
       }),
     listSnapshots: () =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
@@ -1332,14 +1335,14 @@ export const useStore = create<StoreState>((set, get) => {
         pendingProfiles.set(corrId, { resolve, reject });
         client.send({ t: 'rename_profile', id, name, project, corrId });
       }),
-    renameAgent: (agentId, name) =>
+    renameAgent: (sessionId, name) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
           if (!result.error) get().refreshAgents();
           resolve(result);
         });
-        client.send({ t: 'rename_agent', agentId, name, corrId });
+        client.send({ t: 'rename_agent', sessionId, name, corrId });
       }),
     deleteProfile: (id, project) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
@@ -1347,143 +1350,143 @@ export const useStore = create<StoreState>((set, get) => {
         pendingProfiles.set(corrId, { resolve, reject });
         client.send({ t: 'delete_profile', id, project, corrId });
       }),
-    prompt: (agentId, input) =>
+    prompt: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
           resolve(result);
         });
         client.send(typeof input === 'string'
-          ? { t: 'prompt', agentId, text: input, corrId }
-          : { t: 'prompt', agentId, blocks: input, corrId });
+          ? { t: 'prompt', sessionId, text: input, corrId }
+          : { t: 'prompt', sessionId, blocks: input, corrId });
       }),
-    steer: (agentId, input) =>
+    steer: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
           resolve(result);
         });
         client.send(typeof input === 'string'
-          ? { t: 'steer', agentId, text: input, corrId }
-          : { t: 'steer', agentId, blocks: input, corrId });
+          ? { t: 'steer', sessionId, text: input, corrId }
+          : { t: 'steer', sessionId, blocks: input, corrId });
       }),
-    aside: (agentId, question) =>
+    aside: (sessionId, question) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [agentId]: '' } }));
+          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
           resolve(result);
         });
-        client.send({ t: 'aside', agentId, text: question, corrId });
+        client.send({ t: 'aside', sessionId, text: question, corrId });
       }),
-    removeQueuedPrompt: (agentId, promptId) =>
+    removeQueuedPrompt: (sessionId, promptId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'remove_queued_prompt', agentId, promptId, corrId });
+        client.send({ t: 'remove_queued_prompt', sessionId, promptId, corrId });
       }),
-    clearPromptQueue: (agentId) =>
+    clearPromptQueue: (sessionId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'clear_prompt_queue', agentId, corrId });
+        client.send({ t: 'clear_prompt_queue', sessionId, corrId });
       }),
-    interruptAndClearQueue: (agentId) =>
+    interruptAndClearQueue: (sessionId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'interrupt_and_clear_queue', agentId, corrId });
+        client.send({ t: 'interrupt_and_clear_queue', sessionId, corrId });
       }),
     // Annotations are daemon-authoritative: these actions only send the WS
     // message and resolve the ack. Local `annotations` state updates only via
     // the `annotations` broadcast (and `snapshot` hydration) above.
-    addAnnotation: (agentId, anchor, comment) =>
+    addAnnotation: (sessionId, anchor, comment) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'add_annotation', agentId, seq: anchor.seq, role: anchor.role, quote: anchor.quote, comment, corrId });
+        client.send({ t: 'add_annotation', sessionId, seq: anchor.seq, role: anchor.role, quote: anchor.quote, comment, corrId });
       }),
-    updateAnnotation: (agentId, id, comment) =>
+    updateAnnotation: (sessionId, id, comment) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'update_annotation', agentId, id, comment, corrId });
+        client.send({ t: 'update_annotation', sessionId, id, comment, corrId });
       }),
-    removeAnnotation: (agentId, id) =>
+    removeAnnotation: (sessionId, id) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'delete_annotation', agentId, id, corrId });
+        client.send({ t: 'delete_annotation', sessionId, id, corrId });
       }),
-    clearAnnotations: (agentId) =>
+    clearAnnotations: (sessionId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'clear_annotations', agentId, corrId });
+        client.send({ t: 'clear_annotations', sessionId, corrId });
       }),
-    setDraft: (agentId, text) => set((st) => ({ drafts: { ...st.drafts, [agentId]: text } })),
-    interrupt: (agentId) => client.send({ t: 'interrupt', agentId }),
-    respond: (agentId, reqId, optionId) => {
+    setDraft: (sessionId, text) => set((st) => ({ drafts: { ...st.drafts, [sessionId]: text } })),
+    interrupt: (sessionId) => client.send({ t: 'interrupt', sessionId }),
+    respond: (sessionId, reqId, optionId) => {
       // Optimistically drop the approval so the rail feels instant; the daemon
       // confirms via a status/event stream.
       set((st) => {
-        const a = st.agents[agentId];
+        const a = st.sessions[sessionId];
         if (!a) return st;
-        return { agents: { ...st.agents, [agentId]: { ...a, pendingApprovals: a.pendingApprovals.filter((p) => p.reqId !== reqId) } } };
+        return { sessions: { ...st.sessions, [sessionId]: { ...a, pendingApprovals: a.pendingApprovals.filter((p) => p.reqId !== reqId) } } };
       });
-      client.send({ t: 'permission_response', agentId, reqId, optionId });
+      client.send({ t: 'permission_response', sessionId, reqId, optionId });
     },
-    setMode: (agentId, modeId) => client.send({ t: 'set_mode', agentId, modeId }),
-    setConfigOption: (agentId, configId, value) => client.send({ t: 'set_config_option', agentId, configId, value }),
-    getClosePreview: (agentId) =>
+    setMode: (sessionId, modeId) => client.send({ t: 'set_mode', sessionId, modeId }),
+    setConfigOption: (sessionId, configId, value) => client.send({ t: 'set_config_option', sessionId, configId, value }),
+    getClosePreview: (sessionId) =>
       new Promise<ClosePreview>((resolve, reject) => {
         const corrId = nextCorr();
         pendingClosePreviews.set(corrId, { resolve, reject });
-        client.send({ t: 'get_close_preview', agentId, corrId });
+        client.send({ t: 'get_close_preview', sessionId, corrId });
       }),
-    getDiff: (agentId) =>
+    getDiff: (sessionId) =>
       new Promise<WorkspaceDiff>((resolve, reject) => {
         const corrId = nextCorr();
         pendingDiffs.set(corrId, { resolve, reject });
-        client.send({ t: 'get_diff', agentId, corrId });
+        client.send({ t: 'get_diff', sessionId, corrId });
       }),
-    closeAgent: (agentId, force, deleteWorktree, deinitSubmodules) =>
+    closeAgent: (sessionId, force, deleteWorktree, deinitSubmodules) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'close_agent', agentId, force, deleteWorktree, deinitSubmodules, corrId });
+        client.send({ t: 'close_agent', sessionId, force, deleteWorktree, deinitSubmodules, corrId });
       }),
     send: (m) => client.send(m),
     // Opt an agent's browser channel in/out (screencast focus rule). Re-subscribe
-    // both the previously- and newly-viewing agents so the daemon starts/stops the
+    // both the previously- and newly-viewing sessions so the daemon starts/stops the
     // screencast accordingly.
-    setBrowserSub: (agentId) => {
+    setBrowserSub: (sessionId) => {
       const prev = get().browserSubAgent;
-      if (prev === agentId) return;
-      set({ browserSubAgent: agentId });
-      if (prev && get().agents[prev]) subscribeAgent(prev);
-      if (agentId && get().agents[agentId]) subscribeAgent(agentId);
+      if (prev === sessionId) return;
+      set({ browserSubAgent: sessionId });
+      if (prev && get().sessions[prev]) subscribeAgent(prev);
+      if (sessionId && get().sessions[sessionId]) subscribeAgent(sessionId);
     },
-    browserControl: (agentId, action) => client.send({ t: 'browser_control', agentId, action }),
-    restartBrowser: (agentId, snapshotId) =>
+    browserControl: (sessionId, action) => client.send({ t: 'browser_control', sessionId, action }),
+    restartBrowser: (sessionId, snapshotId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'restart_browser', agentId, snapshotId, corrId });
+        client.send({ t: 'restart_browser', sessionId, snapshotId, corrId });
       }),
-    browserInput: (agentId, event) => client.send({ t: 'browser_input', agentId, event }),
-    toggleWheel: (agentId) => {
-      const a = get().agents[agentId];
+    browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, event }),
+    toggleWheel: (sessionId) => {
+      const a = get().sessions[sessionId];
       if (!a || !a.browserActive) return;
-      client.send({ t: 'browser_control', agentId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
+      client.send({ t: 'browser_control', sessionId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
     },
     nav: (dir) => {
       const previous = get().focusedId;
       const previousHadPty = previous ? wantsPty(previous) : false;
       set((st) => {
-        const ranked = rankAgents(st.agents, st.order);
+        const ranked = rankSessions(st.sessions, st.order);
         if (ranked.length === 0) return st;
         const i = st.focusedId ? ranked.indexOf(st.focusedId) : -1;
         const next = ranked[(i + dir + ranked.length) % ranked.length];
@@ -1503,30 +1506,30 @@ export const useStore = create<StoreState>((set, get) => {
 // Do the same for drafts: every keystroke reaches localStorage synchronously,
 // before a refresh or daemon restart can discard the browser state.
 useStore.subscribe((state, previous) => {
-  if (state.focusedId !== previous.focusedId) saveFocusedAgent(state.focusedId);
+  if (state.focusedId !== previous.focusedId) saveFocusedSession(state.focusedId);
   if (state.drafts !== previous.drafts) saveDrafts(state.drafts);
 });
 
 // Derived selector: rail order with blocked/error floated to the top.
 export function rankedOrder(st: StoreState): string[] {
-  return rankAgents(st.agents, st.order);
+  return rankSessions(st.sessions, st.order);
 }
-// All pending approvals across all agents (for the right rail), urgent first.
-export function allApprovals(st: StoreState): { agentId: string; approval: Approval }[] {
-  const out: { agentId: string; approval: Approval }[] = [];
-  for (const id of rankAgents(st.agents, st.order)) {
-    const a = st.agents[id];
-    for (const ap of a.pendingApprovals) out.push({ agentId: id, approval: ap });
+// All pending approvals across all sessions (for the right rail), urgent first.
+export function allApprovals(st: StoreState): { sessionId: string; approval: Approval }[] {
+  const out: { sessionId: string; approval: Approval }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    const a = st.sessions[id];
+    for (const ap of a.pendingApprovals) out.push({ sessionId: id, approval: ap });
   }
   return out;
 }
 
 // Completed turns waiting to be read, newest first within each agent.
-export function allTurnNotifications(st: StoreState): { agentId: string; notification: TurnNotification }[] {
-  const out: { agentId: string; notification: TurnNotification }[] = [];
-  for (const id of rankAgents(st.agents, st.order)) {
-    const agent = st.agents[id];
-    for (const notification of agent.turnNotifications) out.push({ agentId: id, notification });
+export function allTurnNotifications(st: StoreState): { sessionId: string; notification: TurnNotification }[] {
+  const out: { sessionId: string; notification: TurnNotification }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    const agent = st.sessions[id];
+    for (const notification of agent.turnNotifications) out.push({ sessionId: id, notification });
   }
   return out.sort((a, b) => b.notification.createdAt - a.notification.createdAt);
 }
@@ -1536,15 +1539,15 @@ export function allTurnNotifications(st: StoreState): { agentId: string; notific
 export function notificationsSummary(st: StoreState): { total: number; severity: NotifSeverity | null } {
   const severities: NotifSeverity[] = st.systemNotifications.map((n) => n.severity);
   let total = st.systemNotifications.length;
-  for (const id of Object.keys(st.agents)) {
-    const badge = agentBadge(st.agents[id]);
+  for (const id of Object.keys(st.sessions)) {
+    const badge = agentBadge(st.sessions[id]);
     total += badge.count;
     if (badge.severity) severities.push(badge.severity);
   }
   return { total, severity: maxSeverity(severities) };
 }
 
-function shell(id: string): AgentView {
+function shell(id: string): SessionView {
   return {
     id,
     name: id,
@@ -1582,7 +1585,7 @@ function shell(id: string): AgentView {
   };
 }
 
-function mergeSummary(prev: AgentView | undefined, s: AgentSummary): AgentView {
+function mergeSummary(prev: SessionView | undefined, s: SessionSummary): SessionView {
   const base = prev ?? shell(s.id);
   return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
 }
@@ -1596,7 +1599,7 @@ function usageUpdatedAt(event: Extract<WireEvent, { kind: 'usage' }>): number {
   return typeof event.updatedAt === 'number' && event.updatedAt > 0 ? event.updatedAt : Date.now();
 }
 
-function applyEventToView(v: AgentView, event: WireEvent): void {
+function applyEventToView(v: SessionView, event: WireEvent): void {
   if (event.kind === 'status') v.status = event.status;
   if (event.kind === 'permission_request') {
     v.status = 'blocked';
@@ -1636,12 +1639,12 @@ function applyEventToView(v: AgentView, event: WireEvent): void {
   }
 }
 
-// All pending browser takeovers across agents, for the attention rail.
-export function allTakeovers(st: StoreState): { agentId: string; takeover: Takeover }[] {
-  const out: { agentId: string; takeover: Takeover }[] = [];
-  for (const id of rankAgents(st.agents, st.order)) {
-    const a = st.agents[id];
-    for (const t of a.takeovers) out.push({ agentId: id, takeover: t });
+// All pending browser takeovers across sessions, for the attention rail.
+export function allTakeovers(st: StoreState): { sessionId: string; takeover: Takeover }[] {
+  const out: { sessionId: string; takeover: Takeover }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    const a = st.sessions[id];
+    for (const t of a.takeovers) out.push({ sessionId: id, takeover: t });
   }
   return out;
 }

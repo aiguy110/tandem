@@ -51,8 +51,8 @@ type Stored struct {
 }
 
 type MetadataStore interface {
-	PutAsset(agentID string, asset store.Asset) error
-	AgentAsset(agentID, assetID string) (*store.Asset, error)
+	PutAsset(sessionID string, asset store.Asset) error
+	SessionAsset(sessionID, assetID string) (*store.Asset, error)
 }
 
 type Store struct {
@@ -70,7 +70,7 @@ func Open(root string, meta MetadataStore) (*Store, error) {
 	return &Store{root: root, meta: meta}, nil
 }
 
-func (s *Store) Put(agentID string, data []byte, declaredMIME string) (Stored, error) {
+func (s *Store) Put(sessionID string, data []byte, declaredMIME string) (Stored, error) {
 	if int64(len(data)) > MaxAssetBytes {
 		return Stored{}, &TooLargeError{Limit: MaxAssetBytes}
 	}
@@ -119,17 +119,17 @@ func (s *Store) Put(agentID string, data []byte, declaredMIME string) (Stored, e
 		return Stored{}, err
 	}
 	asset := store.Asset{ID: id, MIMEType: mime, Size: int64(len(data))}
-	if err := s.meta.PutAsset(agentID, asset); err != nil {
+	if err := s.meta.PutAsset(sessionID, asset); err != nil {
 		return Stored{}, err
 	}
 	return Stored{AssetID: id, MIMEType: mime, Size: int64(len(data))}, nil
 }
 
-func (s *Store) Get(agentID, assetID string) (Stored, error) {
+func (s *Store) Get(sessionID, assetID string) (Stored, error) {
 	if !validID.MatchString(assetID) {
 		return Stored{}, ErrNotFound
 	}
-	meta, err := s.meta.AgentAsset(agentID, assetID)
+	meta, err := s.meta.SessionAsset(sessionID, assetID)
 	if err != nil {
 		return Stored{}, err
 	}

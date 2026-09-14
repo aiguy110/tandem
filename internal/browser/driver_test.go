@@ -61,19 +61,19 @@ func TestSteelDriverLifecycle(t *testing.T) {
 }
 
 type fakeSessionStore struct {
-	saved   map[string][3]string // agentID -> {sessionID, profileID, cdpURL}
+	saved   map[string][3]string // sessionID -> {driverSessionID, profileID, cdpURL}
 	deleted []string
 }
 
-func (f *fakeSessionStore) SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error {
+func (f *fakeSessionStore) SaveBrowserSession(sessionID, driverSessionID, profileID, cdpURL string) error {
 	if f.saved == nil {
 		f.saved = map[string][3]string{}
 	}
-	f.saved[agentID] = [3]string{sessionID, profileID, cdpURL}
+	f.saved[sessionID] = [3]string{driverSessionID, profileID, cdpURL}
 	return nil
 }
-func (f *fakeSessionStore) DeleteBrowserSession(agentID string) error {
-	f.deleted = append(f.deleted, agentID)
+func (f *fakeSessionStore) DeleteBrowserSession(sessionID string) error {
+	f.deleted = append(f.deleted, sessionID)
 	return nil
 }
 

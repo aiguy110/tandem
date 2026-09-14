@@ -11,10 +11,10 @@ import (
 func TestTakeoverEndpointAuthenticatesAndResolvesOnRelease(t *testing.T) {
 	requested := false
 	resolved := false
-	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(id string) bool { return id == "one" }, OnRequest: func(agentID, reqID, reason string) {
-		requested = agentID == "one" && reqID == "tk_1" && reason == "login"
-	}, OnResolved: func(agentID, reqID string) {
-		resolved = agentID == "one" && reqID == "tk_1"
+	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(id string) bool { return id == "one" }, OnRequest: func(sessionID, reqID, reason string) {
+		requested = sessionID == "one" && reqID == "tk_1" && reason == "login"
+	}, OnResolved: func(sessionID, reqID string) {
+		resolved = sessionID == "one" && reqID == "tk_1"
 	}})
 	post := httptest.NewRequest(http.MethodPost, "/internal/browser/takeover?agentId=one", bytes.NewBufferString(`{"reason":"login"}`))
 	post.Header.Set("Authorization", "Bearer secret")

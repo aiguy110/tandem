@@ -9,8 +9,8 @@ import { PtyTerminal } from './PtyTerminal';
 // The shell is spawned lazily on first visit and its scrollback replays from the
 // daemon on reconnect. On exit the pane offers a restart.
 export function ShellPane() {
-  const agentId = useStore((s) => s.focusedId)!;
-  const agent = useStore((s) => s.agents[agentId]);
+  const sessionId = useStore((s) => s.focusedId)!;
+  const agent = useStore((s) => s.sessions[sessionId]);
   const send = useStore((s) => s.send);
   const openShell = useStore((s) => s.openShell);
   const restartShell = useStore((s) => s.restartShell);
@@ -31,16 +31,16 @@ export function ShellPane() {
       // only a shell that has never exited is opened lazily on first visit.
       if (exited) return;
       openedRef.current = true;
-      void openShell(agentId, cols, rows);
+      void openShell(sessionId, cols, rows);
     } else {
-      send({ t: 'shell_resize', agentId, cols, rows });
+      send({ t: 'shell_resize', sessionId, cols, rows });
     }
   };
 
   const restart = () => {
     const { cols, rows } = sizeRef.current;
     openedRef.current = true;
-    void restartShell(agentId, cols, rows);
+    void restartShell(sessionId, cols, rows);
     setGeneration((g) => g + 1);
   };
 
@@ -48,9 +48,9 @@ export function ShellPane() {
     <div className="pane shell-pane">
       <div className="term-host">
         <PtyTerminal
-          key={`shell-${agentId}-${generation}`}
-          subscribe={(cb) => shellHub.subscribe(agentId, cb)}
-          onData={(d) => send({ t: 'shell_input', agentId, bytesB64: encode(d) })}
+          key={`shell-${sessionId}-${generation}`}
+          subscribe={(cb) => shellHub.subscribe(sessionId, cb)}
+          onData={(d) => send({ t: 'shell_input', sessionId, bytesB64: encode(d) })}
           onResize={onResize}
         />
         {exited && (

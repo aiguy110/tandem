@@ -6,7 +6,7 @@ export function Inspector() {
   const open = useStore((s) => s.inspectorOpen);
   const toggle = useStore((s) => s.toggleInspector);
   const focusedId = useStore((s) => s.focusedId);
-  const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
+  const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined));
 
   return (
     <div className="inspector">
@@ -48,7 +48,7 @@ export function Inspector() {
           </div>
         </div>
       )}
-      {open && !agent && <div className="insp-body">No agent focused.</div>}
+      {open && !agent && <div className="insp-body">No session focused.</div>}
     </div>
   );
 }

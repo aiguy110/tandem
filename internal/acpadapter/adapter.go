@@ -27,8 +27,8 @@ import (
 // AssetStore is the narrow asset-store surface needed to resolve prompt images
 // and capture image-bearing tool results before they enter the event log.
 type AssetStore interface {
-	Get(agentID, assetID string) (assets.Stored, error)
-	Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error)
+	Get(sessionID, assetID string) (assets.Stored, error)
+	Put(sessionID string, data []byte, declaredMIME string) (assets.Stored, error)
 }
 
 type MCPServer struct {
@@ -43,7 +43,7 @@ type MCPServer struct {
 
 type AdapterConfig struct {
 	Transport       acp.Config
-	AgentID         string
+	SessionID         string
 	Cwd             string
 	ResumeSessionID string
 	CaptureReplay   bool
@@ -151,7 +151,7 @@ var permissionCounter atomic.Uint64
 // StartAdapter launches an ACP process and completes initialize plus either
 // session/new or capability-gated session/load before returning.
 func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
-	if cfg.AgentID == "" {
+	if cfg.SessionID == "" {
 		return nil, errors.New("acp adapter: agent ID is required")
 	}
 	childCtx, cancel := context.WithCancel(ctx)
@@ -283,7 +283,7 @@ func (a *Adapter) cwd() string {
 }
 
 func (a *Adapter) Capabilities() Capabilities { a.mu.RLock(); defer a.mu.RUnlock(); return a.caps }
-func (a *Adapter) SessionID() string          { a.mu.RLock(); defer a.mu.RUnlock(); return a.sessionID }
+func (a *Adapter) ExternalSessionID() string          { a.mu.RLock(); defer a.mu.RUnlock(); return a.sessionID }
 func (a *Adapter) SessionState() SessionState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -342,7 +342,7 @@ func (a *Adapter) endReplay() {
 }
 
 func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, error) {
-	return a.promptSession(ctx, a.SessionID(), blocks, true)
+	return a.promptSession(ctx, a.ExternalSessionID(), blocks, true)
 }
 
 // Aside forks the current session, runs one isolated prompt, and leaves the
@@ -360,7 +360,7 @@ func (a *Adapter) Aside(ctx context.Context, asideID string, blocks []PromptBloc
 		SessionID string `json:"sessionId"`
 	}
 	if err := a.tr.Call(ctx, "session/fork", map[string]any{
-		"sessionId": a.SessionID(), "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers,
+		"sessionId": a.ExternalSessionID(), "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers,
 	}, &fork); err != nil {
 		return "", fmt.Errorf("acp session/fork: %w", err)
 	}
@@ -522,7 +522,7 @@ func (a *Adapter) resolvePrompt(blocks []PromptBlock) ([]map[string]any, error) 
 			if images > assets.MaxPromptImages {
 				return nil, fmt.Errorf("prompt may contain at most %d images", assets.MaxPromptImages)
 			}
-			asset, err := a.cfg.Assets.Get(a.cfg.AgentID, block.AssetID)
+			asset, err := a.cfg.Assets.Get(a.cfg.SessionID, block.AssetID)
 			if err != nil {
 				return nil, fmt.Errorf("resolve image %s: %w", block.AssetID, err)
 			}
@@ -614,11 +614,11 @@ func (a *Adapter) Interrupt() error {
 }
 
 func (a *Adapter) SetMode(ctx context.Context, modeID string) error {
-	return a.tr.Call(ctx, "session/set_mode", map[string]any{"sessionId": a.SessionID(), "modeId": modeID}, nil)
+	return a.tr.Call(ctx, "session/set_mode", map[string]any{"sessionId": a.ExternalSessionID(), "modeId": modeID}, nil)
 }
 
 func (a *Adapter) SetConfigOption(ctx context.Context, configID string, value any) error {
-	params := map[string]any{"sessionId": a.SessionID(), "configId": configID, "value": value}
+	params := map[string]any{"sessionId": a.ExternalSessionID(), "configId": configID, "value": value}
 	if _, ok := value.(bool); ok {
 		params["type"] = "boolean"
 	}
@@ -849,7 +849,7 @@ func (a *Adapter) validateServiceSession(method, sessionID string) error {
 	active := a.turnSessionID
 	a.mu.RUnlock()
 	if active == "" {
-		active = a.SessionID()
+		active = a.ExternalSessionID()
 	}
 	if sessionID != active {
 		return &invalidServiceParams{message: "malformed " + method + ": sessionId does not match the active session"}
@@ -1323,7 +1323,7 @@ func (a *Adapter) normalizeToolContent(raw json.RawMessage, extraFile string) (a
 			var decoded []byte
 			decoded, err = base64.StdEncoding.DecodeString(data)
 			if err == nil && a.cfg.Assets != nil {
-				stored, err = a.cfg.Assets.Put(a.cfg.AgentID, decoded, mime)
+				stored, err = a.cfg.Assets.Put(a.cfg.SessionID, decoded, mime)
 			}
 		case "resource_link":
 			uri, _ := content["uri"].(string)
@@ -1440,7 +1440,7 @@ func (a *Adapter) captureToolFile(raw string) (assets.Stored, error) {
 	if err != nil {
 		return assets.Stored{}, err
 	}
-	return a.cfg.Assets.Put(a.cfg.AgentID, data, "")
+	return a.cfg.Assets.Put(a.cfg.SessionID, data, "")
 }
 
 func (a *Adapter) updateCurrentMode(mode string) {

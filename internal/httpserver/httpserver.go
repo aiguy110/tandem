@@ -31,16 +31,16 @@ const MaxUploadBytes = 1000 * 1024 * 1024
 const noCache = "no-cache, no-store, must-revalidate"
 
 type AssetStore interface {
-	Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error)
-	Get(agentID, assetID string) (assets.Stored, error)
+	Put(sessionID string, data []byte, declaredMIME string) (assets.Stored, error)
+	Get(sessionID, assetID string) (assets.Stored, error)
 }
 
 type UploadStore interface {
-	Save(agentID, name string, data []byte) (string, error)
+	Save(sessionID, name string, data []byte) (string, error)
 }
 
 type configuredUploadStore interface {
-	HasConfiguredDirectory(agentID string) (bool, error)
+	HasConfiguredDirectory(sessionID string) (bool, error)
 }
 
 type Options struct {
@@ -56,7 +56,7 @@ type Options struct {
 	Uploads            UploadStore
 	AgentExists        func(string) bool
 	Voice              voice.Renderer
-	MessageText        func(agentID string, seq int64) (string, error)
+	MessageText        func(sessionID string, seq int64) (string, error)
 	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
 }
 
@@ -120,17 +120,17 @@ func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	agentID, err := url.PathUnescape(parts[2])
-	if err != nil || agentID == "" || h.opts.AgentExists == nil || !h.opts.AgentExists(agentID) {
+	sessionID, err := url.PathUnescape(parts[2])
+	if err != nil || sessionID == "" || h.opts.AgentExists == nil || !h.opts.AgentExists(sessionID) {
 		http.NotFound(w, r)
 		return
 	}
 	if (h.opts.Assets != nil || h.opts.Uploads != nil) && parts[3] == "assets" && r.Method == http.MethodPost && len(parts) == 4 {
-		h.upload(w, r, agentID)
+		h.upload(w, r, sessionID)
 		return
 	}
 	if h.opts.Assets != nil && parts[3] == "assets" && r.Method == http.MethodGet && len(parts) == 5 {
-		h.download(w, r, agentID, parts[4])
+		h.download(w, r, sessionID, parts[4])
 		return
 	}
 	if parts[3] == "messages" && len(parts) == 6 && parts[5] == "audio" && r.Method == http.MethodPost {
@@ -139,15 +139,15 @@ func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		h.renderAudio(w, r, agentID, seq)
+		h.renderAudio(w, r, sessionID, seq)
 		return
 	}
 	http.NotFound(w, r)
 }
 
-func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, agentID string, seq int64) {
+func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, sessionID string, seq int64) {
 	if h.opts.RenderMessageAudio != nil {
-		audio, err := h.opts.RenderMessageAudio(r.Context(), agentID, seq)
+		audio, err := h.opts.RenderMessageAudio(r.Context(), sessionID, seq)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
@@ -159,7 +159,7 @@ func (h *Handler) renderAudio(w http.ResponseWriter, r *http.Request, agentID st
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "voice rendering is not configured; run tandem setup"})
 		return
 	}
-	text, err := h.opts.MessageText(agentID, seq)
+	text, err := h.opts.MessageText(sessionID, seq)
 	if err != nil {
 		if errors.Is(err, ErrMessageNotFound) {
 			http.NotFound(w, r)
@@ -190,7 +190,7 @@ func bearerMatches(header, token string) bool {
 	return token != "" && len(header) == len(want) && subtle.ConstantTimeCompare([]byte(header), []byte(want)) == 1
 }
 
-func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string) {
+func (h *Handler) upload(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.ContentLength > MaxUploadBytes {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("file exceeds %d byte limit", MaxUploadBytes)})
 		return
@@ -213,7 +213,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 	saveUpload := h.opts.Uploads != nil
 	if storeImage {
 		if configured, ok := h.opts.Uploads.(configuredUploadStore); ok {
-			keepInWorkspace, err := configured.HasConfiguredDirectory(agentID)
+			keepInWorkspace, err := configured.HasConfiguredDirectory(sessionID)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
@@ -222,7 +222,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 		}
 	}
 	if saveUpload {
-		path, err := h.opts.Uploads.Save(agentID, name, data)
+		path, err := h.opts.Uploads.Save(sessionID, name, data)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -230,7 +230,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, agentID string)
 		result["upload"] = map[string]any{"path": path, "name": name, "size": len(data)}
 	}
 	if storeImage {
-		stored, err := h.opts.Assets.Put(agentID, data, r.Header.Get("Content-Type"))
+		stored, err := h.opts.Assets.Put(sessionID, data, r.Header.Get("Content-Type"))
 		if err != nil {
 			status := http.StatusInternalServerError
 			var tooLarge *assets.TooLargeError
@@ -274,8 +274,8 @@ func uploadName(raw string) string {
 	return raw
 }
 
-func (h *Handler) download(w http.ResponseWriter, r *http.Request, agentID, assetID string) {
-	stored, err := h.opts.Assets.Get(agentID, assetID)
+func (h *Handler) download(w http.ResponseWriter, r *http.Request, sessionID, assetID string) {
+	stored, err := h.opts.Assets.Get(sessionID, assetID)
 	if err != nil {
 		http.NotFound(w, r)
 		return

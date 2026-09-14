@@ -23,17 +23,17 @@ const paneCmd = (pane: PaneId, n: number, label: string): Command => ({
 export function buildCommands(): Command[] {
   const s = () => useStore.getState();
   return [
-    { id: 'agent.spawn', title: 'Spawn agent…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
+    { id: 'agent.spawn', title: 'Spawn session…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
     { id: 'agent.resume', title: 'Resume session…', subtitle: 'Search past and active sessions, grouped by repo', run: () => s().setModal('resume') },
     { id: 'automation.open', title: 'Automation…', subtitle: 'View schedules and recent runs', run: () => s().setModal('automation') },
     {
       id: 'agent.spawn.sibling',
-      title: 'Spawn sibling agent',
-      subtitle: 'New agent in the focused repo (new worktree)',
+      title: 'Spawn sibling session',
+      subtitle: 'New session in the focused repo (new worktree)',
       enabled: () => !!s().focusedId,
       run: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         if (a && a.workspace.kind === 'worktree' && a.workspace.repoPath) {
           const targetRef = a.workspace.targetRef ?? 'HEAD';
           void st.spawn({
@@ -55,16 +55,16 @@ export function buildCommands(): Command[] {
     },
     {
       id: 'agent.spawn.sibling.dependent',
-      title: 'Spawn dependent sibling agent',
-      subtitle: 'New agent starting from the focused agent’s current commits',
+      title: 'Spawn dependent sibling session',
+      subtitle: 'New session starting from the focused session’s current commits',
       enabled: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         return !!a && a.workspace.kind === 'worktree' && !!a.workspace.repoPath && !!a.workspace.branch;
       },
       run: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         if (!a || a.workspace.kind !== 'worktree' || !a.workspace.repoPath || !a.workspace.branch) return;
         void st.spawn({
           adapter: 'acp',
@@ -79,10 +79,10 @@ export function buildCommands(): Command[] {
         });
       },
     },
-    { id: 'palette.open', title: 'Command palette', subtitle: 'All commands, jump-to-agent', run: () => s().setModal('command') },
-    { id: 'nav.goToAgent', title: 'Go to agent…', subtitle: 'Jump to an agent by name', run: () => s().setModal('command') },
-    { id: 'nav.next', title: 'Next agent', subtitle: 'Move down the agent rail', run: () => s().nav(1) },
-    { id: 'nav.prev', title: 'Previous agent', subtitle: 'Move up the agent rail', run: () => s().nav(-1) },
+    { id: 'palette.open', title: 'Command palette', subtitle: 'All commands, jump-to-session', run: () => s().setModal('command') },
+    { id: 'nav.goToAgent', title: 'Go to session…', subtitle: 'Jump to a session by name', run: () => s().setModal('command') },
+    { id: 'nav.next', title: 'Next session', subtitle: 'Move down the session rail', run: () => s().nav(1) },
+    { id: 'nav.prev', title: 'Previous session', subtitle: 'Move up the session rail', run: () => s().nav(-1) },
     paneCmd('chat', 1, 'Chat'),
     paneCmd('shell', 2, 'Terminal'),
     paneCmd('diff', 3, 'Diff'),
@@ -96,8 +96,8 @@ export function buildCommands(): Command[] {
         const top = allApprovals(s())[0];
         if (top) {
           const allow = top.approval.options.find((o) => /allow|yes|approve/i.test(o.name)) ?? top.approval.options[0];
-          s().respond(top.agentId, top.approval.reqId, allow.optionId);
-          s().focus(top.agentId);
+          s().respond(top.sessionId, top.approval.reqId, allow.optionId);
+          s().focus(top.sessionId);
         }
       },
     },
@@ -110,18 +110,18 @@ export function buildCommands(): Command[] {
         const top = allApprovals(s())[0];
         if (top) {
           const deny = top.approval.options.find((o) => /reject|deny|no/i.test(o.name)) ?? top.approval.options[top.approval.options.length - 1];
-          s().respond(top.agentId, top.approval.reqId, deny.optionId);
-          s().focus(top.agentId);
+          s().respond(top.sessionId, top.approval.reqId, deny.optionId);
+          s().focus(top.sessionId);
         }
       },
     },
     {
       id: 'agent.interrupt',
-      title: 'Interrupt agent',
-      subtitle: 'Cancel the focused agent’s current turn',
+      title: 'Interrupt session',
+      subtitle: 'Cancel the focused session’s current turn',
       enabled: () => {
         const st = s();
-        return !!st.focusedId && st.agents[st.focusedId]?.status === 'working';
+        return !!st.focusedId && st.sessions[st.focusedId]?.status === 'working';
       },
       run: () => {
         const st = s();
@@ -130,8 +130,8 @@ export function buildCommands(): Command[] {
     },
     {
       id: 'agent.close',
-      title: 'Close agent',
-      subtitle: 'Tear down the focused agent (keeps its branch)',
+      title: 'Close session',
+      subtitle: 'Tear down the focused session (keeps its branch)',
       enabled: () => !!s().focusedId,
       run: () => {
         const st = s();
@@ -148,10 +148,10 @@ export function buildCommands(): Command[] {
     {
       id: 'browser.toggleWheel',
       title: 'Take / release the wheel',
-      subtitle: 'Grab or hand back control of the focused agent’s shared browser',
+      subtitle: 'Grab or hand back control of the focused session’s shared browser',
       enabled: () => {
         const st = s();
-        return !!st.focusedId && !!st.agents[st.focusedId]?.browserActive;
+        return !!st.focusedId && !!st.sessions[st.focusedId]?.browserActive;
       },
       run: () => {
         const st = s();

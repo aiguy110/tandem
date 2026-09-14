@@ -66,7 +66,7 @@ Browser (React app)
    │  durable WebSocket (reconnect + replay)
    ▼
 Self-hosted Daemon
-   ├── Session/Agent registry (source of truth)
+	├── Session registry (source of truth)
    ├── Agent Supervisor
    │     └── per-agent AgentAdapter
    │           ├── AcpAdapter (structured, primary)
@@ -100,7 +100,7 @@ There is no TypeScript backend or rollback daemon in the repository. Backend beh
 
 ### UI (`ui/src/`)
 
-React "mission control" front-end: a durable WS client with reconnect + replay, docked rails (agents, approvals) + a focus pane, streaming transcript, quick-spawn, command, and resume palettes with a rebindable keymap, a ghostty-web terminal, and the shared-browser pane (screencast + grab/release).
+React "mission control" front-end: a durable WS client with reconnect + replay, docked rails (sessions, approvals) + a focus pane, streaming transcript, quick-spawn, command, and resume palettes with a rebindable keymap, a ghostty-web terminal, and the shared-browser pane (screencast + grab/release).
 
 - `store.ts` — client-side state, projected from daemon WS events (zustand).
 - `wire.ts` / `ws/` — the WebSocket client: connection, auth, subscribe/replay handling.

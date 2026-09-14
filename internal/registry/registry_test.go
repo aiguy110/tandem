@@ -28,10 +28,10 @@ type fakeFactory struct {
 }
 
 func (f *fakeFactory) Start(_ context.Context, r agentadapter.StartRequest) (agentadapter.Adapter, error) {
-	if f.fail[r.AgentID] {
+	if f.fail[r.SessionID] {
 		return nil, errors.New("boom")
 	}
-	a := &regAdapter{events: make(chan eventlog.Event, 16), done: make(chan struct{}), gate: make(chan struct{}, 2), sid: "session-" + r.AgentID}
+	a := &regAdapter{events: make(chan eventlog.Event, 16), done: make(chan struct{}), gate: make(chan struct{}, 2), sid: "session-" + r.SessionID}
 	f.mu.Lock()
 	if f.adapters == nil {
 		f.adapters = map[string]*regAdapter{}
@@ -39,8 +39,8 @@ func (f *fakeFactory) Start(_ context.Context, r agentadapter.StartRequest) (age
 	if f.requests == nil {
 		f.requests = map[string]agentadapter.StartRequest{}
 	}
-	f.adapters[r.AgentID] = a
-	f.requests[r.AgentID] = r
+	f.adapters[r.SessionID] = a
+	f.requests[r.SessionID] = r
 	f.mu.Unlock()
 	return a, nil
 }
@@ -92,7 +92,7 @@ func (a *regAdapter) Close(context.Context) error {
 	a.once.Do(func() { close(a.events); close(a.done) })
 	return nil
 }
-func (a *regAdapter) SessionID() string { return a.sid }
+func (a *regAdapter) ExternalSessionID() string { return a.sid }
 func (a *regAdapter) PID() int          { return 1 }
 
 func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config) {
@@ -205,7 +205,7 @@ func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {
 	_, db, cfg := setup(t, f)
 	raw, _ := json.Marshal(existing(t.TempDir()))
 	closed := time.Now().UnixMilli()
-	if err := db.UpsertAgent(store.Agent{ID: "job-17", Name: "job-17", Spec: raw, CWD: t.TempDir(), Status: "idle", CreatedAt: 1, ClosedAt: &closed}); err != nil {
+	if err := db.UpsertSession(store.Session{ID: "job-17", Name: "job-17", Spec: raw, CWD: t.TempDir(), Status: "idle", CreatedAt: 1, ClosedAt: &closed}); err != nil {
 		t.Fatal(err)
 	}
 	r2, err := New(Options{Store: db, Config: cfg, Factory: f})
@@ -254,7 +254,7 @@ func TestRenameChangesDisplayNameWithoutChangingStableID(t *testing.T) {
 	if s.ID != stableID || s.Spec.Name != stableID {
 		t.Fatalf("rename changed stable identity: id=%q spec.name=%q", s.ID, s.Spec.Name)
 	}
-	rec, err := db.Agent(stableID)
+	rec, err := db.Session(stableID)
 	if err != nil || rec == nil || rec.Name != "checkout investigation" {
 		t.Fatalf("persisted agent=%+v err=%v", rec, err)
 	}
@@ -268,7 +268,7 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 		spec := existing(dir)
 		raw, _ := json.Marshal(spec)
 		sid := "old-" + id
-		if err := db.UpsertAgent(store.Agent{ID: id, Name: id, Spec: raw, CWD: dir, ACPSessionID: &sid, Status: "working", CreatedAt: int64(i + 1)}); err != nil {
+		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, ExternalSessionID: &sid, Status: "working", CreatedAt: int64(i + 1)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -278,7 +278,7 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	if r.Get("web-1") == nil || r.Get("api-2") != nil {
 		t.Fatal("partial restore isolation failed")
 	}
-	failed, _ := db.Agent("api-2")
+	failed, _ := db.Session("api-2")
 	if failed.Status != "error" {
 		t.Fatalf("failed status=%s", failed.Status)
 	}
@@ -290,7 +290,7 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	if ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	closed, _ := db.Agent("web-1")
+	closed, _ := db.Session("web-1")
 	if closed.ClosedAt == nil {
 		t.Fatal("close transition not persisted")
 	}
@@ -361,7 +361,7 @@ func TestResumeUnpromptedTandemSessionStartsFreshACPSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionID := s.SessionID()
+	sessionID := s.ExternalSessionID()
 	if ok, err := r.Close(context.Background(), s.ID, false, false, false); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
@@ -376,7 +376,7 @@ func TestResumeUnpromptedTandemSessionStartsFreshACPSession(t *testing.T) {
 	if got := f.requests[s.ID].ResumeSessionID; got != "" {
 		t.Fatalf("unprompted tandem session resumed ACP session %q, want a fresh session", got)
 	}
-	rec, err := db.Agent(s.ID)
+	rec, err := db.Session(s.ID)
 	if err != nil || rec == nil || rec.ClosedAt != nil {
 		t.Fatalf("agent not reopened: %+v err=%v", rec, err)
 	}
@@ -402,7 +402,7 @@ func TestSessionConfigPersistsAndReapplies(t *testing.T) {
 	if err = r.SetConfigOption(context.Background(), s.ID, "model", "two"); err != nil {
 		t.Fatal(err)
 	}
-	rec, err := db.Agent(s.ID)
+	rec, err := db.Session(s.ID)
 	if err != nil || rec == nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cwdRec, _ := r.store.Agent(s.ID)
+	cwdRec, _ := r.store.Session(s.ID)
 	work := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = cwdRec.CWD
@@ -535,7 +535,7 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 			retained = &refs[i]
 		}
 	}
-	if retained == nil || retained.Tandem == nil || retained.Tandem.AgentID != s.ID || !retained.Tandem.Live || retained.Tandem.Closed || retained.Tandem.IntegrationRef != targetRef {
+	if retained == nil || retained.Tandem == nil || retained.Tandem.SessionID != s.ID || !retained.Tandem.Live || retained.Tandem.Closed || retained.Tandem.IntegrationRef != targetRef {
 		t.Fatalf("live retained ref=%+v", retained)
 	}
 	ok, err := r.Close(context.Background(), s.ID, false, true, false)
@@ -591,7 +591,7 @@ func TestCloseForceRemovesDurableOrphanWithoutLiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertAgent(store.Agent{ID: "orphan", Name: "orphan", Spec: spec, CWD: cwd, Status: "idle", CreatedAt: 1}); err != nil {
+	if err := db.UpsertSession(store.Session{ID: "orphan", Name: "orphan", Spec: spec, CWD: cwd, Status: "idle", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	closed, err := r.Close(context.Background(), "orphan", true, true, false)
@@ -601,7 +601,7 @@ func TestCloseForceRemovesDurableOrphanWithoutLiveSession(t *testing.T) {
 	if _, err := os.Stat(cwd); !os.IsNotExist(err) {
 		t.Fatalf("orphaned worktree remains: %v", err)
 	}
-	rec, err := db.Agent("orphan")
+	rec, err := db.Session("orphan")
 	if err != nil || rec == nil || rec.ClosedAt == nil {
 		t.Fatalf("record=%+v err=%v", rec, err)
 	}

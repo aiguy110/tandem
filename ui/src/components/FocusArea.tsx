@@ -19,7 +19,7 @@ function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
 
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
-  const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
+  const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined));
   const pane = useStore((s) => s.pane);
   const setPane = useStore((s) => s.setPane);
   const enterTerminal = useStore((s) => s.enterTerminal);
@@ -40,7 +40,7 @@ export function FocusArea() {
       <div className="focus">
         <div className="pane-placeholder">
           <div className="big">◐</div>
-          <div>Select or spawn an agent to begin.</div>
+          <div>Select or spawn a session to begin.</div>
         </div>
       </div>
     );

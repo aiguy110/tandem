@@ -16,7 +16,7 @@ export type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error'
 
 export interface EngineState {
   // The chat this playlist belongs to. Switching chats resets playback.
-  agentId: string | null;
+  sessionId: string | null;
   // Ordered message seqs (sections) for the focused chat.
   playlist: number[];
   // Index into playlist of the current/loading section, -1 if none armed.
@@ -35,7 +35,7 @@ export interface EngineState {
   error: string | null;
   // Seqs rendered locally this session (via the per-row "Listen" button)
   // that the daemon hasn't necessarily confirmed as cached yet. Scoped to
-  // agentId. Callers fold this into cachedAudio/playlist membership.
+  // sessionId. Callers fold this into cachedAudio/playlist membership.
   renderedSeqs: number[];
   // User setting (persisted, device-local): keep the shared element producing
   // silent audio between sections / at the end of a finished playlist so a
@@ -74,7 +74,7 @@ function writeKeepaliveSetting(enabled: boolean) {
 }
 
 let state: EngineState = {
-  agentId: null,
+  sessionId: null,
   playlist: [],
   index: -1,
   position: 0,
@@ -107,8 +107,8 @@ const urlCache = new Map<string, string>();
 // the cache entries we're free to revoke once superseded.
 let liveUrl: string | null = null;
 
-function clipKey(agentId: string, seq: number): string {
-  return `${agentId}:${seq}`;
+function clipKey(sessionId: string, seq: number): string {
+  return `${sessionId}:${seq}`;
 }
 
 function emit() {
@@ -204,7 +204,7 @@ export function getGlobalPosition(): number {
 // the silence keepalive rather than daemon pre-render focus).
 export function getListeningAgentId(): string | null {
   const listening = state.status === 'playing' || (state.status === 'paused' && state.index >= 0);
-  return listening ? state.agentId : null;
+  return listening ? state.sessionId : null;
 }
 
 export function getGlobalDuration(): number {
@@ -386,7 +386,7 @@ function realCurrentTime(): number {
 
 function wantsKeepalive(): boolean {
   if (!state.keepaliveEnabled) return false;
-  if (!state.agentId || state.playlist.length === 0) return false;
+  if (!state.sessionId || state.playlist.length === 0) return false;
   if (userExplicitlyPaused) return false;
   // 'idle' covers both "never played anything in this chat yet" and a fresh
   // setPlaylist reset — don't start burning battery until the user has
@@ -458,7 +458,7 @@ export function setKeepaliveEnabled(enabled: boolean) {
 // switch). Batch those into a single per-agent queue, newest seq first, so
 // the bottom of the chat becomes playable before a burst of older ones —
 // this preserves useCachedAudioLoader's old prioritization.
-const queue: { agentId: string; seq: number; resolve: (url: string) => void; reject: (cause: unknown) => void }[] = [];
+const queue: { sessionId: string; seq: number; resolve: (url: string) => void; reject: (cause: unknown) => void }[] = [];
 let draining = false;
 
 function drain() {
@@ -468,10 +468,10 @@ function drain() {
     while (queue.length) {
       queue.sort((a, b) => b.seq - a.seq);
       const job = queue.shift()!;
-      const key = clipKey(job.agentId, job.seq);
+      const key = clipKey(job.sessionId, job.seq);
       try {
         const cached = urlCache.get(key);
-        const url = cached ?? await renderMessageAudio(job.agentId, job.seq);
+        const url = cached ?? await renderMessageAudio(job.sessionId, job.seq);
         urlCache.set(key, url);
         job.resolve(url);
       } catch (cause) {
@@ -482,11 +482,11 @@ function drain() {
   })();
 }
 
-function queueLoad(agentId: string, seq: number): Promise<string> {
-  const cached = urlCache.get(clipKey(agentId, seq));
+function queueLoad(sessionId: string, seq: number): Promise<string> {
+  const cached = urlCache.get(clipKey(sessionId, seq));
   if (cached) return Promise.resolve(cached);
   return new Promise((resolve, reject) => {
-    queue.push({ agentId, seq, resolve, reject });
+    queue.push({ sessionId, seq, resolve, reject });
     drain();
   });
 }
@@ -497,28 +497,28 @@ function queueLoad(agentId: string, seq: number): Promise<string> {
 // therefore the same in-flight request) that section activation uses, so
 // there is never a duplicate fetch for a clip that's both prefetched and
 // then played.
-export function prefetchClip(agentId: string, seq: number): Promise<string> {
-  return queueLoad(agentId, seq);
+export function prefetchClip(sessionId: string, seq: number): Promise<string> {
+  return queueLoad(sessionId, seq);
 }
 
 // Explicit user action (the per-row "Listen" button) — fetch immediately,
 // ahead of the batch queue, and remember the seq as locally rendered so the
 // caller can fold it into playlist membership even before the daemon's
 // audioReadySeqs snapshot confirms it.
-export async function renderClip(agentId: string, seq: number): Promise<string> {
-  const key = clipKey(agentId, seq);
+export async function renderClip(sessionId: string, seq: number): Promise<string> {
+  const key = clipKey(sessionId, seq);
   const cached = urlCache.get(key);
-  const url = cached ?? await renderMessageAudio(agentId, seq);
+  const url = cached ?? await renderMessageAudio(sessionId, seq);
   urlCache.set(key, url);
-  const set = renderedByAgent.get(agentId) ?? new Set<number>();
+  const set = renderedByAgent.get(sessionId) ?? new Set<number>();
   set.add(seq);
-  renderedByAgent.set(agentId, set);
-  if (state.agentId === agentId) setState({ renderedSeqs: [...set] });
+  renderedByAgent.set(sessionId, set);
+  if (state.sessionId === sessionId) setState({ renderedSeqs: [...set] });
   return url;
 }
 
-export function getRenderedSeqs(agentId: string): number[] {
-  return [...(renderedByAgent.get(agentId) ?? [])];
+export function getRenderedSeqs(sessionId: string): number[] {
+  return [...(renderedByAgent.get(sessionId) ?? [])];
 }
 
 // Seed known clip durations ahead of playback (e.g. once the daemon reports
@@ -527,8 +527,8 @@ export function getRenderedSeqs(agentId: string): number[] {
 // tick layout already prefers `durations` over its even-spacing fallback, so
 // wiring a real source in is a one-line call to this function, not a
 // GlobalAudioPlayer change.
-export function seedDurations(agentId: string, durations: Record<number, number>) {
-  if (state.agentId !== agentId) return;
+export function seedDurations(sessionId: string, durations: Record<number, number>) {
+  if (state.sessionId !== sessionId) return;
   setState({ durations: { ...durations, ...state.durations } });
 }
 
@@ -563,7 +563,7 @@ export interface AudioPosition {
 
 const POSITION_FLUSH_INTERVAL_MS = 5000;
 
-type PositionSender = (agentId: string, seq: number, positionMs: number) => void;
+type PositionSender = (sessionId: string, seq: number, positionMs: number) => void;
 let positionSender: PositionSender | null = null;
 
 // Handed a sender by whatever owns the WS client (store.ts, via the app-root
@@ -573,22 +573,22 @@ export function setPositionSender(fn: PositionSender | null) {
   positionSender = fn;
 }
 
-function localPositionKey(agentId: string): string {
-  return `tandem.audio.position.${agentId}`;
+function localPositionKey(sessionId: string): string {
+  return `tandem.audio.position.${sessionId}`;
 }
 
-function writeLocalPosition(agentId: string, pos: AudioPosition) {
+function writeLocalPosition(sessionId: string, pos: AudioPosition) {
   try {
-    localStorage.setItem(localPositionKey(agentId), JSON.stringify(pos));
+    localStorage.setItem(localPositionKey(sessionId), JSON.stringify(pos));
   } catch {
     // Storage can be unavailable (private browsing, quota) — the daemon is
     // still the durable copy, so this is only a missed latency optimization.
   }
 }
 
-function readLocalPosition(agentId: string): AudioPosition | null {
+function readLocalPosition(sessionId: string): AudioPosition | null {
   try {
-    const raw = localStorage.getItem(localPositionKey(agentId));
+    const raw = localStorage.getItem(localPositionKey(sessionId));
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (
@@ -613,8 +613,8 @@ let positionFlushTimer: ReturnType<typeof setInterval> | null = null;
 // periodic in-playback flushing goes through the throttled path instead of
 // firing on every timeupdate.
 function flushPosition(immediate: boolean) {
-  const { agentId, index, playlist } = state;
-  if (!agentId) return;
+  const { sessionId, index, playlist } = state;
+  if (!sessionId) return;
   const now = Date.now();
   if (!immediate && now - lastPositionFlush < POSITION_FLUSH_INTERVAL_MS) return;
   lastPositionFlush = now;
@@ -624,8 +624,8 @@ function flushPosition(immediate: boolean) {
   // The localStorage write must happen synchronously here — this is also
   // called from the pagehide handler below, where an in-flight WS send has
   // no guarantee of landing before the page is gone.
-  writeLocalPosition(agentId, pos);
-  positionSender?.(agentId, seq, positionMs);
+  writeLocalPosition(sessionId, pos);
+  positionSender?.(sessionId, seq, positionMs);
 }
 
 function startPositionFlushLoop() {
@@ -648,8 +648,8 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => flushPosition(true));
 }
 
-function applyRestoredPosition(agentId: string, pos: AudioPosition | null) {
-  if (state.agentId !== agentId) return; // playlist for this chat isn't active yet
+function applyRestoredPosition(sessionId: string, pos: AudioPosition | null) {
+  if (state.sessionId !== sessionId) return; // playlist for this chat isn't active yet
   if (!pos || pos.seq === 0) return;
   const index = state.playlist.indexOf(pos.seq);
   if (index === -1) return; // seq no longer in the transcript -- fall back to no position
@@ -665,23 +665,23 @@ function applyRestoredPosition(agentId: string, pos: AudioPosition | null) {
 
 // Call when focusing a chat, before the daemon snapshot necessarily has
 // arrived, to paint instantly from the last locally-known position.
-export function restoreLocalPosition(agentId: string) {
-  applyRestoredPosition(agentId, readLocalPosition(agentId));
+export function restoreLocalPosition(sessionId: string) {
+  applyRestoredPosition(sessionId, readLocalPosition(sessionId));
 }
 
 // Call whenever the daemon-hydrated position for this chat is available/
-// changes (AgentView.audioPosition). The daemon wins unless the local copy
+// changes (SessionView.audioPosition). The daemon wins unless the local copy
 // has a strictly newer `updatedAt` (e.g. a flush that raced the snapshot).
-export function reconcileDaemonPosition(agentId: string, daemon: AudioPosition | null) {
+export function reconcileDaemonPosition(sessionId: string, daemon: AudioPosition | null) {
   // Never yank the seek position out from under someone already listening —
   // reconciliation only matters for priming a chat that hasn't started
   // playing yet.
-  if (state.agentId === agentId && state.status !== 'idle' && state.status !== 'paused') return;
-  const local = readLocalPosition(agentId);
+  if (state.sessionId === sessionId && state.status !== 'idle' && state.status !== 'paused') return;
+  const local = readLocalPosition(sessionId);
   const chosen: AudioPosition | null = local && daemon
     ? (local.updatedAt > daemon.updatedAt ? local : daemon)
     : (daemon ?? local ?? null);
-  applyRestoredPosition(agentId, chosen);
+  applyRestoredPosition(sessionId, chosen);
 }
 
 // --- Playlist + transport ---------------------------------------------
@@ -692,8 +692,8 @@ function arraysEqual(a: number[], b: number[]): boolean {
   return true;
 }
 
-export function setPlaylist(agentId: string, seqs: number[]) {
-  if (state.agentId !== agentId) {
+export function setPlaylist(sessionId: string, seqs: number[]) {
+  if (state.sessionId !== sessionId) {
     // Leaving one chat for another: flush the outgoing chat's position
     // (synchronously to localStorage; best-effort to the daemon) before
     // repointing the engine at the new one.
@@ -702,7 +702,7 @@ export function setPlaylist(agentId: string, seqs: number[]) {
     loadedIndex = -1;
     userExplicitlyPaused = false;
     setState({
-      agentId,
+      sessionId,
       playlist: seqs,
       index: -1,
       position: 0,
@@ -710,7 +710,7 @@ export function setPlaylist(agentId: string, seqs: number[]) {
       durations: {},
       status: 'idle',
       error: null,
-      renderedSeqs: getRenderedSeqs(agentId),
+      renderedSeqs: getRenderedSeqs(sessionId),
     });
     return;
   }
@@ -721,15 +721,15 @@ export function setPlaylist(agentId: string, seqs: number[]) {
 }
 
 async function activateSection(index: number, opts: { autoplay: boolean; offset?: number }) {
-  const { agentId, playlist } = state;
-  if (!agentId || index < 0 || index >= playlist.length) return;
+  const { sessionId, playlist } = state;
+  if (!sessionId || index < 0 || index >= playlist.length) return;
   if (state.index !== -1 && state.index !== index) flushPosition(true); // flush the outgoing section
   const seq = playlist[index];
   const generation = ++loadGeneration;
   userExplicitlyPaused = false; // an activation is always a resume/fresh-section, never a pause
   setState({ index, status: 'loading', error: null, position: opts.offset ?? 0, duration: state.durations[seq] ?? NaN });
   try {
-    const url = await queueLoad(agentId, seq);
+    const url = await queueLoad(sessionId, seq);
     if (generation !== loadGeneration) return; // superseded by a newer activation
     const el = ensureElement();
     const stale = liveUrl;
@@ -763,8 +763,8 @@ async function activateSection(index: number, opts: { autoplay: boolean; offset?
 
 let loadGeneration = 0;
 
-export function play(agentId: string, seq?: number) {
-  if (state.agentId !== agentId) return;
+export function play(sessionId: string, seq?: number) {
+  if (state.sessionId !== sessionId) return;
   userExplicitlyPaused = false;
   const targetIndex = seq != null ? state.playlist.indexOf(seq) : state.index;
   if (targetIndex === -1) {
@@ -801,18 +801,18 @@ export function pause() {
   updateKeepalive();
 }
 
-export function toggle(agentId: string) {
-  if (state.agentId !== agentId) return;
+export function toggle(sessionId: string) {
+  if (state.sessionId !== sessionId) return;
   if (state.status === 'playing') pause();
-  else play(agentId);
+  else play(sessionId);
 }
 
 // Seek to an absolute offset within a specific section, switching sections if
 // needed. Used both by "tap a row's bar" (row not current) and scrubbing the
 // current row.
 export function seekWithin(seq: number, seconds: number) {
-  const { agentId, playlist, index } = state;
-  if (!agentId) return;
+  const { sessionId, playlist, index } = state;
+  if (!sessionId) return;
   const i = playlist.indexOf(seq);
   if (i === -1) return;
   const clamped = Math.max(0, seconds);
@@ -916,7 +916,7 @@ export function __resetForTests() {
   }
   silenceUrl = null;
   state = {
-    agentId: null,
+    sessionId: null,
     playlist: [],
     index: -1,
     position: 0,
@@ -962,7 +962,7 @@ export function installMediaSession() {
   const session = mediaSession();
   if (!session || mediaSessionInstalled) return;
   mediaSessionInstalled = true;
-  setMediaAction(session, 'play', () => { if (state.agentId) play(state.agentId); });
+  setMediaAction(session, 'play', () => { if (state.sessionId) play(state.sessionId); });
   setMediaAction(session, 'pause', () => pause());
   setMediaAction(session, 'seekbackward', (details) => skip(-(details.seekOffset ?? 10)));
   setMediaAction(session, 'seekforward', (details) => skip(details.seekOffset ?? 10));
@@ -980,7 +980,7 @@ export function installMediaSession() {
 function updateMediaSessionPlaybackState(s: EngineState) {
   const session = mediaSession();
   if (!session) return;
-  if (s.agentId == null || s.playlist.length === 0) {
+  if (s.sessionId == null || s.playlist.length === 0) {
     session.playbackState = 'none';
     return;
   }
@@ -991,7 +991,7 @@ let lastPositionUpdate = 0;
 
 function updateMediaSessionPosition(_position: number, global: number) {
   const session = mediaSession();
-  if (!session || state.agentId == null) return;
+  if (!session || state.sessionId == null) return;
   const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
   if (now - lastPositionUpdate < 200) return;
   lastPositionUpdate = now;

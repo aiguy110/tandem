@@ -154,7 +154,7 @@ func (*testBackend) SetAudioFocus(string, string, bool) error { return nil }
 // mirroring the ListAnnotations/UpsertAnnotation pattern above, so WS tests
 // can exercise set_audio_position + the snapshot's audioPosition field
 // without a real database.
-func (b *testBackend) SetAudioPosition(agentID string, seq, positionMs int64) (int64, error) {
+func (b *testBackend) SetAudioPosition(sessionID string, seq, positionMs int64) (int64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	updatedAt := int64(0)
@@ -165,16 +165,16 @@ func (b *testBackend) SetAudioPosition(agentID string, seq, positionMs int64) (i
 		b.audioPositions = map[string]store.AudioPosition{}
 	}
 	if seq == 0 {
-		delete(b.audioPositions, agentID)
+		delete(b.audioPositions, sessionID)
 		return updatedAt, nil
 	}
-	b.audioPositions[agentID] = store.AudioPosition{AgentID: agentID, Seq: seq, PositionMs: positionMs, UpdatedAt: updatedAt}
+	b.audioPositions[sessionID] = store.AudioPosition{SessionID: sessionID, Seq: seq, PositionMs: positionMs, UpdatedAt: updatedAt}
 	return updatedAt, nil
 }
-func (b *testBackend) AudioPosition(agentID string) (*store.AudioPosition, error) {
+func (b *testBackend) AudioPosition(sessionID string) (*store.AudioPosition, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	pos, ok := b.audioPositions[agentID]
+	pos, ok := b.audioPositions[sessionID]
 	if !ok {
 		return nil, nil
 	}
@@ -219,11 +219,11 @@ func (b *testBackend) Resume(_ context.Context, sessionID, agent, cwd, source st
 // ListAnnotations, UpsertAnnotation, DeleteAnnotation, and ClearAnnotations are
 // an in-memory stand-in for the store, exercising the wsserver protocol
 // (add/update/delete/clear + snapshot + broadcast) without a real database.
-func (b *testBackend) ListAnnotations(agentID string) ([]store.Annotation, error) {
+func (b *testBackend) ListAnnotations(sessionID string) ([]store.Annotation, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]store.Annotation, len(b.annotations[agentID]))
-	copy(out, b.annotations[agentID])
+	out := make([]store.Annotation, len(b.annotations[sessionID]))
+	copy(out, b.annotations[sessionID])
 	return out, nil
 }
 func (b *testBackend) UpsertAnnotation(a store.Annotation) error {
@@ -232,34 +232,34 @@ func (b *testBackend) UpsertAnnotation(a store.Annotation) error {
 	if b.annotations == nil {
 		b.annotations = map[string][]store.Annotation{}
 	}
-	list := b.annotations[a.AgentID]
+	list := b.annotations[a.SessionID]
 	for i := range list {
 		if list[i].ID == a.ID {
 			list[i] = a
 			return nil
 		}
 	}
-	b.annotations[a.AgentID] = append(list, a)
+	b.annotations[a.SessionID] = append(list, a)
 	return nil
 }
 func (b *testBackend) DeleteAnnotation(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for agentID, list := range b.annotations {
+	for sessionID, list := range b.annotations {
 		for i := range list {
 			if list[i].ID == id {
-				b.annotations[agentID] = append(list[:i], list[i+1:]...)
+				b.annotations[sessionID] = append(list[:i], list[i+1:]...)
 				return nil
 			}
 		}
 	}
 	return nil
 }
-func (b *testBackend) ClearAnnotations(agentID string) (int, error) {
+func (b *testBackend) ClearAnnotations(sessionID string) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	n := len(b.annotations[agentID])
-	delete(b.annotations, agentID)
+	n := len(b.annotations[sessionID])
+	delete(b.annotations, sessionID)
 	return n, nil
 }
 
@@ -337,7 +337,7 @@ func (a *testAdapter) Close(context.Context) error {
 	a.mu.Unlock()
 	return nil
 }
-func (*testAdapter) SessionID() string { return "" }
+func (*testAdapter) ExternalSessionID() string { return "" }
 func (*testAdapter) PID() int          { return 0 }
 
 func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
@@ -1267,8 +1267,8 @@ func TestRenderMessageAudioReturnsInlineClipAndSurfacesFailures(t *testing.T) {
 	var gotSeq int64
 	fail := false
 	_, _, _, _, url := setupWSOptions(t, 0, nil, func(o *Options) {
-		o.RenderMessageAudio = func(_ context.Context, agentID string, seq int64) (voice.Audio, error) {
-			gotAgent, gotSeq = agentID, seq
+		o.RenderMessageAudio = func(_ context.Context, sessionID string, seq int64) (voice.Audio, error) {
+			gotAgent, gotSeq = sessionID, seq
 			if fail {
 				return voice.Audio{}, errors.New("provider is down")
 			}
@@ -1300,7 +1300,7 @@ func TestRenderMessageAudioReturnsInlineClipAndSurfacesFailures(t *testing.T) {
 	}
 
 	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "corrId": "audio-3"})
-	if got := recv(t, c); got["error"] != "agentId and seq are required" {
+	if got := recv(t, c); got["error"] != "sessionId and seq are required" {
 		t.Fatalf("missing seq envelope=%#v", got)
 	}
 }
@@ -1315,28 +1315,28 @@ func TestRenderMessageAudioWithoutRendererReportsConfiguration(t *testing.T) {
 	}
 }
 
-func TestRemoteAgentIDRoundTrip(t *testing.T) {
-	id := remoteAgentID("boremox-3f9a1c", "einstein-401")
+func TestRemoteSessionIDRoundTrip(t *testing.T) {
+	id := remoteSessionID("boremox-3f9a1c", "einstein-401")
 	if id != "fed~boremox-3f9a1c~einstein-401" {
-		t.Fatalf("remoteAgentID = %q", id)
+		t.Fatalf("remoteSessionID = %q", id)
 	}
-	host, agent, ok := SplitRemoteAgentID(id)
+	host, agent, ok := SplitRemoteSessionID(id)
 	if !ok || host != "boremox-3f9a1c" || agent != "einstein-401" {
 		t.Fatalf("split = %q/%q/%v", host, agent, ok)
 	}
 	// An agent name may contain the separator; the host ID never can.
-	host, agent, ok = SplitRemoteAgentID(remoteAgentID("h1", "odd~name"))
+	host, agent, ok = SplitRemoteSessionID(remoteSessionID("h1", "odd~name"))
 	if !ok || host != "h1" || agent != "odd~name" {
 		t.Fatalf("split with separator in agent = %q/%q/%v", host, agent, ok)
 	}
 	// IDs minted by the previous base64 encoding still route, so a browser
 	// tab or queued notification action survives the upgrade.
-	host, agent, ok = SplitRemoteAgentID("federation~" + base64.RawURLEncoding.EncodeToString([]byte("h1")) + "~" + base64.RawURLEncoding.EncodeToString([]byte("dirac-7")))
+	host, agent, ok = SplitRemoteSessionID("federation~" + base64.RawURLEncoding.EncodeToString([]byte("h1")) + "~" + base64.RawURLEncoding.EncodeToString([]byte("dirac-7")))
 	if !ok || host != "h1" || agent != "dirac-7" {
 		t.Fatalf("legacy split = %q/%q/%v", host, agent, ok)
 	}
 	for _, bad := range []string{"", "einstein-401", "fed~h1", "fed~~a", "fed~h1~", "federation~h1~a"} {
-		if _, _, ok := SplitRemoteAgentID(bad); ok {
+		if _, _, ok := SplitRemoteSessionID(bad); ok {
 			t.Fatalf("%q parsed as a federated ID", bad)
 		}
 	}

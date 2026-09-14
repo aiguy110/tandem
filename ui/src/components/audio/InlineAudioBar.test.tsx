@@ -22,16 +22,16 @@ afterEach(() => {
 
 describe('InlineAudioBar', () => {
   it('renders the three-state progress rule: before=1, current=live, after=0', () => {
-    setPlaylist('agent-1', [1, 2, 3]);
+    setPlaylist('session-1', [1, 2, 3]);
     // activateSection sets `index` synchronously before its first await, so
     // the engine already reports section 2 (index 1) as current here.
-    play('agent-1', 2);
+    play('session-1', 2);
 
     const view = render(
       <>
-        <InlineAudioBar agentId="agent-1" seq={1} />
-        <InlineAudioBar agentId="agent-1" seq={2} />
-        <InlineAudioBar agentId="agent-1" seq={3} />
+        <InlineAudioBar sessionId="session-1" seq={1} />
+        <InlineAudioBar sessionId="session-1" seq={2} />
+        <InlineAudioBar sessionId="session-1" seq={3} />
       </>,
     );
 
@@ -48,10 +48,10 @@ describe('InlineAudioBar', () => {
   });
 
   it('lets tapping a non-current row start that section', () => {
-    setPlaylist('agent-1', [1, 2]);
-    play('agent-1', 1);
+    setPlaylist('session-1', [1, 2]);
+    play('session-1', 1);
 
-    const view = render(<InlineAudioBar agentId="agent-1" seq={2} />);
+    const view = render(<InlineAudioBar sessionId="session-1" seq={2} />);
     const track = view.container.querySelector('.inline-audio-track')!;
     track.getBoundingClientRect = () => ({ left: 0, right: 100, width: 100, top: 0, bottom: 0, height: 0, x: 0, y: 0, toJSON() {} });
     track.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 50 }));

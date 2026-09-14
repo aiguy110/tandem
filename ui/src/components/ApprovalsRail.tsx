@@ -27,7 +27,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const takeovers = useStore(allTakeovers);
   const notifications = useStore(allTurnNotifications);
   const systemNotifications = useStore((s) => s.systemNotifications);
-  const agents = useStore((s) => s.agents);
+  const agents = useStore((s) => s.sessions);
   const respond = useStore((s) => s.respond);
   const focus = useStore((s) => s.focus);
   const setPane = useStore((s) => s.setPane);
@@ -95,29 +95,29 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           )}
         </div>
       ))}
-      {notifications.map(({ agentId, notification }) => (
+      {notifications.map(({ sessionId, notification }) => (
         <div
-          key={`${agentId}-${notification.seq}`}
+          key={`${sessionId}-${notification.seq}`}
           className={`appr notification ${SEVERITY_CLASS[notification.severity]}`}
-          onClick={() => focus(agentId)}
+          onClick={() => focus(sessionId)}
         >
           <div className="who">
-            <span className={`dot ${SEVERITY_DOT[notification.severity]}`} /> {agents[agentId]?.name ?? agentId}
+            <span className={`dot ${SEVERITY_DOT[notification.severity]}`} /> {agents[sessionId]?.name ?? sessionId}
           </div>
           <div className="what">{SEVERITY_LABEL[notification.severity]}</div>
         </div>
       ))}
-      {takeovers.map(({ agentId, takeover }) => (
+      {takeovers.map(({ sessionId, takeover }) => (
         <div
-          key={agentId + takeover.reqId}
+          key={sessionId + takeover.reqId}
           className="appr takeover"
           onClick={() => {
-            focus(agentId);
+            focus(sessionId);
             setPane('browser');
           }}
         >
           <div className="who">
-            <span className="dot blocked" /> {agents[agentId]?.name ?? agentId} · browser
+            <span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · browser
           </div>
           <div className="what">needs you — {takeover.reason}</div>
           <div className="acts">
@@ -125,9 +125,9 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
               className="btn-approve"
               onClick={(e) => {
                 e.stopPropagation();
-                focus(agentId);
+                focus(sessionId);
                 setPane('browser');
-                if (agents[agentId]?.browserOwner !== 'user') toggleWheel(agentId);
+                if (agents[sessionId]?.browserOwner !== 'user') toggleWheel(sessionId);
               }}
             >
               🖐 Take the wheel
@@ -136,16 +136,16 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
         </div>
       ))}
       {items.length === 0 && takeovers.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
-        <div className="empty">No notifications. Completed agent turns and requests for attention appear here.</div>
+        <div className="empty">No notifications. Completed session turns and requests for attention appear here.</div>
       ) : (
-        items.map(({ agentId, approval }) => {
-          const status = agents[agentId]?.status;
+        items.map(({ sessionId, approval }) => {
+          const status = agents[sessionId]?.status;
           const allow = approval.options.find((o) => /allow|yes|approve/i.test(o.name)) ?? approval.options[0];
           const deny = approval.options.find((o) => /reject|deny|no/i.test(o.name)) ?? approval.options[approval.options.length - 1];
           return (
-            <div key={agentId + approval.reqId} className={`appr${status === 'error' ? ' err' : ''}`} onClick={() => focus(agentId)}>
+            <div key={sessionId + approval.reqId} className={`appr${status === 'error' ? ' err' : ''}`} onClick={() => focus(sessionId)}>
               <div className="who">
-                <span className={`dot ${status ?? 'blocked'}`} /> {agents[agentId]?.name ?? agentId}
+                <span className={`dot ${status ?? 'blocked'}`} /> {agents[sessionId]?.name ?? sessionId}
               </div>
               <div className="permission-request-rail"><PermissionRequestDetails title={approval.title} /></div>
               <div className="acts">
@@ -153,7 +153,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                   className="btn-approve"
                   onClick={(e) => {
                     e.stopPropagation();
-                    respond(agentId, approval.reqId, allow.optionId);
+                    respond(sessionId, approval.reqId, allow.optionId);
                   }}
                 >
                   ✓ {allow.name}
@@ -162,7 +162,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                   className="btn-deny"
                   onClick={(e) => {
                     e.stopPropagation();
-                    respond(agentId, approval.reqId, deny.optionId);
+                    respond(sessionId, approval.reqId, deny.optionId);
                   }}
                 >
                   ✗ {deny.name}

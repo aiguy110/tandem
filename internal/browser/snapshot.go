@@ -13,18 +13,18 @@ import (
 // state from a captured snapshot ref (a directory for local, a profileId for
 // steel). Both bundled drivers implement it.
 type snapshotSeeder interface {
-	SeedProfile(agentID, ref string)
+	SeedProfile(sessionID, ref string)
 }
 
 // localProfileDriver is the optional driver capability for locating an agent's
 // on-disk user-data-dir, used to copy out a snapshot. Only the local driver has
 // a copyable profile directory.
 type localProfileDriver interface {
-	ProfileDir(agentID string) string
+	ProfileDir(sessionID string) string
 }
 
 type steelProfileDriver interface {
-	ProfileID(agentID string) string
+	ProfileID(sessionID string) string
 }
 
 // CaptureSnapshot records the agent's current browser state into a durable
@@ -32,13 +32,13 @@ type steelProfileDriver interface {
 // deep-copies the live user-data-dir into destDir (kind "local", ref destDir).
 // For Steel it records the current server-side profileId (kind "steel", ref
 // profileId). The agent's browser must be provisioned.
-func (b *Broker) CaptureSnapshot(_ context.Context, agentID, destDir string) (kind, ref string, err error) {
-	if !b.driver.IsProvisioned(agentID) {
+func (b *Broker) CaptureSnapshot(_ context.Context, sessionID, destDir string) (kind, ref string, err error) {
+	if !b.driver.IsProvisioned(sessionID) {
 		return "", "", errors.New("no live browser to capture for this agent")
 	}
 	switch d := b.driver.(type) {
 	case localProfileDriver:
-		src := d.ProfileDir(agentID)
+		src := d.ProfileDir(sessionID)
 		if err := os.MkdirAll(destDir, 0o700); err != nil {
 			return "", "", err
 		}
@@ -47,7 +47,7 @@ func (b *Broker) CaptureSnapshot(_ context.Context, agentID, destDir string) (ki
 		}
 		return "local", destDir, nil
 	case steelProfileDriver:
-		id := d.ProfileID(agentID)
+		id := d.ProfileID(sessionID)
 		if id == "" {
 			return "", "", errors.New("steel session has no persisted profile to capture")
 		}
@@ -61,7 +61,7 @@ func (b *Broker) CaptureSnapshot(_ context.Context, agentID, destDir string) (ki
 // captured snapshot. kind must match the active driver ("local" ref is a
 // directory, "steel" ref is a profileId); a mismatch or empty ref is a no-op
 // (fresh state). Must be called before the agent's browser is provisioned.
-func (b *Broker) SeedSnapshot(agentID, kind, ref string) {
+func (b *Broker) SeedSnapshot(sessionID, kind, ref string) {
 	seeder, ok := b.driver.(snapshotSeeder)
 	if !ok || ref == "" {
 		return
@@ -69,7 +69,7 @@ func (b *Broker) SeedSnapshot(agentID, kind, ref string) {
 	if kind != "" && kind != b.driver.Kind() {
 		return
 	}
-	seeder.SeedProfile(agentID, ref)
+	seeder.SeedProfile(sessionID, ref)
 }
 
 // copyTree recursively copies regular files and directories from src into dst,

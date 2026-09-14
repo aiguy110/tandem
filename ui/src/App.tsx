@@ -4,7 +4,7 @@ import { useGlobalKeys } from './useGlobalKeys';
 import { TokenScreen } from './components/TokenScreen';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { ConductorBar } from './components/ConductorBar';
-import { AgentsRail } from './components/AgentsRail';
+import { SessionsRail } from './components/AgentsRail';
 import { ApprovalsRail } from './components/ApprovalsRail';
 import { FocusArea } from './components/FocusArea';
 import { Inspector } from './components/Inspector';
@@ -21,18 +21,18 @@ export function App() {
   const conn = useStore((s) => s.conn);
   const modal = useStore((s) => s.modal);
   const boot = useStore((s) => s.boot);
-  const agentsRailCollapsed = useStore((s) => s.agentsRailCollapsed);
+	const sessionsRailCollapsed = useStore((s) => s.sessionsRailCollapsed);
   const approvalsRailCollapsed = useStore((s) => s.approvalsRailCollapsed);
   // Deliberately component-local: dock widths reset with each page load.
   const defaultDockWidths = () => window.innerWidth <= 860
-    ? { agents: 200, approvals: 260 }
-    : { agents: 240, approvals: 300 };
+		? { sessions: 200, approvals: 260 }
+		: { sessions: 240, approvals: 300 };
   const [dockWidths, setDockWidths] = useState(defaultDockWidths);
 
-  const resizeDock = (dock: 'agents' | 'approvals', startX: number) => {
+	const resizeDock = (dock: 'sessions' | 'approvals', startX: number) => {
     const startWidth = dockWidths[dock];
-    const otherWidth = dockWidths[dock === 'agents' ? 'approvals' : 'agents'];
-    const direction = dock === 'agents' ? 1 : -1;
+		const otherWidth = dockWidths[dock === 'sessions' ? 'approvals' : 'sessions'];
+		const direction = dock === 'sessions' ? 1 : -1;
     const onMove = (event: PointerEvent) => {
       const maxWidth = Math.max(160, window.innerWidth - otherWidth - 240);
       const width = Math.max(160, Math.min(maxWidth, startWidth + direction * (event.clientX - startX)));
@@ -89,12 +89,12 @@ export function App() {
     <>
       <AudioEngineRoot />
       <div
-        className={`app${agentsRailCollapsed ? ' agents-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
-        style={{ '--agents-rail-width': `${dockWidths.agents}px`, '--approvals-rail-width': `${dockWidths.approvals}px` } as CSSProperties}
+		className={`app${sessionsRailCollapsed ? ' sessions-collapsed' : ''}${approvalsRailCollapsed ? ' approvals-collapsed' : ''}`}
+		style={{ '--sessions-rail-width': `${dockWidths.sessions}px`, '--approvals-rail-width': `${dockWidths.approvals}px` } as CSSProperties}
       >
 
         <ConductorBar version={daemonVersion} />
-        <AgentsRail onResizeStart={(x) => resizeDock('agents', x)} />
+		<SessionsRail onResizeStart={(x) => resizeDock('sessions', x)} />
         <FocusArea />
         <ApprovalsRail onResizeStart={(x) => resizeDock('approvals', x)} />
         <Inspector />

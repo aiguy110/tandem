@@ -42,7 +42,7 @@ func ParseMode(raw string) Mode {
 // Source describes the agent being handed off from. Every field is optional;
 // the preamble only mentions what is known.
 type Source struct {
-	AgentName string // the Tandem agent's display name ("einstein-3")
+	SessionName string // the Tandem agent's display name ("einstein-3")
 	Harness   string // human label for the previous harness ("Claude", "Codex")
 	CWD       string
 	Branch    string
@@ -128,8 +128,8 @@ func preamble(src Source, mode Mode) string {
 	var b strings.Builder
 	b.WriteString("# Hand-off\n\n")
 	fmt.Fprintf(&b, "You are taking over an in-progress session from %s", who)
-	if src.AgentName != "" {
-		fmt.Fprintf(&b, " (Tandem agent %q)", src.AgentName)
+	if src.SessionName != "" {
+		fmt.Fprintf(&b, " (Tandem agent %q)", src.SessionName)
 	}
 	b.WriteString(". That agent stopped before the work was finished — commonly because it hit a usage limit mid-turn — so you are continuing its conversation rather than starting a new one.\n\n")
 	if src.CWD != "" {

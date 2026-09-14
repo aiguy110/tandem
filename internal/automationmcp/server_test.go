@@ -34,7 +34,7 @@ func TestToolsAndAuthenticatedRunRequest(t *testing.T) {
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), inR, outW, Config{ControlURL: httpServer.URL, Token: "secret", AgentID: "agent-7", WorkspaceCWD: "/worktrees/repo"})
+		done <- Run(context.Background(), inR, outW, Config{ControlURL: httpServer.URL, Token: "secret", SessionID: "agent-7", WorkspaceCWD: "/worktrees/repo"})
 	}()
 	responses := make(chan map[string]any, 4)
 	go func() {
@@ -58,7 +58,7 @@ func TestToolsAndAuthenticatedRunRequest(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	request := <-requestSeen
-	if request["agentId"] != "agent-7" || request["workspaceCwd"] != "/worktrees/repo" || request["path"] != ".tandem/scripts/check.ts" {
+	if request["sessionId"] != "agent-7" || request["workspaceCwd"] != "/worktrees/repo" || request["path"] != ".tandem/scripts/check.ts" {
 		t.Fatalf("request = %#v", request)
 	}
 	_ = inW.Close()

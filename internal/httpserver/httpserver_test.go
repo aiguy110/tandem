@@ -58,13 +58,13 @@ func (f *fakeUploads) Save(agent, name string, data []byte) (string, error) {
 	return f.path, f.err
 }
 
-func (f *fakeAssets) Put(agentID string, data []byte, declaredMIME string) (assets.Stored, error) {
-	f.putAgent, f.putData, f.putMIME = agentID, append([]byte(nil), data...), declaredMIME
+func (f *fakeAssets) Put(sessionID string, data []byte, declaredMIME string) (assets.Stored, error) {
+	f.putAgent, f.putData, f.putMIME = sessionID, append([]byte(nil), data...), declaredMIME
 	return f.put, f.putErr
 }
 
-func (f *fakeAssets) Get(agentID, assetID string) (assets.Stored, error) {
-	f.getAgent, f.getAsset = agentID, assetID
+func (f *fakeAssets) Get(sessionID, assetID string) (assets.Stored, error) {
+	f.getAgent, f.getAsset = sessionID, assetID
 	return f.get, f.getErr
 }
 
@@ -252,9 +252,9 @@ func TestMessageAudioRendering(t *testing.T) {
 	renderer := &fakeVoice{audio: voice.Audio{Data: []byte("mp3-data"), MIMEType: "audio/mpeg"}}
 	h := New(Options{
 		Token: "token", Voice: renderer, AgentExists: func(id string) bool { return id == "agent one" }, UI: fstest.MapFS{},
-		MessageText: func(agentID string, seq int64) (string, error) {
-			if agentID != "agent one" || seq != 42 {
-				t.Fatalf("message lookup = %q/%d", agentID, seq)
+		MessageText: func(sessionID string, seq int64) (string, error) {
+			if sessionID != "agent one" || seq != 42 {
+				t.Fatalf("message lookup = %q/%d", sessionID, seq)
 			}
 			return "Agent answer", nil
 		},

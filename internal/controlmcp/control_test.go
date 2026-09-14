@@ -24,7 +24,7 @@ func TestMCPHandshakeAndTakeoverBlocksUntilRelease(t *testing.T) {
 		}
 		switch r.Method {
 		case http.MethodPost:
-			if r.URL.Query().Get("agentId") != "api-58" {
+			if r.URL.Query().Get("sessionId") != "api-58" {
 				http.Error(w, "agent", 400)
 				return
 			}
@@ -41,7 +41,7 @@ func TestMCPHandshakeAndTakeoverBlocksUntilRelease(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, inR, outW, Config{ControlURL: server.URL, Token: "secret", AgentID: "api-58", PollInterval: 10 * time.Millisecond})
+		done <- Run(ctx, inR, outW, Config{ControlURL: server.URL, Token: "secret", SessionID: "api-58", PollInterval: 10 * time.Millisecond})
 	}()
 	responses := make(chan map[string]any, 8)
 	go func() {

@@ -103,14 +103,14 @@ func NewWithGit(config Config, git GitRunner) *Manager {
 	return &Manager{worktreesDir: config.WorktreesDir, git: git}
 }
 
-func (m *Manager) Provision(ctx context.Context, ws Workspace, agentName string) (ProvisionResult, error) {
+func (m *Manager) Provision(ctx context.Context, ws Workspace, sessionName string) (ProvisionResult, error) {
 	if ws.Kind == KindExisting {
 		return m.provisionExisting(ws)
 	}
 	if ws.Kind != KindWorktree {
 		return ProvisionResult{}, &Error{"invalid_workspace", fmt.Sprintf("unknown workspace kind: %s", ws.Kind)}
 	}
-	return m.provisionWorktree(ctx, ws, agentName)
+	return m.provisionWorktree(ctx, ws, sessionName)
 }
 
 func (m *Manager) provisionExisting(ws Workspace) (ProvisionResult, error) {
@@ -125,12 +125,12 @@ func (m *Manager) provisionExisting(ws Workspace) (ProvisionResult, error) {
 	return ProvisionResult{CWD: cwd, Workspace: Workspace{Kind: KindExisting, CWD: cwd}}, nil
 }
 
-func (m *Manager) provisionWorktree(ctx context.Context, ws Workspace, agentName string) (ProvisionResult, error) {
+func (m *Manager) provisionWorktree(ctx context.Context, ws Workspace, sessionName string) (ProvisionResult, error) {
 	repo, err := m.git.Run(ctx, ws.Repo, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return ProvisionResult{}, err
 	}
-	cwd := filepath.Join(m.worktreesDir, filepath.Base(repo), agentName)
+	cwd := filepath.Join(m.worktreesDir, filepath.Base(repo), sessionName)
 	if _, err := os.Stat(cwd); err == nil {
 		return ProvisionResult{}, &Error{"worktree_exists", "worktree path already exists: " + cwd}
 	}
@@ -161,7 +161,7 @@ func (m *Manager) provisionWorktree(ctx context.Context, ws Workspace, agentName
 	explicit := ws.Branch != ""
 	branch := normalizeLocalBranch(ws.Branch)
 	if branch == "" {
-		branch = defaultAgentBranch(integration.Ref, agentName)
+		branch = defaultAgentBranch(integration.Ref, sessionName)
 	}
 	if _, err := m.git.Run(ctx, repo, "check-ref-format", "--branch", branch); err != nil {
 		return ProvisionResult{}, &Error{"invalid_branch", "invalid branch name: " + branch}
@@ -626,7 +626,7 @@ func normalizeLocalBranch(branch string) string { return strings.TrimPrefix(bran
 var invalidContext = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
 var invalidAgent = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
-func defaultAgentBranch(integrationRef, agentName string) string {
+func defaultAgentBranch(integrationRef, sessionName string) string {
 	contextName := displayRef(integrationRef)
 	if strings.HasPrefix(contextName, "origin/") {
 		contextName = strings.TrimPrefix(contextName, "origin/")
@@ -642,7 +642,7 @@ func defaultAgentBranch(integrationRef, agentName string) string {
 	if contextName == "" {
 		contextName = "detached"
 	}
-	agent := strings.Trim(invalidAgent.ReplaceAllString(agentName, "-"), "-.")
+	agent := strings.Trim(invalidAgent.ReplaceAllString(sessionName, "-"), "-.")
 	if agent == "" {
 		agent = "agent"
 	}
@@ -705,8 +705,8 @@ type GitRefInfo struct {
 }
 
 type GitRefTandem struct {
-	AgentID         string  `json:"agentId"`
-	AgentName       string  `json:"agentName"`
+	SessionID         string  `json:"agentId"`
+	SessionName       string  `json:"sessionName"`
 	IntegrationRef  string  `json:"integrationRef,omitempty"`
 	IntegrationKind RefKind `json:"integrationKind,omitempty"`
 	Live            bool    `json:"live"`

@@ -27,7 +27,7 @@ type BrokerConfig struct {
 	Host                          string
 	MaxPayloadBytes, MaxHeldBytes int64
 	HTTPClient                    *http.Client
-	OnRelease                     func(agentID string)
+	OnRelease                     func(sessionID string)
 }
 type heldFrame struct {
 	kind int

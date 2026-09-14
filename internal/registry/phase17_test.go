@@ -45,7 +45,7 @@ func (f *phaseFactory) Start(_ context.Context, req agentadapter.StartRequest) (
 	if f.adapters == nil {
 		f.adapters = map[string]*phaseAdapter{}
 	}
-	f.adapters[req.AgentID] = a
+	f.adapters[req.SessionID] = a
 	return a, nil
 }
 
@@ -89,7 +89,7 @@ func (a *phaseAdapter) Interrupt() error {
 }
 func (a *phaseAdapter) Close(context.Context) error { a.stop(); return nil }
 func (a *phaseAdapter) stop()                       { a.once.Do(func() { close(a.events); close(a.done) }) }
-func (a *phaseAdapter) SessionID() string           { return a.sid }
+func (a *phaseAdapter) ExternalSessionID() string           { return a.sid }
 func (a *phaseAdapter) PID() int                    { return 1 }
 
 func phaseSetup(t *testing.T, factory *phaseFactory, launch config.Launch) (*Registry, *store.Store, config.Config) {
@@ -135,13 +135,13 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	var external bool
 	var supports bool
 	for _, s := range catalog.Sessions {
-		if s.SessionID == "sess_mock" {
+		if s.ExternalSessionID == "sess_mock" {
 			mockCount++
 			if s.Source != "tandem" {
 				t.Fatalf("dedupe winner = %s", s.Source)
 			}
 		}
-		if s.SessionID == "sess_external" {
+		if s.ExternalSessionID == "sess_external" {
 			external = s.Source == "acp" && s.Title == "Imported external title"
 		}
 	}
@@ -168,8 +168,8 @@ func TestPhase17CatalogAndResumePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _ := db.Agent(imported.ID)
-	if imported.ID == live.ID || rec == nil || rec.ACPSessionID == nil || *rec.ACPSessionID != "sess_external" {
+	rec, _ := db.Session(imported.ID)
+	if imported.ID == live.ID || rec == nil || rec.ExternalSessionID == nil || *rec.ExternalSessionID != "sess_external" {
 		t.Fatalf("bad import %#v", rec)
 	}
 }
@@ -223,8 +223,8 @@ func TestPhase17HandoffBusyInterruptFailureAndReload(t *testing.T) {
 	for s.ControlMode() != "transcript" && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if s.ControlMode() != "transcript" || s.SessionID() != "sess_mock" {
-		t.Fatalf("reload mode=%s sid=%s", s.ControlMode(), s.SessionID())
+	if s.ControlMode() != "transcript" || s.ExternalSessionID() != "sess_mock" {
+		t.Fatalf("reload mode=%s sid=%s", s.ControlMode(), s.ExternalSessionID())
 	}
 	f.mu.Lock()
 	if len(f.requests) == 0 || !f.requests[len(f.requests)-1].CaptureReplay {
