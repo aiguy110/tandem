@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/federation"
@@ -1306,6 +1307,37 @@ func TestRenderMessageAudioReturnsInlineClipAndSurfacesFailures(t *testing.T) {
 	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "corrId": "audio-3"})
 	if got := recv(t, c); got["error"] != "sessionId and seq are required" {
 		t.Fatalf("missing seq envelope=%#v", got)
+	}
+}
+
+func TestGetAssetReturnsInlineImageAndHidesLookupErrors(t *testing.T) {
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(o *Options) {
+		o.Asset = func(sessionID, assetID string) (assets.Stored, error) {
+			if sessionID != "a" || assetID != "img-1" {
+				return assets.Stored{}, errors.New("sqlite: no rows in /secret/path")
+			}
+			return assets.Stored{AssetID: assetID, MIMEType: "image/png", Size: 3, Data: []byte("png")}, nil
+		}
+	})
+	c := dial(t, url)
+
+	send(t, c, map[string]any{"t": "get_asset", "sessionId": "a", "assetId": "img-1", "corrId": "asset-1"})
+	got := recv(t, c)
+	if got["t"] != "asset" || got["corrId"] != "asset-1" || got["assetId"] != "img-1" || got["mimeType"] != "image/png" {
+		t.Fatalf("envelope=%#v", got)
+	}
+	if data, err := base64.StdEncoding.DecodeString(got["data"].(string)); err != nil || string(data) != "png" {
+		t.Fatalf("data=%#v err=%v", got["data"], err)
+	}
+
+	send(t, c, map[string]any{"t": "get_asset", "sessionId": "a", "assetId": "missing", "corrId": "asset-2"})
+	if got := recv(t, c); got["error"] != "asset not found" {
+		t.Fatalf("missing envelope=%#v", got)
+	}
+
+	send(t, c, map[string]any{"t": "get_asset", "sessionId": "a", "corrId": "asset-3"})
+	if got := recv(t, c); got["error"] != "sessionId and assetId are required" {
+		t.Fatalf("invalid envelope=%#v", got)
 	}
 }
 

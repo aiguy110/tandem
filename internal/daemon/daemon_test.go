@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -437,6 +438,62 @@ func TestRemoteMessageAudioRendersOnTheOwningHost(t *testing.T) {
 	}
 	if string(audio.Data) != "remote-faraday-66" || audio.MIMEType != "audio/mpeg" {
 		t.Fatalf("audio=%q %q", audio.Data, audio.MIMEType)
+	}
+}
+
+// federatedAssetLocal answers get_asset the way a slave's wsserver would.
+type federatedAssetLocal struct{}
+
+func (federatedAssetLocal) Snapshot(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"t":"agents","agents":[]}`), nil
+}
+func (federatedAssetLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
+	var m struct {
+		T         string `json:"t"`
+		SessionID string `json:"sessionId"`
+		AssetID   string `json:"assetId"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m.T != "get_asset" {
+		return nil, fmt.Errorf("unexpected command %q", m.T)
+	}
+	envelope := map[string]any{"t": "asset", "sessionId": m.SessionID, "assetId": m.AssetID}
+	if m.AssetID != "img-1" {
+		envelope["error"] = "asset not found"
+	} else {
+		envelope["mimeType"] = "image/png"
+		envelope["data"] = base64.StdEncoding.EncodeToString([]byte("png-" + m.SessionID))
+	}
+	return json.Marshal(envelope)
+}
+
+func TestFederatedAssetStoreFetchesFromTheOwningHost(t *testing.T) {
+	master, hostID := connectFederatedHost(t, federatedAssetLocal{})
+	localStore, err := store.Open(filepath.Join(t.TempDir(), "assets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = localStore.Close() })
+	local, err := assets.Open(filepath.Join(t.TempDir(), "assets"), localStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := federatedAssetStore{local: local, federation: master}
+
+	stored, err := s.Get("fed~"+hostID+"~faraday-66", "img-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored.Data) != "png-faraday-66" || stored.MIMEType != "image/png" || stored.Size != int64(len(stored.Data)) {
+		t.Fatalf("stored=%#v", stored)
+	}
+	if _, err := s.Get("fed~"+hostID+"~faraday-66", "img-2"); err == nil || err.Error() != "asset not found" {
+		t.Fatalf("missing err=%v", err)
+	}
+	if _, err := s.Get("faraday-66", "img-1"); err == nil {
+		t.Fatal("local session unexpectedly fetched remotely")
 	}
 }
 

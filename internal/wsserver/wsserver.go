@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/federation"
@@ -88,6 +89,10 @@ type Options struct {
 	// exists so a master can fetch a federated agent's audio over the tunnel;
 	// browsers fetch local clips from the authenticated HTTP audio route.
 	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
+	// Asset returns one stored prompt/tool image. It backs the get_asset
+	// command, which exists so a master can fetch a federated agent's image
+	// over the tunnel; browsers fetch local assets from the HTTP asset route.
+	Asset func(sessionID, assetID string) (assets.Stored, error)
 }
 
 // Federation is the master-side transport used for host-qualified browser
@@ -333,6 +338,7 @@ type clientMessage struct {
 	PositionMs        int64                      `json:"positionMs"`
 	NotificationID    string                     `json:"notificationId"`
 	HostID            string                     `json:"hostId"`
+	AssetID           string                     `json:"assetId"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -484,6 +490,33 @@ func (c *connection) renderMessageAudio(m clientMessage) {
 		return
 	}
 	reply(map[string]any{"mimeType": audio.MIMEType, "data": base64.StdEncoding.EncodeToString(audio.Data)})
+}
+
+// getAsset answers with one stored image inline. Like renderMessageAudio, only
+// a master reaching a federated agent uses this path.
+func (c *connection) getAsset(m clientMessage) {
+	reply := func(extra map[string]any) {
+		envelope := map[string]any{"t": "asset", "sessionId": m.SessionID, "assetId": m.AssetID}
+		for k, v := range extra {
+			envelope[k] = v
+		}
+		c.send(withCorr(envelope, m.CorrID))
+	}
+	if m.SessionID == "" || m.AssetID == "" {
+		reply(map[string]any{"error": "sessionId and assetId are required"})
+		return
+	}
+	if c.server.opts.Asset == nil {
+		reply(map[string]any{"error": "asset storage is not configured"})
+		return
+	}
+	stored, err := c.server.opts.Asset(m.SessionID, m.AssetID)
+	if err != nil {
+		slog.Info("asset lookup failed", "session_id", m.SessionID, "asset_id", m.AssetID, "error", err)
+		reply(map[string]any{"error": "asset not found"})
+		return
+	}
+	reply(map[string]any{"mimeType": stored.MIMEType, "data": base64.StdEncoding.EncodeToString(stored.Data)})
 }
 
 func (c *connection) setAudioFocus(m clientMessage) {
@@ -1077,6 +1110,8 @@ func (c *connection) handle(m clientMessage) {
 		c.setAudioFocus(m)
 	case "render_message_audio":
 		c.renderMessageAudio(m)
+	case "get_asset":
+		c.getAsset(m)
 	case "set_audio_position":
 		updatedAt, err := c.server.opts.Registry.SetAudioPosition(m.SessionID, m.Seq, m.PositionMs)
 		if err != nil {

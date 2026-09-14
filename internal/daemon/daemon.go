@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -278,7 +279,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return err
 	}
 	httpHandler := httpserver.New(httpserver.Options{
-		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
+		// A federated agent's images live on the host that owns it; the
+		// federated store fetches them over the tunnel on a local miss.
+		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: federatedAssetStore{local: assetStore, federation: federationService},
 		Uploads: agents,
 		Voice:   voiceRenderer,
 		MessageText: func(sessionID string, seq int64) (string, error) {
@@ -374,7 +377,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get})
 	defer handler.Close()
 	updateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -540,6 +543,74 @@ func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, se
 		return voice.Audio{}, errors.New("remote host returned no audio")
 	}
 	return voice.Audio{Data: data, MIMEType: envelope.MIMEType}, nil
+}
+
+// federatedAssetStore serves local assets directly and, for a namespaced
+// federated session ID with no local copy, fetches the image from the host
+// that owns the session. Uploads are always stored locally.
+type federatedAssetStore struct {
+	local      *assets.Store
+	federation *federation.Service
+}
+
+func (s federatedAssetStore) Put(sessionID string, data []byte, declaredMIME string) (assets.Stored, error) {
+	return s.local.Put(sessionID, data, declaredMIME)
+}
+
+func (s federatedAssetStore) Get(sessionID, assetID string) (assets.Stored, error) {
+	stored, err := s.local.Get(sessionID, assetID)
+	if err == nil {
+		return stored, nil
+	}
+	hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID)
+	if !ok {
+		return assets.Stored{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stored, err = remoteAsset(ctx, s.federation, hostID, localID, assetID)
+	if err != nil {
+		slog.Warn("remote asset fetch failed", "host_id", hostID, "session_id", localID, "asset_id", assetID, "error", err)
+		return assets.Stored{}, err
+	}
+	slog.Debug("remote asset fetched", "host_id", hostID, "session_id", localID, "asset_id", assetID, "bytes", stored.Size)
+	return stored, nil
+}
+
+// remoteAsset fetches one stored image from the host that owns a federated
+// session. The tunnel carries browser-protocol JSON only, so the bytes come
+// back base64-encoded, as with remoteMessageAudio.
+func remoteAsset(ctx context.Context, svc *federation.Service, hostID, sessionID, assetID string) (assets.Stored, error) {
+	if svc == nil {
+		return assets.Stored{}, errors.New("remote hosts are unavailable")
+	}
+	payload, err := json.Marshal(map[string]any{"t": "get_asset", "sessionId": sessionID, "assetId": assetID})
+	if err != nil {
+		return assets.Stored{}, err
+	}
+	response, err := svc.Call(ctx, hostID, payload)
+	if err != nil {
+		return assets.Stored{}, err
+	}
+	var envelope struct {
+		Error    string `json:"error"`
+		MIMEType string `json:"mimeType"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return assets.Stored{}, fmt.Errorf("remote host returned invalid asset response: %w", err)
+	}
+	if envelope.Error != "" {
+		return assets.Stored{}, errors.New(envelope.Error)
+	}
+	data, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil {
+		return assets.Stored{}, fmt.Errorf("remote host returned undecodable asset: %w", err)
+	}
+	if len(data) == 0 || envelope.MIMEType == "" {
+		return assets.Stored{}, errors.New("remote host returned an empty asset")
+	}
+	return assets.Stored{AssetID: assetID, MIMEType: envelope.MIMEType, Size: int64(len(data)), Data: data}, nil
 }
 
 // messageAudioCache owns all provider work and retained clips. The browser

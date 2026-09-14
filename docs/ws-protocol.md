@@ -259,7 +259,8 @@ type ClientMsg =
   | { t: 'shell_resize'; sessionId: string; cols: number; rows: number }
   | { t: 'shell_close'; sessionId: string }
   | { t: 'set_audio_position'; sessionId: string; seq: number; positionMs: number } // seq: 0 clears (see below)
-  | { t: 'render_message_audio'; sessionId: string; seq: number };       // federation-only, see below
+  | { t: 'render_message_audio'; sessionId: string; seq: number }        // federation-only, see below
+  | { t: 'get_asset'; sessionId: string; assetId: string };              // federation-only, see below
 
 type PromptBlock =
   | { type: 'text'; text: string }
@@ -313,7 +314,9 @@ type ServerMsg =
   | { t: 'browser_state'; sessionId: string; active: boolean;             // lifecycle + wheel
       controlOwner: 'agent'|'user' }
   | { t: 'message_audio'; sessionId: string; seq: number;                 // reply to render_message_audio
-      mimeType?: string; data?: string; error?: string };               // data: base64 clip bytes
+      mimeType?: string; data?: string; error?: string }                // data: base64 clip bytes
+  | { t: 'asset'; sessionId: string; assetId: string;                   // reply to get_asset
+      mimeType?: string; data?: string; error?: string };               // data: base64 image bytes
 
 // WireEvent = AgentEvent plus:
 //   { kind:'raw_pty', dataB64: string }   // agent CLI / native PTY agent
@@ -338,6 +341,11 @@ lives on the host that owns it, so the master renders the clip there over the tu
 which carries protocol JSON only, so the bytes come back base64-encoded in
 `message_audio` like `raw_pty` and `browser_frame` — and then serves them from its own
 audio route under the namespaced agent ID. A UI needs no federation-specific audio code.
+
+`get_asset` follows the same pattern for prompt and tool images: when
+`GET /api/agents/{id}/assets/{assetId}` misses locally for a namespaced federated ID, the
+master fetches the image from the owning host over the tunnel and serves it from its own
+asset route.
 
 The audio player's playback position is daemon-owned so it survives a session switch or
 a closed tab: `set_audio_position` writes one row per agent (last-write-wins, not
