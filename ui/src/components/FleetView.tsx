@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useStore, LOCAL_HOST_ID } from '../store';
 import type { FederationHost } from '../wire';
 
-const NODE_WIDTH = 168;
+const NODE_WIDTH = 260;
 const NODE_HEIGHT = 66;
 const COLUMN_GAP = 34;
 const ROW_GAP = 54;
@@ -84,7 +84,7 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
       host,
       parentId: parentByID.get(host.id),
       depth: position.depth,
-      x: PADDING_X + position.x * (NODE_WIDTH + COLUMN_GAP),
+      x: PADDING_X + NODE_WIDTH / 2 + position.x * (NODE_WIDTH + COLUMN_GAP),
       y: PADDING_Y + position.depth * (NODE_HEIGHT + ROW_GAP),
     };
   });
@@ -93,7 +93,7 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
   return {
     nodes,
     edges,
-    width: Math.max(430, PADDING_X * 2 + Math.max(1, nextLeaf) * NODE_WIDTH + Math.max(0, nextLeaf - 1) * COLUMN_GAP),
+    width: PADDING_X * 2 + Math.max(1, nextLeaf) * NODE_WIDTH + Math.max(0, nextLeaf - 1) * COLUMN_GAP,
     height: PADDING_Y * 2 + (maxDepth + 1) * NODE_HEIGHT + maxDepth * ROW_GAP,
   };
 }
@@ -127,11 +127,15 @@ export function FleetView() {
         </div>
         <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from slave to master</div>
         <div className="fleet-canvas" aria-label="Fleet topology graph">
-          <svg className="fleet-graph" viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from slaves to masters">
+          <div className="fleet-stage">
+          <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from slaves to masters">
             <defs>
               <marker id="fleet-master-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead" />
               </marker>
+              {fleet.nodes.map((node, index) => (
+                <clipPath id={`fleet-node-content-${index}`} key={node.host.id}><rect x="8" y="4" width={NODE_WIDTH - 16} height={NODE_HEIGHT - 8} /></clipPath>
+              ))}
             </defs>
             <g className="fleet-edges">
               {fleet.edges.map((edge) => {
@@ -154,19 +158,22 @@ export function FleetView() {
               })}
             </g>
             <g className="fleet-nodes">
-              {fleet.nodes.map((node) => (
+              {fleet.nodes.map((node, index) => (
                 <g className={`fleet-node fleet-${statusLabel(node.host)}`} transform={`translate(${node.x - NODE_WIDTH / 2} ${node.y - NODE_HEIGHT / 2})`} key={node.host.id}>
                   <title>{`${node.host.name ?? node.host.id}, ${version(node.host)}`}</title>
                   <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx="8" />
-                  <circle cx="15" cy="17" r="4" />
-                  <text className="fleet-name" x="26" y="21">{node.host.name ?? node.host.id}</text>
-                  <text className="fleet-version" x="12" y="42">{version(node.host)}</text>
-                  <text className="fleet-status" x="12" y="57">{statusLabel(node.host)}</text>
+                  <g clipPath={`url(#fleet-node-content-${index})`}>
+                    <circle cx="15" cy="17" r="4" />
+                    <text className="fleet-name" x="26" y="21">{node.host.name ?? node.host.id}</text>
+                    <text className="fleet-version" x="12" y="42">{version(node.host)}</text>
+                    <text className="fleet-status" x="12" y="57">{statusLabel(node.host)}</text>
+                  </g>
                 </g>
               ))}
             </g>
           </svg>
         </div>
+          </div>
         <div className="foot fleet-foot">
           <span>{fleet.nodes.length} {fleet.nodes.length === 1 ? 'node' : 'nodes'} · {fleet.edges.length} {fleet.edges.length === 1 ? 'link' : 'links'}</span>
           <button type="button" onClick={refreshHosts}>Refresh</button>

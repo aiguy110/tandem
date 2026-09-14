@@ -986,7 +986,8 @@ body.dock-resizing .app { transition: none; }
 .fleet-legend { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
 .fleet-arrow { color: var(--agent); font-size: 16px; line-height: 1; }
 .fleet-canvas { max-height: min(60vh, 560px); overflow: auto; background: var(--bg); }
-.fleet-graph { display: block; min-width: 100%; min-height: 270px; }
+.fleet-stage { display: flex; align-items: center; justify-content: center; width: max-content; min-width: 100%; min-height: 270px; }
+.fleet-graph { display: block; flex: 0 0 auto; }
 .fleet-edge { fill: none; stroke: var(--border-strong); stroke-width: 2; }
 .fleet-arrowhead { fill: var(--border-strong); }
 .fleet-node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
