@@ -22,6 +22,8 @@ func TestNewerVersion(t *testing.T) {
 		{"v1.2.3", "v1.2.4", true},
 		{"1.2.3", "v2.0.0", true},
 		{"1.2.3-rc.1", "v1.2.3", true},
+		{"v0.8.0.f1817c0c", "v0.9.0", true},
+		{"v0.8.0.f1817c0c", "v0.8.0", true},
 		{"1.2.3", "v1.2.3", false},
 		{"1.3.0", "v1.2.9", false},
 	}
@@ -38,13 +40,13 @@ func TestNewerVersion(t *testing.T) {
 	}
 }
 
-func TestDevelopmentVersion(t *testing.T) {
+func TestUnversionedDevelopmentVersion(t *testing.T) {
 	for value, want := range map[string]bool{
-		"": true, "dev": true, "v0.5.1.1234abcd": true,
+		"": true, "dev": true, "v0.5.1.1234abcd": false,
 		"v0.5.1": false, "v0.5.1.1234abc": false, "v0.5.1.1234abcd0": false,
 	} {
-		if got := isDevelopmentVersion(value); got != want {
-			t.Errorf("isDevelopmentVersion(%q) = %v, want %v", value, got, want)
+		if got := isUnversionedDevelopmentVersion(value); got != want {
+			t.Errorf("isUnversionedDevelopmentVersion(%q) = %v, want %v", value, got, want)
 		}
 	}
 }
@@ -150,6 +152,24 @@ func TestDevelopmentBuildSkipsNetwork(t *testing.T) {
 	})}
 	if err := CheckAtStartup(context.Background(), Options{CurrentVersion: "dev", HTTPClient: client}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVersionedDevelopmentBuildChecksForAndCanInstallRelease(t *testing.T) {
+	var downloads atomic.Int32
+	server := releaseServer(t, []byte("new binary"), &downloads)
+	defer server.Close()
+
+	result, err := Check(context.Background(), Options{
+		CurrentVersion: "v0.8.0.f1817c0c",
+		APIBaseURL:     server.URL,
+		HTTPClient:     server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Available || result.LatestVersion != "v1.1.0" {
+		t.Fatalf("Check() = %+v, want available v1.1.0", result)
 	}
 }
 

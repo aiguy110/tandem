@@ -53,12 +53,14 @@ type CheckResult struct {
 	Available      bool
 }
 
-// Check queries the latest release. Development builds and installations with
-// update checks disabled return an empty, unavailable result without network
-// access.
+// Check queries the latest release. Unversioned development builds and
+// installations with update checks disabled return an empty, unavailable
+// result without network access. Source builds based on a release (for
+// example v0.8.0.f1817c0c) are versioned development builds: they do check
+// for, and can install, a newer release.
 func Check(ctx context.Context, opts Options) (CheckResult, error) {
 	result := CheckResult{CurrentVersion: opts.CurrentVersion}
-	if isDevelopmentVersion(opts.CurrentVersion) || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
+	if isUnversionedDevelopmentVersion(opts.CurrentVersion) || os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return result, nil
 	}
 	setDefaults(&opts)
@@ -101,7 +103,7 @@ func Update(ctx context.Context, opts Options) error {
 // executable. Callers that need information provided only by the new binary
 // can use the result to avoid querying it when no update was installed.
 func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
-	if isDevelopmentVersion(opts.CurrentVersion) {
+	if isUnversionedDevelopmentVersion(opts.CurrentVersion) {
 		return false, errors.New("self-update is unavailable for development builds")
 	}
 	setDefaults(&opts)
@@ -137,8 +139,11 @@ func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
 	return true, nil
 }
 
-func isDevelopmentVersion(value string) bool {
-	return value == "" || value == "dev" || developmentVersion.MatchString(value)
+// isUnversionedDevelopmentVersion identifies builds for which no release
+// lineage is known. A development build stamped with its nearest release and
+// commit is safe to compare with releases and to replace atomically.
+func isUnversionedDevelopmentVersion(value string) bool {
+	return value == "" || value == "dev"
 }
 
 func setDefaults(opts *Options) {
@@ -302,6 +307,13 @@ type version struct {
 func parseVersion(value string) (version, error) {
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
 	value = strings.SplitN(value, "+", 2)[0]
+	// Local builds are stamped as vX.Y.Z.<eight-hex-commit>. Interpret that
+	// form as a prerelease of its nearest release, so the next release always
+	// wins the comparison (including v0.9.0 over v0.8.0.f1817c0c).
+	if developmentVersion.MatchString(value) {
+		lastDot := strings.LastIndex(value, ".")
+		value = value[:lastDot] + "-dev." + value[lastDot+1:]
+	}
 	parts := strings.SplitN(value, "-", 2)
 	numbers := strings.Split(parts[0], ".")
 	if len(numbers) != 3 {
