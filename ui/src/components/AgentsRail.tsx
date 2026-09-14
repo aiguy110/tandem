@@ -106,9 +106,9 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   return (
     <div className={`rail agents${collapsed ? ' collapsed' : ''}`}>
       {collapsed && !expandedMounted && (
-        <button className="rail-toggle" title="Show agents" onClick={toggleCollapsed}>
+        <button className="rail-toggle" title="Show sessions" onClick={toggleCollapsed}>
           <span className="chevron">›</span>
-          <span className="label">Agents</span>
+          <span className="label">Sessions</span>
           {order.length > 0 && <span className="count">{order.length}</span>}
         </button>
       )}
@@ -117,7 +117,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
       <div
         className="dock-resize-handle dock-resize-handle-right"
         role="separator"
-        aria-label="Resize agents panel"
+        aria-label="Resize sessions panel"
         aria-orientation="vertical"
         onPointerDown={(event) => {
           event.preventDefault();
@@ -125,18 +125,18 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
         }}
       />
       <div ref={headRef} className="rail-head">
-        <button className="rail-toggle-btn" title="Collapse agents" onClick={toggleCollapsed}>
+        <button className="rail-toggle-btn" title="Collapse sessions" onClick={toggleCollapsed}>
           ‹
         </button>
         <span className="rail-head-label" onClick={toggleCollapsed}>
-          Agents <span className="count">{order.length}</span>
+          Sessions <span className="count">{order.length}</span>
         </span>
       </div>
       {order.length === 0 ? (
         <div className="empty">
-          No agents yet.
+          No sessions yet.
           <br />
-          Press <span className="kbd">C</span> or <b>+ Agent</b> to spawn one.
+          Press <span className="kbd">C</span> or <b>+ Session</b> to spawn one.
         </div>
       ) : (
         <>
@@ -210,12 +210,12 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
         <div className="modal-scrim" onClick={() => setConfirmation(null)}>
           <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-body">
-              <div>Delete agent <b>{agents[confirmation.id].name}</b>?</div>
+              <div>Delete session <b>{agents[confirmation.id].name}</b>?</div>
               {confirmation.preview.notGitRepo ? (
                 <>
                   <section>
                     <strong>Not a git repository</strong>
-                    <p>This existing directory will not be deleted. Deleting the agent only stops it and removes it from Tandem.</p>
+                    <p>This existing directory will not be deleted. Deleting the session only stops it and removes it from Tandem.</p>
                     <p>Tandem cannot tell whether the directory has any changes.</p>
                   </section>
                   <section>
@@ -252,11 +252,11 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
                     <section>
                       <strong>Worktree is shared</strong>
                       <p>
-                        {confirmation.preview.cohabitants.length === 1 ? 'Agent' : 'Agents'}{' '}
+                        {confirmation.preview.cohabitants.length === 1 ? 'Session' : 'Sessions'}{' '}
                         <b>{confirmation.preview.cohabitants.join(', ')}</b>{' '}
                         {confirmation.preview.cohabitants.length === 1 ? 'is' : 'are'} still working in{' '}
-                        <code>{agents[confirmation.id].workspace.cwd}</code>. Deleting this agent leaves the worktree and
-                        its branch in place; it is removed with the last agent that occupies it.
+                        <code>{agents[confirmation.id].workspace.cwd}</code>. Deleting this session leaves the worktree and
+                        its branch in place; it is removed with the last session that occupies it.
                       </p>
                     </section>
                   ) : confirmation.preview.kind === 'worktree' && (
@@ -303,7 +303,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
 function hostLinkBadge(status: FederationHost['status']): HostLink {
   switch (status) {
     case 'connected':
-      return { label: 'online', tone: 'link-online', title: 'Connected — this host is reachable and its agents are live' };
+      return { label: 'online', tone: 'link-online', title: 'Connected — this host is reachable and its sessions are live' };
     case 'pending':
       return { label: 'pending', tone: 'link-pending', title: 'Awaiting approval — this host has requested to join' };
     case 'rejected':
@@ -447,7 +447,7 @@ function Row({
     <div
       className={`agent-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
       draggable={!editing}
-      title={editing ? undefined : 'Drag to reorder agent'}
+      title={editing ? undefined : 'Drag to reorder session'}
       onClick={onClick}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
@@ -486,7 +486,7 @@ function Row({
               value={name}
               maxLength={80}
               autoFocus
-              aria-label="Agent name"
+              aria-label="Session name"
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => setName(e.target.value)}
               onBlur={() => {
@@ -527,7 +527,7 @@ function Row({
       {showActions && <div className="agent-actions">
         <button
           className="rename-btn"
-          title="Rename agent"
+          title="Rename session"
           aria-label={`Rename ${agent.name}`}
           onClick={(e) => {
             e.stopPropagation();
@@ -538,7 +538,7 @@ function Row({
         </button>
         <button
           className="delete-btn"
-          title="Delete agent"
+          title="Delete session"
           onClick={(e) => {
             e.stopPropagation();
             onDelete();

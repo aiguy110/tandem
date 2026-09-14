@@ -48,7 +48,7 @@ export function Inspector() {
           </div>
         </div>
       )}
-      {open && !agent && <div className="insp-body">No agent focused.</div>}
+      {open && !agent && <div className="insp-body">No session focused.</div>}
     </div>
   );
 }

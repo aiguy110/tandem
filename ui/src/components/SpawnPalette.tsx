@@ -85,8 +85,8 @@ function proposedBranch(ref: GitRefInfo | undefined, name: string): string {
   let context = ref?.displayName ?? 'current';
   context = context.replace(/^origin\//, '').replace(/^feature\//, '').replace(/[^A-Za-z0-9._/-]+/g, '-');
   context = context.replace(/^[-./]+|[-./]+$/g, '').slice(0, 64) || 'detached';
-  const agent = name ? name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') : '<agent-name>';
-  return `tandem/${context}/${agent || 'agent'}`;
+  const agent = name ? name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') : '<session-name>';
+  return `tandem/${context}/${agent || 'session'}`;
 }
 
 // Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs.
@@ -786,7 +786,7 @@ export function SpawnPalette() {
                         </select>
                       </label>
                       <div className="git-context-preview" style={{ gridColumn: '1 / -1' }}>
-                        The new agent's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
+                        The new session's first message will be a Hand-off Transcript assembled from <b>{parentAgent.name}</b>'s
                         conversation.{' '}
                         {handoffMode === 'full'
                           ? "Every user and assistant message is carried over verbatim, and each intervening tool call becomes one summary line naming the file it touched."
@@ -815,7 +815,7 @@ export function SpawnPalette() {
                   setAttachBranchRef(local?.ref ?? '');
                 }
               }}>
-                <option value="create">New agent branch</option>
+                <option value="create">New session branch</option>
                 <option value="attach">Continue existing branch</option>
                 <option value="existing">Use existing checkout</option>
                 <option value="join" disabled={!joinCwd}>
@@ -863,8 +863,8 @@ export function SpawnPalette() {
             )}
             {cohabitants.length > 0 && (
               <div className="branch-warning" style={{ gridColumn: '1 / -1' }}>
-                This worktree is already occupied by {cohabitants.length === 1 ? 'agent' : 'agents'}{' '}
-                <b>{cohabitants.join(', ')}</b>. Agents sharing a checkout can overwrite each other's edits, and the
+                This worktree is already occupied by {cohabitants.length === 1 ? 'session' : 'sessions'}{' '}
+                <b>{cohabitants.join(', ')}</b>. Sessions sharing a checkout can overwrite each other's edits, and the
                 worktree will not be removed until the last of them is deleted.
               </div>
             )}
@@ -873,7 +873,7 @@ export function SpawnPalette() {
                 <div>
                   {workspaceMode === 'create' ? <>Starting at <b>{selectedGitRef.displayName}</b> @ <code>{selectedGitRef.commit.slice(0, 8)}</code></> : <>Attaching <b>{selectedAttachRef?.displayName ?? '—'}</b>; merge target <b>{selectedGitRef.displayName}</b></>}
                 </div>
-                {workspaceMode === 'create' && <div>Agent branch <code>{agentBranch || proposedBranch(selectedGitRef, name)}</code></div>}
+                {workspaceMode === 'create' && <div>Session branch <code>{agentBranch || proposedBranch(selectedGitRef, name)}</code></div>}
                 {selectedAttachRef?.checkedOutAt && workspaceMode === 'attach' && (
                   <div className="modal-err">
                     <div>This branch is already checked out at {selectedAttachRef.checkedOutAt}.</div>
@@ -889,7 +889,7 @@ export function SpawnPalette() {
                   </div>
                 )}
                 {selectedGitRef.checkedOutAt === selectedDir?.path && selectedDir?.dirty && workspaceMode === 'create' && (
-                  <div className="branch-warning">Uncommitted changes in the existing checkout are not included; the agent starts from the committed revision above.</div>
+                  <div className="branch-warning">Uncommitted changes in the existing checkout are not included; the session starts from the committed revision above.</div>
                 )}
               </div>
             )}
@@ -1081,7 +1081,7 @@ function GitRefPicker({
               <span className="git-ref-meta">
                 {ref.isCurrent && <em>current</em>}
                 {ref.checkedOutAt && <em>checked out</em>}
-                {ref.tandem && <em>{ref.tandem.live ? 'live Tandem agent' : 'Tandem branch'}</em>}
+                {ref.tandem && <em>{ref.tandem.live ? 'live Tandem session' : 'Tandem branch'}</em>}
                 <span>{ref.kind.replace('-branch', '')}</span>
                 {(ref.ahead || ref.behind) ? <span>+{ref.ahead ?? 0}/-{ref.behind ?? 0}</span> : null}
               </span>

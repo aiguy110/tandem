@@ -23,8 +23,8 @@ export function ConductorBar({ version }: { version: string | null }) {
       <div className="brand">
         <b>Tandem</b><span className="version" aria-label={version ? `Version ${version}` : 'Loading version'}>{version ?? '…'}</span>
       </div>
-      <button className="btn primary" onClick={() => setModal('spawn')} title={`Spawn agent (${prettyBinding(b['agent.spawn'])})`}>
-        + Agent <span className="kbd">{prettyBinding(b['agent.spawn'])}</span>
+      <button className="btn primary" onClick={() => setModal('spawn')} title={`Spawn session (${prettyBinding(b['agent.spawn'])})`}>
+        + Session <span className="kbd">{prettyBinding(b['agent.spawn'])}</span>
       </button>
       <button className="btn ghost" onClick={() => setModal('command')} title="Command palette">
         <PaletteIcon />

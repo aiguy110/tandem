@@ -552,7 +552,7 @@ export function BrowserPane() {
         <div className="pane-placeholder">
           <div className="big">◉</div>
           <div>
-            <b>Browser</b> — no browser yet for this agent. It spins up lazily the first time the agent uses a browser tool, then the live view appears here.
+            <b>Browser</b> — no browser yet for this session. It spins up lazily the first time the agent uses a browser tool, then the live view appears here.
           </div>
         </div>
       ) : (

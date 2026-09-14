@@ -40,7 +40,7 @@ export function FocusArea() {
       <div className="focus">
         <div className="pane-placeholder">
           <div className="big">◐</div>
-          <div>Select or spawn an agent to begin.</div>
+          <div>Select or spawn a session to begin.</div>
         </div>
       </div>
     );

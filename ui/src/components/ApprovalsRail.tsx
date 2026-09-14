@@ -136,7 +136,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
         </div>
       ))}
       {items.length === 0 && takeovers.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
-        <div className="empty">No notifications. Completed agent turns and requests for attention appear here.</div>
+        <div className="empty">No notifications. Completed session turns and requests for attention appear here.</div>
       ) : (
         items.map(({ agentId, approval }) => {
           const status = agents[agentId]?.status;
