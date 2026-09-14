@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -1282,6 +1283,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	hostID := m.HostID
+	slog.Info("routing browser command to remote host", "type", m.T, "host_id", hostID, "session_id", m.SessionID)
 	if m.T == "spawn_agent" && m.Spec.HandoffFrom != "" {
 		if sourceHostID, sourceSessionID, ok := SplitRemoteSessionID(m.Spec.HandoffFrom); ok {
 			if sourceHostID != hostID {
@@ -1331,6 +1333,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 	}
 	response, err := c.server.opts.Federation.Call(callCtx, hostID, payload)
 	if err != nil {
+		slog.Warn("remote browser command failed", "type", m.T, "host_id", hostID, "session_id", m.SessionID, "error", err)
 		if m.T == "subscribe" && remoteID != "" {
 			c.mu.Lock()
 			delete(c.remoteSubs, remoteID)
@@ -1339,6 +1342,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 		c.commandError(m, err)
 		return
 	}
+	slog.Info("remote browser command completed", "type", m.T, "host_id", hostID, "session_id", m.SessionID)
 	var envelope map[string]any
 	if err := json.Unmarshal(response, &envelope); err != nil {
 		c.commandError(m, fmt.Errorf("remote host returned invalid protocol response: %w", err))

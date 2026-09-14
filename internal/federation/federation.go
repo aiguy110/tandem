@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -418,6 +419,7 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 		return nil, err
 	}
 	done := make(chan result, 1)
+	slog.Info("sending federation command", "host_id", hostID, "command_id", id, "bytes", len(payload))
 	s.mu.Lock()
 	s.waiters[id] = done
 	tunnel := s.tunnels[directID]
@@ -437,10 +439,13 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	select {
 	case r := <-done:
 		if r.Error != "" {
+			slog.Warn("federation command failed remotely", "host_id", hostID, "command_id", id, "error", r.Error)
 			return nil, errors.New(r.Error)
 		}
+		slog.Info("federation command completed", "host_id", hostID, "command_id", id, "bytes", len(r.Payload))
 		return r.Payload, nil
 	case <-ctx.Done():
+		slog.Warn("federation command timed out", "host_id", hostID, "command_id", id, "error", ctx.Err())
 		return nil, ctx.Err()
 	}
 }
@@ -634,6 +639,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	peer.LastSeenAt = time.Now().UnixMilli()
 	peer.ProtocolVersion, peer.BuildVersion = hello.ProtocolVersion, hello.BuildVersion
 	_ = s.store.UpsertFederationSlave(*peer)
+	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion)
 	// A host predating the welcome message ignores unknown tunnel types, so
 	// this is safe to send unconditionally.
 	_ = t.send(tunnelMessage{T: "welcome", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
@@ -657,6 +663,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.UpsertFederationSlave(*p)
 			s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 		}
+		slog.Warn("federation host disconnected", "host_id", hello.HostID)
 	}()
 	for {
 		var msg tunnelMessage
@@ -1105,7 +1112,11 @@ func (s *Service) RunSlave(ctx context.Context) error {
 			}
 			continue
 		}
-		if errors.Is(s.runTunnel(ctx, hostID, credential), errCredentialRejected) {
+		tunnelErr := s.runTunnel(ctx, hostID, credential)
+		if tunnelErr != nil && !errors.Is(tunnelErr, context.Canceled) {
+			slog.Warn("federation upstream tunnel ended; reconnecting", "host_id", hostID, "error", tunnelErr)
+		}
+		if errors.Is(tunnelErr, errCredentialRejected) {
 			// The master no longer knows this credential -- its record was
 			// replaced or deleted. Retrying it forever would leave this host
 			// permanently unreachable, so ask for registration again under

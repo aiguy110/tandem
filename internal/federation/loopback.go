@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"sync"
@@ -22,10 +23,15 @@ type LoopbackLocal struct {
 	mu      sync.Mutex
 	conn    *websocket.Conn
 	writeMu sync.Mutex
-	waiters map[string]chan json.RawMessage
+	waiters map[string]loopbackWaiter
 	next    uint64
 	events  chan json.RawMessage
 	closed  bool
+}
+
+type loopbackWaiter struct {
+	conn  *websocket.Conn
+	reply chan json.RawMessage
 }
 
 func NewLoopbackLocal(httpBaseURL, token string) (*LoopbackLocal, error) {
@@ -45,7 +51,7 @@ func NewLoopbackLocal(httpBaseURL, token string) (*LoopbackLocal, error) {
 	q := u.Query()
 	q.Set("token", token)
 	u.RawQuery = q.Encode()
-	return &LoopbackLocal{url: u.String(), dial: websocket.DefaultDialer, waiters: map[string]chan json.RawMessage{}, events: make(chan json.RawMessage, 1024)}, nil
+	return &LoopbackLocal{url: u.String(), dial: websocket.DefaultDialer, waiters: map[string]loopbackWaiter{}, events: make(chan json.RawMessage, 1024)}, nil
 }
 func (l *LoopbackLocal) Snapshot(ctx context.Context) (json.RawMessage, error) {
 	return l.Execute(ctx, json.RawMessage(`{"t":"list_agents"}`))
@@ -67,12 +73,13 @@ func (l *LoopbackLocal) Execute(ctx context.Context, payload json.RawMessage) (j
 	l.next++
 	id := "federation-loopback-" + strconv.FormatUint(l.next, 10)
 	wait := make(chan json.RawMessage, 1)
-	l.waiters[id] = wait
+	l.waiters[id] = loopbackWaiter{conn: conn, reply: wait}
 	l.mu.Unlock()
 	defer func() { l.mu.Lock(); delete(l.waiters, id); l.mu.Unlock() }()
 	message["corrId"], _ = json.Marshal(id)
 	data, err := json.Marshal(message)
 	if err != nil {
+		slog.Warn("federation loopback command write failed", "command_id", id, "error", err)
 		return nil, err
 	}
 	l.writeMu.Lock()
@@ -106,6 +113,7 @@ func (l *LoopbackLocal) connection(ctx context.Context) (*websocket.Conn, error)
 	l.mu.Unlock()
 	conn, _, err := l.dial.DialContext(ctx, l.url, nil)
 	if err != nil {
+		slog.Warn("federation loopback connection failed", "error", err)
 		return nil, err
 	}
 	l.mu.Lock()
@@ -122,25 +130,15 @@ func (l *LoopbackLocal) connection(ctx context.Context) (*websocket.Conn, error)
 	}
 	l.conn = conn
 	l.mu.Unlock()
+	slog.Info("federation loopback connected")
 	go l.read(conn)
 	return conn, nil
 }
 func (l *LoopbackLocal) read(conn *websocket.Conn) {
 	defer func() {
-		l.mu.Lock()
-		if l.conn == conn {
-			l.conn = nil
-		}
-		waiters := make([]chan json.RawMessage, 0, len(l.waiters))
-		for id, waiter := range l.waiters {
-			waiters = append(waiters, waiter)
-			delete(l.waiters, id)
-		}
-		l.mu.Unlock()
-		for _, waiter := range waiters {
-			close(waiter)
-		}
+		failed := l.failWaiters(conn)
 		_ = conn.Close()
+		slog.Info("federation loopback disconnected", "failed_commands", failed)
 	}()
 	for {
 		_, data, err := conn.ReadMessage()
@@ -152,11 +150,11 @@ func (l *LoopbackLocal) read(conn *websocket.Conn) {
 		}
 		_ = json.Unmarshal(data, &e)
 		l.mu.Lock()
-		wait := l.waiters[e.CorrID]
+		waiter, found := l.waiters[e.CorrID]
 		l.mu.Unlock()
-		if e.CorrID != "" && wait != nil {
+		if e.CorrID != "" && found && waiter.conn == conn {
 			select {
-			case wait <- append(json.RawMessage(nil), data...):
+			case waiter.reply <- append(json.RawMessage(nil), data...):
 			default:
 			}
 			continue
@@ -164,8 +162,31 @@ func (l *LoopbackLocal) read(conn *websocket.Conn) {
 		select {
 		case l.events <- append(json.RawMessage(nil), data...):
 		default:
+			slog.Warn("dropping federation loopback event because relay buffer is full", "bytes", len(data))
 		}
 	}
+}
+
+// failWaiters retires only calls that used conn. An old reader can exit after
+// Reset has installed a replacement connection, so sweeping the whole waiter
+// map here would randomly abort healthy commands on the replacement.
+func (l *LoopbackLocal) failWaiters(conn *websocket.Conn) int {
+	l.mu.Lock()
+	if l.conn == conn {
+		l.conn = nil
+	}
+	waiters := make([]chan json.RawMessage, 0, len(l.waiters))
+	for id, waiter := range l.waiters {
+		if waiter.conn == conn {
+			waiters = append(waiters, waiter.reply)
+			delete(l.waiters, id)
+		}
+	}
+	l.mu.Unlock()
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+	return len(waiters)
 }
 func (l *LoopbackLocal) Close() error {
 	l.mu.Lock()
@@ -174,6 +195,7 @@ func (l *LoopbackLocal) Close() error {
 	l.conn = nil
 	l.mu.Unlock()
 	if conn != nil {
+		slog.Info("closing federation loopback connection")
 		return conn.Close()
 	}
 	return nil
@@ -189,6 +211,7 @@ func (l *LoopbackLocal) Reset() {
 	l.conn = nil
 	l.mu.Unlock()
 	if conn != nil {
+		slog.Info("resetting federation loopback connection")
 		_ = conn.Close()
 	}
 }

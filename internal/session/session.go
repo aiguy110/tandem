@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -421,6 +422,7 @@ func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.Promp
 	if startRunner {
 		go s.runPromptQueue()
 	}
+	slog.Info("agent prompt accepted", "session_id", s.ID, "prompt_id", prompt.ID, "disposition", disposition, "position", position, "blocks", len(blocks))
 	return PromptReceipt{ID: prompt.ID, Disposition: disposition, Position: position, done: prompt.done}, nil
 }
 
@@ -532,12 +534,19 @@ func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.Promp
 	}
 	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
 	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
+	slog.Info("agent prompt started", "session_id", s.ID, "adapter_epoch", epoch, "blocks", len(blocks))
 	stopReason, err := adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
 	s.mu.RLock()
 	replaced := epoch != s.adapterEpoch
 	s.mu.RUnlock()
 	if replaced {
+		slog.Warn("agent prompt returned after adapter replacement", "session_id", s.ID, "adapter_epoch", epoch, "error", err)
 		return "", errAdapterReplaced
+	}
+	if err != nil {
+		slog.Warn("agent prompt failed", "session_id", s.ID, "adapter_epoch", epoch, "error", err)
+	} else {
+		slog.Info("agent prompt completed", "session_id", s.ID, "adapter_epoch", epoch, "stop_reason", stopReason)
 	}
 	return stopReason, err
 }
@@ -686,8 +695,10 @@ func (s *Session) Interrupt() error {
 	a := s.adapter
 	s.mu.RUnlock()
 	if err := a.Interrupt(); err != nil {
+		slog.Warn("agent interrupt failed", "session_id", s.ID, "error", err)
 		return err
 	}
+	slog.Info("agent interrupt requested", "session_id", s.ID, "active_turn", s.ActiveTurn())
 	s.mu.Lock()
 	s.approvals = map[string]agentadapter.Approval{}
 	s.approvalHandlers = map[string]func(string) error{}
