@@ -526,7 +526,7 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 		t.Fatalf("remote summary = %#v", remote)
 	}
 
-	send(t, c, map[string]any{"t": "spawn_agent", "spec": map[string]any{"hostId": "host-one", "adapter": "acp", "workspace": map[string]any{"kind": "existing", "cwd": "/repo"}}, "corrId": "spawn"})
+	send(t, c, map[string]any{"t": "spawn_agent", "spec": map[string]any{"hostId": "host-one", "adapter": "acp", "handoffFrom": remoteID, "workspace": map[string]any{"kind": "existing", "cwd": "/repo"}}, "corrId": "spawn"})
 	got = recv(t, c)
 	if got["t"] != "ack" || got["agentId"] != remoteID || got["hostId"] != "host-one" {
 		t.Fatalf("spawn ack = %#v", got)
@@ -536,6 +536,9 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	fed.mu.Unlock()
 	if strings.Contains(string(spawnPayload), "host-one") {
 		t.Fatalf("slave payload retained federation route: %s", spawnPayload)
+	}
+	if !strings.Contains(string(spawnPayload), `"handoffFrom":"remote-agent"`) {
+		t.Fatalf("slave payload did not localize hand-off source: %s", spawnPayload)
 	}
 
 	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript", "browser"}, "corrId": "sub"})

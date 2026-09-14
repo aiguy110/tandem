@@ -1282,6 +1282,16 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	hostID := m.HostID
+	if m.T == "spawn_agent" && m.Spec.HandoffFrom != "" {
+		if sourceHostID, sourceSessionID, ok := SplitRemoteSessionID(m.Spec.HandoffFrom); ok {
+			if sourceHostID != hostID {
+				c.commandError(m, fmt.Errorf("hand-off source is on host %s, not target host %s", sourceHostID, hostID))
+				return
+			}
+			// The destination daemon knows its session by the host-local id.
+			m.Spec.HandoffFrom = sourceSessionID
+		}
+	}
 	remoteID := ""
 	if m.SessionID != "" {
 		remoteID = remoteSessionID(hostID, m.SessionID)

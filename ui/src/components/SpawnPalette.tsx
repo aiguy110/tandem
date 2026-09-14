@@ -178,6 +178,15 @@ export function SpawnPalette() {
   const taskRef = useRef<HTMLInputElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
 
+  // A rail-initiated hand-off should be created where its source actually
+  // lives. Remote summaries carry a master-qualified id plus this hostId;
+  // choosing local here makes both the checkout and transcript unavailable.
+  useEffect(() => {
+    if (!spawnHandoffFrom) return;
+    const source = agents[spawnHandoffFrom];
+    if (source) setHostId(source.hostId ?? LOCAL_HOST_ID);
+  }, [spawnHandoffFrom, agents]);
+
   // Host discovery is intentionally lazy: opening the palette continues to
   // work against an older daemon, while choosing a connected slave asks the
   // master for that host's own repositories and launch catalog.
@@ -221,8 +230,10 @@ export function SpawnPalette() {
   // Sessions offered as a hand-off source, newest names last is unhelpful here,
   // so order them the way the rail does: alphabetically by display name.
   const parentCandidates = useMemo(
-    () => Object.values(agents).sort((a, b) => a.name.localeCompare(b.name)),
-    [agents],
+    () => Object.values(agents)
+      .filter((candidate) => (candidate.hostId ?? LOCAL_HOST_ID) === hostId)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [agents, hostId],
   );
   const joinCwd = parentAgent?.workspace.cwd ?? '';
   // Agents already working in whichever directory this spawn would land in.
@@ -242,14 +253,14 @@ export function SpawnPalette() {
   useEffect(() => {
     if (handoffSeeded.current || !spawnHandoffFrom) return;
     const source = agents[spawnHandoffFrom];
-    if (!source || dirs.length === 0) return;
+    if (!source || (source.hostId ?? LOCAL_HOST_ID) !== hostId || scopedDirs.length === 0) return;
     handoffSeeded.current = true;
     setParentSession(spawnHandoffFrom);
-    const dir = dirs.find((d) => d.path === source.workspace.repoPath);
+    const dir = scopedDirs.find((d) => d.path === source.workspace.repoPath);
     if (dir) setQuery(dir.path);
     setAdvanced(true);
     if (source.workspace.cwd) setWorkspaceMode('join');
-  }, [spawnHandoffFrom, agents, dirs]);
+  }, [spawnHandoffFrom, agents, hostId, scopedDirs]);
   // "Continue in the source's worktree" stops meaning anything once the source
   // is cleared; fall back to the ordinary isolated worktree.
   useEffect(() => {
@@ -756,8 +767,7 @@ export function SpawnPalette() {
                 </select>
               </label>
             ) : <div className="sub">Remote browser starts with a fresh state.</div>}
-            {!remote && (
-              <>
+            <>
               <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Hand-off</div>
               <label style={{ gridColumn: '1 / -1' }}>
                 Continue from session <span className="sub">(optional)</span>
@@ -798,7 +808,6 @@ export function SpawnPalette() {
                 </>
               )}
               </>
-            )}
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Repo settings</div>
             <label>
               Name
