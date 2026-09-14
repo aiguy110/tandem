@@ -6,6 +6,7 @@ import { renderMessageAudio } from '../audio';
 import {
   __getElementForTests,
   __resetForTests,
+  getGlobalPosition,
   getListeningAgentId,
   getState,
   pause,
@@ -373,6 +374,45 @@ describe('silence keepalive', () => {
     setPlaylist('agent-1', []); // same chat, e.g. the agent was closed
 
     expect(el.loop).toBe(false);
+  });
+
+  it('leaves the reported position alone when the setting is toggled off mid-arm', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    const el = __getElementForTests()!;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    el.dispatchEvent(new Event('durationchange'));
+    el.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+    // The silence loop cycles the element's own currentTime; it must never
+    // be read as the section's position, whether it's looping or merely
+    // paused with the silence blob still loaded.
+    Object.defineProperty(el, 'currentTime', { configurable: true, writable: true, value: 0.4 });
+
+    expect(getGlobalPosition()).toBe(30);
+    setKeepaliveEnabled(false);
+    expect(getGlobalPosition()).toBe(30);
+    setKeepaliveEnabled(true);
+    expect(getGlobalPosition()).toBe(30);
+  });
+
+  it('still resumes the real clip after the setting is toggled off while armed', async () => {
+    setPlaylist('agent-1', [10]);
+    play('agent-1', 10);
+    await vi.waitFor(() => expect(getState().status).toBe('playing'));
+    const el = __getElementForTests()!;
+    el.dispatchEvent(new Event('ended'));
+    await vi.waitFor(() => expect(el.loop).toBe(true));
+    const silenceCallCount = mockRenderMessageAudio.mock.calls.length;
+    setKeepaliveEnabled(false); // pauses the keepalive, silence blob still loaded
+
+    play('agent-1'); // "replay" tap
+    el.dispatchEvent(new Event('play'));
+
+    expect(el.src).toContain('blob:10');
+    expect(mockRenderMessageAudio.mock.calls.length).toBe(silenceCallCount);
+    expect(getState().status).toBe('playing');
   });
 
   it('lets a tap on the global player resume the real clip instead of leaving silence looping', async () => {

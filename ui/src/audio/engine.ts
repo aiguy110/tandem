@@ -244,22 +244,22 @@ function attach(el: HTMLAudioElement) {
     el.currentTime = previous.currentTime;
     previous.pause();
   }
-  // Every listener below must ignore events fired for the keepalive silence
-  // clip — it shares this element (see "Silence keepalive" below) but must
+  // Every listener below must ignore events fired for the silence clip —
+  // it shares this element (see "Silence keepalive" below) but must
   // never be visible as playback state: no status flips, no duration
   // recorded against a real seq, no advance(), no error surfaced.
   el.addEventListener('play', () => {
-    if (silencePlaying) return;
+    if (silenceLoaded) return;
     setState({ status: 'playing', error: null });
   });
   el.addEventListener('pause', () => {
-    if (silencePlaying) return;
+    if (silenceLoaded) return;
     if (state.status !== 'playing') return;
     setState({ status: 'paused', position: el.currentTime });
     flushPosition(true);
   });
   el.addEventListener('durationchange', () => {
-    if (silencePlaying) return;
+    if (silenceLoaded) return;
     const seq = currentSeq();
     if (seq == null || !Number.isFinite(el.duration) || el.duration <= 0) return;
     setState({ duration: el.duration, durations: { ...state.durations, [seq]: el.duration } });
@@ -267,12 +267,12 @@ function attach(el: HTMLAudioElement) {
   el.addEventListener('ended', () => {
     // The silence clip always loops (see startKeepaliveSilence), so 'ended'
     // should never fire for it — this guard is belt-and-suspenders.
-    if (silencePlaying) return;
+    if (silenceLoaded) return;
     setState({ position: Number.isFinite(el.duration) ? el.duration : state.position });
     advance();
   });
   el.addEventListener('error', () => {
-    if (silencePlaying) return;
+    if (silenceLoaded) return;
     if (el.src) setState({ status: 'error', error: 'Playback failed' });
   });
 }
@@ -306,17 +306,27 @@ let loadedIndex = -1;
 // The silence clip shares the ONE element real sections play through (never
 // a second element, never a competing WebAudio graph — see file header) so
 // it never fights the real clip for the media session. Every element event
-// listener in attach() ignores events fired while `silencePlaying` is set,
+// listener in attach() ignores events fired while `silenceLoaded` is set,
 // and realCurrentTime()/currentGlobalPosition() fall back to the frozen
-// `state.position` while it's active, so it can never be mistaken for a
+// `state.position` while it's set, so it can never be mistaken for a
 // playing section, corrupt a recorded duration, or pollute a position flush
 // with a fake seq.
 //
-// Whether the shared element currently holds the silence loop is tracked
-// with this explicit flag rather than by comparing `element.src` against the
-// silence blob URL — object URLs aren't guaranteed distinguishable that way
-// (e.g. a test or polyfill that stubs URL.createObjectURL to a fixed value),
-// and an explicit flag we set/clear ourselves is exact regardless.
+// Two flags, not one: "the element's src IS the silence clip" outlives "the
+// keepalive is currently looping". Stopping the keepalive (the user turning
+// the setting off, an explicit pause) only pauses the element — the silence
+// blob stays loaded until a real section takes the src back. Collapsing them
+// into one flag made the paused-silence element look like a real clip, so
+// realCurrentTime() started reporting the silence loop's own 0..1s
+// currentTime as the section position (the timeline visibly jumped on every
+// toggle) and play() would resume the silence blob instead of the clip.
+//
+// Whether the shared element currently holds the silence clip is tracked
+// with these explicit flags rather than by comparing `element.src` against
+// the silence blob URL — object URLs aren't guaranteed distinguishable that
+// way (e.g. a test or polyfill that stubs URL.createObjectURL to a fixed
+// value), and flags we set/clear ourselves are exact regardless.
+let silenceLoaded = false;
 let silencePlaying = false;
 let silenceUrl: string | null = null;
 
@@ -362,7 +372,7 @@ function ensureSilenceUrl(): string {
 // resuming/seeking against the silence src would silently do nothing to the
 // real section.
 function elementHoldsRealClip(): boolean {
-  return !silencePlaying;
+  return !silenceLoaded;
 }
 
 // Prefer this over a raw `element.currentTime` read anywhere that number
@@ -370,7 +380,7 @@ function elementHoldsRealClip(): boolean {
 // silence is looping, the element's real currentTime cycles 0..~1s and must
 // not leak into the frozen `state.position` those readers expect.
 function realCurrentTime(): number {
-  if (silencePlaying) return state.position;
+  if (silenceLoaded) return state.position;
   return element?.currentTime ?? state.position;
 }
 
@@ -391,6 +401,7 @@ function wantsKeepalive(): boolean {
 
 function startKeepaliveSilence(el: HTMLAudioElement) {
   const url = ensureSilenceUrl();
+  silenceLoaded = true;
   silencePlaying = true;
   el.loop = true;
   if (el.src !== url) el.src = url;
@@ -402,6 +413,8 @@ function startKeepaliveSilence(el: HTMLAudioElement) {
 }
 
 function stopKeepaliveSilence(el: HTMLAudioElement) {
+  // `silenceLoaded` deliberately stays set — the element is only paused, its
+  // src is still the silence blob. See the flag docs above.
   silencePlaying = false;
   el.loop = false;
   el.pause();
@@ -413,6 +426,7 @@ function stopKeepaliveSilence(el: HTMLAudioElement) {
 // (which would also turn a same-tick resume into an async one).
 function resumeFromSilence(offset: number) {
   const el = ensureElement();
+  silenceLoaded = false;
   silencePlaying = false;
   el.loop = false;
   if (liveUrl && el.src !== liveUrl) el.src = liveUrl;
@@ -719,7 +733,8 @@ async function activateSection(index: number, opts: { autoplay: boolean; offset?
     if (generation !== loadGeneration) return; // superseded by a newer activation
     const el = ensureElement();
     const stale = liveUrl;
-    silencePlaying = false; // a real section is taking the element back over
+    silenceLoaded = false; // a real section is taking the element back over
+    silencePlaying = false;
     el.loop = false; // undo the keepalive silence loop if it was showing
     if (el.src !== url) el.src = url;
     liveUrl = url;
@@ -890,6 +905,7 @@ export function __resetForTests() {
   lastPositionFlush = 0;
   positionSender = null;
   userExplicitlyPaused = false;
+  silenceLoaded = false;
   silencePlaying = false;
   if (silenceUrl) {
     try {
