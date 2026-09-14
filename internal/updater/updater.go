@@ -302,24 +302,26 @@ func newerVersion(current, latest string) (bool, error) {
 type version struct {
 	major, minor, patch uint64
 	prerelease          []string
+	development         bool
 }
 
 func parseVersion(value string) (version, error) {
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
 	value = strings.SplitN(value, "+", 2)[0]
-	// Local builds are stamped as vX.Y.Z.<eight-hex-commit>. Interpret that
-	// form as a prerelease of its nearest release, so the next release always
-	// wins the comparison (including v0.9.0 over v0.8.0.f1817c0c).
-	if developmentVersion.MatchString(value) {
-		lastDot := strings.LastIndex(value, ".")
-		value = value[:lastDot] + "-dev." + value[lastDot+1:]
+	// Local builds are stamped as vX.Y.Z.<eight-hex-commit>. They are commits
+	// after their nearest release, so retain that distinction while parsing the
+	// release portion. This intentionally gives the local build precedence over
+	// the matching release, while a later semantic version still wins.
+	development := developmentVersion.MatchString(value)
+	if development {
+		value = value[:strings.LastIndex(value, ".")]
 	}
 	parts := strings.SplitN(value, "-", 2)
 	numbers := strings.Split(parts[0], ".")
 	if len(numbers) != 3 {
 		return version{}, fmt.Errorf("%q is not a semantic version", value)
 	}
-	parsed := version{}
+	parsed := version{development: development}
 	values := []*uint64{&parsed.major, &parsed.minor, &parsed.patch}
 	for index, number := range numbers {
 		if number == "" || (len(number) > 1 && number[0] == '0') {
@@ -386,6 +388,12 @@ func (v version) compare(other version) int {
 	}
 	if len(v.prerelease) > len(other.prerelease) {
 		return 1
+	}
+	if v.development && !other.development {
+		return 1
+	}
+	if !v.development && other.development {
+		return -1
 	}
 	return 0
 }
