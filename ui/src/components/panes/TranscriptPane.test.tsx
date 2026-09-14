@@ -70,6 +70,22 @@ afterEach(() => {
 });
 
 describe('TranscriptPane voice rendering', () => {
+  it('shows daemon-reported clip duration before playback', async () => {
+    const ready = agent();
+    ready.audioReadySeqs = [1];
+    ready.audioDurations = { 1: 65_000 };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio'], { type: 'audio/mpeg' }), { status: 200 })));
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:ready-voice');
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': ready }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<><AudioEngineRoot /><TranscriptPane /></>);
+
+    await waitFor(() => expect(view.getByText('-1:05')).toBeTruthy());
+  });
+
   it('shows complete command and output when an execute tool call is expanded', () => {
     const withTool = agent();
     const command = 'cd /a/very/long/path && npm run a-command-with-a-long-name -- --verbose';

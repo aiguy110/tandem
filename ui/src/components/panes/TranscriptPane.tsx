@@ -10,7 +10,7 @@ import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
 import { PermissionRequestDetails } from '../PermissionRequest';
 import { usePresence, useUpdateFlash, useValuePresence } from '../../transitions';
-import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition, renderClip, restoreLocalPosition, setPlaylist, useEngineState } from '../../audio/engine';
+import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition, renderClip, restoreLocalPosition, seedDurations, setPlaylist, useEngineState } from '../../audio/engine';
 import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
 import { InlineAudioBar } from '../audio/InlineAudioBar';
 
@@ -356,9 +356,19 @@ export function TranscriptPane() {
     return seqs;
   }, [agent, items, engineAudio]);
   useEffect(() => {
-    if (agent) setPlaylist(agent.id, audioPlaylist);
+    if (agent) {
+      setPlaylist(agent.id, audioPlaylist);
+      seedDurations(
+        agent.id,
+        Object.fromEntries(
+          Object.entries(agent.audioDurations)
+            .filter(([, durationMs]) => Number.isFinite(durationMs) && durationMs > 0)
+            .map(([seq, durationMs]) => [Number(seq), durationMs / 1000]),
+        ),
+      );
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent?.id, audioPlaylist]);
+  }, [agent?.id, agent?.audioDurations, audioPlaylist]);
   // Position restore: paint instantly from localStorage on focus (declared
   // after the setPlaylist effect above so the engine already has this
   // chat's playlist active — see engine.ts's applyRestoredPosition), then

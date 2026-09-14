@@ -521,15 +521,14 @@ export function getRenderedSeqs(sessionId: string): number[] {
   return [...(renderedByAgent.get(sessionId) ?? [])];
 }
 
-// Seed known clip durations ahead of playback (e.g. once the daemon reports
-// per-clip lengths in a snapshot, rather than only learning them as each clip
-// is played). A no-op today — nothing calls it yet — but GlobalAudioPlayer's
-// tick layout already prefers `durations` over its even-spacing fallback, so
-// wiring a real source in is a one-line call to this function, not a
-// GlobalAudioPlayer change.
+// Seed daemon-reported clip durations ahead of playback. Browser-measured
+// values already in state win, and identical snapshot updates are a no-op so
+// React callers can safely invoke this while subscribed to engine state.
 export function seedDurations(sessionId: string, durations: Record<number, number>) {
   if (state.sessionId !== sessionId) return;
-  setState({ durations: { ...durations, ...state.durations } });
+  const additions = Object.entries(durations).filter(([seq]) => state.durations[Number(seq)] == null);
+  if (additions.length === 0) return;
+  setState({ durations: { ...Object.fromEntries(additions), ...state.durations } });
 }
 
 // Object URLs in `urlCache` are the cache — a clip is replayable precisely
