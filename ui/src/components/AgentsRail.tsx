@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePresence, useValuePresence } from '../transitions';
+import { usesSoftKeyboard } from '../mobile';
 import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { SessionView } from '../store';
@@ -412,7 +413,9 @@ function Row({
     setEditing(false);
     setRenameError('');
   };
-  const showActions = active || mouseHovered;
+  // Hover is the trigger on desktop; touch devices have no hover, so keep
+  // showing actions on the active (selected) row there instead.
+  const showActions = mouseHovered || (active && usesSoftKeyboard());
   const beginRename = () => {
     setName(agent.name);
     setRenameError('');
