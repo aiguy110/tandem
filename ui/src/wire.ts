@@ -150,6 +150,12 @@ export interface RepoInfo {
 export interface FederationHost {
   id: string;
   name?: string;
+  // The immediate upstream/master. A missing parent on a non-local host is
+  // interpreted as the local Tandem instance for compatibility with the
+  // original one-hop federation response.
+  parentId?: string;
+  // Ordered route from this Tandem instance to a descendant host.
+  route?: string[];
   status?: 'connected' | 'accepted' | 'pending' | 'offline' | 'rejected';
   local?: boolean;
   // Reported by the host on its last connection; absent for a host running a

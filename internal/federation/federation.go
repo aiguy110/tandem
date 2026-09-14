@@ -1,6 +1,6 @@
-// Package federation implements Tandem's single-hop master/agent-host
-// protocol. A host dials its configured master; the master never needs to
-// initiate a network connection back into a host.
+// Package federation implements Tandem's routed federation tree protocol. A
+// node dials one configured master and may accept children; masters never
+// need to initiate network connections back into a node.
 package federation
 
 import (
@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,11 @@ import (
 // framing, changed credential handling, or an existing field whose meaning
 // changes. A peer reporting a different version still connects -- see
 // checkProtocol -- because most commands remain mutually intelligible.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
+
+// maxFederationDepth is a defensive bound for delegated trust and prevents a
+// malformed peer from advertising an unbounded/cyclic topology.
+const maxFederationDepth = 8
 
 const (
 	RegisterPath  = "/internal/federation/register"
@@ -45,7 +50,14 @@ const (
 // Host is the master-safe view of a registered agent host. Snapshot is the
 // host's latest opaque catalog/state envelope and excludes its credential.
 type Host struct {
-	ID       string          `json:"id"`
+	ID string `json:"id"`
+	// NodeID is the identity assigned by the node's direct master. ID is the
+	// route-scoped address used to reach it from this daemon; they differ only
+	// for descendants.
+	NodeID   string          `json:"nodeId,omitempty"`
+	ParentID string          `json:"parentId,omitempty"`
+	Route    []string        `json:"route,omitempty"`
+	Depth    int             `json:"depth,omitempty"`
 	Name     string          `json:"name,omitempty"`
 	Endpoint string          `json:"endpoint,omitempty"`
 	Status   string          `json:"status"`
@@ -55,6 +67,7 @@ type Host struct {
 	// connected; both are absent for a host predating version reporting.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
+	nextID          string
 }
 
 // Local supplies a slave's local operations. Commands and snapshots are
@@ -105,13 +118,15 @@ type Service struct {
 	poll          time.Duration
 	buildVersion  string
 
-	mu        sync.Mutex
-	snapshots map[string]json.RawMessage
-	queues    map[string][]command
-	waiters   map[string]chan result
-	tunnels   map[string]*tunnel
-	subs      map[int]func(string, json.RawMessage)
-	nextSub   int
+	mu         sync.Mutex
+	snapshots  map[string]json.RawMessage
+	topologies map[string][]Host
+	queues     map[string][]command
+	waiters    map[string]chan result
+	tunnels    map[string]*tunnel
+	upstream   *tunnel
+	subs       map[int]func(string, json.RawMessage)
+	nextSub    int
 }
 
 type command struct {
@@ -161,6 +176,9 @@ type tunnelMessage struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 	Error    string          `json:"error,omitempty"`
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+	Hosts    []Host          `json:"hosts,omitempty"`
+	// Ancestors is a best-effort loop guard. Older peers ignore it.
+	Ancestors []string `json:"ancestors,omitempty"`
 	// Carried on "hello" (host to master) and "welcome" (master to host). The
 	// hello is the authoritative report: a long-registered host reconnects
 	// without ever registering again.
@@ -236,24 +254,22 @@ func New(opts Options) (*Service, error) {
 			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
 		}
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
+	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
-	if master == "" {
-		peers, err := opts.Store.FederationSlaves()
-		if err != nil {
-			return nil, err
+	peers, err := opts.Store.FederationSlaves()
+	if err != nil {
+		return nil, err
+	}
+	for _, peer := range peers {
+		if peer.Status == "pending" {
+			service.notifyPending(peer)
 		}
-		for _, peer := range peers {
-			if peer.Status == "pending" {
-				service.notifyPending(peer)
-			}
-			if peer.Status == "connected" {
-				peer.Status = "offline"
-				if err := opts.Store.UpsertFederationSlave(peer); err != nil {
-					return nil, err
-				}
+		if peer.Status == "connected" {
+			peer.Status = "offline"
+			if err := opts.Store.UpsertFederationSlave(peer); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -275,8 +291,8 @@ func trusted(peer *store.FederationSlave) bool {
 	return false
 }
 
-// IsSlave is true once configured with or enrolled in an upstream. Such a
-// daemon rejects all child registrations; federation has exactly one level.
+// IsSlave reports whether this daemon has an upstream. It may still accept
+// children: federation is a rooted tree, not a one-hop relationship.
 func (s *Service) IsSlave() bool {
 	if s.masterURL != "" {
 		return true
@@ -294,13 +310,54 @@ func (s *Service) Hosts() []Host {
 	defer s.mu.Unlock()
 	out := make([]Host, 0, len(peers))
 	for _, p := range peers {
-		h := Host{ID: p.ID, Name: p.Name, Endpoint: p.Endpoint, Status: p.Status, LastSeen: p.LastSeenAt, ProtocolVersion: p.ProtocolVersion, BuildVersion: p.BuildVersion}
+		h := Host{ID: p.ID, NodeID: p.ID, Route: []string{p.ID}, Depth: 1, Name: p.Name, Endpoint: p.Endpoint, Status: p.Status, LastSeen: p.LastSeenAt, ProtocolVersion: p.ProtocolVersion, BuildVersion: p.BuildVersion, nextID: p.ID}
 		if b := s.snapshots[p.ID]; len(b) != 0 {
 			h.Snapshot = append(json.RawMessage(nil), b...)
 		}
 		out = append(out, h)
+		out = append(out, s.descendantsLocked(p.ID, h.ID, h.Route, 1, p.Status == "connected")...)
 	}
 	return out
+}
+
+// descendantsLocked translates a child's public addresses into addresses
+// meaningful to this daemon. ParentID makes the flattened result a tree.
+func (s *Service) descendantsLocked(via, parentID string, prefix []string, depth int, reachable bool) []Host {
+	children := s.topologies[via]
+	if len(children) == 0 {
+		return nil
+	}
+	idMap := make(map[string]string, len(children))
+	for _, child := range children {
+		if depth+1 > maxFederationDepth {
+			continue
+		}
+		idMap[child.ID] = routedHostID(append(append([]string(nil), prefix...), child.ID))
+	}
+	out := make([]Host, 0, len(children))
+	for _, child := range children {
+		if depth+1 > maxFederationDepth || idMap[child.ID] == "" {
+			continue
+		}
+		id := idMap[child.ID]
+		parent := parentID
+		if child.ParentID != "" && idMap[child.ParentID] != "" {
+			parent = idMap[child.ParentID]
+		}
+		route := append(append([]string(nil), prefix...), child.ID)
+		h := child
+		h.ID, h.ParentID, h.Route, h.Depth, h.nextID = id, parent, route, depth+1, child.ID
+		if !reachable {
+			h.Status = "offline"
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+func routedHostID(route []string) string {
+	b, _ := json.Marshal(route)
+	return "route@" + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // Call queues a protocol envelope for a connected host and waits for the
@@ -310,12 +367,36 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	if hostID == "" || len(payload) == 0 {
 		return nil, errors.New("federation: host ID and command are required")
 	}
-	peer, err := s.store.FederationSlave(hostID)
+	// A direct host executes locally. A descendant is addressed to its direct
+	// child at the next hop; that child's wsserver repeats the same operation.
+	// Keeping this transformation here avoids making the browser understand a
+	// transport route.
+	target := Host{}
+	for _, h := range s.Hosts() {
+		if h.ID == hostID {
+			target = h
+			break
+		}
+	}
+	if target.ID == "" {
+		return nil, fmt.Errorf("federation: unknown host %q", hostID)
+	}
+	directID := target.Route[0]
+	if len(target.Route) > 1 {
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			return nil, fmt.Errorf("federation: invalid routed command: %w", err)
+		}
+		next, _ := json.Marshal(target.nextID)
+		envelope["hostId"] = next
+		payload, _ = json.Marshal(envelope)
+	}
+	peer, err := s.store.FederationSlave(directID)
 	if err != nil {
 		return nil, err
 	}
 	if peer == nil || peer.Status != "connected" {
-		return nil, fmt.Errorf("federation: host %q is offline", hostID)
+		return nil, fmt.Errorf("federation: route to %q is offline at %q", hostID, directID)
 	}
 	id, err := randomID()
 	if err != nil {
@@ -324,9 +405,9 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	done := make(chan result, 1)
 	s.mu.Lock()
 	s.waiters[id] = done
-	tunnel := s.tunnels[hostID]
+	tunnel := s.tunnels[directID]
 	if tunnel == nil {
-		s.queues[hostID] = append(s.queues[hostID], command{ID: id, Payload: append(json.RawMessage(nil), payload...)})
+		s.queues[directID] = append(s.queues[directID], command{ID: id, Payload: append(json.RawMessage(nil), payload...)})
 	}
 	s.mu.Unlock()
 	if tunnel != nil {
@@ -369,10 +450,6 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.IsSlave() {
-		writeJSON(w, http.StatusConflict, registerResponse{Status: "rejected", Error: "this Tandem instance is registered as a slave and cannot accept slave registrations"})
 		return
 	}
 	var req registerRequest
@@ -500,10 +577,6 @@ func (s *Service) Subscribe(fn func(hostID string, payload json.RawMessage)) fun
 }
 
 func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
-	if s.IsSlave() {
-		http.Error(w, "slave instances cannot accept federation tunnels", http.StatusConflict)
-		return
-	}
 	conn, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, EnableCompression: false}).Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -523,6 +596,14 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
 		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: unauthorizedTunnelError})
 		return
+	}
+	if self, _ := s.store.FederationMaster(); self != nil {
+		for _, ancestor := range hello.Ancestors {
+			if ancestor == self.HostID {
+				_ = conn.WriteJSON(tunnelMessage{T: "error", Error: "federation cycle detected"})
+				return
+			}
+		}
 	}
 	t := &tunnel{conn: conn}
 	s.mu.Lock()
@@ -575,10 +656,54 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 			s.snapshots[hello.HostID] = append(json.RawMessage(nil), msg.Snapshot...)
 			s.mu.Unlock()
 			s.publish(hello.HostID, msg.Snapshot)
+		case "topology":
+			if s.topologyCycles(msg.Hosts) {
+				_ = t.send(tunnelMessage{T: "error", Error: "federation cycle detected"})
+				return
+			}
+			s.mu.Lock()
+			s.topologies[hello.HostID] = cloneHosts(msg.Hosts)
+			s.mu.Unlock()
+			s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 		case "event":
-			s.publish(hello.HostID, msg.Payload)
+			s.publish(s.relayHostID(hello.HostID, msg.HostID), msg.Payload)
 		}
 	}
+}
+
+func cloneHosts(in []Host) []Host {
+	out := make([]Host, len(in))
+	for i := range in {
+		out[i] = in[i]
+		out[i].Route = append([]string(nil), in[i].Route...)
+		out[i].Snapshot = append(json.RawMessage(nil), in[i].Snapshot...)
+	}
+	return out
+}
+
+// relayHostID converts the emitting child's public ID into this daemon's
+// public ID. Empty means the directly connected child itself emitted it.
+func (s *Service) relayHostID(via, childID string) string {
+	if childID == "" || childID == via {
+		return via
+	}
+	peers, err := s.store.FederationSlaves()
+	if err != nil {
+		return via
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range peers {
+		if p.ID != via {
+			continue
+		}
+		for _, h := range s.descendantsLocked(via, via, []string{via}, 1, true) {
+			if h.nextID == childID {
+				return h.ID
+			}
+		}
+	}
+	return via
 }
 func (s *Service) deliver(r result) {
 	s.mu.Lock()
@@ -607,6 +732,35 @@ func (s *Service) publish(hostID string, payload json.RawMessage) {
 	for _, fn := range callbacks {
 		fn(hostID, append(json.RawMessage(nil), payload...))
 	}
+	if envelope.T == "federation_hosts_changed" || envelope.T == "agents" {
+		s.sendTopologyUpstream()
+	}
+}
+
+func (s *Service) sendTopologyUpstream() {
+	s.mu.Lock()
+	t := s.upstream
+	s.mu.Unlock()
+	if t != nil {
+		_ = t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()})
+	}
+}
+
+// A cycle would eventually re-advertise this daemon's upstream identity as a
+// descendant. IDs are scoped to their direct master, so this is deliberately
+// a conservative guard paired with maxFederationDepth rather than a claim of
+// global node identity.
+func (s *Service) topologyCycles(hosts []Host) bool {
+	self, _ := s.store.FederationMaster()
+	if self == nil || self.HostID == "" {
+		return false
+	}
+	for _, host := range hosts {
+		if host.NodeID == self.HostID || host.Depth > maxFederationDepth {
+			return true
+		}
+	}
+	return false
 }
 func (t *tunnel) send(message tunnelMessage) error {
 	t.writeMu.Lock()
@@ -1012,15 +1166,29 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}()
 	defer close(stopClose)
 	t := &tunnel{conn: conn}
-	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion}); err != nil {
+	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: []string{hostID}}); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.upstream = t
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.upstream == t {
+			s.upstream = nil
+		}
+		s.mu.Unlock()
+	}()
 	if s.local != nil {
 		if snapshot, e := s.local.Snapshot(ctx); e == nil && len(snapshot) > 0 {
+			snapshot = localOnlySnapshot(snapshot)
 			if err = t.send(tunnelMessage{T: "snapshot", Snapshot: snapshot}); err != nil {
 				return err
 			}
 		}
+	}
+	if err = t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+		return err
 	}
 	var events <-chan json.RawMessage
 	if src, ok := s.local.(EventSource); ok {
@@ -1059,7 +1227,32 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 					if !ok {
 						return
 					}
-					if err := t.send(tunnelMessage{T: "event", Payload: event}); err != nil {
+					var meta struct {
+						T      string `json:"t"`
+						HostID string `json:"hostId"`
+					}
+					_ = json.Unmarshal(event, &meta)
+					if meta.T == "agents" {
+						// A loopback's agents event is an aggregate view. Send only
+						// this daemon's local portion as its snapshot; descendants
+						// travel in the accompanying topology.
+						if err := t.send(tunnelMessage{T: "snapshot", Snapshot: localOnlySnapshot(event)}); err != nil {
+							reportWriteError(err)
+							return
+						}
+						if err := t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+							reportWriteError(err)
+							return
+						}
+						continue
+					}
+					if meta.T == "federation_hosts_changed" {
+						if err := t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+							reportWriteError(err)
+							return
+						}
+					}
+					if err := t.send(tunnelMessage{T: "event", HostID: meta.HostID, Payload: event}); err != nil {
 						reportWriteError(err)
 						return
 					}
@@ -1106,6 +1299,45 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		default:
 		}
 	}
+}
+
+// A middle daemon's browser snapshot contains its own remotely visible
+// sessions too. Those are advertised independently through topology, so only
+// forward truly local sessions as this node's snapshot.
+func localOnlySnapshot(raw json.RawMessage) json.RawMessage {
+	var snapshot struct {
+		Agents []map[string]any `json:"agents"`
+	}
+	if json.Unmarshal(raw, &snapshot) != nil || snapshot.Agents == nil {
+		return raw
+	}
+	local := snapshot.Agents[:0]
+	for _, agent := range snapshot.Agents {
+		id, _ := agent["id"].(string)
+		if !strings.HasPrefix(id, "fed~") && !strings.HasPrefix(id, "federation~") {
+			local = append(local, agent)
+		}
+	}
+	snapshot.Agents = local
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return raw
+	}
+	b, err := json.Marshal(snapshot.Agents)
+	if err != nil {
+		return raw
+	}
+	envelope["agents"] = b
+	// Older consumers accept either field and the loopback snapshot happens to
+	// include both, so keep them in sync when present.
+	if _, ok := envelope["sessions"]; ok {
+		envelope["sessions"] = b
+	}
+	filtered, err := json.Marshal(envelope)
+	if err != nil {
+		return raw
+	}
+	return filtered
 }
 
 // registerWithMaster asks for approval under id. previousID/previousCredential

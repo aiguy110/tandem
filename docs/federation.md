@@ -50,9 +50,17 @@ are kept short and readable: the master namespaces a remote agent as
 Host identities, credentials, and approval state live under each daemon's `TANDEM_HOME`;
 deleting or changing that home therefore creates a new identity that requires approval.
 
-Federation is deliberately one level deep. An instance started with `--master` rejects
-attempts by other slaves to register with it and returns an explanatory error. Masters
-may accept many directly connected slaves.
+Federation forms a rooted tree. Every instance may have at most one upstream master and
+may accept many directly connected slaves, including when it is itself registered with
+an upstream. Each link is still initiated outbound by the slave, so an intermediate
+instance does not need inbound reachability from its own master.
+
+Trust is hop-by-hop: accepting a slave delegates control of that slave and the subtree it
+advertises. An upstream master can therefore discover and manage descendant hosts without
+holding their link credentials. Descendant addresses carry an opaque route, while the host
+catalog includes `parentId`, `route`, and `depth` metadata so clients can present the real
+topology. Tandem rejects cyclic or excessively deep advertised routes; the supported
+maximum depth is eight links.
 
 ## Changing a host's ID
 
@@ -98,10 +106,15 @@ version connects, and is re-raised on the next connection if the skew persists.
 
 ## Spawning and control
 
-The spawn palette includes a host selector. Repository discovery, configured agents,
-launch variants, workspace provisioning, and the resulting process all belong to the
-selected host. Remote agents appear in the normal agent rail with a host label. Agent
-IDs are namespaced at the master so equal local names on two hosts cannot collide.
+The spawn palette includes every reachable host, including descendants, in its host
+selector. Repository discovery, configured agents, launch variants, workspace
+provisioning, and the resulting process all belong to the selected host. Remote agents
+appear in the normal agent rail with a host label. Agent IDs are namespaced at the
+viewing master so equal local names on two hosts cannot collide.
+
+The command palette's **Fleet View** displays the complete hierarchy. Each node shows its
+name, connection state, Tandem build, and federation protocol version; directed arrows
+point from slaves to their masters.
 
 The master proxies the same live controls available for a local agent, including:
 

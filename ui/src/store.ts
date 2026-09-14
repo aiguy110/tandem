@@ -10,6 +10,7 @@ import { getListeningAgentId, getState as getEngineState, setPlaylist as setEngi
 import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
+import { frontendVersion } from './version';
 import type {
   SessionStatus,
   SessionSummary,
@@ -194,7 +195,7 @@ export interface SessionView {
   audioPosition: AudioPosition | null;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet';
 
 export interface AckResult {
   sessionId?: string;
@@ -376,7 +377,7 @@ export function isLocalHost(hostId: string | undefined): boolean {
 }
 
 function normalizedHosts(hosts: FederationHost[]): FederationHost[] {
-  const local: FederationHost = { id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true };
+  const local: FederationHost = { id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true, buildVersion: frontendVersion };
   const explicitLocal = hosts.find((host) => host.local || host.id === LOCAL_HOST_ID);
   const remotes = hosts.filter((host) => host !== explicitLocal && host.id !== LOCAL_HOST_ID);
   return [explicitLocal ? { ...local, ...explicitLocal, id: LOCAL_HOST_ID, local: true } : local, ...remotes];
@@ -1140,6 +1141,7 @@ export const useStore = create<StoreState>((set, get) => {
         client.send({ t: 'list_agent_catalog' });
         get().refreshHosts();
       }
+      if (m === 'fleet') get().refreshHosts();
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
       set({ modal: m, spawnHandoffFrom: null });
