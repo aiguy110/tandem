@@ -32,6 +32,17 @@ func openStore(t *testing.T) *store.Store {
 	return s
 }
 
+func TestLocalHostReportsDaemonVersions(t *testing.T) {
+	service, err := New(Options{Store: openStore(t), BuildVersion: "v9.9.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := service.LocalHost()
+	if host.ID != "local" || !host.Local || host.Status != "connected" || host.ProtocolVersion != ProtocolVersion || host.BuildVersion != "v9.9.9" {
+		t.Fatalf("local host = %#v", host)
+	}
+}
+
 func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
 	masterStore := openStore(t)
 	center := notifications.New()

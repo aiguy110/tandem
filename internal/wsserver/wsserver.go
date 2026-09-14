@@ -100,6 +100,9 @@ type Federation interface {
 type FederationEvents interface {
 	Subscribe(func(string, json.RawMessage)) func()
 }
+type federationLocalHost interface {
+	LocalHost() federation.Host
+}
 
 type AutomationStore interface {
 	AutomationJobs(string) ([]store.AutomationJob, error)
@@ -125,6 +128,17 @@ type Handler struct {
 	// browsers see so a host's update prompt is visible — and actionable —
 	// from mission control.
 	remoteNotifications map[string][]notifications.Notification
+}
+
+func (h *Handler) federationHosts() []federation.Host {
+	if h.opts.Federation == nil {
+		return []federation.Host{}
+	}
+	hosts := h.opts.Federation.Hosts()
+	if local, ok := h.opts.Federation.(federationLocalHost); ok {
+		hosts = append([]federation.Host{local.LocalHost()}, hosts...)
+	}
+	return hosts
 }
 
 func New(opts Options) *Handler {
@@ -189,7 +203,7 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		}
 		h.mu.Unlock()
 		for _, c := range connections {
-			c.send(map[string]any{"t": "hosts", "hosts": h.opts.Federation.Hosts()})
+			c.send(map[string]any{"t": "hosts", "hosts": h.federationHosts()})
 		}
 		return
 	}
@@ -594,7 +608,7 @@ func (c *connection) handle(m clientMessage) {
 			c.send(withCorr(map[string]any{"t": "hosts", "hosts": []any{}}, m.CorrID))
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.opts.Federation.Hosts()}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()}, m.CorrID))
 		return
 	}
 	if m.HostID == "" {
@@ -1000,7 +1014,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sessionID)
 		if c.server.opts.Federation != nil {
-			c.send(map[string]any{"t": "hosts", "hosts": c.server.opts.Federation.Hosts()})
+			c.send(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()})
 		}
 	case "get_spawn_options":
 		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)

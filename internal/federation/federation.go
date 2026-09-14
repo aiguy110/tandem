@@ -50,7 +50,8 @@ const (
 // Host is the master-safe view of a registered agent host. Snapshot is the
 // host's latest opaque catalog/state envelope and excludes its credential.
 type Host struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
+	Local bool   `json:"local,omitempty"`
 	// NodeID is the identity assigned by the node's direct master. ID is the
 	// route-scoped address used to reach it from this daemon; they differ only
 	// for descendants.
@@ -68,6 +69,20 @@ type Host struct {
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
 	nextID          string
+}
+
+// LocalHost returns this daemon's browser-safe federation identity. It is
+// intentionally separate from Hosts, whose contents are advertised upstream
+// as this daemon's descendants.
+func (s *Service) LocalHost() Host {
+	return Host{
+		ID:              "local",
+		Local:           true,
+		Name:            "This host",
+		Status:          "connected",
+		ProtocolVersion: ProtocolVersion,
+		BuildVersion:    s.buildVersion,
+	}
 }
 
 // Local supplies a slave's local operations. Commands and snapshots are
