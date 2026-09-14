@@ -58,7 +58,7 @@ func TestToolsAndAuthenticatedRunRequest(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	request := <-requestSeen
-	if request["agentId"] != "agent-7" || request["workspaceCwd"] != "/worktrees/repo" || request["path"] != ".tandem/scripts/check.ts" {
+	if request["sessionId"] != "agent-7" || request["workspaceCwd"] != "/worktrees/repo" || request["path"] != ".tandem/scripts/check.ts" {
 		t.Fatalf("request = %#v", request)
 	}
 	_ = inW.Close()

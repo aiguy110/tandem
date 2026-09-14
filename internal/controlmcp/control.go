@@ -20,8 +20,8 @@ const ToolName = "browser_request_takeover"
 
 type Config struct {
 	ControlURL, Token, SessionID string
-	HTTPClient                 *http.Client
-	PollInterval               time.Duration
+	HTTPClient                   *http.Client
+	PollInterval                 time.Duration
 }
 
 type server struct {
@@ -135,7 +135,7 @@ func (s *server) takeover(ctx context.Context, reason string) error {
 		return err
 	}
 	q := u.Query()
-	q.Set("agentId", s.cfg.SessionID)
+	q.Set("sessionId", s.cfg.SessionID)
 	u.RawQuery = q.Encode()
 	body, _ := json.Marshal(map[string]string{"reason": reason})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))

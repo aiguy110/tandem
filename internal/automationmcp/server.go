@@ -27,7 +27,7 @@ const (
 type Config struct {
 	ControlURL   string
 	Token        string
-	SessionID      string
+	SessionID    string
 	WorkspaceCWD string
 	HTTPClient   *http.Client
 }
@@ -136,7 +136,7 @@ func endpointFor(name string) string {
 }
 
 // call defines the daemon contract: POST /internal/automation/{run,evaluate,
-// preapprove}, bearer-authenticated, with agentId and workspaceCwd added to the
+// preapprove}, bearer-authenticated, with sessionId and workspaceCwd added to the
 // MCP arguments. A successful response is any JSON value. A non-2xx response
 // may return {"error":"..."} or plain text.
 func (s *server) call(ctx context.Context, tool string, args map[string]any) (any, error) {
@@ -147,7 +147,7 @@ func (s *server) call(ctx context.Context, tool string, args map[string]any) (an
 	for k, v := range args {
 		body[k] = v
 	}
-	body["agentId"] = s.cfg.SessionID
+	body["sessionId"] = s.cfg.SessionID
 	body["workspaceCwd"] = s.cfg.WorkspaceCWD
 	data, err := json.Marshal(body)
 	if err != nil {

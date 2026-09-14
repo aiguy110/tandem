@@ -11,26 +11,26 @@ class BrowserHub {
   private last = new Map<string, Frame>();
   private listeners = new Map<string, Set<(f: Frame) => void>>();
 
-  push(agentId: string, f: Frame): void {
-    this.last.set(agentId, f);
-    const ls = this.listeners.get(agentId);
+  push(sessionId: string, f: Frame): void {
+    this.last.set(sessionId, f);
+    const ls = this.listeners.get(sessionId);
     if (ls) for (const l of ls) l(f);
   }
 
   // Subscribe live; immediately replays the last frame so a freshly mounted pane
   // shows something without waiting for the next screencast tick.
-  subscribe(agentId: string, cb: (f: Frame) => void): () => void {
-    const ls = this.listeners.get(agentId) ?? new Set();
+  subscribe(sessionId: string, cb: (f: Frame) => void): () => void {
+    const ls = this.listeners.get(sessionId) ?? new Set();
     ls.add(cb);
-    this.listeners.set(agentId, ls);
-    const last = this.last.get(agentId);
+    this.listeners.set(sessionId, ls);
+    const last = this.last.get(sessionId);
     if (last) cb(last);
     return () => ls.delete(cb);
   }
 
-  clear(agentId: string): void {
-    this.last.delete(agentId);
-    this.listeners.delete(agentId);
+  clear(sessionId: string): void {
+    this.last.delete(sessionId);
+    this.listeners.delete(sessionId);
   }
 }
 

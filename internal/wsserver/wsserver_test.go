@@ -1300,7 +1300,7 @@ func TestRenderMessageAudioReturnsInlineClipAndSurfacesFailures(t *testing.T) {
 	}
 
 	send(t, c, map[string]any{"t": "render_message_audio", "agentId": "a", "corrId": "audio-3"})
-	if got := recv(t, c); got["error"] != "agentId and seq are required" {
+	if got := recv(t, c); got["error"] != "sessionId and seq are required" {
 		t.Fatalf("missing seq envelope=%#v", got)
 	}
 }
@@ -1315,28 +1315,28 @@ func TestRenderMessageAudioWithoutRendererReportsConfiguration(t *testing.T) {
 	}
 }
 
-func TestRemoteAgentIDRoundTrip(t *testing.T) {
-	id := remoteAgentID("boremox-3f9a1c", "einstein-401")
+func TestRemoteSessionIDRoundTrip(t *testing.T) {
+	id := remoteSessionID("boremox-3f9a1c", "einstein-401")
 	if id != "fed~boremox-3f9a1c~einstein-401" {
-		t.Fatalf("remoteAgentID = %q", id)
+		t.Fatalf("remoteSessionID = %q", id)
 	}
-	host, agent, ok := SplitRemoteAgentID(id)
+	host, agent, ok := SplitRemoteSessionID(id)
 	if !ok || host != "boremox-3f9a1c" || agent != "einstein-401" {
 		t.Fatalf("split = %q/%q/%v", host, agent, ok)
 	}
 	// An agent name may contain the separator; the host ID never can.
-	host, agent, ok = SplitRemoteAgentID(remoteAgentID("h1", "odd~name"))
+	host, agent, ok = SplitRemoteSessionID(remoteSessionID("h1", "odd~name"))
 	if !ok || host != "h1" || agent != "odd~name" {
 		t.Fatalf("split with separator in agent = %q/%q/%v", host, agent, ok)
 	}
 	// IDs minted by the previous base64 encoding still route, so a browser
 	// tab or queued notification action survives the upgrade.
-	host, agent, ok = SplitRemoteAgentID("federation~" + base64.RawURLEncoding.EncodeToString([]byte("h1")) + "~" + base64.RawURLEncoding.EncodeToString([]byte("dirac-7")))
+	host, agent, ok = SplitRemoteSessionID("federation~" + base64.RawURLEncoding.EncodeToString([]byte("h1")) + "~" + base64.RawURLEncoding.EncodeToString([]byte("dirac-7")))
 	if !ok || host != "h1" || agent != "dirac-7" {
 		t.Fatalf("legacy split = %q/%q/%v", host, agent, ok)
 	}
 	for _, bad := range []string{"", "einstein-401", "fed~h1", "fed~~a", "fed~h1~", "federation~h1~a"} {
-		if _, _, ok := SplitRemoteAgentID(bad); ok {
+		if _, _, ok := SplitRemoteSessionID(bad); ok {
 			t.Fatalf("%q parsed as a federated ID", bad)
 		}
 	}

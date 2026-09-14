@@ -1,6 +1,6 @@
 // Browser pane (D7/D13, docs/browser.md) — the shared, per-agent browser: a CDP
 // screencast painted into a <canvas>, a control-owner wheel (grab/release), user
-// input forwarding when the user holds the wheel, and the agent-initiated
+// input forwarding when the user holds the wheel, and the session-initiated
 // takeover banner. Frames arrive via browserHub (out of the reactive store).
 //
 // Focus/bandwidth rule: mounting opts this agent's browser channel in
@@ -29,11 +29,11 @@ function BrowserIcon({ name }: { name: BrowserIconName }) {
 }
 
 export function BrowserPane() {
-  const agentId = useStore((s) => s.focusedId)!;
-  const active = useStore((s) => s.agents[agentId]?.browserActive ?? false);
-  const owner = useStore((s) => s.agents[agentId]?.browserOwner ?? 'agent');
-  const takeoverHeld = useStore((s) => s.agents[agentId]?.browserTakeoverHeld ?? false);
-  const takeovers = useStore((s) => s.agents[agentId]?.takeovers ?? []);
+  const sessionId = useStore((s) => s.focusedId)!;
+  const active = useStore((s) => s.sessions[sessionId]?.browserActive ?? false);
+  const owner = useStore((s) => s.sessions[sessionId]?.browserOwner ?? 'agent');
+  const takeoverHeld = useStore((s) => s.sessions[sessionId]?.browserTakeoverHeld ?? false);
+  const takeovers = useStore((s) => s.sessions[sessionId]?.takeovers ?? []);
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
@@ -54,7 +54,7 @@ export function BrowserPane() {
     setRestartBusy(true);
     setRestartMsg('');
     try {
-      const result = await restartBrowser(agentId, seed || undefined);
+      const result = await restartBrowser(sessionId, seed || undefined);
       if (result.error) throw new Error(result.error);
     } catch (e) {
       setRestartMsg((e as Error).message);
@@ -74,7 +74,7 @@ export function BrowserPane() {
     setSnapBusy(true);
     setSnapMsg('');
     try {
-      await captureSnapshot(agentId, name);
+      await captureSnapshot(sessionId, name);
       setSnapMsg(`Saved “${name}”`);
       setSnapName('');
       setCapturing(false);
@@ -105,9 +105,9 @@ export function BrowserPane() {
 
   // Opt this agent's browser channel in for the pane's lifetime (focus rule).
   useEffect(() => {
-    setBrowserSub(agentId);
+    setBrowserSub(sessionId);
     return () => setBrowserSub(null);
-  }, [agentId, setBrowserSub]);
+  }, [sessionId, setBrowserSub]);
 
   // Paint frames into the canvas (scale to fit, letterbox).
   useEffect(() => {
@@ -183,7 +183,7 @@ export function BrowserPane() {
 
     const observer = new ResizeObserver(redraw);
     observer.observe(canvas.parentElement!);
-    const unsub = browserHub.subscribe(agentId, paint);
+    const unsub = browserHub.subscribe(sessionId, paint);
     return () => {
       disposed = true;
       redrawRef.current = null;
@@ -192,7 +192,7 @@ export function BrowserPane() {
     };
     // `active` is a dep: the <canvas> only exists once the browser is active, so
     // the effect must re-run when it appears to attach the frame subscription.
-  }, [agentId, active]);
+  }, [sessionId, active]);
 
   // Map a client (clientX/clientY) point on the canvas to device (page) coords.
   const clientToPage = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -208,7 +208,7 @@ export function BrowserPane() {
   // Map an event on the canvas to device (page) coordinates.
   const toPage = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => clientToPage(e.clientX, e.clientY);
 
-  const emit = (event: BrowserInputWire) => browserInput(agentId, event);
+  const emit = (event: BrowserInputWire) => browserInput(sessionId, event);
   // Chromium's built-in editing/navigation commands (delete-backward, caret
   // movement, etc.) key off the CDP event's windowsVirtualKeyCode, not just
   // `key`/`code` — a synthetic Backspace with no VK code reaches the page's
@@ -309,7 +309,7 @@ export function BrowserPane() {
       moveFrameRef.current = null;
       pendingMoveRef.current = null;
     };
-  }, [agentId, userOwns]);
+  }, [sessionId, userOwns]);
 
   // One finger taps or scrolls the remote page. Two fingers zoom and pan only
   // this local viewer; input coordinates are mapped back through that view.
@@ -501,7 +501,7 @@ export function BrowserPane() {
               <BrowserIcon name="keyboard" />
             </button>
           )}
-          <button className={`browser-action-btn${takeoverHeld ? ' return-control' : ''}`} disabled={!active} onClick={() => toggleWheel(agentId)}>
+          <button className={`browser-action-btn${takeoverHeld ? ' return-control' : ''}`} disabled={!active} onClick={() => toggleWheel(sessionId)}>
             <BrowserIcon name="wheel" />
             {owner === 'user' ? (takeoverHeld ? 'Return control' : 'Release control') : 'Take control'} <kbd>w</kbd>
           </button>
@@ -538,10 +538,10 @@ export function BrowserPane() {
       {takeovers.length > 0 && (
         <div className="takeover-banner">
           <span>
-            <b>{agentId}</b> needs you — {takeovers[takeovers.length - 1].reason}
+            <b>{sessionId}</b> needs you — {takeovers[takeovers.length - 1].reason}
           </span>
           {owner !== 'user' && (
-            <button className="wheel-btn hot" onClick={() => toggleWheel(agentId)}>
+            <button className="wheel-btn hot" onClick={() => toggleWheel(sessionId)}>
               Take the wheel
             </button>
           )}

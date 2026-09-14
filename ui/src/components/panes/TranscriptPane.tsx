@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { createUnifiedPatch } from '../diff/textDiff';
-import type { AckResult, AgentView } from '../../store';
+import type { AckResult, SessionView } from '../../store';
 import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { storedToken } from '../../ws/client';
 import { renderMarkdown } from '../../markdown';
@@ -14,7 +14,7 @@ import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition,
 import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
 import { InlineAudioBar } from '../audio/InlineAudioBar';
 
-// The Transcript pane renders the normalized AgentEvent stream (docs/ui.md):
+// The Transcript pane renders the normalized SessionEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
 // per-terminal mini-terminals, inline permission cards, and error banners. A
 // prompt input sends {t:'prompt'}; Esc/Interrupt sends {t:'interrupt'}.
@@ -287,7 +287,7 @@ function mobilePopoverPosition() {
 }
 
 export function TranscriptPane() {
-  const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined)) as AgentView | undefined;
+  const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined)) as SessionView | undefined;
   const respond = useStore((s) => s.respond);
   const annotations = useStore((s) => (agent ? s.annotations[agent.id] : undefined)) ?? [];
   const addAnnotation = useStore((s) => s.addAnnotation);
@@ -324,14 +324,14 @@ export function TranscriptPane() {
   // Rows animate in only when they arrive while the transcript is already on
   // screen; the first render for an agent (initial load, replay, or switching
   // agents) seeds the set silently so history does not stampede in.
-  const seenRows = useRef<{ agentId: string; keys: Set<string> }>({ agentId: '', keys: new Set() });
-  const seededForAgent = seenRows.current.agentId === (agent?.id ?? '');
+  const seenRows = useRef<{ sessionId: string; keys: Set<string> }>({ sessionId: '', keys: new Set() });
+  const seededForAgent = seenRows.current.sessionId === (agent?.id ?? '');
   const isNewRow = (key: string) => seededForAgent && !seenRows.current.keys.has(key);
   useLayoutEffect(() => {
     const seen = seenRows.current;
     const id = agent?.id ?? '';
-    if (seen.agentId !== id) {
-      seen.agentId = id;
+    if (seen.sessionId !== id) {
+      seen.sessionId = id;
       seen.keys = new Set();
     }
     for (const it of transcriptItems) seen.keys.add(it.key);
@@ -346,7 +346,7 @@ export function TranscriptPane() {
   const engineAudio = useEngineState();
   const audioPlaylist = useMemo(() => {
     if (!agent) return [];
-    const renderedSet = new Set(engineAudio.agentId === agent.id ? engineAudio.renderedSeqs : getRenderedSeqs(agent.id));
+    const renderedSet = new Set(engineAudio.sessionId === agent.id ? engineAudio.renderedSeqs : getRenderedSeqs(agent.id));
     const seqs: number[] = [];
     for (const it of items) {
       if (it.kind !== 'message') continue;
@@ -409,12 +409,12 @@ export function TranscriptPane() {
   };
 
   // On mount and whenever the focused agent changes, open to the latest message.
-  const agentId = agent?.id;
+  const sessionId = agent?.id;
   useLayoutEffect(() => {
     stick.current = true;
     scrollToBottom();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [sessionId]);
 
   // As new items stream in, keep the tail pinned only while sticking. Smooth
   // tail-following makes the existing rows slide upward as a new row appears,
@@ -569,7 +569,7 @@ export function TranscriptPane() {
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
                 onJumpToQuote={jumpToQuote}
                 onJumpToLinkedBlock={jumpToLinkedBlock}
-                agentId={agent.id}
+                sessionId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
                 cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
                 renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
@@ -673,7 +673,7 @@ export function TranscriptPane() {
         </div>
         {annotations.length > 0 && (
           <AnnotationTray
-            agentId={agent.id}
+            sessionId={agent.id}
             annotations={annotations}
             knownSeqs={knownSeqs}
             onJump={jumpToQuote}
@@ -683,9 +683,9 @@ export function TranscriptPane() {
         )}
         {taskList && <TaskList item={taskList} />}
       </div>
-      {audioPlaylist.length > 0 && <GlobalAudioPlayer agentId={agent.id} />}
-      <PromptBar agentId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
-      <SessionConfigBar agentId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
+      {audioPlaylist.length > 0 && <GlobalAudioPlayer sessionId={agent.id} />}
+      <PromptBar sessionId={agent.id} working={agent.status === 'working' || agent.status === 'blocked'} />
+      <SessionConfigBar sessionId={agent.id} sessionConfig={agent.sessionConfig} usage={agent.usage} />
     </div>
   );
 }
@@ -701,13 +701,13 @@ export function TranscriptPane() {
 // on snapshot replay/backfill — that's what keeps a reconnect or chat switch
 // from re-triggering autoplay for old history. `seen` additionally guards
 // against a duplicate revision bump for the same seq.
-function useLiveAudioAutoplay(agentId: string, seq: number | null, revision: number) {
-  const baseline = useRef({ agentId, revision });
+function useLiveAudioAutoplay(sessionId: string, seq: number | null, revision: number) {
+  const baseline = useRef({ sessionId, revision });
   const seen = useRef(new Set<number>());
 
   useEffect(() => {
-    if (baseline.current.agentId !== agentId) {
-      baseline.current = { agentId, revision };
+    if (baseline.current.sessionId !== sessionId) {
+      baseline.current = { sessionId, revision };
       seen.current = new Set();
       return;
     }
@@ -716,8 +716,8 @@ function useLiveAudioAutoplay(agentId: string, seq: number | null, revision: num
     if (seq === null || seen.current.has(seq)) return;
     seen.current.add(seq);
     if (getState().status === 'playing') return;
-    play(agentId, seq);
-  }, [agentId, revision, seq]);
+    play(sessionId, seq);
+  }, [sessionId, revision, seq]);
 }
 
 // The pending-annotation review tray, rendered above PromptBar (visual
@@ -725,19 +725,19 @@ function useLiveAudioAutoplay(agentId: string, seq: number | null, revision: num
 // daemon-owned; edits/removes just send the WS message and wait for the
 // `annotations` broadcast to update this list.
 function AnnotationTray({
-  agentId,
+  sessionId,
   annotations,
   knownSeqs,
   onJump,
   onUpdate,
   onRemove,
 }: {
-  agentId: string;
+  sessionId: string;
   annotations: Annotation[];
   knownSeqs: Set<number>;
   onJump: (seq: number, targetId: string) => boolean;
-  onUpdate: (agentId: string, id: string, comment: string) => Promise<AckResult>;
-  onRemove: (agentId: string, id: string) => Promise<AckResult>;
+  onUpdate: (sessionId: string, id: string, comment: string) => Promise<AckResult>;
+  onRemove: (sessionId: string, id: string) => Promise<AckResult>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -748,7 +748,7 @@ function AnnotationTray({
   };
   const saveEdit = async () => {
     if (!editingId) return;
-    await onUpdate(agentId, editingId, editText.trim());
+    await onUpdate(sessionId, editingId, editText.trim());
     setEditingId(null);
     setEditText('');
   };
@@ -782,7 +782,7 @@ function AnnotationTray({
             ) : (
               <div className="annotation-actions">
                 <button type="button" onClick={() => startEdit(a)} title="Edit comment" aria-label="Edit annotation">Edit</button>
-                <button type="button" onClick={() => void onRemove(agentId, a.id)} title="Remove annotation" aria-label="Remove annotation">×</button>
+                <button type="button" onClick={() => void onRemove(sessionId, a.id)} title="Remove annotation" aria-label="Remove annotation">×</button>
               </div>
             )}
           </div>
@@ -841,7 +841,7 @@ function Row({
   item,
   entering,
   commands,
-  agentId,
+  sessionId,
   canRenderAudio,
   cachedAudio,
   renderingAudio,
@@ -853,7 +853,7 @@ function Row({
   item: Item;
   entering: boolean;
   commands: SlashCommand[];
-  agentId: string;
+  sessionId: string;
   canRenderAudio: boolean;
   cachedAudio: boolean;
   renderingAudio: boolean;
@@ -915,7 +915,7 @@ function Row({
           }}
         >
           <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
-          <MessageAudio agentId={agentId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} />
+          <MessageAudio sessionId={sessionId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} />
         </div>
       );
     case 'thought':
@@ -971,7 +971,7 @@ function Row({
 // (store.ts); this component's own state is just "have I fetched/kicked off
 // a clip for this seq" bookkeeping, delegated to the shared engine
 // (ui/src/audio/engine.ts) for everything about actually playing it.
-function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio }: { agentId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean }) {
+function MessageAudio({ sessionId, seq, enabled, cachedAudio, renderingAudio }: { sessionId: string; seq: number; enabled: boolean; cachedAudio: boolean; renderingAudio: boolean }) {
   const [prefetching, setPrefetching] = useState(false);
   const [prefetched, setPrefetched] = useState(false);
   const [pending, setPending] = useState(false);
@@ -984,7 +984,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio }: { 
   useEffect(() => {
     if (!cachedAudio || prefetched || prefetching || error) return;
     setPrefetching(true);
-    void prefetchClip(agentId, seq)
+    void prefetchClip(sessionId, seq)
       .then(() => setPrefetched(true))
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
       .finally(() => setPrefetching(false));
@@ -995,7 +995,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio }: { 
     setPending(true);
     setError(null);
     try {
-      await renderClip(agentId, seq);
+      await renderClip(sessionId, seq);
       setManuallyRendered(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1012,7 +1012,7 @@ function MessageAudio({ agentId, seq, enabled, cachedAudio, renderingAudio }: { 
 
   return (
     <div className={`message-audio${ready || playerPending ? '' : ' message-listen'}`}>
-      {ready ? <InlineAudioBar agentId={agentId} seq={seq} /> : playerPending ? (
+      {ready ? <InlineAudioBar sessionId={sessionId} seq={seq} /> : playerPending ? (
         <div className="message-audio-placeholder" role="status">{renderingAudio || pending ? 'Rendering speech…' : 'Loading speech…'}</div>
       ) : (
         <button type="button" onClick={() => void onListen()} disabled={!enabled || pending} title={enabled ? 'Render this response as speech' : 'Available when the response is complete'}>
@@ -1050,20 +1050,20 @@ function TaskList({ item }: { item: Extract<Item, { kind: 'plan' }> }) {
   );
 }
 
-function assetUrl(agentId: string, assetId: string): string {
-  return `/api/agents/${encodeURIComponent(agentId)}/assets/${encodeURIComponent(assetId)}`;
+function assetUrl(sessionId: string, assetId: string): string {
+  return `/api/agents/${encodeURIComponent(sessionId)}/assets/${encodeURIComponent(assetId)}`;
 }
 
 function TranscriptImage({ block }: { block: Extract<PromptBlock, { type: 'image' }> }) {
-  const agentId = useStore((s) => s.focusedId);
+  const sessionId = useStore((s) => s.focusedId);
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!agentId) return;
+    if (!sessionId) return;
     const controller = new AbortController();
     let objectUrl: string | null = null;
-    void fetch(assetUrl(agentId, block.assetId), {
+    void fetch(assetUrl(sessionId, block.assetId), {
       headers: storedToken() ? { Authorization: `Bearer ${storedToken()}` } : {},
       signal: controller.signal,
     })
@@ -1082,7 +1082,7 @@ function TranscriptImage({ block }: { block: Extract<PromptBlock, { type: 'image
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [agentId, block.assetId]);
+  }, [sessionId, block.assetId]);
 
   if (failed) return <div className="transcript-image-failed">Image unavailable: {block.name ?? 'attachment'}</div>;
   if (!src) return <div className="transcript-image-loading">Loading {block.name ?? 'image'}…</div>;
@@ -1282,7 +1282,7 @@ function compactTokens(value: number): string {
   return `${scaled >= 100 || Number.isInteger(scaled) ? scaled.toFixed(0) : scaled.toFixed(1)}${unit.suffix}`;
 }
 
-function UsageMeter({ usage }: { usage: NonNullable<AgentView['usage']> }) {
+function UsageMeter({ usage }: { usage: NonNullable<SessionView['usage']> }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -1312,7 +1312,7 @@ function UsageMeter({ usage }: { usage: NonNullable<AgentView['usage']> }) {
   );
 }
 
-function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; sessionConfig: AgentView['sessionConfig']; usage: AgentView['usage'] }) {
+function SessionConfigBar({ sessionId, sessionConfig, usage }: { sessionId: string; sessionConfig: SessionView['sessionConfig']; usage: SessionView['usage'] }) {
   const setMode = useStore((s) => s.setMode);
   const setConfigOption = useStore((s) => s.setConfigOption);
   if (!sessionConfig && !usage) return null;
@@ -1334,7 +1334,7 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
       {modelOpt && (
         <label>
           Model
-          <select className="model-select" value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(agentId, modelOpt.id, e.target.value)}>
+          <select className="model-select" value={String(modelOpt.currentValue)} onChange={(e) => setConfigOption(sessionId, modelOpt.id, e.target.value)}>
             {(modelOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value} title={o.name}>
                 {o.name}
@@ -1348,7 +1348,7 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
           Thinking
           <select
             value={String(thoughtLevelOpt.currentValue)}
-            onChange={(e) => setConfigOption(agentId, thoughtLevelOpt.id, e.target.value)}
+            onChange={(e) => setConfigOption(sessionId, thoughtLevelOpt.id, e.target.value)}
           >
             {(thoughtLevelOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value}>
@@ -1361,7 +1361,7 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
       {permissionOpt ? (
         <label>
           Permission Mode
-          <select value={String(permissionOpt.currentValue)} onChange={(e) => setConfigOption(agentId, permissionOpt.id, e.target.value)}>
+          <select value={String(permissionOpt.currentValue)} onChange={(e) => setConfigOption(sessionId, permissionOpt.id, e.target.value)}>
             {(permissionOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value} title={o.description}>
                 {o.name}
@@ -1372,7 +1372,7 @@ function SessionConfigBar({ agentId, sessionConfig, usage }: { agentId: string; 
       ) : hasModes && modes ? (
         <label>
           Permission Mode
-          <select value={modes.currentModeId} onChange={(e) => setMode(agentId, e.target.value)}>
+          <select value={modes.currentModeId} onChange={(e) => setMode(sessionId, e.target.value)}>
             {modes.availableModes.map((m) => (
               <option key={m.id} value={m.id} title={m.description}>
                 {m.name}
@@ -1436,7 +1436,7 @@ function SkillText({ text, commands, asideSupport = false }: { text: string; com
     const token = match[0];
     const isCommand = token[0] === '/';
     const isKnownCommand = isCommand && names.has(token.slice(1));
-    // `/btw` is a transport-level aside, rather than an agent-provided slash
+    // `/btw` is a transport-level aside, rather than an session-provided slash
     // command. It is only special at the start of a prompt (apart from leading
     // whitespace), matching the send path below exactly.
     const isAside = asideSupport === true
@@ -1469,7 +1469,7 @@ type DraftAttachment = {
   error?: string;
 };
 
-function PromptBar({ agentId, working }: { agentId: string; working: boolean }) {
+function PromptBar({ sessionId, working }: { sessionId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
   const steer = useStore((s) => s.steer);
   const aside = useStore((s) => s.aside);
@@ -1477,21 +1477,21 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
   // Pending annotations (review tray) consumed into quote blocks on send.
-  const annotations = useStore((s) => s.annotations[agentId] ?? []);
+  const annotations = useStore((s) => s.annotations[sessionId] ?? []);
   const clearAnnotations = useStore((s) => s.clearAnnotations);
   // Draft lives in the store (keyed by agent) so it survives the remounts that a
   // tab switch or agent switch cause.
-  const text = useStore((s) => s.drafts[agentId] ?? '');
+  const text = useStore((s) => s.drafts[sessionId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
-  const commands = useStore((s) => s.agents[agentId]?.commands ?? []);
+  const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
-  const imageSupport = useStore((s) => s.agents[agentId]?.imagePromptSupport ?? null);
-  const asideSupport = useStore((s) => s.agents[agentId]?.asideSupport ?? null);
-  const steeringSupport = useStore((s) => s.agents[agentId]?.steeringSupport ?? null);
-  const queuedPrompts = useStore((s) => s.agents[agentId]?.queuedPrompts ?? []);
+  const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
+  const asideSupport = useStore((s) => s.sessions[sessionId]?.asideSupport ?? null);
+  const steeringSupport = useStore((s) => s.sessions[sessionId]?.steeringSupport ?? null);
+  const queuedPrompts = useStore((s) => s.sessions[sessionId]?.queuedPrompts ?? []);
   // A federated agent's ID is namespaced by its owning host, which reads as
   // noise in a placeholder; its name is what the rail shows.
-  const agentLabel = useStore((s) => s.agents[agentId]?.name || agentId);
+  const agentLabel = useStore((s) => s.sessions[sessionId]?.name || sessionId);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   // The draft is shared Zustand state so it survives pane remounts. Preserve
@@ -1549,7 +1549,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     setFileEntries([]);
     setFileEntriesDir(fileRequest.dir);
     const timer = window.setTimeout(() => {
-      void listWorkspaceEntries(agentId, fileRequest.dir).then(
+      void listWorkspaceEntries(sessionId, fileRequest.dir).then(
         (entries) => { if (current) setFileEntries(entries); },
         () => { if (current) setFileEntries([]); },
       );
@@ -1558,7 +1558,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       current = false;
       window.clearTimeout(timer);
     };
-  }, [agentId, file?.start, fileRequest?.dir, listWorkspaceEntries]);
+  }, [sessionId, file?.start, fileRequest?.dir, listWorkspaceEntries]);
 
   useLayoutEffect(() => {
     const el = textRef.current;
@@ -1595,7 +1595,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     if (!slash || !cmd) return;
     const insertion = `/${cmd.name} `;
     const next = text.slice(0, slash.start) + insertion + text.slice(slash.end);
-    setDraft(agentId, next);
+    setDraft(sessionId, next);
     const pos = slash.start + insertion.length;
     setCaret(pos);
     requestAnimationFrame(() => {
@@ -1611,7 +1611,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     if (!file || !entry) return;
     const insertion = `@${entry.path}${entry.isDir ? '/' : ' '}`;
     const next = text.slice(0, file.start) + insertion + text.slice(file.end);
-    setDraft(agentId, next);
+    setDraft(sessionId, next);
     const pos = file.start + insertion.length;
     setCaret(pos);
     requestAnimationFrame(() => {
@@ -1636,7 +1636,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       const token = storedToken();
       const { status, body } = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
         const request = new XMLHttpRequest();
-        request.open('POST', `/api/agents/${encodeURIComponent(agentId)}/assets`);
+        request.open('POST', `/api/agents/${encodeURIComponent(sessionId)}/assets`);
         request.setRequestHeader('Content-Type', attachment.file.type);
         request.setRequestHeader('X-File-Name', encodeURIComponent(attachment.file.name));
         if (attachment.file.type.startsWith('image/') && imageSupport === true) request.setRequestHeader('X-Store-Image-Asset', 'true');
@@ -1743,7 +1743,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     if (attachments.length === 0 && !hasAnnotations) {
       setSending(true);
       const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
-      const result = !steering && btw ? await aside(agentId, btw[1].trim()) : await (steering ? steer : prompt)(agentId, t);
+      const result = !steering && btw ? await aside(sessionId, btw[1].trim()) : await (steering ? steer : prompt)(sessionId, t);
       setSending(false);
       if (result.error) setAttachmentError(result.error);
       if (result.disposition === 'queued') {
@@ -1763,7 +1763,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     const uploaded = attachments.flatMap((attachment) => attachment.uploadPath ? [attachment.uploadPath] : []);
     if (uploaded.length > 0) blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded.join(', ')}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
     setSending(true);
-    const result = await (steering ? steer : prompt)(agentId, blocks);
+    const result = await (steering ? steer : prompt)(sessionId, blocks);
     setSending(false);
     if (result.error) {
       setAttachmentError(result.error);
@@ -1772,7 +1772,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
     for (const attachment of attachments) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments([]);
     setAttachmentError(null);
-    if (hasAnnotations) void clearAnnotations(agentId);
+    if (hasAnnotations) void clearAnnotations(sessionId);
     if (result.disposition === 'queued') {
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 1200);
@@ -1796,7 +1796,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       setAttachmentError('Queued prompts with images cannot be edited yet.');
       return;
     }
-    const result = await removeQueuedPrompt(agentId, queued.id);
+    const result = await removeQueuedPrompt(sessionId, queued.id);
     if (result.error) {
       setAttachmentError(result.error);
       return;
@@ -1805,7 +1805,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
       .filter((block): block is Extract<PromptBlock, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
       .join('\n\n');
-    setDraft(agentId, draft);
+    setDraft(sessionId, draft);
     setAttachmentError(null);
     requestAnimationFrame(() => {
       const el = textRef.current;
@@ -1876,7 +1876,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           <div className="prompt-queue-header">
             <span>Next up ({queuedPrompts.length})</span>
             <span className="prompt-queue-actions">
-              <button type="button" onClick={() => void clearPromptQueue(agentId)}>Clear queue</button>
+              <button type="button" onClick={() => void clearPromptQueue(sessionId)}>Clear queue</button>
             </span>
           </div>
           {queuedPrompts.map((queued, index) => {
@@ -1886,7 +1886,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
                 <span className="prompt-queue-position">{index + 1}.</span>
                 <span className="prompt-queue-preview" title={preview}>{preview}</span>
                 <button type="button" onClick={() => void editQueuedPrompt(queued)} title="Edit queued prompt" aria-label={`Edit queued prompt ${index + 1}`}>Edit</button>
-                <button type="button" onClick={() => void removeQueuedPrompt(agentId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
+                <button type="button" onClick={() => void removeQueuedPrompt(sessionId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
               </div>
             );
           })}
@@ -1918,7 +1918,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
           <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} asideSupport={asideSupport} /></div>
           <textarea
             ref={textRef}
-            data-prompt-agent={agentId}
+            data-prompt-agent={sessionId}
             placeholder={usesSoftKeyboard()
               ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
               : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`)}
@@ -1936,7 +1936,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
                 start: e.target.selectionStart ?? e.target.value.length,
                 end: e.target.selectionEnd ?? e.target.value.length,
               };
-              setDraft(agentId, e.target.value);
+              setDraft(sessionId, e.target.value);
               updateCaret(e.target);
             }}
             onClick={(e) => updateCaret(e.currentTarget)}
@@ -2007,7 +2007,7 @@ function PromptBar({ agentId, working }: { agentId: string; working: boolean }) 
             )}
           </div>
           {working && (
-              <button className="btn stop-btn" onClick={() => interrupt(agentId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
+              <button className="btn stop-btn" onClick={() => interrupt(sessionId)} title="Stop current turn; queued prompts will continue" aria-label="Stop current turn">
               <span className="stop-btn-icon" aria-hidden="true" />
             </button>
           )}

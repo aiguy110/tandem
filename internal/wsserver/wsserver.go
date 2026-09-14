@@ -167,6 +167,7 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 	if json.Unmarshal(payload, &envelope) != nil {
 		return
 	}
+	normalizeSessionEnvelope(envelope)
 	if envelope["t"] == "system_notifications" {
 		var relayed struct {
 			Notifications []notifications.Notification `json:"notifications"`
@@ -196,8 +197,9 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		return
 	}
 	remoteID := ""
-	if sessionID, ok := envelope["agentId"].(string); ok && sessionID != "" {
-		remoteID = remoteAgentID(hostID, sessionID)
+	if sessionID, ok := envelope["sessionId"].(string); ok && sessionID != "" {
+		remoteID = remoteSessionID(hostID, sessionID)
+		envelope["sessionId"] = remoteID
 		envelope["agentId"] = remoteID
 	}
 	envelope["hostId"] = hostID
@@ -266,55 +268,78 @@ func tokenMatches(got, want string) bool {
 }
 
 type clientMessage struct {
-	T                string                     `json:"t"`
-	SessionID          string                     `json:"agentId"`
-	Channels         []string                   `json:"channels"`
-	SinceSeq         int64                      `json:"sinceSeq"`
-	CorrID           json.RawMessage            `json:"corrId"`
-	Text             string                     `json:"text"`
-	Blocks           []agentadapter.PromptBlock `json:"blocks"`
-	BytesB64         string                     `json:"bytesB64"`
-	Cols             int                        `json:"cols"`
-	Rows             int                        `json:"rows"`
-	ReqID            string                     `json:"reqId"`
-	PromptID         string                     `json:"promptId"`
-	OptionID         string                     `json:"optionId"`
-	ModeID           string                     `json:"modeId"`
-	ConfigID         string                     `json:"configId"`
-	Value            any                        `json:"value"`
-	Spec             agentadapter.Spec          `json:"spec"`
-	Agent            string                     `json:"agent"`
-	Harness          string                     `json:"harness"`
-	ACPArgs          []string                   `json:"acpArgs"`
-	CWD              string                     `json:"cwd"`
-	Repo             string                     `json:"repo"`
-	Force            bool                       `json:"force"`
-	DeleteWorktree   *bool                      `json:"deleteWorktree"`
-	DeinitSubmodules bool                       `json:"deinitSubmodules"`
-	ExternalSessionID string                    `json:"sessionId"`
-	Source           string                     `json:"source"`
-	Query            string                     `json:"query"`
-	Limit            int                        `json:"limit"`
-	MaxHits          int                        `json:"maxHitsPerSession"`
-	Reindex          bool                       `json:"reindex"`
-	InterruptFirst   bool                       `json:"interrupt"`
-	Action           string                     `json:"action"`
-	Event            browser.BrowserInputEvent  `json:"event"`
-	Name             string                     `json:"name"`
-	ID               string                     `json:"id"`
-	SnapshotID       string                     `json:"snapshotId"`
-	Project          string                     `json:"project"`
-	RepositoryID     string                     `json:"repositoryId"`
-	Enabled          bool                       `json:"enabled"`
-	Focused          bool                       `json:"focused"`
-	Seq              int64                      `json:"seq"`
-	Role             string                     `json:"role"`
-	Quote            string                     `json:"quote"`
-	Comment          string                     `json:"comment"`
-	Path             string                     `json:"path"`
-	PositionMs       int64                      `json:"positionMs"`
-	NotificationID   string                     `json:"notificationId"`
-	HostID           string                     `json:"hostId"`
+	T                 string                     `json:"t"`
+	SessionID         string                     `json:"sessionId"`
+	Channels          []string                   `json:"channels"`
+	SinceSeq          int64                      `json:"sinceSeq"`
+	CorrID            json.RawMessage            `json:"corrId"`
+	Text              string                     `json:"text"`
+	Blocks            []agentadapter.PromptBlock `json:"blocks"`
+	BytesB64          string                     `json:"bytesB64"`
+	Cols              int                        `json:"cols"`
+	Rows              int                        `json:"rows"`
+	ReqID             string                     `json:"reqId"`
+	PromptID          string                     `json:"promptId"`
+	OptionID          string                     `json:"optionId"`
+	ModeID            string                     `json:"modeId"`
+	ConfigID          string                     `json:"configId"`
+	Value             any                        `json:"value"`
+	Spec              agentadapter.Spec          `json:"spec"`
+	Agent             string                     `json:"agent"`
+	Harness           string                     `json:"harness"`
+	ACPArgs           []string                   `json:"acpArgs"`
+	CWD               string                     `json:"cwd"`
+	Repo              string                     `json:"repo"`
+	Force             bool                       `json:"force"`
+	DeleteWorktree    *bool                      `json:"deleteWorktree"`
+	DeinitSubmodules  bool                       `json:"deinitSubmodules"`
+	ExternalSessionID string                     `json:"externalSessionId"`
+	Source            string                     `json:"source"`
+	Query             string                     `json:"query"`
+	Limit             int                        `json:"limit"`
+	MaxHits           int                        `json:"maxHitsPerSession"`
+	Reindex           bool                       `json:"reindex"`
+	InterruptFirst    bool                       `json:"interrupt"`
+	Action            string                     `json:"action"`
+	Event             browser.BrowserInputEvent  `json:"event"`
+	Name              string                     `json:"name"`
+	ID                string                     `json:"id"`
+	SnapshotID        string                     `json:"snapshotId"`
+	Project           string                     `json:"project"`
+	RepositoryID      string                     `json:"repositoryId"`
+	Enabled           bool                       `json:"enabled"`
+	Focused           bool                       `json:"focused"`
+	Seq               int64                      `json:"seq"`
+	Role              string                     `json:"role"`
+	Quote             string                     `json:"quote"`
+	Comment           string                     `json:"comment"`
+	Path              string                     `json:"path"`
+	PositionMs        int64                      `json:"positionMs"`
+	NotificationID    string                     `json:"notificationId"`
+	HostID            string                     `json:"hostId"`
+}
+
+// UnmarshalJSON accepts the previous agentId envelope during the rolling
+// upgrade. sessionId used to mean the upstream session for resume_session, so
+// preserve that interpretation for that one command while all other commands
+// use sessionId as Tandem's own session identifier.
+func (m *clientMessage) UnmarshalJSON(data []byte) error {
+	type plain clientMessage
+	var decoded struct {
+		*plain
+		LegacySessionID string `json:"agentId"`
+	}
+	decoded.plain = (*plain)(m)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if m.T == "resume_session" && m.ExternalSessionID == "" {
+		m.ExternalSessionID, m.SessionID = m.SessionID, ""
+	}
+	if m.SessionID == "" {
+		m.SessionID = decoded.LegacySessionID
+	}
+	return nil
 }
 
 type connection struct {
@@ -421,14 +446,14 @@ func (c *connection) close() {
 // only, so the bytes ride along base64-encoded like raw_pty and browser_frame.
 func (c *connection) renderMessageAudio(m clientMessage) {
 	reply := func(extra map[string]any) {
-		envelope := map[string]any{"t": "message_audio", "agentId": m.SessionID, "seq": m.Seq}
+		envelope := map[string]any{"t": "message_audio", "sessionId": m.SessionID, "seq": m.Seq}
 		for k, v := range extra {
 			envelope[k] = v
 		}
 		c.send(withCorr(envelope, m.CorrID))
 	}
 	if m.SessionID == "" || m.Seq < 1 {
-		reply(map[string]any{"error": "agentId and seq are required"})
+		reply(map[string]any{"error": "sessionId and seq are required"})
 		return
 	}
 	if c.server.opts.RenderMessageAudio == nil {
@@ -466,6 +491,7 @@ func (c *connection) setAudioFocus(m clientMessage) {
 }
 
 func (c *connection) send(value any) bool {
+	normalizeSessionEnvelope(value)
 	data, err := json.Marshal(value)
 	if err != nil {
 		return false
@@ -481,9 +507,29 @@ func (c *connection) send(value any) bool {
 	}
 }
 
+// normalizeSessionEnvelope keeps browser and federation peers interoperable
+// across the agentId -> sessionId protocol migration. sessionId is canonical;
+// agentId is deliberately retained as a one-release compatibility alias.
+func normalizeSessionEnvelope(value any) {
+	envelope, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	sessionID, _ := envelope["sessionId"].(string)
+	legacyID, _ := envelope["agentId"].(string)
+	if sessionID == "" && legacyID != "" {
+		envelope["sessionId"] = legacyID
+		sessionID = legacyID
+	}
+	if sessionID != "" && legacyID == "" {
+		envelope["agentId"] = sessionID
+	}
+}
+
 // sendFrame retains at most one unsent frame per agent. Screencast frames are
 // snapshots, so delivering stale intermediate frames only increases latency.
 func (c *connection) sendFrame(sessionID string, value any) bool {
+	normalizeSessionEnvelope(value)
 	data, err := json.Marshal(value)
 	if err != nil {
 		return false
@@ -554,7 +600,7 @@ func (c *connection) handle(m clientMessage) {
 		m.HostID = m.Spec.HostID
 	}
 	if m.HostID == "" && m.SessionID != "" {
-		if hostID, sessionID, ok := SplitRemoteAgentID(m.SessionID); ok {
+		if hostID, sessionID, ok := SplitRemoteSessionID(m.SessionID); ok {
 			m.HostID, m.SessionID = hostID, sessionID
 		}
 	}
@@ -568,7 +614,8 @@ func (c *connection) handle(m clientMessage) {
 	case "unsubscribe":
 		c.unsubscribe(m)
 	case "list_agents":
-		c.send(withCorr(map[string]any{"t": "agents", "agents": c.server.agentSummaries()}, m.CorrID))
+		sessions := c.server.sessionSummaries()
+		c.send(withCorr(map[string]any{"t": "agents", "sessions": sessions, "agents": sessions}, m.CorrID))
 	case "list_dirs":
 		dirs, err := c.server.opts.Registry.ListDirs(context.Background())
 		if err != nil {
@@ -581,7 +628,7 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
 	case "list_workspace_entries":
 		if m.SessionID == "" {
-			c.send(withCorr(map[string]any{"t": "workspace_entries", "error": "agentId is required"}, m.CorrID))
+			c.send(withCorr(map[string]any{"t": "workspace_entries", "error": "sessionId is required"}, m.CorrID))
 			return
 		}
 		entries, err := c.server.opts.Registry.ListWorkspaceEntries(context.Background(), m.SessionID, m.Path)
@@ -787,7 +834,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
 	case "steer":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -801,7 +848,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "disposition": "steered"}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "disposition": "steered"}, m.CorrID))
 	case "aside":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -812,7 +859,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
 	case "remove_queued_prompt":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -829,7 +876,7 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		count := sess.ClearPromptQueue()
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "cleared": count}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "cleared": count}, m.CorrID))
 	case "interrupt_and_clear_queue":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -840,7 +887,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": sess.ID, "cleared": count}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "cleared": count}, m.CorrID))
 	case "input":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -936,7 +983,7 @@ func (c *connection) handle(m clientMessage) {
 	case "system_notification_action":
 		// A host-namespaced ID belongs to the daemon that raised it, whose
 		// own update service owns the install/restart sequence.
-		if hostID, localID, ok := SplitRemoteAgentID(m.NotificationID); ok {
+		if hostID, localID, ok := SplitRemoteSessionID(m.NotificationID); ok {
 			m.HostID, m.NotificationID = hostID, localID
 			c.forwardFederation(m)
 			return
@@ -1129,7 +1176,7 @@ func (c *connection) handle(m clientMessage) {
 		now := time.Now().UnixMilli()
 		ann := store.Annotation{
 			ID:        "ann-" + randHex(8),
-			SessionID:   sess.ID,
+			SessionID: sess.ID,
 			Seq:       m.Seq,
 			Role:      m.Role,
 			Quote:     m.Quote,
@@ -1195,7 +1242,7 @@ func (c *connection) handle(m clientMessage) {
 		c.server.broadcastAnnotations(sess.ID)
 		c.commandAck(m, sess.ID)
 	case "merge_back":
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.SessionID, "error": "merge_back not implemented yet"}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
 		c.send(withCorr(map[string]any{"t": "ack", "error": m.T + " not implemented yet"}, m.CorrID))
 	}
@@ -1212,7 +1259,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 	hostID := m.HostID
 	remoteID := ""
 	if m.SessionID != "" {
-		remoteID = remoteAgentID(hostID, m.SessionID)
+		remoteID = remoteSessionID(hostID, m.SessionID)
 	}
 	if m.T == "subscribe" && remoteID != "" {
 		// The slave sends the replay snapshot before its correlated subscribe
@@ -1231,6 +1278,22 @@ func (c *connection) forwardFederation(m clientMessage) {
 	}
 	callCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	var request map[string]any
+	if err := json.Unmarshal(payload, &request); err != nil {
+		c.commandError(m, err)
+		return
+	}
+	if m.SessionID != "" {
+		request["agentId"] = m.SessionID
+	}
+	if m.T == "resume_session" && m.ExternalSessionID != "" {
+		request["sessionId"] = m.ExternalSessionID
+	}
+	payload, err = json.Marshal(request)
+	if err != nil {
+		c.commandError(m, err)
+		return
+	}
 	response, err := c.server.opts.Federation.Call(callCtx, hostID, payload)
 	if err != nil {
 		if m.T == "subscribe" && remoteID != "" {
@@ -1246,13 +1309,15 @@ func (c *connection) forwardFederation(m clientMessage) {
 		c.commandError(m, fmt.Errorf("remote host returned invalid protocol response: %w", err))
 		return
 	}
+	normalizeSessionEnvelope(envelope)
 	// Master corrIds are authoritative. A stale or malicious slave response
 	// must not satisfy a different browser request.
 	if m.CorrID != nil {
 		envelope["corrId"] = json.RawMessage(append([]byte(nil), m.CorrID...))
 	}
-	if sessionID, ok := envelope["agentId"].(string); ok && sessionID != "" {
-		envelope["agentId"] = remoteAgentID(hostID, sessionID)
+	if sessionID, ok := envelope["sessionId"].(string); ok && sessionID != "" {
+		envelope["sessionId"] = remoteSessionID(hostID, sessionID)
+		envelope["agentId"] = envelope["sessionId"]
 	}
 	envelope["hostId"] = hostID
 	if m.T == "unsubscribe" && remoteID != "" {
@@ -1263,13 +1328,13 @@ func (c *connection) forwardFederation(m clientMessage) {
 	c.send(envelope)
 }
 
-// remoteAgentID namespaces a host-local identifier. Agent IDs are the main
-// use; system-notification IDs share the encoding so SplitRemoteAgentID can
+// remoteSessionID namespaces a host-local identifier. Session IDs are the main
+// use; system-notification IDs share the encoding so SplitRemoteSessionID can
 // route an action back to the host that raised it. The parts stay readable
 // on purpose — these IDs surface in the UI, and a host ID never contains the
-// "~" separator (federation.ValidHostID enforces that), so the agent ID is
+// "~" separator (federation.ValidHostID enforces that), so the session ID is
 // simply the remainder and may contain anything.
-func remoteAgentID(hostID, sessionID string) string {
+func remoteSessionID(hostID, sessionID string) string {
 	return remoteIDPrefix + hostID + "~" + sessionID
 }
 
@@ -1280,9 +1345,9 @@ const remoteIDPrefix = "fed~"
 // notification action) keep routing after an upgrade.
 const legacyRemoteIDPrefix = "federation~"
 
-// SplitRemoteAgentID decodes a namespaced federated agent ID back into the
-// owning host and that host's local agent ID.
-func SplitRemoteAgentID(id string) (hostID, sessionID string, ok bool) {
+// SplitRemoteSessionID decodes a namespaced federated session ID back into the
+// owning host and that host's local session ID.
+func SplitRemoteSessionID(id string) (hostID, sessionID string, ok bool) {
 	if rest, found := strings.CutPrefix(id, remoteIDPrefix); found {
 		host, agent, split := strings.Cut(rest, "~")
 		if !split || host == "" || agent == "" {
@@ -1309,10 +1374,10 @@ func SplitRemoteAgentID(id string) (hostID, sessionID string, ok bool) {
 	return string(host), string(agent), true
 }
 
-// agentSummaries combines local agents with the current snapshots received
+// sessionSummaries combines local sessions with the current snapshots received
 // from slave tunnels. Remote IDs are namespaced, avoiding collisions between
 // otherwise ordinary local agent names on different hosts.
-func (h *Handler) agentSummaries() []any {
+func (h *Handler) sessionSummaries() []any {
 	local := h.opts.Registry.Summaries(context.Background())
 	out := make([]any, 0, len(local))
 	for _, summary := range local {
@@ -1336,7 +1401,7 @@ func (h *Handler) agentSummaries() []any {
 			if id == "" {
 				continue
 			}
-			agent["id"] = remoteAgentID(host.ID, id)
+			agent["id"] = remoteSessionID(host.ID, id)
 			agent["hostId"] = host.ID
 			agent["hostName"] = host.Name
 			out = append(out, agent)
@@ -1373,7 +1438,7 @@ func (h *Handler) systemNotifications() []notifications.Notification {
 	sort.Strings(hostIDs)
 	for _, hostID := range hostIDs {
 		for _, item := range h.remoteNotifications[hostID] {
-			item.ID = remoteAgentID(hostID, item.ID)
+			item.ID = remoteSessionID(hostID, item.ID)
 			item.HostID, item.HostName = hostID, names[hostID]
 			items = append(items, item)
 		}
@@ -1461,12 +1526,12 @@ func (h *Handler) broadcastSystemNotifications([]notifications.Notification) {
 }
 
 func (c *connection) commandAck(m clientMessage, sessionID string) {
-	c.send(withCorr(map[string]any{"t": "ack", "agentId": sessionID}, m.CorrID))
+	c.send(withCorr(map[string]any{"t": "ack", "sessionId": sessionID}, m.CorrID))
 }
 func (c *connection) commandError(m clientMessage, err error) {
 	value := map[string]any{"t": "ack", "error": err.Error()}
 	if m.SessionID != "" {
-		value["agentId"] = m.SessionID
+		value["sessionId"] = m.SessionID
 	}
 	c.send(withCorr(value, m.CorrID))
 }
@@ -1495,7 +1560,7 @@ func (h *Handler) broadcastClosed(sessionID string) {
 		}
 		c.mu.Unlock()
 		if sub != nil {
-			c.send(map[string]any{"t": "agent_closed", "agentId": sessionID})
+			c.send(map[string]any{"t": "agent_closed", "sessionId": sessionID})
 		}
 	}
 }
@@ -1532,7 +1597,7 @@ func (h *Handler) broadcastAnnotations(sessionID string) {
 		_, subscribed := c.subs[sessionID]
 		c.mu.Unlock()
 		if subscribed {
-			c.send(map[string]any{"t": "annotations", "agentId": sessionID, "annotations": annotations})
+			c.send(map[string]any{"t": "annotations", "sessionId": sessionID, "annotations": annotations})
 		}
 	}
 }
@@ -1559,13 +1624,13 @@ func (h *Handler) broadcastAudioPosition(sessionID string, seq, positionMs, upda
 		_, subscribed := c.subs[sessionID]
 		c.mu.Unlock()
 		if subscribed {
-			c.send(map[string]any{"t": "audio_position", "agentId": sessionID, "seq": seq, "positionMs": positionMs, "updatedAt": updatedAt})
+			c.send(map[string]any{"t": "audio_position", "sessionId": sessionID, "seq": seq, "positionMs": positionMs, "updatedAt": updatedAt})
 		}
 	}
 }
 
 func (h *Handler) broadcastAgents() {
-	agents := h.agentSummaries()
+	sessions := h.sessionSummaries()
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {
@@ -1573,7 +1638,7 @@ func (h *Handler) broadcastAgents() {
 	}
 	h.mu.Unlock()
 	for _, c := range connections {
-		c.send(map[string]any{"t": "agents", "agents": agents})
+		c.send(map[string]any{"t": "agents", "sessions": sessions, "agents": sessions})
 	}
 }
 
@@ -1687,7 +1752,7 @@ func (c *connection) subscribe(m clientMessage) {
 	replay, err := sess.Log.ReplaySince(m.SinceSeq)
 	if err != nil {
 		sub.stop()
-		c.send(withCorr(map[string]any{"t": "ack", "agentId": m.SessionID, "error": err.Error()}, m.CorrID))
+		c.send(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID, "error": err.Error()}, m.CorrID))
 		return
 	}
 	boundary := int64(0)
@@ -1718,7 +1783,7 @@ func (c *connection) subscribe(m clientMessage) {
 				audioReady = append(audioReady, map[string]any{"seq": clip.Seq, "durationMs": clip.DurationMs})
 			}
 		}
-		snapshot := map[string]any{"t": "snapshot", "agentId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady}
+		snapshot := map[string]any{"t": "snapshot", "sessionId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady}
 		if pos, err := c.server.opts.Registry.AudioPosition(sess.ID); err == nil && pos != nil {
 			snapshot["audioPosition"] = map[string]any{"seq": pos.Seq, "positionMs": pos.PositionMs, "updatedAt": pos.UpdatedAt}
 		}
@@ -1743,7 +1808,7 @@ func (c *connection) subscribe(m clientMessage) {
 		}
 	}
 	if queueRelevant {
-		c.send(map[string]any{"t": "prompt_queue", "agentId": sess.ID, "queuedPrompts": queuedPrompts})
+		c.send(map[string]any{"t": "prompt_queue", "sessionId": sess.ID, "queuedPrompts": queuedPrompts})
 	}
 	sub.mu.Lock()
 	pending := append([]eventlog.LoggedEvent{}, sub.pending...)
@@ -1760,7 +1825,7 @@ func (c *connection) subscribe(m clientMessage) {
 		// tab enables (and survives a page refresh) as soon as the agent has a
 		// browser, independent of whether this client is viewing the pane.
 		offState := c.server.opts.Browser.OnState(sess.ID, func(state browser.BrowserState) {
-			c.send(map[string]any{"t": "browser_state", "agentId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
+			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
 		})
 		sub.mu.Lock()
 		sub.browserStateOff = offState
@@ -1769,14 +1834,14 @@ func (c *connection) subscribe(m clientMessage) {
 		// focused, browser-viewing client streams frames).
 		if sub.channels["browser"] {
 			offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
-				c.sendFrame(sess.ID, map[string]any{"t": "browser_frame", "agentId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
+				c.sendFrame(sess.ID, map[string]any{"t": "browser_frame", "sessionId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
 			})
 			sub.mu.Lock()
 			sub.browserFrameOff = offFrames
 			sub.mu.Unlock()
 		}
 	}
-	c.send(withCorr(map[string]any{"t": "ack", "agentId": m.SessionID}, m.CorrID))
+	c.send(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID}, m.CorrID))
 }
 
 func (c *connection) unsubscribe(m clientMessage) {
@@ -1811,10 +1876,10 @@ func (c *connection) unsubscribe(m clientMessage) {
 		delete(c.subs, m.SessionID)
 	}
 	c.mu.Unlock()
-	c.send(withCorr(map[string]any{"t": "ack", "agentId": m.SessionID}, m.CorrID))
+	c.send(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID}, m.CorrID))
 }
 
 func eventMessage(id string, le eventlog.LoggedEvent) map[string]any {
-	return map[string]any{"t": "event", "agentId": id, "seq": le.Seq, "event": wireEvent(le.Event)}
+	return map[string]any{"t": "event", "sessionId": id, "seq": le.Seq, "event": wireEvent(le.Event)}
 }
 func wireEvent(ev eventlog.Event) json.RawMessage { b, _ := ev.NormalizedJSON(); return b }

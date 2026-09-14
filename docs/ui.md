@@ -1,7 +1,7 @@
 # UI structure
 
 Tandem is explicitly **not** an IDE. The metaphor is **mission control**: the user conducts
-a set of semi-autonomous agents, and the UI's job is legibility + intervention. Layout is
+a set of semi-autonomous sessions, and the UI's job is legibility + intervention. Layout is
 **docked rails + focus** (D6), with the shared browser as a **pane inside focus mode** (D7).
 
 ## Regions
@@ -24,7 +24,7 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
 
 - **Left rail — Agents.** The orchestra; one row per agent with a status dot
   (`idle · working · ⚠ blocked · error`), name, and workspace. The order stays user-arranged,
-  even for blocked and error agents. Click = focus; drag a row to reorder; the pencil edits the display name without renaming the
+  even for blocked and error sessions. Click = focus; drag a row to reorder; the pencil edits the display name without renaming the
   stable agent id, worktree, or branch. Always visible.
 - **Center — Focus.** The selected agent, with pane tabs:
   - **Chat** (default) — structured ACP transcript or the agent's resumable CLI, selected
@@ -37,7 +37,7 @@ a set of semi-autonomous agents, and the UI's job is legibility + intervention. 
     "grab/release wheel" button (grabbing pauses the agent). Shown only when a browser is
     attached.
 - **Right rail — Approvals.** The conductor's inbox: every `blocked-on-approval` across
-  *all* agents, most-urgent first, with inline approve / deny / edit. Clicking an item
+  *all* sessions, most-urgent first, with inline approve / deny / edit. Clicking an item
   focuses that agent and the relevant pane. The single most important element in a
   human-as-conductor model.
 - **Top — Conductor bar.** `+ Agent` (dir-first quick-spawn), `Assign task`, `⌘K` command
@@ -71,7 +71,7 @@ interface AgentView {
 ## Key client behaviors
 
 - **One WS, multiplexed** by `agentId` + channel. Subscribe on focus; keep `status` and
-  approvals streams **always-on** so the rails stay live for unfocused agents.
+  approvals streams **always-on** so the rails stay live for unfocused sessions.
 - **Reconnect = resnapshot + replay.** On reopen, request each subscribed agent's snapshot
   (last N events, scrollback tail, current browser frame), then resume the live tail. See
   [`ws-protocol.md`](ws-protocol.md#reconnect--replay).
@@ -106,7 +106,7 @@ Small deviations from the sketch above, all driven by what the wire actually car
   `shellHub` holds the user's Terminal shell, so byte streams never trigger React renders
   and cannot mix during replay.
 - The rail needs each agent's **name + workspace**, which no `snapshot` carries, so the client
-  discovers agents via a new **`list_agents`** message (see `ws-protocol.md`) on every
+  discovers sessions via a **`list_agents`** message (see `ws-protocol.md`) on every
   (re)connect — this is what makes the rail correct after a daemon restart.
 - **Diff** and **Browser** panes are placeholders (their daemon verbs still return error acks).
 

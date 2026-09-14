@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePresence, useValuePresence } from '../transitions';
 import { LOCAL_HOST_ID, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
-import type { AgentView } from '../store';
+import type { SessionView } from '../store';
 import type { ClosePreview, FederationHost } from '../wire';
 
 // Badge color per severity, matching the Notifications panel (red > yellow > green).
@@ -14,9 +14,9 @@ const SEVERITY_CLASS: Record<NotifSeverity, string> = {
 
 // Left rail — the orchestra. One row per agent in the order arranged by the
 // user. Click = focus; drag = reorder.
-export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
+export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
   const order = useStore(rankedOrder);
-  const agents = useStore((s) => s.agents);
+  const agents = useStore((s) => s.sessions);
   const hosts = useStore((s) => s.hosts);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
@@ -28,8 +28,8 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   const closeAgent = useStore((s) => s.closeAgent);
   const renameAgent = useStore((s) => s.renameAgent);
   const handOffAgent = useStore((s) => s.handOffAgent);
-  const collapsed = useStore((s) => s.agentsRailCollapsed);
-  const toggleCollapsed = useStore((s) => s.toggleAgentsRail);
+	const collapsed = useStore((s) => s.sessionsRailCollapsed);
+  const toggleCollapsed = useStore((s) => s.toggleSessionsRail);
   // Keep the familiar uninterrupted rail until federation has at least one
   // accepted/known slave. Once it does, every group (including local) has a
   // labeled divider so the placement of remote controls is unambiguous.
@@ -104,7 +104,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
   };
 
   return (
-    <div className={`rail agents${collapsed ? ' collapsed' : ''}`}>
+	<div className={`rail sessions${collapsed ? ' collapsed' : ''}`}>
       {collapsed && !expandedMounted && (
         <button className="rail-toggle" title="Show sessions" onClick={toggleCollapsed}>
           <span className="chevron">›</span>
@@ -143,13 +143,13 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
           {displayedGroups.map((group) => (
             // Each group is its own box so its divider sticks only for as long
             // as the group is on screen: the next one pushes it out at the top.
-            <section className="agent-host-group" key={group.hostId}>
+            <section className="session-host-group" key={group.hostId}>
               {federationGrouping && (
-                <div className="agent-host-divider">
+                <div className="session-host-divider">
                   <span>{group.label}</span>
                   {group.link && (
-                    <span className={`agent-host-link ${group.link.tone}`} title={group.link.title}>
-                      <span className="agent-host-link-dot" />
+                    <span className={`session-host-link ${group.link.tone}`} title={group.link.title}>
+                      <span className="session-host-link-dot" />
                       {group.link.label}
                     </span>
                   )}
@@ -185,7 +185,7 @@ export function AgentsRail({ onResizeStart }: { onResizeStart?: (clientX: number
             </section>
           ))}
           <div
-            className={`agent-drop-end${draggedId ? ' active' : ''}`}
+            className={`session-drop-end${draggedId ? ' active' : ''}`}
             aria-hidden="true"
             onDragOver={(event) => {
               event.preventDefault();
@@ -316,7 +316,7 @@ function hostLinkBadge(status: FederationHost['status']): HostLink {
 type HostLink = { label: string; tone: string; title: string };
 type HostGroup = { hostId: string; label: string; link: HostLink | null; ids: string[] };
 
-function groupedAgentRows(order: string[], agents: Record<string, AgentView>, hosts: FederationHost[]): HostGroup[] {
+function groupedAgentRows(order: string[], agents: Record<string, SessionView>, hosts: FederationHost[]): HostGroup[] {
   const groups = new Map<string, HostGroup>();
   for (const id of order) {
     const agent = agents[id];
@@ -348,7 +348,7 @@ function Row({
   onDrop,
   onDragEnd,
 }: {
-  agent: AgentView;
+  agent: SessionView;
   active: boolean;
   onClick: () => void;
   onMarkUnread: () => void;
@@ -445,7 +445,7 @@ function Row({
   };
   return (
     <div
-      className={`agent-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
+      className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
       draggable={!editing}
       title={editing ? undefined : 'Drag to reorder session'}
       onClick={onClick}
@@ -482,7 +482,7 @@ function Row({
           {agent.status === 'error' && '⛔ '}
           {editing ? (
             <input
-              className="agent-rename-input"
+              className="session-rename-input"
               value={name}
               maxLength={80}
               autoFocus
@@ -505,7 +505,7 @@ function Row({
             />
           ) : agent.name}
           {agent.hostId && (
-            <span className="agent-host-badge" title={`Running on ${agent.hostName || agent.hostId}`}>
+            <span className="session-host-badge" title={`Running on ${agent.hostName || agent.hostId}`}>
               {agent.hostName || agent.hostId}
             </span>
           )}
@@ -513,7 +513,7 @@ function Row({
             <span className={`count badge notification-badge ${SEVERITY_CLASS[badge.severity]}`}>{badge.count}</span>
           )}
         </div>
-        {renameError && <div className="agent-rename-error">{renameError}</div>}
+        {renameError && <div className="session-rename-error">{renameError}</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
           <span className="ws-text">
@@ -524,7 +524,7 @@ function Row({
           </span>
         </div>
       </div>
-      {showActions && <div className="agent-actions">
+      {showActions && <div className="session-actions">
         <button
           className="rename-btn"
           title="Rename session"
@@ -549,7 +549,7 @@ function Row({
       </div>}
       {contextMenu && (
         <div
-          className={`agent-context-menu${menuClosing ? ' closing' : ''}`}
+          className={`session-context-menu${menuClosing ? ' closing' : ''}`}
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label={`Actions for ${agent.name}`}
@@ -585,7 +585,7 @@ function AgentDetails({
   onClose,
   onMove,
 }: {
-  agent: AgentView;
+  agent: SessionView;
   position: { x: number; y: number };
   closing: boolean;
   onClose: () => void;
@@ -614,21 +614,21 @@ function AgentDetails({
 
   return (
     <section
-      className={`agent-details-popover${closing ? ' closing' : ''}`}
+      className={`session-details-popover${closing ? ' closing' : ''}`}
       style={{ left: position.x, top: position.y }}
       role="dialog"
       aria-label={`Details for ${agent.name}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="agent-details-head" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
+      <div className="session-details-head" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
         <div>
           <strong>{agent.name}</strong>
-          <span className={`agent-details-status ${agent.status}`}>{agent.status}</span>
+          <span className={`session-details-status ${agent.status}`}>{agent.status}</span>
         </div>
         <button type="button" aria-label="Close details" title="Close details" onPointerDown={(event) => event.stopPropagation()} onClick={onClose}>×</button>
       </div>
-      <div className="agent-details-body">
+      <div className="session-details-body">
         <Detail label="Agent" value={agent.agent || 'Default agent'} />
         {agent.hostId && (
           <Detail
@@ -655,5 +655,5 @@ function AgentDetails({
 }
 
 function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return <div className="agent-detail"><span>{label}</span><code className={mono ? '' : 'plain'} title={value}>{value}</code></div>;
+  return <div className="session-detail"><span>{label}</span><code className={mono ? '' : 'plain'} title={value}>{value}</code></div>;
 }

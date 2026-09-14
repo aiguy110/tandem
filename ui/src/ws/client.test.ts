@@ -73,7 +73,7 @@ describe('WsClient.wake', () => {
     expect(first.sent.some((raw) => JSON.parse(raw).t === 'list_agents')).toBe(true);
 
     // Any inbound frame proves the socket is alive.
-    first.onmessage?.({ data: JSON.stringify({ t: 'agents', agents: [] }) });
+    first.onmessage?.({ data: JSON.stringify({ t: 'agents', sessions: [] }) });
     vi.advanceTimersByTime(5000);
 
     expect(FakeWebSocket.instances).toHaveLength(1);

@@ -287,13 +287,13 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		// A federated agent's transcript lives on the host that owns it, so
 		// its clip is rendered there and carried back over the tunnel.
 		RenderMessageAudio: func(renderCtx context.Context, sessionID string, seq int64) (voice.Audio, error) {
-			if hostID, localID, ok := wsserver.SplitRemoteAgentID(sessionID); ok {
+			if hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID); ok {
 				return remoteMessageAudio(renderCtx, federationService, hostID, localID, seq)
 			}
 			return audioCache.render(renderCtx, sessionID, seq)
 		},
 		AgentExists: func(id string) bool {
-			if hostID, _, ok := wsserver.SplitRemoteAgentID(id); ok {
+			if hostID, _, ok := wsserver.SplitRemoteSessionID(id); ok {
 				// Only the owning host can confirm the agent; accept any ID
 				// naming a host we know and let the remote call 404 instead.
 				for _, host := range federationService.Hosts() {
@@ -339,7 +339,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
-				id := r.URL.Query().Get("agentId")
+				id := r.URL.Query().Get("sessionId")
+				if id == "" {
+					id = r.URL.Query().Get("agentId")
+				}
 				if agents.Get(id) == nil {
 					http.Error(w, "no such agent", http.StatusNotFound)
 					return
@@ -510,7 +513,7 @@ func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, se
 	if svc == nil {
 		return voice.Audio{}, errors.New("remote hosts are unavailable")
 	}
-	payload, err := json.Marshal(map[string]any{"t": "render_message_audio", "agentId": sessionID, "seq": seq})
+	payload, err := json.Marshal(map[string]any{"t": "render_message_audio", "sessionId": sessionID, "seq": seq})
 	if err != nil {
 		return voice.Audio{}, err
 	}
@@ -559,7 +562,9 @@ func newMessageAudioCache(ctx context.Context, db *store.Store, renderer voice.R
 	}
 }
 
-func audioKey(sessionID string, seq int64) string { return sessionID + "/" + strconv.FormatInt(seq, 10) }
+func audioKey(sessionID string, seq int64) string {
+	return sessionID + "/" + strconv.FormatInt(seq, 10)
+}
 
 func (c *messageAudioCache) render(ctx context.Context, sessionID string, seq int64) (voice.Audio, error) {
 	if c.renderer == nil {

@@ -52,7 +52,7 @@ export function ResumePalette() {
   const loading = useStore((s) => s.resumeLoading);
   const hosts = useStore((s) => s.hosts);
   const refreshSessions = useStore((s) => s.refreshSessions);
-  const agents = useStore((s) => s.agents);
+  const agents = useStore((s) => s.sessions);
   const order = useStore((s) => s.order);
   const searchSessions = useStore((s) => s.searchSessions);
   const resumeSession = useStore((s) => s.resumeSession);

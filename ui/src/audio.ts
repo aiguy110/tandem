@@ -28,9 +28,9 @@ export function lastAgentReply(events: { seq: number; event: WireEvent }[]): { s
 // Render the exact same provider-backed clip used by the transcript's Listen
 // control. The caller owns the returned object URL and must revoke it when it
 // replaces or discards the clip.
-export async function renderMessageAudio(agentId: string, seq: number): Promise<string> {
+export async function renderMessageAudio(sessionId: string, seq: number): Promise<string> {
   const token = storedToken();
-  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages/${seq}/audio`, {
+  const response = await fetch(`/api/agents/${encodeURIComponent(sessionId)}/messages/${seq}/audio`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });

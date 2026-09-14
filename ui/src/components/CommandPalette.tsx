@@ -13,13 +13,13 @@ interface Entry {
   run: () => void;
 }
 
-// Command palette (D10): every command + jump-to-agent-by-name, each row showing
+// Command palette (D10): every command + jump-to-session-by-name, each row showing
 // its keybinding inline so the palette teaches the hotkeys.
 export function CommandPalette() {
   const setModal = useStore((s) => s.setModal);
   const focus = useStore((s) => s.focus);
   const order = useStore(rankedOrder);
-  const agents = useStore((s) => s.agents);
+  const agents = useStore((s) => s.sessions);
 
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);

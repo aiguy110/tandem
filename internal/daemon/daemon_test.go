@@ -351,7 +351,7 @@ func (federatedAudioLocal) Snapshot(context.Context) (json.RawMessage, error) {
 func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
 	var m struct {
 		T       string `json:"t"`
-		SessionID string `json:"agentId"`
+		SessionID string `json:"sessionId"`
 		Seq     int64  `json:"seq"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -360,7 +360,7 @@ func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (js
 	if m.T != "render_message_audio" {
 		return nil, fmt.Errorf("unexpected command %q", m.T)
 	}
-	envelope := map[string]any{"t": "message_audio", "agentId": m.SessionID, "seq": m.Seq}
+	envelope := map[string]any{"t": "message_audio", "sessionId": m.SessionID, "seq": m.Seq}
 	if l.err != "" {
 		envelope["error"] = l.err
 	} else {

@@ -3,7 +3,7 @@
 // what the daemon sends. Kept as a hand-maintained copy so the UI has no build
 // dependency on the daemon package.
 
-export type AgentStatus = 'idle' | 'working' | 'blocked' | 'error';
+export type SessionStatus = 'idle' | 'working' | 'blocked' | 'error';
 export type ControlMode = 'transcript' | 'switching' | 'terminal';
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 export type Channel = 'transcript' | 'pty' | 'terminals' | 'browser' | 'status';
@@ -61,7 +61,7 @@ export interface QueuedPrompt {
 // sent as `quote` prompt blocks. docs/transcript-annotations.md.
 export interface Annotation {
   id: string;
-  agentId: string;
+  sessionId: string;
   seq: number;
   role: 'assistant' | 'user' | 'thought' | 'tool';
   quote: string;
@@ -70,11 +70,11 @@ export interface Annotation {
   updatedAt: number;
 }
 
-export type AgentEvent =
+export type SessionEvent =
   | { kind: 'user_message'; text?: string; blocks?: PromptBlock[] }
   // parentId (when present) is the toolCallId of the tool call that spawned the
   // emitter — e.g. a subagent's parent Task call — normalized by the daemon from
-  // an agent-specific `_meta` path. Absent for top-level activity. Lets the
+  // an session-specific `_meta` path. Absent for top-level activity. Lets the
   // transcript group subagent output under its spawn instead of interleaving it.
   | { kind: 'message_chunk'; text: string; parentId?: string }
   | { kind: 'thought_chunk'; text: string; parentId?: string }
@@ -83,7 +83,7 @@ export type AgentEvent =
   | { kind: 'plan'; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal_output'; termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }
-  | { kind: 'status'; status: AgentStatus }
+  | { kind: 'status'; status: SessionStatus }
   | { kind: 'error'; message: string }
   | { kind: 'takeover_request'; reqId: string; reason: string }
   | { kind: 'takeover_resolved'; reqId: string }
@@ -93,7 +93,7 @@ export type AgentEvent =
   | { kind: 'aside_capabilities'; fork: boolean }
   | { kind: 'steering_capabilities'; supported: boolean }
   | { kind: 'aside_started'; asideId: string; question: string }
-  | { kind: 'aside_event'; asideId: string; event: AgentEvent }
+  | { kind: 'aside_event'; asideId: string; event: SessionEvent }
   | { kind: 'aside_completed'; asideId: string; stopReason?: string; error?: string }
   | { kind: 'usage'; used: number; size: number; cost?: { amount: number; currency: string } | null; updatedAt?: number }
   | { kind: 'control_state'; mode: ControlMode }
@@ -104,10 +104,10 @@ export type AgentEvent =
   | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
-// AgentEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
+// SessionEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
 // tab), kept separate from the agent's raw_pty stream.
 export type WireEvent =
-  | AgentEvent
+  | SessionEvent
   | { kind: 'raw_pty'; dataB64: string }
   | { kind: 'shell_pty'; dataB64: string }
   | { kind: 'shell_exit'; message: string };
@@ -173,7 +173,7 @@ export interface GitRefInfo {
   isCurrent: boolean;
   isDefault: boolean;
   tandem?: {
-    agentId: string;
+    sessionId: string;
     agentName: string;
     integrationRef?: string;
     integrationKind?: 'local-branch' | 'remote-branch' | 'detached';
@@ -182,7 +182,7 @@ export interface GitRefInfo {
   };
 }
 
-export interface AgentSummary {
+export interface SessionSummary {
   id: string;
   name: string;
   agent?: string;
@@ -199,7 +199,7 @@ export interface AgentSummary {
     targetKind?: 'local-branch' | 'remote-branch' | 'detached';
     startCommit?: string;
   };
-  status: AgentStatus;
+  status: SessionStatus;
   pendingApprovals: number;
   controlMode: ControlMode;
   // Stable adapter kind (does not change across an ACP↔CLI handoff) and whether
@@ -221,9 +221,9 @@ export interface AgentSummary {
 
 // A resumable coding-agent session for the Resume picker — either a session
 // Tandem spawned ('tandem', with full linkage), ACP-discovered ('acp'), or
-// transcript-imported ('history'). Identity is `(agent, sessionId)`.
+// transcript-imported ('history'). Identity is `(agent, externalSessionId)`.
 export interface ResumableSession {
-  sessionId: string;
+	externalSessionId: string;
   source: 'tandem' | 'acp' | 'history';
   agent: string;
   adapter?: 'acp' | 'pty';
@@ -234,12 +234,13 @@ export interface ResumableSession {
   repoPath?: string;
   title?: string;
   updatedAt?: string;
-  agentId?: string;
+	// Tandem's own session identity when this upstream session is (or was) live.
+	sessionId?: string;
   agentName?: string;
   branch?: string;
   live?: boolean;
   closed?: boolean;
-  status?: AgentStatus;
+  status?: SessionStatus;
   resumable: boolean;
   historyOnly?: boolean;
   resumeError?: string;
@@ -431,47 +432,47 @@ export interface WorkspaceEntry {
 }
 
 export type ClientMsg =
-  | { t: 'subscribe'; agentId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
-  | { t: 'unsubscribe'; agentId: string; channels?: Channel[]; corrId?: string }
-  | { t: 'prompt'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
-  | { t: 'steer'; agentId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
-  | { t: 'aside'; agentId: string; text: string; corrId?: string }
-  | { t: 'remove_queued_prompt'; agentId: string; promptId: string; corrId?: string }
-  | { t: 'clear_prompt_queue'; agentId: string; corrId?: string }
-  | { t: 'add_annotation'; agentId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }
-  | { t: 'update_annotation'; agentId: string; id: string; comment: string; corrId?: string }
-  | { t: 'delete_annotation'; agentId: string; id: string; corrId?: string }
-  | { t: 'clear_annotations'; agentId: string; corrId?: string }
-  | { t: 'interrupt_and_clear_queue'; agentId: string; corrId?: string }
-  | { t: 'input'; agentId: string; bytesB64: string; corrId?: string }
-  | { t: 'resize'; agentId: string; cols: number; rows: number; corrId?: string }
-  | { t: 'permission_response'; agentId: string; reqId: string; optionId: string; corrId?: string }
-  | { t: 'interrupt'; agentId: string; corrId?: string }
-  | { t: 'set_mode'; agentId: string; modeId: string; corrId?: string }
-  | { t: 'set_config_option'; agentId: string; configId: string; value: string | boolean; corrId?: string }
-  | { t: 'set_audio_enabled'; agentId: string; enabled: boolean; corrId?: string }
-  | { t: 'set_audio_focus'; agentId: string; focused: boolean; corrId?: string }
-  | { t: 'set_audio_position'; agentId: string; seq: number; positionMs: number; corrId?: string }
+  | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
+  | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
+  | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'aside'; sessionId: string; text: string; corrId?: string }
+  | { t: 'remove_queued_prompt'; sessionId: string; promptId: string; corrId?: string }
+  | { t: 'clear_prompt_queue'; sessionId: string; corrId?: string }
+  | { t: 'add_annotation'; sessionId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }
+  | { t: 'update_annotation'; sessionId: string; id: string; comment: string; corrId?: string }
+  | { t: 'delete_annotation'; sessionId: string; id: string; corrId?: string }
+  | { t: 'clear_annotations'; sessionId: string; corrId?: string }
+  | { t: 'interrupt_and_clear_queue'; sessionId: string; corrId?: string }
+  | { t: 'input'; sessionId: string; bytesB64: string; corrId?: string }
+  | { t: 'resize'; sessionId: string; cols: number; rows: number; corrId?: string }
+  | { t: 'permission_response'; sessionId: string; reqId: string; optionId: string; corrId?: string }
+  | { t: 'interrupt'; sessionId: string; corrId?: string }
+  | { t: 'set_mode'; sessionId: string; modeId: string; corrId?: string }
+  | { t: 'set_config_option'; sessionId: string; configId: string; value: string | boolean; corrId?: string }
+  | { t: 'set_audio_enabled'; sessionId: string; enabled: boolean; corrId?: string }
+  | { t: 'set_audio_focus'; sessionId: string; focused: boolean; corrId?: string }
+  | { t: 'set_audio_position'; sessionId: string; seq: number; positionMs: number; corrId?: string }
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'list_system_notifications'; corrId?: string }
   | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
-  | { t: 'capture_snapshot'; agentId: string; name: string; corrId?: string }
+  | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; corrId?: string }
   | { t: 'delete_snapshot'; id: string; corrId?: string }
   | { t: 'list_profiles'; project?: string; corrId?: string }
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
-  | { t: 'rename_agent'; agentId: string; name: string; corrId?: string }
+  | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
-  | { t: 'get_close_preview'; agentId: string; corrId?: string }
-  | { t: 'get_diff'; agentId: string; corrId?: string }
-  | { t: 'close_agent'; agentId: string; force?: boolean; deleteWorktree?: boolean; deinitSubmodules?: boolean; corrId?: string }
-  | { t: 'merge_back'; agentId: string; mode: 'merge' | 'pr'; corrId?: string }
-  | { t: 'browser_control'; agentId: string; action: 'grab' | 'release'; corrId?: string }
-  | { t: 'restart_browser'; agentId: string; snapshotId?: string; corrId?: string }
-  | { t: 'browser_input'; agentId: string; event: BrowserInputWire; corrId?: string }
+  | { t: 'get_close_preview'; sessionId: string; corrId?: string }
+  | { t: 'get_diff'; sessionId: string; corrId?: string }
+  | { t: 'close_agent'; sessionId: string; force?: boolean; deleteWorktree?: boolean; deinitSubmodules?: boolean; corrId?: string }
+  | { t: 'merge_back'; sessionId: string; mode: 'merge' | 'pr'; corrId?: string }
+  | { t: 'browser_control'; sessionId: string; action: 'grab' | 'release'; corrId?: string }
+  | { t: 'restart_browser'; sessionId: string; snapshotId?: string; corrId?: string }
+  | { t: 'browser_input'; sessionId: string; event: BrowserInputWire; corrId?: string }
   | { t: 'list_dirs'; hostId?: string; corrId?: string }
-  | { t: 'list_workspace_entries'; agentId: string; path: string; corrId?: string }
+  | { t: 'list_workspace_entries'; sessionId: string; path: string; corrId?: string }
   | { t: 'list_git_refs'; repo: string; hostId?: string; corrId?: string }
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; hostId?: string; corrId?: string }
@@ -482,13 +483,13 @@ export type ClientMsg =
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; hostId?: string; corrId?: string }
   | { t: 'refresh_history'; agent: string; reindex?: boolean; corrId?: string }
   | { t: 'history_status'; agent?: string; corrId?: string }
-  | { t: 'resume_session'; sessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; hostId?: string; corrId?: string }
-  | { t: 'enter_terminal'; agentId: string; interrupt?: boolean; corrId?: string }
-  | { t: 'leave_terminal'; agentId: string; corrId?: string }
-  | { t: 'shell_open'; agentId: string; cols: number; rows: number; corrId?: string }
-  | { t: 'shell_input'; agentId: string; bytesB64: string; corrId?: string }
-  | { t: 'shell_resize'; agentId: string; cols: number; rows: number; corrId?: string }
-  | { t: 'shell_close'; agentId: string; corrId?: string };
+  | { t: 'resume_session'; externalSessionId: string; source: ResumableSession['source']; agent: string; cwd?: string; hostId?: string; corrId?: string }
+  | { t: 'enter_terminal'; sessionId: string; interrupt?: boolean; corrId?: string }
+  | { t: 'leave_terminal'; sessionId: string; corrId?: string }
+  | { t: 'shell_open'; sessionId: string; cols: number; rows: number; corrId?: string }
+  | { t: 'shell_input'; sessionId: string; bytesB64: string; corrId?: string }
+  | { t: 'shell_resize'; sessionId: string; cols: number; rows: number; corrId?: string }
+  | { t: 'shell_close'; sessionId: string; corrId?: string };
 
 export interface BrowserInputWire {
   kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';
@@ -507,14 +508,14 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
-  | { t: 'snapshot'; agentId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: AgentStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[]; audioReadySeqs?: number[]; audioReady?: { seq: number; durationMs: number }[]; audioPosition?: { seq: number; positionMs: number; updatedAt: number } }
-  | { t: 'audio_position'; agentId: string; seq: number; positionMs: number; updatedAt: number }
-  | { t: 'prompt_queue'; agentId: string; queuedPrompts: QueuedPrompt[] }
-  | { t: 'annotations'; agentId: string; annotations: Annotation[] }
-  | { t: 'event'; agentId: string; seq: number; event: WireEvent }
-  | { t: 'ack'; corrId?: string; agentId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
-  | { t: 'agent_closed'; agentId: string }
-  | { t: 'agents'; corrId?: string; agents: AgentSummary[] }
+  | { t: 'snapshot'; sessionId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: SessionStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[]; audioReadySeqs?: number[]; audioReady?: { seq: number; durationMs: number }[]; audioPosition?: { seq: number; positionMs: number; updatedAt: number } }
+  | { t: 'audio_position'; sessionId: string; seq: number; positionMs: number; updatedAt: number }
+  | { t: 'prompt_queue'; sessionId: string; queuedPrompts: QueuedPrompt[] }
+  | { t: 'annotations'; sessionId: string; annotations: Annotation[] }
+  | { t: 'event'; sessionId: string; seq: number; event: WireEvent }
+  | { t: 'ack'; corrId?: string; sessionId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
+  | { t: 'agent_closed'; sessionId: string }
+  | { t: 'agents'; corrId?: string; sessions: SessionSummary[]; agentId?: string }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
@@ -529,5 +530,5 @@ export type ServerMsg =
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog; hostId?: string }
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
-  | { t: 'browser_frame'; agentId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; agentId: string; active: boolean; controlOwner: 'agent' | 'user' };
+  | { t: 'browser_frame'; sessionId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
+  | { t: 'browser_state'; sessionId: string; active: boolean; controlOwner: 'agent' | 'user' };

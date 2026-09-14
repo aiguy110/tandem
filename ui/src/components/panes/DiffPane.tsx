@@ -4,7 +4,7 @@ import type { WorkspaceDiff } from '../../wire';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 
 export function DiffPane() {
-  const agentId = useStore((s) => s.focusedId);
+  const sessionId = useStore((s) => s.focusedId);
   const getDiff = useStore((s) => s.getDiff);
   const [diff, setDiff] = useState<WorkspaceDiff | null>(null);
   const [error, setError] = useState('');
@@ -15,11 +15,11 @@ export function DiffPane() {
     let current = true;
     setDiff(null);
     setError('');
-    if (agentId) getDiff(agentId).then((value) => current && setDiff(value)).catch((err: Error) => current && setError(err.message));
+    if (sessionId) getDiff(sessionId).then((value) => current && setDiff(value)).catch((err: Error) => current && setError(err.message));
     return () => { current = false; };
-  }, [agentId, getDiff, refresh]);
+  }, [sessionId, getDiff, refresh]);
 
-  if (!agentId) return null;
+  if (!sessionId) return null;
   return (
     <div className="pane diff-pane">
       <div className="diff-toolbar">

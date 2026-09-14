@@ -16,8 +16,8 @@ type TakeoverOptions struct {
 }
 
 type takeover struct {
-	sessionID  string
-	resolved bool
+	sessionID string
+	resolved  bool
 }
 
 // Takeovers is the authenticated HTTP state behind tandem mcp-control. The WS
@@ -40,7 +40,10 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPost:
-		sessionID := r.URL.Query().Get("agentId")
+		sessionID := r.URL.Query().Get("sessionId")
+		if sessionID == "" {
+			sessionID = r.URL.Query().Get("agentId")
+		}
 		if sessionID == "" || t.opts.AgentExists == nil || !t.opts.AgentExists(sessionID) {
 			takeoverJSON(w, http.StatusNotFound, map[string]string{"error": "no such agent or browser disabled"})
 			return

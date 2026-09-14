@@ -18,41 +18,41 @@ class ShellHub {
   private sizes = new Map<string, number>();
   private listeners = new Map<string, Set<(bytes: Uint8Array) => void>>();
 
-  push(agentId: string, dataB64: string): void {
+  push(sessionId: string, dataB64: string): void {
     const bytes = b64ToBytes(dataB64);
-    const buf = this.buffers.get(agentId) ?? [];
+    const buf = this.buffers.get(sessionId) ?? [];
     buf.push(bytes);
-    let size = (this.sizes.get(agentId) ?? 0) + bytes.length;
+    let size = (this.sizes.get(sessionId) ?? 0) + bytes.length;
     while (size > MAX_BYTES && buf.length > 1) size -= buf.shift()!.length;
-    this.buffers.set(agentId, buf);
-    this.sizes.set(agentId, size);
-    const ls = this.listeners.get(agentId);
+    this.buffers.set(sessionId, buf);
+    this.sizes.set(sessionId, size);
+    const ls = this.listeners.get(sessionId);
     if (ls) for (const l of ls) l(bytes);
   }
 
   // Subscribe live; immediately replays the buffered scrollback into `cb`.
-  subscribe(agentId: string, cb: (bytes: Uint8Array) => void): () => void {
-    for (const chunk of this.buffers.get(agentId) ?? []) cb(chunk);
-    const ls = this.listeners.get(agentId) ?? new Set();
+  subscribe(sessionId: string, cb: (bytes: Uint8Array) => void): () => void {
+    for (const chunk of this.buffers.get(sessionId) ?? []) cb(chunk);
+    const ls = this.listeners.get(sessionId) ?? new Set();
     ls.add(cb);
-    this.listeners.set(agentId, ls);
+    this.listeners.set(sessionId, ls);
     return () => ls.delete(cb);
   }
 
-  hasData(agentId: string): boolean {
-    return (this.sizes.get(agentId) ?? 0) > 0;
+  hasData(sessionId: string): boolean {
+    return (this.sizes.get(sessionId) ?? 0) > 0;
   }
 
   // Drop buffered scrollback so a fresh shell (after exit + restart) starts clean.
-  reset(agentId: string): void {
-    this.buffers.delete(agentId);
-    this.sizes.delete(agentId);
+  reset(sessionId: string): void {
+    this.buffers.delete(sessionId);
+    this.sizes.delete(sessionId);
   }
 
-  clear(agentId: string): void {
-    this.buffers.delete(agentId);
-    this.sizes.delete(agentId);
-    this.listeners.delete(agentId);
+  clear(sessionId: string): void {
+    this.buffers.delete(sessionId);
+    this.sizes.delete(sessionId);
+    this.listeners.delete(sessionId);
   }
 }
 

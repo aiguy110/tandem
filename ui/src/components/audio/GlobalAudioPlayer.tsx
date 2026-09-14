@@ -29,7 +29,7 @@ function tickFractions(playlist: number[], durations: Record<number, number>): n
 // prompt bar. Like InlineAudioBar, this is a pure view over the engine —
 // dragging/tapping call seekGlobal/skip and the engine resolves which
 // section that lands in.
-export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
+export function GlobalAudioPlayer({ sessionId }: { sessionId: string }) {
   const s = useEngineState();
   const [collapsed, setCollapsed] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -37,7 +37,7 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
   const remainingRef = useRef<HTMLSpanElement>(null);
   const dragging = useRef(false);
 
-  const active = s.agentId === agentId;
+  const active = s.sessionId === sessionId;
   const playlist = active ? s.playlist : [];
   const ticks = useMemo(() => tickFractions(playlist, s.durations), [playlist, s.durations]);
   const totalDuration = active ? getGlobalDuration() : 0;
@@ -94,7 +94,7 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
           type="button"
           className="global-audio-play"
           aria-label={isPlaying ? 'Pause' : 'Play'}
-          onClick={() => (s.index === -1 ? play(agentId) : toggle(agentId))}
+          onClick={() => (s.index === -1 ? play(sessionId) : toggle(sessionId))}
         >
           {isPlaying ? '❚❚' : '▶'}
         </button>
@@ -141,7 +141,7 @@ export function GlobalAudioPlayer({ agentId }: { agentId: string }) {
             style={{ left: `${fraction * 100}%` }}
             aria-label={`Jump to section ${i + 1}`}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); play(agentId, playlist[i]); }}
+            onClick={(e) => { e.stopPropagation(); play(sessionId, playlist[i]); }}
           />
         ))}
         <div className="global-audio-thumb" />

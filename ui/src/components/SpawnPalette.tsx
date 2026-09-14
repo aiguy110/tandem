@@ -109,7 +109,7 @@ export function SpawnPalette() {
   const snapshots = useStore((s) => s.snapshots);
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
-  const agents = useStore((s) => s.agents);
+  const agents = useStore((s) => s.sessions);
   const spawnHandoffFrom = useStore((s) => s.spawnHandoffFrom);
   const agentCatalog = useStore((s) => s.agentCatalog);
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
@@ -561,9 +561,9 @@ export function SpawnPalette() {
     if (r.error) {
       const code = r.error.split(':')[0];
       setError({ code, msg: r.error, dir: existingCwd ? { ...dir, path: existingCwd } : dir });
-    } else if (r.agentId) {
+    } else if (r.sessionId) {
       recordRecentDir(dir.path);
-      focus(r.agentId);
+      focus(r.sessionId);
       // store.spawn already closes the modal on success
     }
   };

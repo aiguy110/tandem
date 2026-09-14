@@ -24,7 +24,7 @@ func TestMCPHandshakeAndTakeoverBlocksUntilRelease(t *testing.T) {
 		}
 		switch r.Method {
 		case http.MethodPost:
-			if r.URL.Query().Get("agentId") != "api-58" {
+			if r.URL.Query().Get("sessionId") != "api-58" {
 				http.Error(w, "agent", 400)
 				return
 			}

@@ -7,11 +7,11 @@ import { useStore } from './store';
 import { ChordMatcher, comboFromEvent, hasModifier, loadBindings } from './commands/keymap';
 import { runCommand } from './commands/registry';
 
-function scopeOf(target: EventTarget | null, modalOpen: boolean, focused: boolean): 'global' | 'agent-focused' | 'modal-open' | 'text-input' {
+function scopeOf(target: EventTarget | null, modalOpen: boolean, focused: boolean): 'global' | 'session-focused' | 'modal-open' | 'text-input' {
   if (modalOpen) return 'modal-open';
   const el = target as HTMLElement | null;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return 'text-input';
-  return focused ? 'agent-focused' : 'global';
+  return focused ? 'session-focused' : 'global';
 }
 
 export function useGlobalKeys(): void {
@@ -36,7 +36,7 @@ export function useGlobalKeys(): void {
         && st.pane === 'chat'
         && st.focusedId
       ) {
-        const agent = st.agents[st.focusedId];
+        const agent = st.sessions[st.focusedId];
         if (agent?.adapter !== 'pty' && agent.controlMode === 'transcript') {
           const prompt = document.querySelector<HTMLTextAreaElement>(
             `[data-prompt-agent="${CSS.escape(st.focusedId)}"]`,
@@ -66,7 +66,7 @@ export function useGlobalKeys(): void {
       // A resolved command. agent.interrupt only when working; otherwise Escape
       // is a no-op here (modals handle their own Escape).
       if (res.id === 'agent.interrupt') {
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         if (!a || a.status !== 'working') return;
       }
       e.preventDefault();

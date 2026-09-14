@@ -33,7 +33,7 @@ export function buildCommands(): Command[] {
       enabled: () => !!s().focusedId,
       run: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         if (a && a.workspace.kind === 'worktree' && a.workspace.repoPath) {
           const targetRef = a.workspace.targetRef ?? 'HEAD';
           void st.spawn({
@@ -59,12 +59,12 @@ export function buildCommands(): Command[] {
       subtitle: 'New session starting from the focused session’s current commits',
       enabled: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         return !!a && a.workspace.kind === 'worktree' && !!a.workspace.repoPath && !!a.workspace.branch;
       },
       run: () => {
         const st = s();
-        const a = st.focusedId ? st.agents[st.focusedId] : undefined;
+        const a = st.focusedId ? st.sessions[st.focusedId] : undefined;
         if (!a || a.workspace.kind !== 'worktree' || !a.workspace.repoPath || !a.workspace.branch) return;
         void st.spawn({
           adapter: 'acp',
@@ -96,8 +96,8 @@ export function buildCommands(): Command[] {
         const top = allApprovals(s())[0];
         if (top) {
           const allow = top.approval.options.find((o) => /allow|yes|approve/i.test(o.name)) ?? top.approval.options[0];
-          s().respond(top.agentId, top.approval.reqId, allow.optionId);
-          s().focus(top.agentId);
+          s().respond(top.sessionId, top.approval.reqId, allow.optionId);
+          s().focus(top.sessionId);
         }
       },
     },
@@ -110,8 +110,8 @@ export function buildCommands(): Command[] {
         const top = allApprovals(s())[0];
         if (top) {
           const deny = top.approval.options.find((o) => /reject|deny|no/i.test(o.name)) ?? top.approval.options[top.approval.options.length - 1];
-          s().respond(top.agentId, top.approval.reqId, deny.optionId);
-          s().focus(top.agentId);
+          s().respond(top.sessionId, top.approval.reqId, deny.optionId);
+          s().focus(top.sessionId);
         }
       },
     },
@@ -121,7 +121,7 @@ export function buildCommands(): Command[] {
       subtitle: 'Cancel the focused session’s current turn',
       enabled: () => {
         const st = s();
-        return !!st.focusedId && st.agents[st.focusedId]?.status === 'working';
+        return !!st.focusedId && st.sessions[st.focusedId]?.status === 'working';
       },
       run: () => {
         const st = s();
@@ -151,7 +151,7 @@ export function buildCommands(): Command[] {
       subtitle: 'Grab or hand back control of the focused session’s shared browser',
       enabled: () => {
         const st = s();
-        return !!st.focusedId && !!st.agents[st.focusedId]?.browserActive;
+        return !!st.focusedId && !!st.sessions[st.focusedId]?.browserActive;
       },
       run: () => {
         const st = s();

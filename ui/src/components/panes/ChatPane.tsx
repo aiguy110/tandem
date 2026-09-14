@@ -15,8 +15,8 @@ interface ChatPaneProps {
 }
 
 export function ChatPane({ confirm, onCancelConfirm, onConfirmCli, onConfirmAcp }: ChatPaneProps) {
-  const agentId = useStore((s) => s.focusedId)!;
-  const agent = useStore((s) => s.agents[agentId]);
+  const sessionId = useStore((s) => s.focusedId)!;
+  const agent = useStore((s) => s.sessions[sessionId]);
   const send = useStore((s) => s.send);
 
   if (!agent) return null;
@@ -31,10 +31,10 @@ export function ChatPane({ confirm, onCancelConfirm, onConfirmCli, onConfirmAcp 
         {cliView ? (
           <div className="term-host">
             <PtyTerminal
-              key={`cli-${agentId}`}
-              subscribe={(cb) => ptyHub.subscribe(agentId, cb)}
-              onData={(d) => send({ t: 'input', agentId, bytesB64: encode(d) })}
-              onResize={(cols, rows) => send({ t: 'resize', agentId, cols, rows })}
+              key={`cli-${sessionId}`}
+              subscribe={(cb) => ptyHub.subscribe(sessionId, cb)}
+              onData={(d) => send({ t: 'input', sessionId, bytesB64: encode(d) })}
+              onResize={(cols, rows) => send({ t: 'resize', sessionId, cols, rows })}
             />
             {mode === 'terminal' && (
               <div className="term-note">

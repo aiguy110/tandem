@@ -19,7 +19,7 @@ function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
 
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
-  const agent = useStore((s) => (s.focusedId ? s.agents[s.focusedId] : undefined));
+  const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined));
   const pane = useStore((s) => s.pane);
   const setPane = useStore((s) => s.setPane);
   const enterTerminal = useStore((s) => s.enterTerminal);

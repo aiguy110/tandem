@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import type { AgentView } from '../store';
+import type { SessionView } from '../store';
 import type { ResumableSession, SessionSearchResult } from '../wire';
 import { ResumePalette } from './ResumePalette';
 
@@ -9,7 +9,7 @@ const PLACEHOLDER = 'Resume a session — name, repo, or transcript…';
 
 function session(overrides: Partial<ResumableSession> = {}): ResumableSession {
   return {
-    sessionId: 'session-1',
+    externalSessionId: 'session-1',
     source: 'history',
     agent: 'pi',
     cwd: '/repo',
@@ -22,15 +22,15 @@ function session(overrides: Partial<ResumableSession> = {}): ResumableSession {
   };
 }
 
-function agent(overrides: Partial<AgentView> = {}): AgentView {
+function agent(overrides: Partial<SessionView> = {}): SessionView {
   return {
-    id: 'agent-1',
+    id: 'session-1',
     name: 'Live agent',
     agent: 'claude',
     status: 'working',
     workspace: { kind: 'worktree', repo: 'repo', repoPath: '/repo', branch: 'feature', cwd: '/wt/feature' },
     ...overrides,
-  } as AgentView;
+  } as SessionView;
 }
 
 function result(value: ResumableSession, text: string, hitCount = 1): SessionSearchResult {
@@ -38,7 +38,7 @@ function result(value: ResumableSession, text: string, hitCount = 1): SessionSea
     session: value,
     score: -1,
     hits: Array.from({ length: hitCount }, (_, index) => ({
-      entryId: `${value.sessionId}-entry-${index}`,
+      entryId: `${value.externalSessionId}-entry-${index}`,
       role: index ? 'assistant' : 'user',
       match: { text: `${text} ${index}`, highlights: [{ start: 0, end: Array.from(text).length }] },
     })),
@@ -49,7 +49,7 @@ function setup(state: Partial<ReturnType<typeof useStore.getState>>) {
   useStore.setState({
     resumeCatalog: { sessions: [], adapters: [] },
     resumeLoading: false,
-    agents: {},
+    sessions: {},
     order: [],
     searchSessions: vi.fn().mockResolvedValue([]),
     resumeSession: vi.fn().mockResolvedValue({}),
@@ -77,7 +77,7 @@ describe('ResumePalette', () => {
       resumeCatalog: {
         sessions: [
           session(),
-          session({ sessionId: 'other', repo: 'outpost', repoPath: '/outpost', updatedAt: '2020-01-01T00:00:00Z' }),
+          session({ externalSessionId: 'other', repo: 'outpost', repoPath: '/outpost', updatedAt: '2020-01-01T00:00:00Z' }),
         ],
         adapters: [],
       },
@@ -93,9 +93,9 @@ describe('ResumePalette', () => {
     const setPane = vi.fn();
     const setModal = vi.fn();
     setup({
-      resumeCatalog: { sessions: [session({ sessionId: 'owned', agentId: 'agent-1', source: 'tandem' })], adapters: [] },
-      agents: { 'agent-1': agent() },
-      order: ['agent-1'],
+      resumeCatalog: { sessions: [session({ externalSessionId: 'owned', sessionId: 'session-1', source: 'tandem' })], adapters: [] },
+      sessions: { 'session-1': agent() },
+      order: ['session-1'],
       focus,
       resumeSession,
       setPane,
@@ -104,7 +104,7 @@ describe('ResumePalette', () => {
     const view = render(<ResumePalette />);
     expect(view.container.querySelector('.resume-badge')?.textContent).toBe('active');
     fireEvent.keyDown(view.container.querySelector('.modal')!, { key: 'Enter' });
-    expect(focus).toHaveBeenCalledWith('agent-1');
+    expect(focus).toHaveBeenCalledWith('session-1');
     expect(setPane).toHaveBeenCalledWith('chat');
     expect(setModal).toHaveBeenCalledWith('none');
     expect(resumeSession).not.toHaveBeenCalled();
@@ -136,9 +136,9 @@ describe('ResumePalette', () => {
     fireEvent.change(input, { target: { value: 'new' } });
     await act(async () => vi.advanceTimersByTime(125));
 
-    await act(async () => resolvers.get('new')!([result(session({ sessionId: 'new', title: 'zzz' }), 'new context')]));
+    await act(async () => resolvers.get('new')!([result(session({ externalSessionId: 'new', title: 'zzz' }), 'new context')]));
     expect(view.container.textContent).toContain('new context');
-    await act(async () => resolvers.get('old')!([result(session({ sessionId: 'old', title: 'zzz' }), 'old context')]));
+    await act(async () => resolvers.get('old')!([result(session({ externalSessionId: 'old', title: 'zzz' }), 'old context')]));
     expect(view.container.textContent).toContain('new context');
     expect(view.container.textContent).not.toContain('old context');
   });
@@ -196,7 +196,7 @@ describe('ResumePalette', () => {
   it('arrow keys walk rows across repository groups', () => {
     setup({
       resumeCatalog: {
-        sessions: [session({ sessionId: 'a' }), session({ sessionId: 'b', repo: 'outpost', repoPath: '/outpost' })],
+        sessions: [session({ externalSessionId: 'a' }), session({ externalSessionId: 'b', repo: 'outpost', repoPath: '/outpost' })],
         adapters: [],
       },
     });

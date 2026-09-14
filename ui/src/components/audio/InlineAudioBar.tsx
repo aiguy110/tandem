@@ -13,14 +13,14 @@ export function formatAudioTime(seconds: number): string {
 // owns no media element and no local progress bookkeeping. The three-state
 // progress rule (played / live / not-yet-played) is derived from comparing
 // this row's seq to the engine's current playlist index; see ui/src/audio/engine.ts.
-export function InlineAudioBar({ agentId, seq }: { agentId: string; seq: number }) {
+export function InlineAudioBar({ sessionId, seq }: { sessionId: string; seq: number }) {
   const s = useEngineState();
   const trackRef = useRef<HTMLDivElement>(null);
   const elapsedRef = useRef<HTMLSpanElement>(null);
   const remainingRef = useRef<HTMLSpanElement>(null);
   const dragging = useRef(false);
 
-  const sectionIndex = s.agentId === agentId ? s.playlist.indexOf(seq) : -1;
+  const sectionIndex = s.sessionId === sessionId ? s.playlist.indexOf(seq) : -1;
   const isCurrent = sectionIndex !== -1 && sectionIndex === s.index;
   const isPast = sectionIndex !== -1 && s.index !== -1 && sectionIndex < s.index;
   const duration = isCurrent && Number.isFinite(s.duration) ? s.duration : s.durations[seq];
@@ -60,7 +60,7 @@ export function InlineAudioBar({ agentId, seq }: { agentId: string; seq: number 
         type="button"
         className="inline-audio-play"
         aria-label={isPlaying ? 'Pause response audio' : 'Play response audio'}
-        onClick={() => (isCurrent ? toggle(agentId) : play(agentId, seq))}
+        onClick={() => (isCurrent ? toggle(sessionId) : play(sessionId, seq))}
       >
         {isPlaying ? '❚❚' : '▶'}
       </button>

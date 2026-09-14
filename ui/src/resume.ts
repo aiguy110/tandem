@@ -8,7 +8,7 @@
 // scored as (how well it matched, then which field it matched in).
 
 import { fuzzyScore } from './fuzzy';
-import type { AgentView } from './store';
+import type { SessionView } from './store';
 import type { ResumableSession, SessionSearchHit, SessionSearchResult } from './wire';
 
 // How well the query matched, best first. Compared before FIELD.
@@ -46,11 +46,11 @@ export interface ResumeGroup {
 }
 
 export function sessionKey(session: ResumableSession): string {
-  return `${session.hostId ?? 'local'}\0${session.agent}\0${session.sessionId || session.agentId || session.cwd}`;
+	return `${session.hostId ?? 'local'}\0${session.agent}\0${session.externalSessionId || session.sessionId || session.cwd}`;
 }
 
 export function sessionName(session: ResumableSession): string {
-  return session.title || session.agentName || session.sessionId || 'Untitled session';
+	return session.title || session.agentName || session.externalSessionId || 'Untitled session';
 }
 
 function repoKeyOf(session: ResumableSession): string {
@@ -82,17 +82,17 @@ export function matchQuality(query: string, target: string): number {
 
 // A running agent may have no resumable-catalog row yet (no ACP session id
 // recorded, or the catalog is mid-refresh), so Resume synthesizes one. It is
-// never resumed — liveAgentId routes selection to focus instead.
-export function sessionFromLiveAgent(agent: AgentView): ResumableSession {
+	// never resumed — live sessionId routes selection to focus instead.
+export function sessionFromLiveAgent(agent: SessionView): ResumableSession {
   return {
-    sessionId: '',
+		externalSessionId: '',
     source: 'tandem',
     agent: agent.agent ?? '',
     cwd: agent.workspace.cwd,
     repo: agent.workspace.repo,
     repoPath: agent.workspace.repoPath,
     title: agent.name,
-    agentId: agent.id,
+    sessionId: agent.id,
     agentName: agent.name,
     branch: agent.workspace.branch,
     live: true,
@@ -106,7 +106,7 @@ export function sessionFromLiveAgent(agent: AgentView): ResumableSession {
 // Incidental identifiers, kept searchable at the lowest field priority so a
 // branch or agent name stays findable without competing with real titles.
 function contextText(session: ResumableSession): string {
-  return [session.agent, session.branch, session.cwd, session.sessionId].filter(Boolean).join(' ');
+	return [session.agent, session.branch, session.cwd, session.externalSessionId].filter(Boolean).join(' ');
 }
 
 // Recency is the final tiebreaker, and the only ordering when the query is
@@ -154,7 +154,7 @@ function rankEntry(entry: ResumeEntry, query: string): boolean {
 export function buildResumeGroups(
   query: string,
   sessions: ResumableSession[],
-  liveAgents: AgentView[],
+  liveAgents: SessionView[],
   historyResults: SessionSearchResult[],
 ): ResumeGroup[] {
   const trimmed = query.trim();
@@ -174,7 +174,7 @@ export function buildResumeGroups(
   // overlays the catalog row rather than adding a duplicate.
   const byAgentId = new Map<string, ResumeEntry>();
   for (const entry of byKey.values()) {
-    if (entry.session.agentId) byAgentId.set(entry.session.agentId, entry);
+    if (entry.session.sessionId) byAgentId.set(entry.session.sessionId, entry);
   }
   for (const agent of liveAgents) {
     const existing = byAgentId.get(agent.id);
