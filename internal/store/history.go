@@ -94,7 +94,7 @@ type HistorySearchHit struct {
 // HistorySessions returns normalized sessions for catalog integration without
 // exposing transcript rows. An empty source returns sessions from every source.
 func (s *Store) HistorySessions(source string) ([]HistorySession, error) {
-	query := `SELECT source, agent, externalId, agentId, cwd, title, createdAt, updatedAt,
+	query := `SELECT source, agent, externalId, sessionId, cwd, title, createdAt, updatedAt,
 indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missingSince FROM history_sessions`
 	var args []any
 	if source != "" {
@@ -178,12 +178,12 @@ func (s *Store) replaceHistorySessionAndCheckpoint(session HistorySession, entri
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM history_entries WHERE sessionId = ?", sessionID); err != nil {
+	if _, err := tx.Exec("DELETE FROM history_entries WHERE historySessionId = ?", sessionID); err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		if _, err := tx.Exec(`INSERT INTO history_entries
-(sessionId, externalId, ordinal, role, kind, ts, text, truncated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+(historySessionId, externalId, ordinal, role, kind, ts, text, truncated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			sessionID, entry.ExternalID, entry.Ordinal, entry.Role, entry.Kind, entry.Timestamp, entry.Text, entry.Truncated); err != nil {
 			return err
 		}
@@ -338,10 +338,10 @@ func stringsToAny(values []string) []any {
 
 func replaceHistorySessionRow(tx *sql.Tx, session HistorySession) (int64, error) {
 	_, err := tx.Exec(`INSERT INTO history_sessions
-(source, agent, externalId, agentId, cwd, title, createdAt, updatedAt, indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missingSince)
+(source, agent, externalId, sessionId, cwd, title, createdAt, updatedAt, indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missingSince)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 ON CONFLICT(source, agent, externalId) DO UPDATE SET
-agentId=excluded.agentId, cwd=excluded.cwd, title=excluded.title, createdAt=excluded.createdAt,
+sessionId=excluded.sessionId, cwd=excluded.cwd, title=excluded.title, createdAt=excluded.createdAt,
 updatedAt=excluded.updatedAt, indexedAt=excluded.indexedAt, resumable=excluded.resumable,
 sourceKey=excluded.sourceKey, sourceMeta=excluded.sourceMeta, importerId=excluded.importerId,
 importerVersion=excluded.importerVersion, missingSince=NULL`,
@@ -370,13 +370,13 @@ func (s *Store) SearchHistory(query string, limit int) ([]HistorySearchHit, erro
 		limit = 100
 	}
 	rows, err := s.db.Query(`SELECT
-hs.source, hs.agent, hs.externalId, hs.agentId, hs.cwd, hs.title, hs.createdAt, hs.updatedAt,
+hs.source, hs.agent, hs.externalId, hs.sessionId, hs.cwd, hs.title, hs.createdAt, hs.updatedAt,
 hs.indexedAt, hs.resumable, hs.sourceKey, hs.sourceMeta,
 he.id, he.externalId, he.ordinal, he.role, he.kind, he.ts,
 bm25(history_entries_fts), snippet(history_entries_fts, 0, char(1), char(2), ' … ', 32)
 FROM history_entries_fts
 JOIN history_entries he ON he.id = history_entries_fts.rowid
-JOIN history_sessions hs ON hs.id = he.sessionId
+JOIN history_sessions hs ON hs.id = he.historySessionId
 WHERE history_entries_fts MATCH ?
 ORDER BY bm25(history_entries_fts), COALESCE(he.ts, hs.updatedAt, hs.createdAt, 0) DESC
 LIMIT ?`, match, limit)
@@ -472,7 +472,7 @@ func upsertTandemHistorySession(tx *sql.Tx, sess Session, indexedAt int64) error
 	if sess.ClosedAt != nil {
 		updatedAt = *sess.ClosedAt
 	}
-	sourceMeta, _ := json.Marshal(map[string]string{"agentId": sess.ID})
+	sourceMeta, _ := json.Marshal(map[string]string{"sessionId": sess.ID})
 	_, err := replaceHistorySessionRow(tx, HistorySession{
 		Source: tandemHistorySource, Agent: tandemAgent(sess.Spec), ExternalID: sess.ID,
 		SessionID: sess.ID, CWD: sess.CWD, Title: sess.Name, CreatedAt: &sess.CreatedAt,
@@ -489,8 +489,8 @@ func indexTandemEvent(tx *sql.Tx, sessionID string, seq int64, kind, payload str
 	}
 	var sess Session
 	var spec string
-	if err := tx.QueryRow(`SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt
-FROM agents WHERE id = ?`, sessionID).Scan(&sess.ID, &sess.Name, &spec, &sess.CWD, &sess.ExternalSessionID, &sess.Status, &sess.CreatedAt, &sess.ClosedAt); err != nil {
+	if err := tx.QueryRow(`SELECT id, name, spec, cwd, externalSessionId, status, createdAt, closedAt
+FROM sessions WHERE id = ?`, sessionID).Scan(&sess.ID, &sess.Name, &spec, &sess.CWD, &sess.ExternalSessionID, &sess.Status, &sess.CreatedAt, &sess.ClosedAt); err != nil {
 		// EventLog is intentionally usable without a registry-owned agent row
 		// (tests and embedders rely on that). Such streams remain durable but
 		// lack enough metadata to become resume-history sessions.
@@ -513,7 +513,7 @@ FROM agents WHERE id = ?`, sessionID).Scan(&sess.ID, &sess.Name, &spec, &sess.CW
 		var previousID int64
 		var previousRole string
 		err := tx.QueryRow(`SELECT id, role FROM history_entries
-WHERE sessionId = ? ORDER BY ordinal DESC LIMIT 1`, historyRowID).Scan(&previousID, &previousRole)
+WHERE historySessionId = ? ORDER BY ordinal DESC LIMIT 1`, historyRowID).Scan(&previousID, &previousRole)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -526,8 +526,8 @@ SET ordinal = ?, ts = ?, text = text || ? WHERE id = ?`, seq, ts, text, previous
 		}
 	}
 	_, err := tx.Exec(`INSERT INTO history_entries
-(sessionId, externalId, ordinal, role, kind, ts, text, truncated) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-ON CONFLICT(sessionId, externalId) DO UPDATE SET ordinal=excluded.ordinal, role=excluded.role,
+(historySessionId, externalId, ordinal, role, kind, ts, text, truncated) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(historySessionId, externalId) DO UPDATE SET ordinal=excluded.ordinal, role=excluded.role,
 kind=excluded.kind, ts=excluded.ts, text=excluded.text`,
 		historyRowID, strconv.FormatInt(seq, 10), seq, role, kind, ts, text)
 	return err
@@ -555,14 +555,14 @@ func (s *Store) backfillTandemHistory() error {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT a.id, a.name, a.spec, a.cwd, a.acpSessionId, a.status, a.createdAt, a.closedAt,
+	rows, err := tx.Query(`SELECT a.id, a.name, a.spec, a.cwd, a.externalSessionId, a.status, a.createdAt, a.closedAt,
 e.seq, e.kind, e.payload, e.ts
-FROM agents a JOIN events e ON e.agentId = a.id
+FROM sessions a JOIN events e ON e.sessionId = a.id
 WHERE e.kind IN ('user_message', 'message_chunk')
 AND e.seq > COALESCE((
 	SELECT MAX(he.ordinal) FROM history_sessions hs
-	JOIN history_entries he ON he.sessionId = hs.id
-	WHERE hs.source = 'tandem' AND hs.agentId = a.id
+	JOIN history_entries he ON he.historySessionId = hs.id
+	WHERE hs.source = 'tandem' AND hs.sessionId = a.id
 ), 0)
 ORDER BY a.id, e.seq`)
 	if err != nil {

@@ -1,28 +1,10 @@
 {
-  "pragmas": {
-    "journal_mode": "wal",
-    "synchronous": 1,
-    "foreign_keys": 1,
-    "user_version": 0
-  },
   "schema": [
     {
       "type": "index",
-      "name": "annotations_agent",
+      "name": "annotations_session",
       "tableName": "annotations",
-      "sql": "CREATE INDEX annotations_agent ON annotations(agentId)"
-    },
-    {
-      "type": "index",
-      "name": "sqlite_autoindex_agent_assets_1",
-      "tableName": "agent_assets",
-      "sql": null
-    },
-    {
-      "type": "index",
-      "name": "sqlite_autoindex_agents_1",
-      "tableName": "agents",
-      "sql": null
+      "sql": "CREATE INDEX annotations_session ON annotations(sessionId)"
     },
     {
       "type": "index",
@@ -34,6 +16,12 @@
       "type": "index",
       "name": "sqlite_autoindex_assets_1",
       "tableName": "assets",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_audio_position_1",
+      "tableName": "audio_position",
       "sql": null
     },
     {
@@ -80,6 +68,12 @@
     },
     {
       "type": "index",
+      "name": "sqlite_autoindex_federation_slaves_1",
+      "tableName": "federation_slaves",
+      "sql": null
+    },
+    {
+      "type": "index",
       "name": "sqlite_autoindex_history_entries_1",
       "tableName": "history_entries",
       "sql": null
@@ -94,6 +88,12 @@
       "type": "index",
       "name": "sqlite_autoindex_history_sessions_1",
       "tableName": "history_sessions",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_message_audio_1",
+      "tableName": "message_audio",
       "sql": null
     },
     {
@@ -115,28 +115,40 @@
       "sql": null
     },
     {
-      "type": "table",
-      "name": "agent_assets",
-      "tableName": "agent_assets",
-      "sql": "CREATE TABLE agent_assets (\n        agentId   TEXT NOT NULL,\n        assetId   TEXT NOT NULL,\n        createdAt INTEGER NOT NULL,\n        PRIMARY KEY (agentId, assetId),\n        FOREIGN KEY (assetId) REFERENCES assets(id)\n      )"
+      "type": "index",
+      "name": "sqlite_autoindex_session_assets_1",
+      "tableName": "session_assets",
+      "sql": null
     },
     {
-      "type": "table",
-      "name": "agents",
-      "tableName": "agents",
-      "sql": "CREATE TABLE agents (\n        id           TEXT PRIMARY KEY,\n        name         TEXT NOT NULL,\n        spec         TEXT NOT NULL,\n        cwd          TEXT NOT NULL DEFAULT '',\n        acpSessionId TEXT,\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        closedAt     INTEGER\n      )"
+      "type": "index",
+      "name": "sqlite_autoindex_session_audio_settings_1",
+      "tableName": "session_audio_settings",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_sessions_1",
+      "tableName": "sessions",
+      "sql": null
     },
     {
       "type": "table",
       "name": "annotations",
       "tableName": "annotations",
-      "sql": "CREATE TABLE annotations (\n        id        TEXT PRIMARY KEY,\n        agentId   TEXT NOT NULL,\n        seq       INTEGER NOT NULL,\n        role      TEXT NOT NULL,\n        quote     TEXT NOT NULL,\n        comment   TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL,\n        updatedAt INTEGER NOT NULL\n      )"
+      "sql": "CREATE TABLE annotations (\n        id        TEXT PRIMARY KEY,\n        sessionId   TEXT NOT NULL,\n        seq       INTEGER NOT NULL,\n        role      TEXT NOT NULL,\n        quote     TEXT NOT NULL,\n        comment   TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL,\n        updatedAt INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",
       "name": "assets",
       "tableName": "assets",
       "sql": "CREATE TABLE assets (\n        id        TEXT PRIMARY KEY,\n        mimeType  TEXT NOT NULL,\n        size      INTEGER NOT NULL,\n        createdAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "audio_position",
+      "tableName": "audio_position",
+      "sql": "CREATE TABLE audio_position (\n        sessionId    TEXT PRIMARY KEY,\n        seq        INTEGER NOT NULL,\n        positionMs INTEGER NOT NULL,\n        updatedAt  INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",
@@ -160,13 +172,13 @@
       "type": "table",
       "name": "automation_wakeups",
       "tableName": "automation_wakeups",
-      "sql": "CREATE TABLE automation_wakeups (\n        runId        TEXT PRIMARY KEY,\n        jobId        TEXT,\n        agentId      TEXT,\n        agentProfile TEXT NOT NULL DEFAULT '',\n        prompt       TEXT NOT NULL DEFAULT '',\n        reason       TEXT NOT NULL,\n        context      TEXT NOT NULL DEFAULT '{}',\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        completedAt INTEGER,\n        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE,\n        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL\n      )"
+      "sql": "CREATE TABLE automation_wakeups (\n        runId        TEXT PRIMARY KEY,\n        jobId        TEXT,\n        sessionId      TEXT,\n        agentProfile TEXT NOT NULL DEFAULT '',\n        prompt       TEXT NOT NULL DEFAULT '',\n        reason       TEXT NOT NULL,\n        context      TEXT NOT NULL DEFAULT '{}',\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        completedAt INTEGER,\n        FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE,\n        FOREIGN KEY (jobId) REFERENCES automation_jobs(id) ON DELETE SET NULL\n      )"
     },
     {
       "type": "table",
       "name": "browser_sessions",
       "tableName": "browser_sessions",
-      "sql": "CREATE TABLE browser_sessions (\n        agentId   TEXT PRIMARY KEY,\n        sessionId TEXT NOT NULL,\n        profileId TEXT NOT NULL DEFAULT '',\n        cdpUrl    TEXT NOT NULL DEFAULT '',\n        updatedAt INTEGER NOT NULL\n      )"
+      "sql": "CREATE TABLE browser_sessions (\n        sessionId       TEXT PRIMARY KEY,\n        driverSessionId TEXT NOT NULL,\n        profileId TEXT NOT NULL DEFAULT '',\n        cdpUrl    TEXT NOT NULL DEFAULT '',\n        updatedAt INTEGER NOT NULL\n      )"
     },
     {
       "type": "table",
@@ -178,13 +190,25 @@
       "type": "table",
       "name": "events",
       "tableName": "events",
-      "sql": "CREATE TABLE events (\n        agentId TEXT NOT NULL,\n        seq     INTEGER NOT NULL,\n        kind    TEXT NOT NULL,\n        payload TEXT NOT NULL,\n        ts      INTEGER NOT NULL,\n        PRIMARY KEY (agentId, seq)\n      )"
+      "sql": "CREATE TABLE events (\n        sessionId TEXT NOT NULL,\n        seq     INTEGER NOT NULL,\n        kind    TEXT NOT NULL,\n        payload TEXT NOT NULL,\n        ts      INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, seq)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "federation_master",
+      "tableName": "federation_master",
+      "sql": "CREATE TABLE federation_master (\n        singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),\n        url         TEXT NOT NULL,\n        hostId      TEXT NOT NULL,\n        credential  TEXT NOT NULL,\n        updatedAt   INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "federation_slaves",
+      "tableName": "federation_slaves",
+      "sql": "CREATE TABLE federation_slaves (\n        id          TEXT PRIMARY KEY,\n        name        TEXT NOT NULL DEFAULT '',\n        endpoint    TEXT NOT NULL DEFAULT '',\n        credential  TEXT NOT NULL DEFAULT '',\n        status      TEXT NOT NULL,\n        requestedAt INTEGER NOT NULL,\n        acceptedAt  INTEGER,\n        lastSeenAt  INTEGER,\n        protocolVersion INTEGER NOT NULL DEFAULT 0,\n        buildVersion    TEXT NOT NULL DEFAULT ''\n      )"
     },
     {
       "type": "table",
       "name": "history_entries",
       "tableName": "history_entries",
-      "sql": "CREATE TABLE history_entries (\n        id          INTEGER PRIMARY KEY,\n        sessionId   INTEGER NOT NULL,\n        externalId  TEXT NOT NULL,\n        ordinal     INTEGER NOT NULL,\n        role        TEXT NOT NULL DEFAULT '',\n        kind        TEXT NOT NULL DEFAULT '',\n        ts          INTEGER,\n        text        TEXT NOT NULL,\n        truncated   INTEGER NOT NULL DEFAULT 0,\n        UNIQUE (sessionId, externalId),\n        FOREIGN KEY (sessionId) REFERENCES history_sessions(id) ON DELETE CASCADE\n      )"
+      "sql": "CREATE TABLE history_entries (\n        id          INTEGER PRIMARY KEY,\n        historySessionId INTEGER NOT NULL,\n        externalId  TEXT NOT NULL,\n        ordinal     INTEGER NOT NULL,\n        role        TEXT NOT NULL DEFAULT '',\n        kind        TEXT NOT NULL DEFAULT '',\n        ts          INTEGER,\n        text        TEXT NOT NULL,\n        truncated   INTEGER NOT NULL DEFAULT 0,\n        UNIQUE (historySessionId, externalId),\n        FOREIGN KEY (historySessionId) REFERENCES history_sessions(id) ON DELETE CASCADE\n      )"
     },
     {
       "type": "table",
@@ -208,7 +232,13 @@
       "type": "table",
       "name": "history_sessions",
       "tableName": "history_sessions",
-      "sql": "CREATE TABLE history_sessions (\n        id          INTEGER PRIMARY KEY,\n        source      TEXT NOT NULL,\n        agent       TEXT NOT NULL,\n        externalId  TEXT NOT NULL,\n        agentId     TEXT NOT NULL DEFAULT '',\n        cwd         TEXT NOT NULL DEFAULT '',\n        title       TEXT NOT NULL DEFAULT '',\n        createdAt   INTEGER,\n        updatedAt   INTEGER,\n        indexedAt   INTEGER NOT NULL,\n        resumable   INTEGER NOT NULL DEFAULT 1,\n        sourceKey   TEXT NOT NULL,\n        sourceMeta  TEXT NOT NULL DEFAULT '{}',\n        importerId  TEXT NOT NULL DEFAULT '',\n        importerVersion INTEGER NOT NULL DEFAULT 0,\n        missingSince INTEGER,\n        UNIQUE (source, agent, externalId)\n      )"
+      "sql": "CREATE TABLE history_sessions (\n        id          INTEGER PRIMARY KEY,\n        source      TEXT NOT NULL,\n        agent       TEXT NOT NULL,\n        externalId  TEXT NOT NULL,\n        sessionId     TEXT NOT NULL DEFAULT '',\n        cwd         TEXT NOT NULL DEFAULT '',\n        title       TEXT NOT NULL DEFAULT '',\n        createdAt   INTEGER,\n        updatedAt   INTEGER,\n        indexedAt   INTEGER NOT NULL,\n        resumable   INTEGER NOT NULL DEFAULT 1,\n        sourceKey   TEXT NOT NULL,\n        sourceMeta  TEXT NOT NULL DEFAULT '{}',\n        importerId  TEXT NOT NULL DEFAULT '',\n        importerVersion INTEGER NOT NULL DEFAULT 0,\n        missingSince INTEGER,\n        UNIQUE (source, agent, externalId)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "message_audio",
+      "tableName": "message_audio",
+      "sql": "CREATE TABLE message_audio (\n        sessionId    TEXT NOT NULL,\n        seq        INTEGER NOT NULL,\n        mimeType   TEXT NOT NULL,\n        data       BLOB NOT NULL,\n        durationMs INTEGER NOT NULL DEFAULT 0,\n        createdAt  INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, seq)\n      )"
     },
     {
       "type": "table",
@@ -227,6 +257,24 @@
       "name": "repository_tool_grants",
       "tableName": "repository_tool_grants",
       "sql": "CREATE TABLE repository_tool_grants (\n        repositoryId TEXT NOT NULL,\n        toolName     TEXT NOT NULL,\n        approvalId   TEXT NOT NULL DEFAULT '',\n        grantedBy    TEXT NOT NULL DEFAULT '',\n        grantedAt    INTEGER NOT NULL,\n        revokedAt    INTEGER,\n        PRIMARY KEY (repositoryId, toolName)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "session_assets",
+      "tableName": "session_assets",
+      "sql": "CREATE TABLE session_assets (\n        sessionId   TEXT NOT NULL,\n        assetId   TEXT NOT NULL,\n        createdAt INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, assetId),\n        FOREIGN KEY (assetId) REFERENCES assets(id)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "session_audio_settings",
+      "tableName": "session_audio_settings",
+      "sql": "CREATE TABLE session_audio_settings (\n        sessionId         TEXT PRIMARY KEY,\n        enabled         INTEGER NOT NULL DEFAULT 0,\n        enabledAfterSeq INTEGER NOT NULL DEFAULT 0\n      )"
+    },
+    {
+      "type": "table",
+      "name": "sessions",
+      "tableName": "sessions",
+      "sql": "CREATE TABLE sessions (\n        id           TEXT PRIMARY KEY,\n        name         TEXT NOT NULL,\n        spec         TEXT NOT NULL,\n        cwd          TEXT NOT NULL DEFAULT '',\n        externalSessionId TEXT,\n        status       TEXT NOT NULL,\n        createdAt    INTEGER NOT NULL,\n        closedAt     INTEGER\n      )"
     }
   ]
 }

@@ -72,7 +72,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_assets", "agent_audio_settings", "agents", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants", "session_assets", "session_audio_settings", "sessions"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -170,7 +170,7 @@ func TestFreshSchemaMatchesNodeContract(t *testing.T) {
 	keep := func(rows []schemaRow) []schemaRow {
 		out := make([]schemaRow, 0, len(rows))
 		for _, row := range rows {
-			if row.TableName == "agent_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" || row.TableName == "federation_master" || row.TableName == "federation_slaves" {
+			if row.TableName == "session_audio_settings" || row.TableName == "message_audio" || row.TableName == "audio_position" || row.TableName == "federation_master" || row.TableName == "federation_slaves" {
 				continue
 			}
 			out = append(out, row)
@@ -282,7 +282,7 @@ func TestBrowserSessionPersistence(t *testing.T) {
 	}
 	// Deleting the agent cascades to its browser session.
 	if err := s.SaveBrowserSession("a-2", "sess-3", "", ""); err != nil {
-		// a-2 has no agents row; the session table has no FK, so this still saves.
+		// a-2 has no sessions row; the table has no FK, so this still saves.
 		t.Fatal(err)
 	}
 	if err := s.DeleteBrowserSession("a-1"); err != nil {
@@ -623,7 +623,7 @@ func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
 
 func TestMalformedRowsAreReported(t *testing.T) {
 	s, _ := openTestStore(t)
-	if _, err := s.db.Exec("INSERT INTO agents VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
+	if _, err := s.db.Exec("INSERT INTO sessions VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Session("bad-json"); err == nil || !strings.Contains(err.Error(), "malformed spec JSON") {
@@ -657,7 +657,7 @@ func TestCloseCheckpointsWAL(t *testing.T) {
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow("SELECT count(*) FROM agents").Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("checkpointed count=%d err=%v", count, err)
 	}
 }

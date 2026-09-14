@@ -17,37 +17,37 @@ import (
 var agentSuffix = regexp.MustCompile(`-(\d+)$`)
 
 const schema = `
-CREATE TABLE IF NOT EXISTS agents (
+CREATE TABLE IF NOT EXISTS sessions (
         id           TEXT PRIMARY KEY,
         name         TEXT NOT NULL,
         spec         TEXT NOT NULL,
         cwd          TEXT NOT NULL DEFAULT '',
-        acpSessionId TEXT,
+        externalSessionId TEXT,
         status       TEXT NOT NULL,
         createdAt    INTEGER NOT NULL,
         closedAt     INTEGER
       );
 CREATE TABLE IF NOT EXISTS events (
-        agentId TEXT NOT NULL,
+        sessionId TEXT NOT NULL,
         seq     INTEGER NOT NULL,
         kind    TEXT NOT NULL,
         payload TEXT NOT NULL,
         ts      INTEGER NOT NULL,
-        PRIMARY KEY (agentId, seq)
+        PRIMARY KEY (sessionId, seq)
       );
-CREATE TABLE IF NOT EXISTS agent_audio_settings (
-        agentId         TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS session_audio_settings (
+        sessionId         TEXT PRIMARY KEY,
         enabled         INTEGER NOT NULL DEFAULT 0,
         enabledAfterSeq INTEGER NOT NULL DEFAULT 0
       );
 CREATE TABLE IF NOT EXISTS message_audio (
-        agentId    TEXT NOT NULL,
+        sessionId    TEXT NOT NULL,
         seq        INTEGER NOT NULL,
         mimeType   TEXT NOT NULL,
         data       BLOB NOT NULL,
         durationMs INTEGER NOT NULL DEFAULT 0,
         createdAt  INTEGER NOT NULL,
-        PRIMARY KEY (agentId, seq)
+        PRIMARY KEY (sessionId, seq)
       );
 CREATE TABLE IF NOT EXISTS assets (
         id        TEXT PRIMARY KEY,
@@ -55,16 +55,16 @@ CREATE TABLE IF NOT EXISTS assets (
         size      INTEGER NOT NULL,
         createdAt INTEGER NOT NULL
       );
-CREATE TABLE IF NOT EXISTS agent_assets (
-        agentId   TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS session_assets (
+        sessionId   TEXT NOT NULL,
         assetId   TEXT NOT NULL,
         createdAt INTEGER NOT NULL,
-        PRIMARY KEY (agentId, assetId),
+        PRIMARY KEY (sessionId, assetId),
         FOREIGN KEY (assetId) REFERENCES assets(id)
       );
 CREATE TABLE IF NOT EXISTS browser_sessions (
-        agentId   TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
+        sessionId       TEXT PRIMARY KEY,
+        driverSessionId TEXT NOT NULL,
         profileId TEXT NOT NULL DEFAULT '',
         cdpUrl    TEXT NOT NULL DEFAULT '',
         updatedAt INTEGER NOT NULL
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS history_sessions (
         source      TEXT NOT NULL,
         agent       TEXT NOT NULL,
         externalId  TEXT NOT NULL,
-        agentId     TEXT NOT NULL DEFAULT '',
+        sessionId     TEXT NOT NULL DEFAULT '',
         cwd         TEXT NOT NULL DEFAULT '',
         title       TEXT NOT NULL DEFAULT '',
         createdAt   INTEGER,
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS history_sessions (
       );
 CREATE TABLE IF NOT EXISTS history_entries (
         id          INTEGER PRIMARY KEY,
-        sessionId   INTEGER NOT NULL,
+        historySessionId INTEGER NOT NULL,
         externalId  TEXT NOT NULL,
         ordinal     INTEGER NOT NULL,
         role        TEXT NOT NULL DEFAULT '',
@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS history_entries (
         ts          INTEGER,
         text        TEXT NOT NULL,
         truncated   INTEGER NOT NULL DEFAULT 0,
-        UNIQUE (sessionId, externalId),
-        FOREIGN KEY (sessionId) REFERENCES history_sessions(id) ON DELETE CASCADE
+        UNIQUE (historySessionId, externalId),
+        FOREIGN KEY (historySessionId) REFERENCES history_sessions(id) ON DELETE CASCADE
       );
 CREATE VIRTUAL TABLE IF NOT EXISTS history_entries_fts USING fts5(
         text,
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 CREATE TABLE IF NOT EXISTS automation_wakeups (
         runId        TEXT PRIMARY KEY,
         jobId        TEXT,
-        agentId      TEXT,
+        sessionId      TEXT,
         agentProfile TEXT NOT NULL DEFAULT '',
         prompt       TEXT NOT NULL DEFAULT '',
         reason       TEXT NOT NULL,
@@ -234,6 +234,106 @@ CREATE TABLE IF NOT EXISTS automation_tool_calls (
         completedAt INTEGER,
         FOREIGN KEY (runId) REFERENCES automation_runs(id) ON DELETE CASCADE
       );`
+
+// migrateLegacySessionNames renames the pre-rename "agent" tables and columns
+// to their session names. Every step is guarded by a catalog lookup, so this is
+// idempotent and safe on a fresh database (where nothing matches) or one that
+// was interrupted midway.
+func migrateLegacySessionNames(db *sql.DB) error {
+	tableExists := func(name string) (bool, error) {
+		var found string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&found)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	columnExists := func(table, column string) (bool, error) {
+		rows, err := db.Query("SELECT name FROM pragma_table_info(?)", table)
+		if err != nil {
+			return false, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return false, err
+			}
+			if name == column {
+				return true, rows.Err()
+			}
+		}
+		return false, rows.Err()
+	}
+
+	// Column renames run against the legacy table names, so they must precede
+	// the table renames below. Within browser_sessions the order is load
+	// bearing: its own driver handle has to vacate "sessionId" before the
+	// session id can claim it.
+	for _, c := range []struct{ table, from, to string }{
+		{"browser_sessions", "sessionId", "driverSessionId"},
+		{"browser_sessions", "agentId", "sessionId"},
+		{"agents", "acpSessionId", "externalSessionId"},
+		{"events", "agentId", "sessionId"},
+		{"agent_audio_settings", "agentId", "sessionId"},
+		{"message_audio", "agentId", "sessionId"},
+		{"agent_assets", "agentId", "sessionId"},
+		{"history_sessions", "agentId", "sessionId"},
+		{"history_entries", "sessionId", "historySessionId"},
+		{"automation_wakeups", "agentId", "sessionId"},
+		{"annotations", "agentId", "sessionId"},
+		{"audio_position", "agentId", "sessionId"},
+	} {
+		switch present, err := tableExists(c.table); {
+		case err != nil:
+			return fmt.Errorf("inspect %s: %w", c.table, err)
+		case !present:
+			continue
+		}
+		switch present, err := columnExists(c.table, c.from); {
+		case err != nil:
+			return fmt.Errorf("inspect %s.%s: %w", c.table, c.from, err)
+		case !present:
+			continue
+		}
+		// The destination already existing means this rename is done. The
+		// check is required, not just an optimization: browser_sessions.
+		// sessionId is a legacy driver handle *and* the post-rename session
+		// id, so "from exists" alone would rename an already-correct column.
+		switch present, err := columnExists(c.table, c.to); {
+		case err != nil:
+			return fmt.Errorf("inspect %s.%s: %w", c.table, c.to, err)
+		case present:
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", c.table, c.from, c.to)); err != nil {
+			return fmt.Errorf("rename %s.%s: %w", c.table, c.from, err)
+		}
+	}
+
+	for _, t := range []struct{ from, to string }{
+		{"agents", "sessions"},
+		{"agent_audio_settings", "session_audio_settings"},
+		{"agent_assets", "session_assets"},
+	} {
+		switch present, err := tableExists(t.from); {
+		case err != nil:
+			return fmt.Errorf("inspect %s: %w", t.from, err)
+		case !present:
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s RENAME TO %s", t.from, t.to)); err != nil {
+			return fmt.Errorf("rename table %s: %w", t.from, err)
+		}
+	}
+
+	// The renamed column carries the old index along with it; the additive
+	// migrations create annotations_session in its place.
+	if _, err := db.Exec("DROP INDEX IF EXISTS annotations_agent"); err != nil {
+		return fmt.Errorf("drop annotations_agent: %w", err)
+	}
+	return nil
+}
 
 // Store serializes access through one connection. This makes connection-local
 // pragmas deterministic and gives later event sequence allocation one writer.
@@ -274,14 +374,14 @@ func (s *Store) SetSessionAudioEnabled(sessionID string, enabled bool, enabledAf
 	if enabled {
 		value = 1
 	}
-	_, err := s.db.Exec(`INSERT INTO agent_audio_settings (agentId, enabled, enabledAfterSeq) VALUES (?, ?, ?)
-ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled, enabledAfterSeq=excluded.enabledAfterSeq`, sessionID, value, enabledAfterSeq)
+	_, err := s.db.Exec(`INSERT INTO session_audio_settings (sessionId, enabled, enabledAfterSeq) VALUES (?, ?, ?)
+ON CONFLICT(sessionId) DO UPDATE SET enabled=excluded.enabled, enabledAfterSeq=excluded.enabledAfterSeq`, sessionID, value, enabledAfterSeq)
 	return err
 }
 
 func (s *Store) SessionAudioEnabled(sessionID string) (enabled bool, enabledAfterSeq int64, err error) {
 	var value int
-	err = s.db.QueryRow(`SELECT enabled, enabledAfterSeq FROM agent_audio_settings WHERE agentId = ?`, sessionID).Scan(&value, &enabledAfterSeq)
+	err = s.db.QueryRow(`SELECT enabled, enabledAfterSeq FROM session_audio_settings WHERE sessionId = ?`, sessionID).Scan(&value, &enabledAfterSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, 0, nil
 	}
@@ -295,14 +395,14 @@ func (s *Store) PutMessageAudio(audio MessageAudio) error {
 	if audio.CreatedAt == 0 {
 		audio.CreatedAt = s.now().UnixMilli()
 	}
-	_, err := s.db.Exec(`INSERT INTO message_audio (agentId, seq, mimeType, data, durationMs, createdAt) VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.SessionID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
+	_, err := s.db.Exec(`INSERT INTO message_audio (sessionId, seq, mimeType, data, durationMs, createdAt) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(sessionId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.SessionID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
 	return err
 }
 
 func (s *Store) MessageAudio(sessionID string, seq int64) (*MessageAudio, error) {
 	var audio MessageAudio
-	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, sessionID, seq).
+	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE sessionId = ? AND seq = ?`, sessionID, seq).
 		Scan(&audio.MIMEType, &audio.Data, &audio.DurationMs, &audio.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -318,7 +418,7 @@ func (s *Store) MessageAudio(sessionID string, seq int64) (*MessageAudio, error)
 // the lazy-backfill path for rows written before duration computation
 // existed. It is a no-op (not an error) if the row is gone.
 func (s *Store) UpdateMessageAudioDuration(sessionID string, seq int64, durationMs int64) error {
-	_, err := s.db.Exec(`UPDATE message_audio SET durationMs = ? WHERE agentId = ? AND seq = ?`, durationMs, sessionID, seq)
+	_, err := s.db.Exec(`UPDATE message_audio SET durationMs = ? WHERE sessionId = ? AND seq = ?`, durationMs, sessionID, seq)
 	return err
 }
 
@@ -341,11 +441,11 @@ type AudioPosition struct {
 func (s *Store) SetAudioPosition(sessionID string, seq, positionMs int64) (int64, error) {
 	updatedAt := s.now().UnixMilli()
 	if seq == 0 {
-		_, err := s.db.Exec(`DELETE FROM audio_position WHERE agentId = ?`, sessionID)
+		_, err := s.db.Exec(`DELETE FROM audio_position WHERE sessionId = ?`, sessionID)
 		return updatedAt, err
 	}
-	_, err := s.db.Exec(`INSERT INTO audio_position (agentId, seq, positionMs, updatedAt) VALUES (?, ?, ?, ?)
-ON CONFLICT(agentId) DO UPDATE SET seq=excluded.seq, positionMs=excluded.positionMs, updatedAt=excluded.updatedAt`,
+	_, err := s.db.Exec(`INSERT INTO audio_position (sessionId, seq, positionMs, updatedAt) VALUES (?, ?, ?, ?)
+ON CONFLICT(sessionId) DO UPDATE SET seq=excluded.seq, positionMs=excluded.positionMs, updatedAt=excluded.updatedAt`,
 		sessionID, seq, positionMs, updatedAt)
 	return updatedAt, err
 }
@@ -354,7 +454,7 @@ ON CONFLICT(agentId) DO UPDATE SET seq=excluded.seq, positionMs=excluded.positio
 // if nothing is stored (never played, or explicitly cleared via seq == 0).
 func (s *Store) AudioPosition(sessionID string) (*AudioPosition, error) {
 	var pos AudioPosition
-	err := s.db.QueryRow(`SELECT seq, positionMs, updatedAt FROM audio_position WHERE agentId = ?`, sessionID).
+	err := s.db.QueryRow(`SELECT seq, positionMs, updatedAt FROM audio_position WHERE sessionId = ?`, sessionID).
 		Scan(&pos.Seq, &pos.PositionMs, &pos.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -371,7 +471,7 @@ func (s *Store) AudioPosition(sessionID string) (*AudioPosition, error) {
 // this is just the metadata needed to rehydrate player controls on another
 // client.
 func (s *Store) MessageAudioSeqs(sessionID string) ([]int64, error) {
-	rows, err := s.db.Query(`SELECT seq FROM message_audio WHERE agentId = ? ORDER BY seq`, sessionID)
+	rows, err := s.db.Query(`SELECT seq FROM message_audio WHERE sessionId = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +492,7 @@ func (s *Store) MessageAudioSeqs(sessionID string) ([]int64, error) {
 // means unknown (unparseable format, or a pre-duration row not yet read
 // through MessageAudio's lazy backfill).
 func (s *Store) MessageAudioClips(sessionID string) ([]MessageAudioClip, error) {
-	rows, err := s.db.Query(`SELECT seq, durationMs FROM message_audio WHERE agentId = ? ORDER BY seq`, sessionID)
+	rows, err := s.db.Query(`SELECT seq, durationMs FROM message_audio WHERE sessionId = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +561,7 @@ type BrowserSnapshot struct {
 // on send (see docs/transcript-annotations.md).
 type Annotation struct {
 	ID        string `json:"id"`
-	SessionID   string `json:"agentId"`
+	SessionID   string `json:"sessionId"`
 	Seq       int64  `json:"seq"`
 	Role      string `json:"role"`
 	Quote     string `json:"quote"`
@@ -506,15 +606,22 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("apply %q: %w", pragma, err)
 		}
 	}
+	// Legacy databases call a session an "agent". Rename in place *before* the
+	// schema DDL, so CREATE TABLE IF NOT EXISTS cannot leave an empty
+	// "sessions" beside a populated "agents".
+	if err := migrateLegacySessionNames(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	// Databases predating the workspace service have no cwd column. Duplicate
 	// column is the sole expected error on current databases.
-	if _, err := db.Exec("ALTER TABLE agents ADD COLUMN cwd TEXT NOT NULL DEFAULT ''"); err != nil && !isDuplicateColumn(err) {
+	if _, err := db.Exec("ALTER TABLE sessions ADD COLUMN cwd TEXT NOT NULL DEFAULT ''"); err != nil && !isDuplicateColumn(err) {
 		db.Close()
-		return nil, fmt.Errorf("migrate agents.cwd: %w", err)
+		return nil, fmt.Errorf("migrate sessions.cwd: %w", err)
 	}
 	for _, migration := range []struct {
 		sql, name string
@@ -526,7 +633,7 @@ func Open(path string) (*Store, error) {
 		{"ALTER TABLE message_audio ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0", "message_audio.durationMs"},
 		{`CREATE TABLE IF NOT EXISTS annotations (
         id        TEXT PRIMARY KEY,
-        agentId   TEXT NOT NULL,
+        sessionId   TEXT NOT NULL,
         seq       INTEGER NOT NULL,
         role      TEXT NOT NULL,
         quote     TEXT NOT NULL,
@@ -534,9 +641,9 @@ func Open(path string) (*Store, error) {
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );
-CREATE INDEX IF NOT EXISTS annotations_agent ON annotations(agentId);`, "annotations table"},
+CREATE INDEX IF NOT EXISTS annotations_session ON annotations(sessionId);`, "annotations table"},
 		{`CREATE TABLE IF NOT EXISTS audio_position (
-        agentId    TEXT PRIMARY KEY,
+        sessionId    TEXT PRIMARY KEY,
         seq        INTEGER NOT NULL,
         positionMs INTEGER NOT NULL,
         updatedAt  INTEGER NOT NULL
@@ -573,16 +680,16 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
 	// Existing enabled threads predate the boundary. Treat their current event
 	// head as the cutoff so upgrading does not unexpectedly synthesize speech
 	// for old transcript messages.
-	if _, err := db.Exec("ALTER TABLE agent_audio_settings ADD COLUMN enabledAfterSeq INTEGER NOT NULL DEFAULT 0"); err == nil {
-		if _, err := db.Exec(`UPDATE agent_audio_settings
-SET enabledAfterSeq = COALESCE((SELECT MAX(seq) FROM events WHERE events.agentId = agent_audio_settings.agentId), 0)
+	if _, err := db.Exec("ALTER TABLE session_audio_settings ADD COLUMN enabledAfterSeq INTEGER NOT NULL DEFAULT 0"); err == nil {
+		if _, err := db.Exec(`UPDATE session_audio_settings
+SET enabledAfterSeq = COALESCE((SELECT MAX(seq) FROM events WHERE events.sessionId = session_audio_settings.sessionId), 0)
 WHERE enabled != 0`); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("migrate agent_audio_settings.enabledAfterSeq: %w", err)
+			return nil, fmt.Errorf("migrate session_audio_settings.enabledAfterSeq: %w", err)
 		}
 	} else if !isDuplicateColumn(err) {
 		db.Close()
-		return nil, fmt.Errorf("migrate agent_audio_settings.enabledAfterSeq: %w", err)
+		return nil, fmt.Errorf("migrate session_audio_settings.enabledAfterSeq: %w", err)
 	}
 	// Clip durations persisted before the MP3 frame walk's bitrate tables were
 	// fixed are roughly half the true length (see internal/voice/duration.go).
@@ -642,10 +749,10 @@ func (s *Store) UpsertSession(a Session) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO agents (id, name, spec, cwd, acpSessionId, status, createdAt, closedAt)
+	if _, err = tx.Exec(`INSERT INTO sessions (id, name, spec, cwd, externalSessionId, status, createdAt, closedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name, spec=excluded.spec, cwd=excluded.cwd,
-acpSessionId=excluded.acpSessionId, status=excluded.status, closedAt=excluded.closedAt`,
+externalSessionId=excluded.externalSessionId, status=excluded.status, closedAt=excluded.closedAt`,
 		a.ID, a.Name, compactSpec.String(), a.CWD, a.ExternalSessionID, a.Status, a.CreatedAt, a.ClosedAt); err != nil {
 		return err
 	}
@@ -656,7 +763,7 @@ acpSessionId=excluded.acpSessionId, status=excluded.status, closedAt=excluded.cl
 }
 
 func (s *Store) SetStatus(id, status string) error {
-	_, err := s.db.Exec("UPDATE agents SET status = ? WHERE id = ?", status, id)
+	_, err := s.db.Exec("UPDATE sessions SET status = ? WHERE id = ?", status, id)
 	return err
 }
 
@@ -666,7 +773,7 @@ func (s *Store) SetSessionName(id, name string) error {
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec("UPDATE agents SET name = ? WHERE id = ?", name, id)
+	result, err := tx.Exec("UPDATE sessions SET name = ? WHERE id = ?", name, id)
 	if err != nil {
 		return err
 	}
@@ -677,24 +784,24 @@ func (s *Store) SetSessionName(id, name string) error {
 	if changed == 0 {
 		return errors.New("no such agent")
 	}
-	if _, err := tx.Exec("UPDATE history_sessions SET title = ? WHERE source = 'tandem' AND agentId = ?", name, id); err != nil {
+	if _, err := tx.Exec("UPDATE history_sessions SET title = ? WHERE source = 'tandem' AND sessionId = ?", name, id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) SetExternalSessionID(id, sessionID string) error {
-	_, err := s.db.Exec("UPDATE agents SET acpSessionId = ? WHERE id = ?", sessionID, id)
+	_, err := s.db.Exec("UPDATE sessions SET externalSessionId = ? WHERE id = ?", sessionID, id)
 	return err
 }
 
 func (s *Store) CloseSession(id string) error {
-	_, err := s.db.Exec("UPDATE agents SET status = 'idle', closedAt = ? WHERE id = ?", s.now().UnixMilli(), id)
+	_, err := s.db.Exec("UPDATE sessions SET status = 'idle', closedAt = ? WHERE id = ?", s.now().UnixMilli(), id)
 	return err
 }
 
 func (s *Store) ReopenSession(id string) error {
-	_, err := s.db.Exec("UPDATE agents SET closedAt = NULL, status = 'idle' WHERE id = ?", id)
+	_, err := s.db.Exec("UPDATE sessions SET closedAt = NULL, status = 'idle' WHERE id = ?", id)
 	return err
 }
 
@@ -704,7 +811,7 @@ func (s *Store) DeleteSession(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{"DELETE FROM agent_assets WHERE agentId = ?", "DELETE FROM events WHERE agentId = ?", "DELETE FROM agent_audio_settings WHERE agentId = ?", "DELETE FROM message_audio WHERE agentId = ?", "DELETE FROM browser_sessions WHERE agentId = ?", "DELETE FROM annotations WHERE agentId = ?", "DELETE FROM audio_position WHERE agentId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND agentId = ?", "DELETE FROM agents WHERE id = ?"} {
+	for _, q := range []string{"DELETE FROM session_assets WHERE sessionId = ?", "DELETE FROM events WHERE sessionId = ?", "DELETE FROM session_audio_settings WHERE sessionId = ?", "DELETE FROM message_audio WHERE sessionId = ?", "DELETE FROM browser_sessions WHERE sessionId = ?", "DELETE FROM annotations WHERE sessionId = ?", "DELETE FROM audio_position WHERE sessionId = ?", "DELETE FROM history_sessions WHERE source = 'tandem' AND sessionId = ?", "DELETE FROM sessions WHERE id = ?"} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -716,9 +823,9 @@ func (s *Store) DeleteSession(id string) error {
 // session so it survives a daemon restart. The signature is primitive-typed so
 // the browser package's SessionStore interface is satisfied structurally.
 func (s *Store) SaveBrowserSession(sessionID, driverSessionID, profileID, cdpURL string) error {
-	_, err := s.db.Exec(`INSERT INTO browser_sessions (agentId, sessionId, profileId, cdpUrl, updatedAt)
+	_, err := s.db.Exec(`INSERT INTO browser_sessions (sessionId, driverSessionId, profileId, cdpUrl, updatedAt)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(agentId) DO UPDATE SET sessionId=excluded.sessionId, profileId=excluded.profileId, cdpUrl=excluded.cdpUrl, updatedAt=excluded.updatedAt`,
+ON CONFLICT(sessionId) DO UPDATE SET driverSessionId=excluded.driverSessionId, profileId=excluded.profileId, cdpUrl=excluded.cdpUrl, updatedAt=excluded.updatedAt`,
 		sessionID, driverSessionID, profileID, cdpURL, s.now().UnixMilli())
 	return err
 }
@@ -726,14 +833,14 @@ ON CONFLICT(agentId) DO UPDATE SET sessionId=excluded.sessionId, profileId=exclu
 // DeleteBrowserSession forgets an agent's persisted browser session (session
 // ended, or re-attach failed because it was already gone).
 func (s *Store) DeleteBrowserSession(sessionID string) error {
-	_, err := s.db.Exec("DELETE FROM browser_sessions WHERE agentId = ?", sessionID)
+	_, err := s.db.Exec("DELETE FROM browser_sessions WHERE sessionId = ?", sessionID)
 	return err
 }
 
 // ListBrowserSessions returns every persisted browser session, for re-attach on
 // daemon startup.
 func (s *Store) ListBrowserSessions() ([]BrowserSession, error) {
-	rows, err := s.db.Query("SELECT agentId, sessionId, profileId, cdpUrl FROM browser_sessions")
+	rows, err := s.db.Query("SELECT sessionId, driverSessionId, profileId, cdpUrl FROM browser_sessions")
 	if err != nil {
 		return nil, err
 	}
@@ -914,19 +1021,19 @@ func boolToInt(b bool) int {
 }
 
 func (s *Store) Session(id string) (*Session, error) {
-	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE id = ?", id))
+	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, externalSessionId, status, createdAt, closedAt FROM sessions WHERE id = ?", id))
 }
 
 func (s *Store) SessionByExternalSessionID(sessionID string) (*Session, error) {
-	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE acpSessionId = ? ORDER BY createdAt DESC LIMIT 1", sessionID))
+	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, externalSessionId, status, createdAt, closedAt FROM sessions WHERE externalSessionId = ? ORDER BY createdAt DESC LIMIT 1", sessionID))
 }
 
 func (s *Store) LiveSessions() ([]Session, error) {
-	return s.sessions("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE closedAt IS NULL ORDER BY createdAt")
+	return s.sessions("SELECT id, name, spec, cwd, externalSessionId, status, createdAt, closedAt FROM sessions WHERE closedAt IS NULL ORDER BY createdAt")
 }
 
 func (s *Store) AllSessions() ([]Session, error) {
-	return s.sessions("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents ORDER BY COALESCE(closedAt, createdAt) DESC")
+	return s.sessions("SELECT id, name, spec, cwd, externalSessionId, status, createdAt, closedAt FROM sessions ORDER BY COALESCE(closedAt, createdAt) DESC")
 }
 
 func (s *Store) sessions(query string) ([]Session, error) {
@@ -975,7 +1082,7 @@ func scanSession(row scanner) (*Session, error) {
 }
 
 func (s *Store) MaxSessionSuffix() (int, error) {
-	rows, err := s.db.Query("SELECT id FROM agents")
+	rows, err := s.db.Query("SELECT id FROM sessions")
 	if err != nil {
 		return 0, err
 	}
@@ -1008,7 +1115,7 @@ func (s *Store) PutAsset(sessionID string, asset Asset) error {
 	if _, err := tx.Exec("INSERT OR IGNORE INTO assets (id, mimeType, size, createdAt) VALUES (?, ?, ?, ?)", asset.ID, asset.MIMEType, asset.Size, now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT OR IGNORE INTO agent_assets (agentId, assetId, createdAt) VALUES (?, ?, ?)", sessionID, asset.ID, now); err != nil {
+	if _, err := tx.Exec("INSERT OR IGNORE INTO session_assets (sessionId, assetId, createdAt) VALUES (?, ?, ?)", sessionID, asset.ID, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1017,7 +1124,7 @@ func (s *Store) PutAsset(sessionID string, asset Asset) error {
 func (s *Store) SessionAsset(sessionID, assetID string) (*Asset, error) {
 	var a Asset
 	err := s.db.QueryRow(`SELECT a.id, a.mimeType, a.size FROM assets a
-JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?`, sessionID, assetID).Scan(&a.ID, &a.MIMEType, &a.Size)
+JOIN session_assets aa ON aa.assetId = a.id WHERE aa.sessionId = ? AND a.id = ?`, sessionID, assetID).Scan(&a.ID, &a.MIMEType, &a.Size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1042,10 +1149,10 @@ func (s *Store) AppendEvent(sessionID, kind, payload string, ts int64) (int64, e
 	}
 	defer tx.Rollback()
 	var seq int64
-	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE agentId = ?", sessionID).Scan(&seq); err != nil {
+	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE sessionId = ?", sessionID).Scan(&seq); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec("INSERT INTO events (agentId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", sessionID, seq, kind, payload, ts); err != nil {
+	if _, err := tx.Exec("INSERT INTO events (sessionId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", sessionID, seq, kind, payload, ts); err != nil {
 		return 0, err
 	}
 	if err := indexTandemEvent(tx, sessionID, seq, kind, payload, ts, s.now().UnixMilli()); err != nil {
@@ -1059,7 +1166,7 @@ func (s *Store) AppendEvent(sessionID, kind, payload string, ts int64) (int64, e
 
 // RangeEvents returns events strictly newer than afterSeq in sequence order.
 func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, error) {
-	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND seq > ? ORDER BY seq", sessionID, afterSeq)
+	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE sessionId = ? AND seq > ? ORDER BY seq", sessionID, afterSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -1084,7 +1191,7 @@ func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, er
 // replaying the whole history.
 func (s *Store) LatestEventOfKind(sessionID, kind string) (*StoredEvent, error) {
 	var event StoredEvent
-	err := s.db.QueryRow("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND kind = ? ORDER BY seq DESC LIMIT 1", sessionID, kind).
+	err := s.db.QueryRow("SELECT seq, kind, payload, ts FROM events WHERE sessionId = ? AND kind = ? ORDER BY seq DESC LIMIT 1", sessionID, kind).
 		Scan(&event.Seq, &event.Kind, &event.Payload, &event.TS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1099,15 +1206,15 @@ func (s *Store) LatestEventOfKind(sessionID, kind string) (*StoredEvent, error) 
 }
 
 func (s *Store) EventBounds(sessionID string) (min, max int64, err error) {
-	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", sessionID).Scan(&min, &max)
+	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE sessionId = ?", sessionID).Scan(&min, &max)
 	return
 }
 
 // UpsertAnnotation inserts or replaces a transcript annotation by id.
 func (s *Store) UpsertAnnotation(a Annotation) error {
-	_, err := s.db.Exec(`INSERT INTO annotations (id, agentId, seq, role, quote, comment, createdAt, updatedAt)
+	_, err := s.db.Exec(`INSERT INTO annotations (id, sessionId, seq, role, quote, comment, createdAt, updatedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET agentId=excluded.agentId, seq=excluded.seq, role=excluded.role,
+ON CONFLICT(id) DO UPDATE SET sessionId=excluded.sessionId, seq=excluded.seq, role=excluded.role,
   quote=excluded.quote, comment=excluded.comment, createdAt=excluded.createdAt, updatedAt=excluded.updatedAt`,
 		a.ID, a.SessionID, a.Seq, a.Role, a.Quote, a.Comment, a.CreatedAt, a.UpdatedAt)
 	return err
@@ -1116,8 +1223,8 @@ ON CONFLICT(id) DO UPDATE SET agentId=excluded.agentId, seq=excluded.seq, role=e
 // ListAnnotations returns an agent's annotations ordered by seq then createdAt,
 // matching transcript order for the same row.
 func (s *Store) ListAnnotations(sessionID string) ([]Annotation, error) {
-	rows, err := s.db.Query(`SELECT id, agentId, seq, role, quote, comment, createdAt, updatedAt
-FROM annotations WHERE agentId = ? ORDER BY seq, createdAt`, sessionID)
+	rows, err := s.db.Query(`SELECT id, sessionId, seq, role, quote, comment, createdAt, updatedAt
+FROM annotations WHERE sessionId = ? ORDER BY seq, createdAt`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1143,7 +1250,7 @@ func (s *Store) DeleteAnnotation(id string) error {
 // "sending consumes them" step, or agent deletion — returning the count
 // removed.
 func (s *Store) DeleteAnnotationsForSession(sessionID string) (int, error) {
-	result, err := s.db.Exec("DELETE FROM annotations WHERE agentId = ?", sessionID)
+	result, err := s.db.Exec("DELETE FROM annotations WHERE sessionId = ?", sessionID)
 	if err != nil {
 		return 0, err
 	}

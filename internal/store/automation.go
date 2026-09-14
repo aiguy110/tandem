@@ -73,7 +73,7 @@ type AutomationRun struct {
 type AutomationWakeup struct {
 	RunID        string          `json:"runId"`
 	JobID        *string         `json:"jobId,omitempty"`
-	SessionID      *string         `json:"agentId,omitempty"`
+	SessionID      *string         `json:"sessionId,omitempty"`
 	AgentProfile string          `json:"agentProfile"`
 	Prompt       string          `json:"prompt"`
 	Reason       string          `json:"reason"`
@@ -338,9 +338,9 @@ func (s *Store) SaveAutomationWakeup(wakeup AutomationWakeup) error {
 		return err
 	}
 	_, err = s.db.Exec(`INSERT INTO automation_wakeups
-(runId, jobId, agentId, agentProfile, prompt, reason, context, status, createdAt, completedAt)
+(runId, jobId, sessionId, agentProfile, prompt, reason, context, status, createdAt, completedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(runId) DO UPDATE SET jobId=excluded.jobId, agentId=excluded.agentId, agentProfile=excluded.agentProfile,
+ON CONFLICT(runId) DO UPDATE SET jobId=excluded.jobId, sessionId=excluded.sessionId, agentProfile=excluded.agentProfile,
 prompt=excluded.prompt, reason=excluded.reason, context=excluded.context, status=excluded.status, completedAt=excluded.completedAt`,
 		wakeup.RunID, wakeup.JobID, wakeup.SessionID, wakeup.AgentProfile, wakeup.Prompt, wakeup.Reason,
 		context, wakeup.Status, wakeup.CreatedAt, wakeup.CompletedAt)
@@ -371,7 +371,7 @@ func (s *Store) AutomationWakeups(jobID string) ([]AutomationWakeup, error) {
 	return out, rows.Err()
 }
 
-const automationWakeupSelect = `SELECT runId, jobId, agentId, agentProfile, prompt, reason, context, status, createdAt, completedAt FROM automation_wakeups`
+const automationWakeupSelect = `SELECT runId, jobId, sessionId, agentProfile, prompt, reason, context, status, createdAt, completedAt FROM automation_wakeups`
 
 func scanAutomationWakeup(row scanner) (*AutomationWakeup, error) {
 	var wakeup AutomationWakeup
