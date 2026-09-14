@@ -77,8 +77,10 @@ remote browser control preserves the existing control-owner semantics.
 
 First contact requires an explicit Accept action in the master's daemon-level
 notifications. Acceptance creates durable credentials for automatic reconnect. The
-topology is intentionally one level: a daemon configured as a slave refuses inbound slave
-registration. See [`federation.md`](federation.md) for the operational and security model.
+topology is a rooted tree: a daemon has at most one upstream, may accept multiple children,
+and advertises their reachable subtrees upstream. Trust and credentials remain hop-local;
+accepting a child delegates management of its advertised descendants. See
+[`federation.md`](federation.md) for the operational and security model.
 
 ## Agent integration (structured-first, ACP primary)
 

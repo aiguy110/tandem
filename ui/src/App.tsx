@@ -12,6 +12,7 @@ import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
 import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
+import { FleetView } from './components/FleetView';
 import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { useValuePresence } from './transitions';
 import { frontendVersion, loadDaemonVersion } from './version';
@@ -116,6 +117,7 @@ function ModalHost({ modal }: { modal: string }) {
       {rendered === 'command' && <CommandPalette />}
       {rendered === 'resume' && <ResumePalette />}
       {rendered === 'automation' && <AutomationModal />}
+      {rendered === 'fleet' && <FleetView />}
     </div>
   );
 }

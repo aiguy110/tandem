@@ -1346,6 +1346,17 @@ func (c *connection) forwardFederation(m clientMessage) {
 // "~" separator (federation.ValidHostID enforces that), so the session ID is
 // simply the remainder and may contain anything.
 func remoteSessionID(hostID, sessionID string) string {
+	// An intermediate already namespaces a descendant for its own browser.
+	// Each higher layer must replace that namespace rather than wrapping it,
+	// otherwise a three-hop fleet produces fed~A~fed~B~session and cannot
+	// route a selected session back to the leaf cleanly.
+	for {
+		_, inner, ok := SplitRemoteSessionID(sessionID)
+		if !ok {
+			break
+		}
+		sessionID = inner
+	}
 	return remoteIDPrefix + hostID + "~" + sessionID
 }
 

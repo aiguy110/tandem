@@ -978,6 +978,26 @@ body.dock-resizing .app { transition: none; }
 .automation-toggle, .automation-foot button { flex: 0 0 auto; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
 .automation-toggle:disabled, .automation-foot button:disabled { cursor: default; opacity: .5; }
 .automation-foot { justify-content: space-between; }
+.fleet-modal { width: min(920px, 94vw); }
+.fleet-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+.fleet-header .primary { font-size: var(--fs-md); font-weight: 600; }
+.fleet-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
+.fleet-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: 22px; line-height: 1; }
+.fleet-legend { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
+.fleet-arrow { color: var(--agent); font-size: 16px; line-height: 1; }
+.fleet-canvas { max-height: min(60vh, 560px); overflow: auto; background: var(--bg); }
+.fleet-graph { display: block; min-width: 100%; min-height: 270px; }
+.fleet-edge { fill: none; stroke: var(--border-strong); stroke-width: 2; }
+.fleet-arrowhead { fill: var(--border-strong); }
+.fleet-node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
+.fleet-node circle { fill: var(--text-faint); }
+.fleet-node.fleet-connected circle, .fleet-node.fleet-accepted circle { fill: var(--ok); }
+.fleet-node.fleet-pending circle { fill: var(--warn); }
+.fleet-node.fleet-offline circle, .fleet-node.fleet-rejected circle { fill: var(--err); }
+.fleet-name { fill: var(--text); font: 600 12px var(--font-ui); }
+.fleet-version { fill: var(--text-dim); font: 10px var(--font-mono); }
+.fleet-status { fill: var(--text-faint); font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; }
+.fleet-foot { justify-content: space-between; }
 @media (max-width: 560px) {
   .automation-row { align-items: flex-start; }
   .automation-details { align-items: flex-start; flex-direction: column; gap: 2px; }

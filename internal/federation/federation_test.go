@@ -102,7 +102,7 @@ func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
 	}
 }
 
-func TestSlaveRejectsChildRegistration(t *testing.T) {
+func TestSlaveAcceptsChildRegistration(t *testing.T) {
 	s := openStore(t)
 	service, err := New(Options{Store: s, MasterURL: "http://upstream.example"})
 	if err != nil {
@@ -111,8 +111,8 @@ func TestSlaveRejectsChildRegistration(t *testing.T) {
 	r := httptest.NewRequest("POST", RegisterPath, strings.NewReader(`{"hostId":"child"}`))
 	w := httptest.NewRecorder()
 	service.ServeHTTP(w, r)
-	if w.Code != 409 {
-		t.Fatalf("status=%d want 409", w.Code)
+	if w.Code != 202 {
+		t.Fatalf("status=%d want 202", w.Code)
 	}
 }
 
