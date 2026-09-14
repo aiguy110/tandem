@@ -19,7 +19,7 @@ import (
 // browser to be seeded from the chosen snapshot. It mutates spec.Profile.ID with
 // the resolved profile id so it persists on the agent record. A nil spec.Profile
 // (older UIs) is a no-op.
-func (r *Registry) applyProfile(agentID, project string, spec *agentadapter.Spec) {
+func (r *Registry) applyProfile(sessionID, project string, spec *agentadapter.Spec) {
 	p := spec.Profile
 	if p == nil {
 		return
@@ -27,7 +27,7 @@ func (r *Registry) applyProfile(agentID, project string, spec *agentadapter.Spec
 	// Seed the browser before it is lazily provisioned on first use.
 	if p.Snapshot != "" && r.browser != nil {
 		if snap, err := r.store.BrowserSnapshot(p.Snapshot); err == nil && snap != nil {
-			r.browser.SeedSnapshot(agentID, snap.Kind, snap.Ref)
+			r.browser.SeedSnapshot(sessionID, snap.Kind, snap.Ref)
 		} else {
 			p.Snapshot = "" // snapshot deleted meanwhile → fall back to fresh
 		}
@@ -87,7 +87,7 @@ func (r *Registry) launchLabel(agent, harness string) string {
 
 // CaptureSnapshot copies the agent's current browser state into a new, named
 // snapshot and records it.
-func (r *Registry) CaptureSnapshot(ctx context.Context, agentID, name string) (store.BrowserSnapshot, error) {
+func (r *Registry) CaptureSnapshot(ctx context.Context, sessionID, name string) (store.BrowserSnapshot, error) {
 	if r.browser == nil {
 		return store.BrowserSnapshot{}, errors.New("browser is disabled")
 	}
@@ -97,7 +97,7 @@ func (r *Registry) CaptureSnapshot(ctx context.Context, agentID, name string) (s
 	}
 	id := "snap-" + randHex(8)
 	destDir := filepath.Join(r.config.Browser.SnapshotRoot, id)
-	kind, ref, err := r.browser.CaptureSnapshot(ctx, agentID, destDir)
+	kind, ref, err := r.browser.CaptureSnapshot(ctx, sessionID, destDir)
 	if err != nil {
 		_ = os.RemoveAll(destDir)
 		return store.BrowserSnapshot{}, err
@@ -139,9 +139,9 @@ func (r *Registry) DeleteSnapshot(id string) error {
 
 // RestartBrowser starts a new browser session for an existing agent, optionally
 // seeded from a saved snapshot. An empty snapshotID requests fresh state.
-func (r *Registry) RestartBrowser(ctx context.Context, agentID, snapshotID string) error {
-	if r.Get(agentID) == nil {
-		return fmt.Errorf("no such agent: %s", agentID)
+func (r *Registry) RestartBrowser(ctx context.Context, sessionID, snapshotID string) error {
+	if r.Get(sessionID) == nil {
+		return fmt.Errorf("no such agent: %s", sessionID)
 	}
 	if r.browser == nil {
 		return errors.New("browser subsystem disabled")
@@ -160,7 +160,7 @@ func (r *Registry) RestartBrowser(ctx context.Context, agentID, snapshotID strin
 		}
 		kind, ref = snap.Kind, snap.Ref
 	}
-	return r.browser.Restart(ctx, agentID, kind, ref)
+	return r.browser.Restart(ctx, sessionID, kind, ref)
 }
 
 // ListProfiles returns all profiles and, for the given project, the profile ids

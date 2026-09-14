@@ -73,7 +73,7 @@ type AutomationRun struct {
 type AutomationWakeup struct {
 	RunID        string          `json:"runId"`
 	JobID        *string         `json:"jobId,omitempty"`
-	AgentID      *string         `json:"agentId,omitempty"`
+	SessionID      *string         `json:"agentId,omitempty"`
 	AgentProfile string          `json:"agentProfile"`
 	Prompt       string          `json:"prompt"`
 	Reason       string          `json:"reason"`
@@ -342,7 +342,7 @@ func (s *Store) SaveAutomationWakeup(wakeup AutomationWakeup) error {
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET jobId=excluded.jobId, agentId=excluded.agentId, agentProfile=excluded.agentProfile,
 prompt=excluded.prompt, reason=excluded.reason, context=excluded.context, status=excluded.status, completedAt=excluded.completedAt`,
-		wakeup.RunID, wakeup.JobID, wakeup.AgentID, wakeup.AgentProfile, wakeup.Prompt, wakeup.Reason,
+		wakeup.RunID, wakeup.JobID, wakeup.SessionID, wakeup.AgentProfile, wakeup.Prompt, wakeup.Reason,
 		context, wakeup.Status, wakeup.CreatedAt, wakeup.CompletedAt)
 	return err
 }
@@ -375,10 +375,10 @@ const automationWakeupSelect = `SELECT runId, jobId, agentId, agentProfile, prom
 
 func scanAutomationWakeup(row scanner) (*AutomationWakeup, error) {
 	var wakeup AutomationWakeup
-	var jobID, agentID sql.NullString
+	var jobID, sessionID sql.NullString
 	var completedAt sql.NullInt64
 	var context string
-	if err := row.Scan(&wakeup.RunID, &jobID, &agentID, &wakeup.AgentProfile, &wakeup.Prompt, &wakeup.Reason,
+	if err := row.Scan(&wakeup.RunID, &jobID, &sessionID, &wakeup.AgentProfile, &wakeup.Prompt, &wakeup.Reason,
 		&context, &wakeup.Status, &wakeup.CreatedAt, &completedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -390,7 +390,7 @@ func scanAutomationWakeup(row scanner) (*AutomationWakeup, error) {
 	}
 	wakeup.Context = json.RawMessage(context)
 	setOptionalString(&wakeup.JobID, jobID)
-	setOptionalString(&wakeup.AgentID, agentID)
+	setOptionalString(&wakeup.SessionID, sessionID)
 	setOptionalInt64(&wakeup.CompletedAt, completedAt)
 	return &wakeup, nil
 }

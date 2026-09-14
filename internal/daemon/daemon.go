@@ -281,16 +281,16 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: assetStore,
 		Uploads: agents,
 		Voice:   voiceRenderer,
-		MessageText: func(agentID string, seq int64) (string, error) {
-			return transcriptMessageText(db, agentID, seq)
+		MessageText: func(sessionID string, seq int64) (string, error) {
+			return transcriptMessageText(db, sessionID, seq)
 		},
 		// A federated agent's transcript lives on the host that owns it, so
 		// its clip is rendered there and carried back over the tunnel.
-		RenderMessageAudio: func(renderCtx context.Context, agentID string, seq int64) (voice.Audio, error) {
-			if hostID, localID, ok := wsserver.SplitRemoteAgentID(agentID); ok {
+		RenderMessageAudio: func(renderCtx context.Context, sessionID string, seq int64) (voice.Audio, error) {
+			if hostID, localID, ok := wsserver.SplitRemoteAgentID(sessionID); ok {
 				return remoteMessageAudio(renderCtx, federationService, hostID, localID, seq)
 			}
-			return audioCache.render(renderCtx, agentID, seq)
+			return audioCache.render(renderCtx, sessionID, seq)
 		},
 		AgentExists: func(id string) bool {
 			if hostID, _, ok := wsserver.SplitRemoteAgentID(id); ok {
@@ -303,7 +303,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 				}
 				return false
 			}
-			agent, lookupErr := db.Agent(id)
+			agent, lookupErr := db.Session(id)
 			return lookupErr == nil && agent != nil
 		},
 	})
@@ -366,8 +366,8 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		httpHandler.ServeHTTP(w, r)
 	})
 	notificationAction := func(actionCtx context.Context, id, action string) (string, error) {
-		if agentID, handled, actionErr := federationService.HandleNotificationAction(actionCtx, id, action); handled {
-			return agentID, actionErr
+		if sessionID, handled, actionErr := federationService.HandleNotificationAction(actionCtx, id, action); handled {
+			return sessionID, actionErr
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
@@ -415,8 +415,8 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 // project-local server configuration. This is intentionally evaluated per
 // session creation, so changes made by `tandem mcp add` are available to new
 // agents immediately without restarting the daemon.
-func configuredMCPServers(wiring browser.MCPWiring, home, agentID, cwd string) ([]browser.MCPServer, error) {
-	servers := browser.BuildMCPServers(wiring, agentID, cwd)
+func configuredMCPServers(wiring browser.MCPWiring, home, sessionID, cwd string) ([]browser.MCPServer, error) {
+	servers := browser.BuildMCPServers(wiring, sessionID, cwd)
 	used := make(map[string]bool, len(servers))
 	for _, server := range servers {
 		used[server.Name] = true
@@ -459,12 +459,12 @@ func configuredMCPServers(wiring browser.MCPWiring, home, agentID, cwd string) (
 	return servers, nil
 }
 
-func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, error) {
+func transcriptMessageText(db *store.Store, sessionID string, seq int64) (string, error) {
 	after := seq - 2
 	if after < 0 {
 		after = 0
 	}
-	rows, err := db.RangeEvents(agentID, after)
+	rows, err := db.RangeEvents(sessionID, after)
 	if err != nil {
 		return "", err
 	}
@@ -506,11 +506,11 @@ func transcriptMessageText(db *store.Store, agentID string, seq int64) (string, 
 // remoteMessageAudio renders one federated agent's clip on the host that owns
 // its transcript. The tunnel carries browser-protocol JSON only, so the bytes
 // come back base64-encoded and are decoded here for the ordinary audio route.
-func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, agentID string, seq int64) (voice.Audio, error) {
+func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, sessionID string, seq int64) (voice.Audio, error) {
 	if svc == nil {
 		return voice.Audio{}, errors.New("remote hosts are unavailable")
 	}
-	payload, err := json.Marshal(map[string]any{"t": "render_message_audio", "agentId": agentID, "seq": seq})
+	payload, err := json.Marshal(map[string]any{"t": "render_message_audio", "agentId": sessionID, "seq": seq})
 	if err != nil {
 		return voice.Audio{}, err
 	}
@@ -559,25 +559,25 @@ func newMessageAudioCache(ctx context.Context, db *store.Store, renderer voice.R
 	}
 }
 
-func audioKey(agentID string, seq int64) string { return agentID + "/" + strconv.FormatInt(seq, 10) }
+func audioKey(sessionID string, seq int64) string { return sessionID + "/" + strconv.FormatInt(seq, 10) }
 
-func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int64) (voice.Audio, error) {
+func (c *messageAudioCache) render(ctx context.Context, sessionID string, seq int64) (voice.Audio, error) {
 	if c.renderer == nil {
 		return voice.Audio{}, errors.New("voice rendering is not configured; run tandem setup")
 	}
-	if cached, err := c.db.MessageAudio(agentID, seq); err != nil {
+	if cached, err := c.db.MessageAudio(sessionID, seq); err != nil {
 		return voice.Audio{}, err
 	} else if cached != nil {
-		c.backfillDuration(agentID, seq, cached)
+		c.backfillDuration(sessionID, seq, cached)
 		return voice.Audio{Data: cached.Data, MIMEType: cached.MIMEType}, nil
 	}
-	key := audioKey(agentID, seq)
+	key := audioKey(sessionID, seq)
 	c.mu.Lock()
 	if done := c.flights[key]; done != nil {
 		c.mu.Unlock()
 		select {
 		case <-done:
-			return c.render(ctx, agentID, seq)
+			return c.render(ctx, sessionID, seq)
 		case <-ctx.Done():
 			return voice.Audio{}, ctx.Err()
 		}
@@ -586,7 +586,7 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 	c.flights[key] = done
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.flights, key); close(done); c.mu.Unlock() }()
-	text, err := transcriptMessageText(c.db, agentID, seq)
+	text, err := transcriptMessageText(c.db, sessionID, seq)
 	if err != nil {
 		return voice.Audio{}, err
 	}
@@ -595,7 +595,7 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 		return voice.Audio{}, err
 	}
 	durationMs, _ := voice.Duration(audio.MIMEType, audio.Data) // best effort; 0 means unknown
-	if err := c.db.PutMessageAudio(store.MessageAudio{AgentID: agentID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data, DurationMs: durationMs}); err != nil {
+	if err := c.db.PutMessageAudio(store.MessageAudio{SessionID: sessionID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data, DurationMs: durationMs}); err != nil {
 		return voice.Audio{}, err
 	}
 	return audio, nil
@@ -605,7 +605,7 @@ func (c *messageAudioCache) render(ctx context.Context, agentID string, seq int6
 // predates duration computation (DurationMs == 0). It is a best-effort,
 // read-triggered upgrade: any failure to parse or persist just leaves the
 // clip's duration unknown for this read, to be retried on a later read.
-func (c *messageAudioCache) backfillDuration(agentID string, seq int64, cached *store.MessageAudio) int64 {
+func (c *messageAudioCache) backfillDuration(sessionID string, seq int64, cached *store.MessageAudio) int64 {
 	if cached.DurationMs > 0 {
 		return cached.DurationMs
 	}
@@ -613,7 +613,7 @@ func (c *messageAudioCache) backfillDuration(agentID string, seq int64, cached *
 	if !ok || durationMs <= 0 {
 		return 0
 	}
-	if err := c.db.UpdateMessageAudioDuration(agentID, seq, durationMs); err != nil {
+	if err := c.db.UpdateMessageAudioDuration(sessionID, seq, durationMs); err != nil {
 		return 0
 	}
 	cached.DurationMs = durationMs
@@ -664,14 +664,14 @@ func (c *messageAudioCache) setFocus(s *session.Session, clientID string, focuse
 	}
 }
 
-func (c *messageAudioCache) focused(agentID string) bool {
+func (c *messageAudioCache) focused(sessionID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.focuses[agentID]) > 0
+	return len(c.focuses[sessionID]) > 0
 }
 
-func (c *messageAudioCache) readySeqs(agentID string) []int64 {
-	seqs, err := c.db.MessageAudioSeqs(agentID)
+func (c *messageAudioCache) readySeqs(sessionID string) []int64 {
+	seqs, err := c.db.MessageAudioSeqs(sessionID)
 	if err != nil {
 		return nil
 	}
@@ -682,8 +682,8 @@ func (c *messageAudioCache) readySeqs(agentID string) []int64 {
 // snapshot's audioReady field. It does not itself trigger backfill (that
 // happens lazily off the render/HTTP audio-serving path, which already has
 // the bytes in hand); rows not yet read through render carry durationMs=0.
-func (c *messageAudioCache) readyClips(agentID string) []store.MessageAudioClip {
-	clips, err := c.db.MessageAudioClips(agentID)
+func (c *messageAudioCache) readyClips(sessionID string) []store.MessageAudioClip {
+	clips, err := c.db.MessageAudioClips(sessionID)
 	if err != nil {
 		return nil
 	}
@@ -696,8 +696,8 @@ func (c *messageAudioCache) readyClips(agentID string) []store.MessageAudioClip 
 // same time; render's flight map deduplicates provider work, but without this
 // claim every caller would still emit a separate ready event and autoplay the
 // same clip again.
-func (c *messageAudioCache) claimPreparation(agentID string, seq int64) bool {
-	key := audioKey(agentID, seq)
+func (c *messageAudioCache) claimPreparation(sessionID string, seq int64) bool {
+	key := audioKey(sessionID, seq)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.prepared[key]; exists {
@@ -707,9 +707,9 @@ func (c *messageAudioCache) claimPreparation(agentID string, seq int64) bool {
 	return true
 }
 
-func (c *messageAudioCache) releasePreparation(agentID string, seq int64) {
+func (c *messageAudioCache) releasePreparation(sessionID string, seq int64) {
 	c.mu.Lock()
-	delete(c.prepared, audioKey(agentID, seq))
+	delete(c.prepared, audioKey(sessionID, seq))
 	c.mu.Unlock()
 }
 
@@ -717,7 +717,7 @@ func (c *messageAudioCache) prepare(s *session.Session) {
 	if c.renderer == nil {
 		return
 	}
-	enabled, enabledAfterSeq, err := c.db.AgentAudioEnabled(s.ID)
+	enabled, enabledAfterSeq, err := c.db.SessionAudioEnabled(s.ID)
 	if err != nil || !enabled {
 		return
 	}
@@ -828,18 +828,18 @@ func reattachBrowsers(ctx context.Context, db *store.Store, driver browser.Drive
 		return
 	}
 	for _, ps := range sessions {
-		if agents.Get(ps.AgentID) == nil {
-			_ = db.DeleteBrowserSession(ps.AgentID)
+		if agents.Get(ps.SessionID) == nil {
+			_ = db.DeleteBrowserSession(ps.SessionID)
 			continue
 		}
-		adopter.Adopt(ps.AgentID, ps.SessionID, ps.ProfileID, ps.CDPURL)
+		adopter.Adopt(ps.SessionID, ps.DriverSessionID, ps.ProfileID, ps.CDPURL)
 		attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := broker.EnsureProvisioned(attachCtx, ps.AgentID)
+		err := broker.EnsureProvisioned(attachCtx, ps.SessionID)
 		cancel()
 		if err != nil {
 			// EnsureProvisioned already tore the dead session down (which forgets
 			// the persisted row); just note it.
-			fmt.Fprintf(stdout, "browser re-attach failed for %s: %v\n", ps.AgentID, err)
+			fmt.Fprintf(stdout, "browser re-attach failed for %s: %v\n", ps.SessionID, err)
 		}
 	}
 }

@@ -65,7 +65,7 @@ type Adapter interface {
 	RespondPermission(reqID, optionID string) error
 	Interrupt() error
 	Close(context.Context) error
-	SessionID() string
+	ExternalSessionID() string
 	PID() int
 }
 
@@ -128,7 +128,7 @@ type ProfileSpec struct {
 }
 
 type StartRequest struct {
-	AgentID, CWD, ResumeSessionID string
+	SessionID, CWD, ResumeSessionID string
 	CaptureReplay                 bool
 	Spec                          Spec
 	Log                           *eventlog.Log

@@ -252,7 +252,7 @@ type Store struct {
 // computation and has not yet been read (see MessageAudio's lazy backfill
 // note below).
 type MessageAudio struct {
-	AgentID    string
+	SessionID    string
 	Seq        int64
 	MIMEType   string
 	Data       []byte
@@ -267,21 +267,21 @@ type MessageAudioClip struct {
 	DurationMs int64
 }
 
-// SetAgentAudioEnabled records the transcript boundary after which automatic
+// SetSessionAudioEnabled records the transcript boundary after which automatic
 // speech is allowed. A toggle must never retroactively render older replies.
-func (s *Store) SetAgentAudioEnabled(agentID string, enabled bool, enabledAfterSeq int64) error {
+func (s *Store) SetSessionAudioEnabled(sessionID string, enabled bool, enabledAfterSeq int64) error {
 	value := 0
 	if enabled {
 		value = 1
 	}
 	_, err := s.db.Exec(`INSERT INTO agent_audio_settings (agentId, enabled, enabledAfterSeq) VALUES (?, ?, ?)
-ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled, enabledAfterSeq=excluded.enabledAfterSeq`, agentID, value, enabledAfterSeq)
+ON CONFLICT(agentId) DO UPDATE SET enabled=excluded.enabled, enabledAfterSeq=excluded.enabledAfterSeq`, sessionID, value, enabledAfterSeq)
 	return err
 }
 
-func (s *Store) AgentAudioEnabled(agentID string) (enabled bool, enabledAfterSeq int64, err error) {
+func (s *Store) SessionAudioEnabled(sessionID string) (enabled bool, enabledAfterSeq int64, err error) {
 	var value int
-	err = s.db.QueryRow(`SELECT enabled, enabledAfterSeq FROM agent_audio_settings WHERE agentId = ?`, agentID).Scan(&value, &enabledAfterSeq)
+	err = s.db.QueryRow(`SELECT enabled, enabledAfterSeq FROM agent_audio_settings WHERE agentId = ?`, sessionID).Scan(&value, &enabledAfterSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, 0, nil
 	}
@@ -289,20 +289,20 @@ func (s *Store) AgentAudioEnabled(agentID string) (enabled bool, enabledAfterSeq
 }
 
 func (s *Store) PutMessageAudio(audio MessageAudio) error {
-	if audio.AgentID == "" || audio.Seq < 1 || audio.MIMEType == "" || len(audio.Data) == 0 {
+	if audio.SessionID == "" || audio.Seq < 1 || audio.MIMEType == "" || len(audio.Data) == 0 {
 		return errors.New("invalid message audio")
 	}
 	if audio.CreatedAt == 0 {
 		audio.CreatedAt = s.now().UnixMilli()
 	}
 	_, err := s.db.Exec(`INSERT INTO message_audio (agentId, seq, mimeType, data, durationMs, createdAt) VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.AgentID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
+ON CONFLICT(agentId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.SessionID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
 	return err
 }
 
-func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
+func (s *Store) MessageAudio(sessionID string, seq int64) (*MessageAudio, error) {
 	var audio MessageAudio
-	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, agentID, seq).
+	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE agentId = ? AND seq = ?`, sessionID, seq).
 		Scan(&audio.MIMEType, &audio.Data, &audio.DurationMs, &audio.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -310,15 +310,15 @@ func (s *Store) MessageAudio(agentID string, seq int64) (*MessageAudio, error) {
 	if err != nil {
 		return nil, err
 	}
-	audio.AgentID, audio.Seq = agentID, seq
+	audio.SessionID, audio.Seq = sessionID, seq
 	return &audio, nil
 }
 
 // UpdateMessageAudioDuration persists a duration computed after the fact —
 // the lazy-backfill path for rows written before duration computation
 // existed. It is a no-op (not an error) if the row is gone.
-func (s *Store) UpdateMessageAudioDuration(agentID string, seq int64, durationMs int64) error {
-	_, err := s.db.Exec(`UPDATE message_audio SET durationMs = ? WHERE agentId = ? AND seq = ?`, durationMs, agentID, seq)
+func (s *Store) UpdateMessageAudioDuration(sessionID string, seq int64, durationMs int64) error {
+	_, err := s.db.Exec(`UPDATE message_audio SET durationMs = ? WHERE agentId = ? AND seq = ?`, durationMs, sessionID, seq)
 	return err
 }
 
@@ -326,7 +326,7 @@ func (s *Store) UpdateMessageAudioDuration(agentID string, seq int64, durationMs
 // player — one row per agent (not per message), last-write-wins, so the
 // player can resume across a session switch or a closed tab.
 type AudioPosition struct {
-	AgentID    string
+	SessionID    string
 	Seq        int64
 	PositionMs int64
 	UpdatedAt  int64
@@ -338,23 +338,23 @@ type AudioPosition struct {
 // a zero seq. Returns the daemon-assigned updatedAt used for the write (the
 // caller may use it to describe the change, e.g. in a broadcast, without a
 // second read).
-func (s *Store) SetAudioPosition(agentID string, seq, positionMs int64) (int64, error) {
+func (s *Store) SetAudioPosition(sessionID string, seq, positionMs int64) (int64, error) {
 	updatedAt := s.now().UnixMilli()
 	if seq == 0 {
-		_, err := s.db.Exec(`DELETE FROM audio_position WHERE agentId = ?`, agentID)
+		_, err := s.db.Exec(`DELETE FROM audio_position WHERE agentId = ?`, sessionID)
 		return updatedAt, err
 	}
 	_, err := s.db.Exec(`INSERT INTO audio_position (agentId, seq, positionMs, updatedAt) VALUES (?, ?, ?, ?)
 ON CONFLICT(agentId) DO UPDATE SET seq=excluded.seq, positionMs=excluded.positionMs, updatedAt=excluded.updatedAt`,
-		agentID, seq, positionMs, updatedAt)
+		sessionID, seq, positionMs, updatedAt)
 	return updatedAt, err
 }
 
 // AudioPosition returns the persisted playback position for an agent, or nil
 // if nothing is stored (never played, or explicitly cleared via seq == 0).
-func (s *Store) AudioPosition(agentID string) (*AudioPosition, error) {
+func (s *Store) AudioPosition(sessionID string) (*AudioPosition, error) {
 	var pos AudioPosition
-	err := s.db.QueryRow(`SELECT seq, positionMs, updatedAt FROM audio_position WHERE agentId = ?`, agentID).
+	err := s.db.QueryRow(`SELECT seq, positionMs, updatedAt FROM audio_position WHERE agentId = ?`, sessionID).
 		Scan(&pos.Seq, &pos.PositionMs, &pos.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -362,7 +362,7 @@ func (s *Store) AudioPosition(agentID string) (*AudioPosition, error) {
 	if err != nil {
 		return nil, err
 	}
-	pos.AgentID = agentID
+	pos.SessionID = sessionID
 	return &pos, nil
 }
 
@@ -370,8 +370,8 @@ func (s *Store) AudioPosition(agentID string) (*AudioPosition, error) {
 // rendered audio. The bytes remain private to the authenticated audio route;
 // this is just the metadata needed to rehydrate player controls on another
 // client.
-func (s *Store) MessageAudioSeqs(agentID string) ([]int64, error) {
-	rows, err := s.db.Query(`SELECT seq FROM message_audio WHERE agentId = ? ORDER BY seq`, agentID)
+func (s *Store) MessageAudioSeqs(sessionID string) ([]int64, error) {
+	rows, err := s.db.Query(`SELECT seq FROM message_audio WHERE agentId = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -391,8 +391,8 @@ func (s *Store) MessageAudioSeqs(agentID string) ([]int64, error) {
 // spacing timeline tick marks without downloading audio. A durationMs of 0
 // means unknown (unparseable format, or a pre-duration row not yet read
 // through MessageAudio's lazy backfill).
-func (s *Store) MessageAudioClips(agentID string) ([]MessageAudioClip, error) {
-	rows, err := s.db.Query(`SELECT seq, durationMs FROM message_audio WHERE agentId = ? ORDER BY seq`, agentID)
+func (s *Store) MessageAudioClips(sessionID string) ([]MessageAudioClip, error) {
+	rows, err := s.db.Query(`SELECT seq, durationMs FROM message_audio WHERE agentId = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -416,12 +416,12 @@ type StoredEvent struct {
 	TS      int64
 }
 
-type Agent struct {
+type Session struct {
 	ID           string
 	Name         string
 	Spec         json.RawMessage
 	CWD          string
-	ACPSessionID *string
+	ExternalSessionID *string
 	Status       string
 	CreatedAt    int64
 	ClosedAt     *int64
@@ -436,10 +436,12 @@ type Asset struct {
 // BrowserSession is a durable handle to an externalized (Steel) browser session
 // so it can be re-attached after a daemon restart instead of being orphaned.
 type BrowserSession struct {
-	AgentID   string
 	SessionID string
-	ProfileID string
-	CDPURL    string
+	// DriverSessionID is the browser driver's own session handle (Steel's
+	// sessionId / the local Chromium session), not a Tandem session id.
+	DriverSessionID string
+	ProfileID       string
+	CDPURL          string
 }
 
 // BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
@@ -459,7 +461,7 @@ type BrowserSnapshot struct {
 // on send (see docs/transcript-annotations.md).
 type Annotation struct {
 	ID        string `json:"id"`
-	AgentID   string `json:"agentId"`
+	SessionID   string `json:"agentId"`
 	Seq       int64  `json:"seq"`
 	Role      string `json:"role"`
 	Quote     string `json:"quote"`
@@ -627,7 +629,7 @@ func isDuplicateColumn(err error) bool {
 	return regexp.MustCompile(`(?i)duplicate column name`).MatchString(err.Error())
 }
 
-func (s *Store) UpsertAgent(a Agent) error {
+func (s *Store) UpsertSession(a Session) error {
 	if !json.Valid(a.Spec) {
 		return errors.New("agent spec is not valid JSON")
 	}
@@ -644,7 +646,7 @@ func (s *Store) UpsertAgent(a Agent) error {
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name, spec=excluded.spec, cwd=excluded.cwd,
 acpSessionId=excluded.acpSessionId, status=excluded.status, closedAt=excluded.closedAt`,
-		a.ID, a.Name, compactSpec.String(), a.CWD, a.ACPSessionID, a.Status, a.CreatedAt, a.ClosedAt); err != nil {
+		a.ID, a.Name, compactSpec.String(), a.CWD, a.ExternalSessionID, a.Status, a.CreatedAt, a.ClosedAt); err != nil {
 		return err
 	}
 	if err := upsertTandemHistorySession(tx, a, s.now().UnixMilli()); err != nil {
@@ -658,7 +660,7 @@ func (s *Store) SetStatus(id, status string) error {
 	return err
 }
 
-func (s *Store) SetAgentName(id, name string) error {
+func (s *Store) SetSessionName(id, name string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -681,22 +683,22 @@ func (s *Store) SetAgentName(id, name string) error {
 	return tx.Commit()
 }
 
-func (s *Store) SetSessionID(id, sessionID string) error {
+func (s *Store) SetExternalSessionID(id, sessionID string) error {
 	_, err := s.db.Exec("UPDATE agents SET acpSessionId = ? WHERE id = ?", sessionID, id)
 	return err
 }
 
-func (s *Store) CloseAgent(id string) error {
+func (s *Store) CloseSession(id string) error {
 	_, err := s.db.Exec("UPDATE agents SET status = 'idle', closedAt = ? WHERE id = ?", s.now().UnixMilli(), id)
 	return err
 }
 
-func (s *Store) ReopenAgent(id string) error {
+func (s *Store) ReopenSession(id string) error {
 	_, err := s.db.Exec("UPDATE agents SET closedAt = NULL, status = 'idle' WHERE id = ?", id)
 	return err
 }
 
-func (s *Store) DeleteAgent(id string) error {
+func (s *Store) DeleteSession(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -713,18 +715,18 @@ func (s *Store) DeleteAgent(id string) error {
 // SaveBrowserSession records (or updates) an agent's externalized browser
 // session so it survives a daemon restart. The signature is primitive-typed so
 // the browser package's SessionStore interface is satisfied structurally.
-func (s *Store) SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error {
+func (s *Store) SaveBrowserSession(sessionID, driverSessionID, profileID, cdpURL string) error {
 	_, err := s.db.Exec(`INSERT INTO browser_sessions (agentId, sessionId, profileId, cdpUrl, updatedAt)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(agentId) DO UPDATE SET sessionId=excluded.sessionId, profileId=excluded.profileId, cdpUrl=excluded.cdpUrl, updatedAt=excluded.updatedAt`,
-		agentID, sessionID, profileID, cdpURL, s.now().UnixMilli())
+		sessionID, driverSessionID, profileID, cdpURL, s.now().UnixMilli())
 	return err
 }
 
 // DeleteBrowserSession forgets an agent's persisted browser session (session
 // ended, or re-attach failed because it was already gone).
-func (s *Store) DeleteBrowserSession(agentID string) error {
-	_, err := s.db.Exec("DELETE FROM browser_sessions WHERE agentId = ?", agentID)
+func (s *Store) DeleteBrowserSession(sessionID string) error {
+	_, err := s.db.Exec("DELETE FROM browser_sessions WHERE agentId = ?", sessionID)
 	return err
 }
 
@@ -739,7 +741,7 @@ func (s *Store) ListBrowserSessions() ([]BrowserSession, error) {
 	out := make([]BrowserSession, 0)
 	for rows.Next() {
 		var b BrowserSession
-		if err := rows.Scan(&b.AgentID, &b.SessionID, &b.ProfileID, &b.CDPURL); err != nil {
+		if err := rows.Scan(&b.SessionID, &b.DriverSessionID, &b.ProfileID, &b.CDPURL); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -911,31 +913,31 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func (s *Store) Agent(id string) (*Agent, error) {
-	return scanAgent(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE id = ?", id))
+func (s *Store) Session(id string) (*Session, error) {
+	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE id = ?", id))
 }
 
-func (s *Store) AgentBySessionID(sessionID string) (*Agent, error) {
-	return scanAgent(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE acpSessionId = ? ORDER BY createdAt DESC LIMIT 1", sessionID))
+func (s *Store) SessionByExternalSessionID(sessionID string) (*Session, error) {
+	return scanSession(s.db.QueryRow("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE acpSessionId = ? ORDER BY createdAt DESC LIMIT 1", sessionID))
 }
 
-func (s *Store) LiveAgents() ([]Agent, error) {
-	return s.agents("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE closedAt IS NULL ORDER BY createdAt")
+func (s *Store) LiveSessions() ([]Session, error) {
+	return s.sessions("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents WHERE closedAt IS NULL ORDER BY createdAt")
 }
 
-func (s *Store) AllAgents() ([]Agent, error) {
-	return s.agents("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents ORDER BY COALESCE(closedAt, createdAt) DESC")
+func (s *Store) AllSessions() ([]Session, error) {
+	return s.sessions("SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt FROM agents ORDER BY COALESCE(closedAt, createdAt) DESC")
 }
 
-func (s *Store) agents(query string) ([]Agent, error) {
+func (s *Store) sessions(query string) ([]Session, error) {
 	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]Agent, 0)
+	out := make([]Session, 0)
 	for rows.Next() {
-		a, err := scanAgent(rows)
+		a, err := scanSession(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -948,8 +950,8 @@ func (s *Store) agents(query string) ([]Agent, error) {
 
 type scanner interface{ Scan(...any) error }
 
-func scanAgent(row scanner) (*Agent, error) {
-	var a Agent
+func scanSession(row scanner) (*Session, error) {
+	var a Session
 	var spec string
 	var session sql.NullString
 	var closed sql.NullInt64
@@ -964,7 +966,7 @@ func scanAgent(row scanner) (*Agent, error) {
 	}
 	a.Spec = json.RawMessage(spec)
 	if session.Valid {
-		a.ACPSessionID = &session.String
+		a.ExternalSessionID = &session.String
 	}
 	if closed.Valid {
 		a.ClosedAt = &closed.Int64
@@ -972,7 +974,7 @@ func scanAgent(row scanner) (*Agent, error) {
 	return &a, nil
 }
 
-func (s *Store) MaxAgentSuffix() (int, error) {
+func (s *Store) MaxSessionSuffix() (int, error) {
 	rows, err := s.db.Query("SELECT id FROM agents")
 	if err != nil {
 		return 0, err
@@ -996,7 +998,7 @@ func (s *Store) MaxAgentSuffix() (int, error) {
 	return max, rows.Err()
 }
 
-func (s *Store) PutAsset(agentID string, asset Asset) error {
+func (s *Store) PutAsset(sessionID string, asset Asset) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -1006,16 +1008,16 @@ func (s *Store) PutAsset(agentID string, asset Asset) error {
 	if _, err := tx.Exec("INSERT OR IGNORE INTO assets (id, mimeType, size, createdAt) VALUES (?, ?, ?, ?)", asset.ID, asset.MIMEType, asset.Size, now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT OR IGNORE INTO agent_assets (agentId, assetId, createdAt) VALUES (?, ?, ?)", agentID, asset.ID, now); err != nil {
+	if _, err := tx.Exec("INSERT OR IGNORE INTO agent_assets (agentId, assetId, createdAt) VALUES (?, ?, ?)", sessionID, asset.ID, now); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) AgentAsset(agentID, assetID string) (*Asset, error) {
+func (s *Store) SessionAsset(sessionID, assetID string) (*Asset, error) {
 	var a Asset
 	err := s.db.QueryRow(`SELECT a.id, a.mimeType, a.size FROM assets a
-JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?`, agentID, assetID).Scan(&a.ID, &a.MIMEType, &a.Size)
+JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?`, sessionID, assetID).Scan(&a.ID, &a.MIMEType, &a.Size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1028,7 +1030,7 @@ JOIN agent_assets aa ON aa.assetId = a.id WHERE aa.agentId = ? AND a.id = ?`, ag
 // AppendEvent atomically allocates the next per-agent sequence and writes the
 // event. The lock deliberately covers allocation and INSERT so concurrent
 // EventLog instances cannot observe and reuse the same MAX(seq).
-func (s *Store) AppendEvent(agentID, kind, payload string, ts int64) (int64, error) {
+func (s *Store) AppendEvent(sessionID, kind, payload string, ts int64) (int64, error) {
 	s.eventMu.Lock()
 	defer s.eventMu.Unlock()
 	if !json.Valid([]byte(payload)) {
@@ -1040,13 +1042,13 @@ func (s *Store) AppendEvent(agentID, kind, payload string, ts int64) (int64, err
 	}
 	defer tx.Rollback()
 	var seq int64
-	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE agentId = ?", agentID).Scan(&seq); err != nil {
+	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE agentId = ?", sessionID).Scan(&seq); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec("INSERT INTO events (agentId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", agentID, seq, kind, payload, ts); err != nil {
+	if _, err := tx.Exec("INSERT INTO events (agentId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", sessionID, seq, kind, payload, ts); err != nil {
 		return 0, err
 	}
-	if err := indexTandemEvent(tx, agentID, seq, kind, payload, ts, s.now().UnixMilli()); err != nil {
+	if err := indexTandemEvent(tx, sessionID, seq, kind, payload, ts, s.now().UnixMilli()); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1056,8 +1058,8 @@ func (s *Store) AppendEvent(agentID, kind, payload string, ts int64) (int64, err
 }
 
 // RangeEvents returns events strictly newer than afterSeq in sequence order.
-func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, error) {
-	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND seq > ? ORDER BY seq", agentID, afterSeq)
+func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, error) {
+	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND seq > ? ORDER BY seq", sessionID, afterSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -1069,7 +1071,7 @@ func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, erro
 			return nil, err
 		}
 		if !json.Valid([]byte(event.Payload)) {
-			return nil, fmt.Errorf("event %q/%d has malformed payload JSON", agentID, event.Seq)
+			return nil, fmt.Errorf("event %q/%d has malformed payload JSON", sessionID, event.Seq)
 		}
 		out = append(out, event)
 	}
@@ -1080,9 +1082,9 @@ func (s *Store) RangeEvents(agentID string, afterSeq int64) ([]StoredEvent, erro
 // the agent has never logged one. Callers use it to re-seed in-memory state
 // (for example the last reported context usage) after a daemon restart without
 // replaying the whole history.
-func (s *Store) LatestEventOfKind(agentID, kind string) (*StoredEvent, error) {
+func (s *Store) LatestEventOfKind(sessionID, kind string) (*StoredEvent, error) {
 	var event StoredEvent
-	err := s.db.QueryRow("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND kind = ? ORDER BY seq DESC LIMIT 1", agentID, kind).
+	err := s.db.QueryRow("SELECT seq, kind, payload, ts FROM events WHERE agentId = ? AND kind = ? ORDER BY seq DESC LIMIT 1", sessionID, kind).
 		Scan(&event.Seq, &event.Kind, &event.Payload, &event.TS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1091,13 +1093,13 @@ func (s *Store) LatestEventOfKind(agentID, kind string) (*StoredEvent, error) {
 		return nil, err
 	}
 	if !json.Valid([]byte(event.Payload)) {
-		return nil, fmt.Errorf("event %q/%d has malformed payload JSON", agentID, event.Seq)
+		return nil, fmt.Errorf("event %q/%d has malformed payload JSON", sessionID, event.Seq)
 	}
 	return &event, nil
 }
 
-func (s *Store) EventBounds(agentID string) (min, max int64, err error) {
-	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", agentID).Scan(&min, &max)
+func (s *Store) EventBounds(sessionID string) (min, max int64, err error) {
+	err = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events WHERE agentId = ?", sessionID).Scan(&min, &max)
 	return
 }
 
@@ -1107,15 +1109,15 @@ func (s *Store) UpsertAnnotation(a Annotation) error {
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET agentId=excluded.agentId, seq=excluded.seq, role=excluded.role,
   quote=excluded.quote, comment=excluded.comment, createdAt=excluded.createdAt, updatedAt=excluded.updatedAt`,
-		a.ID, a.AgentID, a.Seq, a.Role, a.Quote, a.Comment, a.CreatedAt, a.UpdatedAt)
+		a.ID, a.SessionID, a.Seq, a.Role, a.Quote, a.Comment, a.CreatedAt, a.UpdatedAt)
 	return err
 }
 
 // ListAnnotations returns an agent's annotations ordered by seq then createdAt,
 // matching transcript order for the same row.
-func (s *Store) ListAnnotations(agentID string) ([]Annotation, error) {
+func (s *Store) ListAnnotations(sessionID string) ([]Annotation, error) {
 	rows, err := s.db.Query(`SELECT id, agentId, seq, role, quote, comment, createdAt, updatedAt
-FROM annotations WHERE agentId = ? ORDER BY seq, createdAt`, agentID)
+FROM annotations WHERE agentId = ? ORDER BY seq, createdAt`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1123,7 +1125,7 @@ FROM annotations WHERE agentId = ? ORDER BY seq, createdAt`, agentID)
 	out := make([]Annotation, 0)
 	for rows.Next() {
 		var a Annotation
-		if err := rows.Scan(&a.ID, &a.AgentID, &a.Seq, &a.Role, &a.Quote, &a.Comment, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.SessionID, &a.Seq, &a.Role, &a.Quote, &a.Comment, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1137,11 +1139,11 @@ func (s *Store) DeleteAnnotation(id string) error {
 	return err
 }
 
-// DeleteAnnotationsForAgent removes every annotation for an agent — the
+// DeleteAnnotationsForSession removes every annotation for an agent — the
 // "sending consumes them" step, or agent deletion — returning the count
 // removed.
-func (s *Store) DeleteAnnotationsForAgent(agentID string) (int, error) {
-	result, err := s.db.Exec("DELETE FROM annotations WHERE agentId = ?", agentID)
+func (s *Store) DeleteAnnotationsForSession(sessionID string) (int, error) {
+	result, err := s.db.Exec("DELETE FROM annotations WHERE agentId = ?", sessionID)
 	if err != nil {
 		return 0, err
 	}

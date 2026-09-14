@@ -273,10 +273,10 @@ func (s *Session) SetStatus(v Status) { s.mu.Lock(); s.status = v; s.mu.Unlock()
 // PushEvent lets daemon-owned auxiliary services (notably browser takeover)
 // enter the same durable event stream as adapter updates.
 func (s *Session) PushEvent(ev eventlog.Event) { s.emit(ev) }
-func (s *Session) SessionID() string {
+func (s *Session) ExternalSessionID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.adapter.SessionID()
+	return s.adapter.ExternalSessionID()
 }
 func (s *Session) PID() int { s.mu.RLock(); defer s.mu.RUnlock(); return s.adapter.PID() }
 func (s *Session) Capabilities() agentadapter.Capabilities {

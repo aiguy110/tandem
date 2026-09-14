@@ -25,7 +25,7 @@ import (
 type DefaultFactory struct {
 	Assets     *assets.Store
 	Config     config.Config
-	MCPServers func(agentID, workspaceCWD string) ([]browser.MCPServer, error)
+	MCPServers func(sessionID, workspaceCWD string) ([]browser.MCPServer, error)
 }
 
 func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest) (agentadapter.Adapter, error) {
@@ -37,7 +37,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		if launch.Terminal == nil {
 			return nil, errors.New("terminal launch is missing")
 		}
-		a := ptyadapter.New(req.AgentID)
+		a := ptyadapter.New(req.SessionID)
 		if err := a.Spawn(ctx, ptyadapter.SpawnOptions{Command: launch.Terminal.Cmd, Args: launch.Terminal.StartArgs, Dir: req.CWD, Env: launch.Terminal.Env}); err != nil {
 			return nil, err
 		}
@@ -61,7 +61,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	}
 	var mcpServers []acpadapter.MCPServer
 	if f.MCPServers != nil {
-		configured, err := f.MCPServers(req.AgentID, req.CWD)
+		configured, err := f.MCPServers(req.SessionID, req.CWD)
 		if err != nil {
 			fs.Close()
 			host.Close(context.Background())
@@ -79,7 +79,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Type: server.Type, Command: server.Command, Args: server.Args, Env: env, URL: server.URL, Headers: headers})
 		}
 	}
-	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{AgentID: req.AgentID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(launch.ACP.Env), Stderr: os.Stderr}})
+	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{SessionID: req.SessionID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(launch.ACP.Env), Stderr: os.Stderr}})
 	if err != nil {
 		host.Close(context.Background())
 		fs.Close()
@@ -237,7 +237,7 @@ func (a *acpAdapter) Close(ctx context.Context) error {
 type ptyAdapter struct{ *ptyadapter.Adapter }
 
 func (a *ptyAdapter) Capabilities() agentadapter.Capabilities { return agentadapter.Capabilities{} }
-func (a *ptyAdapter) SessionID() string                       { return "" }
+func (a *ptyAdapter) ExternalSessionID() string                       { return "" }
 func (a *ptyAdapter) Prompt(context.Context, []agentadapter.PromptBlock) (string, error) {
 	return "", errors.New("PTY adapter does not support structured prompts")
 }

@@ -32,7 +32,7 @@ func TestRenderCarriesMessagesVerbatimAndSummarizesTools(t *testing.T) {
 			"rawInput": map[string]any{"file_path": "/w/repo/upload.go", "old_string": "x"}}),
 		event(t, 8, map[string]any{"kind": "message_chunk", "text": "The edit failed; retrying."}),
 	}
-	got := handoff.Render(history, handoff.Source{AgentName: "tesla-13", Harness: "Claude", CWD: "/w/repo", Branch: "tandem/master/tesla-13"}, handoff.ModeFull)
+	got := handoff.Render(history, handoff.Source{SessionName: "tesla-13", Harness: "Claude", CWD: "/w/repo", Branch: "tandem/master/tesla-13"}, handoff.ModeFull)
 
 	for _, want := range []string{
 		"add a retry to the uploader",
@@ -98,7 +98,7 @@ func TestBriefModeKeepsOnlyTurnEndMessagesAndCountsTools(t *testing.T) {
 		event(t, 8, map[string]any{"kind": "user_message", "text": "now do the downloader"}),
 		event(t, 9, map[string]any{"kind": "message_chunk", "text": "Starting on it."}),
 	}
-	got := handoff.Render(history, handoff.Source{AgentName: "tesla-13"}, handoff.ModeBrief)
+	got := handoff.Render(history, handoff.Source{SessionName: "tesla-13"}, handoff.ModeBrief)
 
 	for _, want := range []string{
 		"add a retry to the uploader",

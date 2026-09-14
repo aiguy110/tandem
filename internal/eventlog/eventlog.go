@@ -126,7 +126,7 @@ type Replay struct {
 // serialized, protecting sequence uniqueness across multiple Log instances.
 type Log struct {
 	mu      sync.RWMutex
-	agentID string
+	sessionID string
 	store   *store.Store
 	cap     int
 	ring    []LoggedEvent
@@ -134,18 +134,18 @@ type Log struct {
 	now     func() time.Time
 }
 
-func New(agentID string, backing *store.Store, capacity int) (*Log, error) {
+func New(sessionID string, backing *store.Store, capacity int) (*Log, error) {
 	if backing == nil {
 		return nil, errors.New("event store is required")
 	}
 	if capacity < 0 {
 		return nil, errors.New("ring capacity cannot be negative")
 	}
-	_, head, err := backing.EventBounds(agentID)
+	_, head, err := backing.EventBounds(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return &Log{agentID: agentID, store: backing, cap: capacity, head: head, now: time.Now}, nil
+	return &Log{sessionID: sessionID, store: backing, cap: capacity, head: head, now: time.Now}, nil
 }
 
 func (l *Log) Append(event Event) (LoggedEvent, error) {
@@ -156,7 +156,7 @@ func (l *Log) Append(event Event) (LoggedEvent, error) {
 		return LoggedEvent{}, err
 	}
 	ts := l.now().UnixMilli()
-	seq, err := l.store.AppendEvent(l.agentID, event.Kind, string(payload), ts)
+	seq, err := l.store.AppendEvent(l.sessionID, event.Kind, string(payload), ts)
 	if err != nil {
 		return LoggedEvent{}, err
 	}
@@ -211,7 +211,7 @@ func (l *Log) ReplaySince(since int64) (Replay, error) {
 	}
 	l.mu.RUnlock()
 
-	min, durableHead, err := l.store.EventBounds(l.agentID)
+	min, durableHead, err := l.store.EventBounds(l.sessionID)
 	if err != nil {
 		return Replay{}, err
 	}
@@ -222,7 +222,7 @@ func (l *Log) ReplaySince(since int64) (Replay, error) {
 		after = 0
 		source = ReplaySnapshot
 	}
-	rows, err := l.store.RangeEvents(l.agentID, after)
+	rows, err := l.store.RangeEvents(l.sessionID, after)
 	if err != nil {
 		return Replay{}, err
 	}
@@ -237,7 +237,7 @@ func (l *Log) ReplaySince(since int64) (Replay, error) {
 // agent has never logged one. It reads through to SQLite so it stays correct
 // after a daemon restart, when the in-memory ring is empty.
 func (l *Log) LatestOfKind(kind string) (LoggedEvent, bool, error) {
-	row, err := l.store.LatestEventOfKind(l.agentID, kind)
+	row, err := l.store.LatestEventOfKind(l.sessionID, kind)
 	if err != nil || row == nil {
 		return LoggedEvent{}, false, err
 	}
@@ -249,7 +249,7 @@ func (l *Log) LatestOfKind(kind string) (LoggedEvent, bool, error) {
 }
 
 func (l *Log) FullHistory() ([]LoggedEvent, error) {
-	rows, err := l.store.RangeEvents(l.agentID, 0)
+	rows, err := l.store.RangeEvents(l.sessionID, 0)
 	if err != nil {
 		return nil, err
 	}

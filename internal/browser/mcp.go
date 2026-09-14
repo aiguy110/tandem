@@ -40,14 +40,14 @@ type MCPWiring struct {
 // BuildMCPServers returns the external Playwright MCP and Tandem's internal
 // control MCP declarations for one agent. A missing Playwright installation is
 // tolerated; tandem-control remains available.
-func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
+func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 	servers := make([]MCPServer, 0, 3)
 	if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
-		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(agentID))
+		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(sessionID))
 		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{
 			Name: PlaywrightMCPName, Command: w.NodeRuntime,
-			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(agentID), "--output-dir", outputDir},
+			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(sessionID), "--output-dir", outputDir},
 			Env:  []MCPEnvVariable{},
 		})
 	}
@@ -57,7 +57,7 @@ func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
 			Env: []MCPEnvVariable{
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
-				{Name: "TANDEM_AGENT_ID", Value: agentID},
+				{Name: "TANDEM_AGENT_ID", Value: sessionID},
 			},
 		})
 	}
@@ -67,7 +67,7 @@ func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
 			Env: []MCPEnvVariable{
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
-				{Name: "TANDEM_AGENT_ID", Value: agentID},
+				{Name: "TANDEM_AGENT_ID", Value: sessionID},
 				{Name: "TANDEM_WORKSPACE_CWD", Value: workspaceCWD},
 			},
 		})
@@ -77,8 +77,8 @@ func BuildMCPServers(w MCPWiring, agentID, workspaceCWD string) []MCPServer {
 
 // sanitizeAgentSlug makes an agent ID safe to use as a single path component,
 // since agent IDs may contain "/" (e.g. catalog-derived spawn-option IDs).
-func sanitizeAgentSlug(agentID string) string {
-	return strings.ReplaceAll(agentID, "/", "-")
+func sanitizeAgentSlug(sessionID string) string {
+	return strings.ReplaceAll(sessionID, "/", "-")
 }
 
 func regularFile(path string) bool {

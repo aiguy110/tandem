@@ -93,7 +93,7 @@ func (f *fakeAdapter) Close(context.Context) error {
 	f.close.Do(func() { close(f.events); close(f.done) })
 	return nil
 }
-func (f *fakeAdapter) SessionID() string { return "s" }
+func (f *fakeAdapter) ExternalSessionID() string { return "s" }
 func (f *fakeAdapter) PID() int          { return 1 }
 
 func testSession(t *testing.T) (*Session, *fakeAdapter, *store.Store) {

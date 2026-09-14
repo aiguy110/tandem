@@ -88,7 +88,7 @@ type LocalDriver struct {
 	cfg     LocalConfig
 	mu      sync.Mutex
 	handles map[string]*localHandle
-	seeds   map[string]string // agentID -> snapshot dir to copy in before first launch
+	seeds   map[string]string // sessionID -> snapshot dir to copy in before first launch
 }
 
 func NewLocalDriver(cfg LocalConfig) *LocalDriver {
@@ -218,8 +218,8 @@ func (d *LocalDriver) Teardown(_ context.Context, id string) error {
 // re-attached after a daemon restart. It is satisfied structurally by
 // *store.Store, so the browser package does not import store.
 type SessionStore interface {
-	SaveBrowserSession(agentID, sessionID, profileID, cdpURL string) error
-	DeleteBrowserSession(agentID string) error
+	SaveBrowserSession(sessionID, driverSessionID, profileID, cdpURL string) error
+	DeleteBrowserSession(sessionID string) error
 }
 
 type SteelConfig struct {
@@ -325,12 +325,12 @@ func (d *SteelDriver) Provision(ctx context.Context, id string) (ProvisionResult
 // Adopt seeds an agent's session/profile handles from persisted state so the
 // next Provision re-attaches to the existing Steel session (preserving its
 // pages) instead of creating a fresh one.
-func (d *SteelDriver) Adopt(agentID, sessionID, profileID, cdpURL string) {
+func (d *SteelDriver) Adopt(sessionID, driverSessionID, profileID, cdpURL string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.sessions[agentID] = steelSession{id: sessionID, cdpURL: cdpURL}
+	d.sessions[sessionID] = steelSession{id: driverSessionID, cdpURL: cdpURL}
 	if profileID != "" {
-		d.profiles[agentID] = profileID
+		d.profiles[sessionID] = profileID
 	}
 }
 

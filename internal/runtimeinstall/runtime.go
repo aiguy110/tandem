@@ -45,12 +45,12 @@ var historyPin = pin{spec: "tsx@4.23.1", dist: filepath.Join("node_modules", "ts
 var installMu sync.Mutex
 
 // EnsureAgent installs the ACP server package (and, if enabled, the
-// Playwright MCP server) that agentID needs before it can be spawned. It is
+// Playwright MCP server) that sessionID needs before it can be spawned. It is
 // a no-op for agent ids not in agentPins (custom/unmanaged agents launch
 // arbitrary commands Tandem does not provision). Safe to call concurrently
 // and repeatedly; installs are serialized and skipped once already present.
-func EnsureAgent(ctx context.Context, cfg config.Config, agentID string, log io.Writer) error {
-	p, ok := agentPins[agentID]
+func EnsureAgent(ctx context.Context, cfg config.Config, sessionID string, log io.Writer) error {
+	p, ok := agentPins[sessionID]
 	if !ok {
 		return nil
 	}
@@ -85,7 +85,7 @@ func EnsureAgent(ctx context.Context, cfg config.Config, agentID string, log io.
 		return err
 	}
 	if !distExists(cfg.RuntimeRoot, p.dist) {
-		return fmt.Errorf("provision agent %s: npm completed without required ACP module", agentID)
+		return fmt.Errorf("provision agent %s: npm completed without required ACP module", sessionID)
 	}
 
 	if cfg.Browser.MCPEnabled && !distExists(cfg.RuntimeRoot, playwrightPin.dist) {
@@ -150,7 +150,7 @@ func EnsureHistory(ctx context.Context, cfg config.Config, log io.Writer) error 
 	return nil
 }
 
-// ready reports whether agentID's package (and, when browser MCP is
+// ready reports whether sessionID's package (and, when browser MCP is
 // enabled, the Playwright MCP server) is already installed.
 func ready(cfg config.Config, p pin) bool {
 	if !distExists(cfg.RuntimeRoot, p.dist) {

@@ -63,9 +63,9 @@ func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
 	if notification.ID == "" {
 		t.Fatal("registration notification was not published")
 	}
-	agentID, handled, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept")
-	if err != nil || !handled || agentID != "" {
-		t.Fatalf("accept agent=%q handled=%v err=%v", agentID, handled, err)
+	sessionID, handled, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept")
+	if err != nil || !handled || sessionID != "" {
+		t.Fatalf("accept agent=%q handled=%v err=%v", sessionID, handled, err)
 	}
 	hostID := strings.TrimPrefix(notification.ID, "federation-registration-")
 	deadline = time.Now().Add(time.Second)

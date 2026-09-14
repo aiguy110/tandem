@@ -34,7 +34,7 @@ func TestToolsAndAuthenticatedRunRequest(t *testing.T) {
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), inR, outW, Config{ControlURL: httpServer.URL, Token: "secret", AgentID: "agent-7", WorkspaceCWD: "/worktrees/repo"})
+		done <- Run(context.Background(), inR, outW, Config{ControlURL: httpServer.URL, Token: "secret", SessionID: "agent-7", WorkspaceCWD: "/worktrees/repo"})
 	}()
 	responses := make(chan map[string]any, 4)
 	go func() {

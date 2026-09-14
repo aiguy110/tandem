@@ -79,11 +79,11 @@ func TestReplaceHistorySessionRollsBackOnDuplicateEntry(t *testing.T) {
 
 func TestTandemEventsAreIndexedLiveAndOnMigration(t *testing.T) {
 	s, path := openTestStore(t)
-	agent := Agent{
+	agent := Session{
 		ID: "api-42", Name: "local transcript", Spec: json.RawMessage(`{"adapter":"acp","agent":"codex"}`),
 		CWD: "/repo", Status: "idle", CreatedAt: 100,
 	}
-	if err := s.UpsertAgent(agent); err != nil {
+	if err := s.UpsertSession(agent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendEvent(agent.ID, "user_message", `{"kind":"user_message","text":"locate the ultraviolet semaphore"}`, 110); err != nil {

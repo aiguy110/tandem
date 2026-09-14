@@ -30,7 +30,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// mcp-scripts is an internal stdio MCP subprocess declared for ACP agents.
 	if len(args) == 1 && args[0] == "mcp-scripts" {
 		err := automationmcp.Run(context.Background(), os.Stdin, stdout, automationmcp.Config{
-			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), AgentID: os.Getenv("TANDEM_AGENT_ID"), WorkspaceCWD: os.Getenv("TANDEM_WORKSPACE_CWD"),
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"), WorkspaceCWD: os.Getenv("TANDEM_WORKSPACE_CWD"),
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-scripts: %v\n", err)
@@ -42,7 +42,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// internal stdio MCP subprocess from Tandem's session/new declaration.
 	if len(args) == 1 && args[0] == "mcp-control" {
 		err := controlmcp.Run(context.Background(), os.Stdin, stdout, controlmcp.Config{
-			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), AgentID: os.Getenv("TANDEM_AGENT_ID"),
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"),
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-control: %v\n", err)

@@ -626,7 +626,7 @@ func (t *tunnel) ping() error {
 // HandleNotificationAction accepts a master UI notification action. It
 // returns handled=false for unrelated notification IDs so daemon code can
 // chain this with updater actions.
-func (s *Service) HandleNotificationAction(_ context.Context, id, action string) (agentID string, handled bool, err error) {
+func (s *Service) HandleNotificationAction(_ context.Context, id, action string) (sessionID string, handled bool, err error) {
 	if id == masterProtocolNotificationID {
 		if action != "dismiss" {
 			return "", true, fmt.Errorf("unknown federation protocol action %q", action)

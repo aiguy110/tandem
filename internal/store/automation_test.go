@@ -112,9 +112,9 @@ func TestAutomationRunWakeupAndToolAudit(t *testing.T) {
 	if err := s.SaveAutomationRun(run); err != nil {
 		t.Fatal(err)
 	}
-	agentID := "agent-9"
+	sessionID := "agent-9"
 	wakeup := AutomationWakeup{
-		RunID: run.ID, JobID: run.JobID, AgentID: &agentID, AgentProfile: "special", Prompt: "Review it",
+		RunID: run.ID, JobID: run.JobID, SessionID: &sessionID, AgentProfile: "special", Prompt: "Review it",
 		Reason: "report", Context: json.RawMessage(`{"messageId":"m-1"}`), Status: "working", CreatedAt: 31,
 	}
 	if err := s.SaveAutomationWakeup(wakeup); err != nil {

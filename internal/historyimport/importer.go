@@ -131,22 +131,22 @@ type endRecord struct {
 	Checkpoint json.RawMessage `json:"checkpoint"`
 }
 
-func (r *Runner) Import(ctx context.Context, agentID string, history config.History) (result Result, retErr error) {
-	return r.importWithOptions(ctx, agentID, history, false)
+func (r *Runner) Import(ctx context.Context, agent string, history config.History) (result Result, retErr error) {
+	return r.importWithOptions(ctx, agent, history, false)
 }
 
 // Reindex runs an importer without checkpoints. Existing indexed sessions are
 // retained unless the complete fresh scan succeeds and lifecycle reconciliation
 // later identifies them as missing.
-func (r *Runner) Reindex(ctx context.Context, agentID string, history config.History) (result Result, retErr error) {
-	return r.importWithOptions(ctx, agentID, history, true)
+func (r *Runner) Reindex(ctx context.Context, agent string, history config.History) (result Result, retErr error) {
+	return r.importWithOptions(ctx, agent, history, true)
 }
 
-func (r *Runner) importWithOptions(ctx context.Context, agentID string, history config.History, fresh bool) (result Result, retErr error) {
+func (r *Runner) importWithOptions(ctx context.Context, agent string, history config.History, fresh bool) (result Result, retErr error) {
 	if !history.Enabled {
 		return Result{}, nil
 	}
-	runID, err := r.store.StartHistoryImportRun(agentID)
+	runID, err := r.store.StartHistoryImportRun(agent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -156,15 +156,15 @@ func (r *Runner) importWithOptions(ctx context.Context, agentID string, history 
 			retErr = finishErr
 		}
 		if retErr != nil {
-			_ = r.store.MarkHistoryImportError(agentID, importerID, retErr)
+			_ = r.store.MarkHistoryImportError(agent, importerID, retErr)
 		}
 	}()
 
-	checkpoints, err := r.store.HistoryImportCheckpoints(agentID)
+	checkpoints, err := r.store.HistoryImportCheckpoints(agent)
 	if err != nil {
 		return result, err
 	}
-	req := request{ProtocolVersion: ProtocolVersion, Agent: agentID, Checkpoints: []requestCheckpoint{}}
+	req := request{ProtocolVersion: ProtocolVersion, Agent: agent, Checkpoints: []requestCheckpoint{}}
 	for _, checkpoint := range checkpoints {
 		if fresh {
 			break
@@ -221,7 +221,7 @@ func (r *Runner) importWithOptions(ctx context.Context, agentID string, history 
 		return result, fmt.Errorf("send history import request: %w", err)
 	}
 
-	readErr := r.consume(stdout, agentID, &importerID, &result)
+	readErr := r.consume(stdout, agent, &importerID, &result)
 	if readErr != nil {
 		_ = cmd.Cancel()
 	}
@@ -243,7 +243,7 @@ func (r *Runner) importWithOptions(ctx context.Context, agentID string, history 
 	return result, nil
 }
 
-func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, result *Result) error {
+func (r *Runner) consume(reader io.Reader, agent string, importerID *string, result *Result) error {
 	br := bufio.NewReaderSize(reader, 64<<10)
 	var total int64
 	lineNumber := 0
@@ -341,7 +341,7 @@ func (r *Runner) consume(reader io.Reader, agentID string, importerID *string, r
 					meta = json.RawMessage(`{}`)
 				}
 				session := store.HistorySession{
-					Source: "history", Agent: agentID, ExternalID: active.Session.ID,
+					Source: "history", Agent: agent, ExternalID: active.Session.ID,
 					CWD: active.Session.CWD, Title: active.Session.Title,
 					CreatedAt: active.Session.CreatedAt, UpdatedAt: active.Session.UpdatedAt,
 					Resumable: resumable, SourceKey: active.SourceKey, SourceMeta: meta,

@@ -134,7 +134,7 @@ func TestMessageAudioCacheBackfillsUnknownDuration(t *testing.T) {
 	if !ok || wantMs <= 0 {
 		t.Fatalf("fixture did not parse: ok=%v ms=%d", ok, wantMs)
 	}
-	if err := db.PutMessageAudio(store.MessageAudio{AgentID: "agent", Seq: 3, MIMEType: "audio/mpeg", Data: clip}); err != nil {
+	if err := db.PutMessageAudio(store.MessageAudio{SessionID: "agent", Seq: 3, MIMEType: "audio/mpeg", Data: clip}); err != nil {
 		t.Fatal(err)
 	}
 	if row, err := db.MessageAudio("agent", 3); err != nil || row.DurationMs != 0 {
@@ -157,7 +157,7 @@ func TestMessageAudioCacheBackfillsUnknownDuration(t *testing.T) {
 
 	// render()'s cache-hit path must also backfill (for a separate row) and
 	// must not invoke the renderer, since the clip is already cached.
-	if err := db.PutMessageAudio(store.MessageAudio{AgentID: "agent", Seq: 5, MIMEType: "audio/mpeg", Data: clip}); err != nil {
+	if err := db.PutMessageAudio(store.MessageAudio{SessionID: "agent", Seq: 5, MIMEType: "audio/mpeg", Data: clip}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.render(context.Background(), "agent", 5); err != nil {
@@ -351,7 +351,7 @@ func (federatedAudioLocal) Snapshot(context.Context) (json.RawMessage, error) {
 func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
 	var m struct {
 		T       string `json:"t"`
-		AgentID string `json:"agentId"`
+		SessionID string `json:"agentId"`
 		Seq     int64  `json:"seq"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -360,12 +360,12 @@ func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (js
 	if m.T != "render_message_audio" {
 		return nil, fmt.Errorf("unexpected command %q", m.T)
 	}
-	envelope := map[string]any{"t": "message_audio", "agentId": m.AgentID, "seq": m.Seq}
+	envelope := map[string]any{"t": "message_audio", "agentId": m.SessionID, "seq": m.Seq}
 	if l.err != "" {
 		envelope["error"] = l.err
 	} else {
 		envelope["mimeType"] = "audio/mpeg"
-		envelope["data"] = base64.StdEncoding.EncodeToString([]byte("remote-" + m.AgentID))
+		envelope["data"] = base64.StdEncoding.EncodeToString([]byte("remote-" + m.SessionID))
 	}
 	return json.Marshal(envelope)
 }

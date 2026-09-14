@@ -41,14 +41,14 @@ type Service struct {
 }
 
 type RunRequest struct {
-	AgentID      string   `json:"agentId"`
+	SessionID      string   `json:"agentId"`
 	WorkspaceCWD string   `json:"workspaceCwd"`
 	Path         string   `json:"path"`
 	Args         []string `json:"args,omitempty"`
 }
 
 type EvaluateRequest struct {
-	AgentID      string           `json:"agentId"`
+	SessionID      string           `json:"agentId"`
 	WorkspaceCWD string           `json:"workspaceCwd"`
 	Source       string           `json:"source"`
 	Args         []string         `json:"args,omitempty"`
@@ -57,7 +57,7 @@ type EvaluateRequest struct {
 }
 
 type PreapproveRequest struct {
-	AgentID          string `json:"agentId"`
+	SessionID          string `json:"agentId"`
 	WorkspaceCWD     string `json:"workspaceCwd"`
 	Path             string `json:"path"`
 	RegisterSchedule bool   `json:"registerSchedule,omitempty"`
@@ -81,7 +81,7 @@ type InvocationResult struct {
 type repository struct{ ID, Root string }
 
 func (s *Service) Run(ctx context.Context, req RunRequest) (InvocationResult, error) {
-	repo, sess, err := s.repositoryAndSession(ctx, req.AgentID, req.WorkspaceCWD)
+	repo, sess, err := s.repositoryAndSession(ctx, req.SessionID, req.WorkspaceCWD)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -151,7 +151,7 @@ func writeAutomationJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func (s *Service) Evaluate(ctx context.Context, req EvaluateRequest) (InvocationResult, error) {
-	repo, sess, err := s.repositoryAndSession(ctx, req.AgentID, req.WorkspaceCWD)
+	repo, sess, err := s.repositoryAndSession(ctx, req.SessionID, req.WorkspaceCWD)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -169,7 +169,7 @@ func (s *Service) Evaluate(ctx context.Context, req EvaluateRequest) (Invocation
 }
 
 func (s *Service) Preapprove(ctx context.Context, req PreapproveRequest) (InvocationResult, error) {
-	repo, sess, err := s.repositoryAndSession(ctx, req.AgentID, req.WorkspaceCWD)
+	repo, sess, err := s.repositoryAndSession(ctx, req.SessionID, req.WorkspaceCWD)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -192,15 +192,15 @@ func (s *Service) Preapprove(ctx context.Context, req PreapproveRequest) (Invoca
 	return result, nil
 }
 
-func (s *Service) repositoryAndSession(ctx context.Context, agentID, cwd string) (repository, interface {
+func (s *Service) repositoryAndSession(ctx context.Context, sessionID, cwd string) (repository, interface {
 	RequestPermission(context.Context, string, string, []agentadapter.ApprovalOption) (string, error)
 }, error) {
 	if s.Store == nil || s.Agents == nil {
 		return repository{}, nil, errors.New("automation service is unavailable")
 	}
-	sess := s.Agents.Get(agentID)
+	sess := s.Agents.Get(sessionID)
 	if sess == nil {
-		return repository{}, nil, fmt.Errorf("no such agent: %s", agentID)
+		return repository{}, nil, fmt.Errorf("no such agent: %s", sessionID)
 	}
 	if strings.TrimSpace(cwd) == "" {
 		return repository{}, nil, errors.New("workspaceCwd is required")
@@ -363,11 +363,11 @@ func (s *Service) execute(ctx context.Context, repo repository, scriptPath strin
 			}
 		}
 		defer cleanup()
-		agentID, wakeErr := s.wake(ctx, repo, run, manifest, profile, reason, process.Report, browserKind, browserRef)
+		sessionID, wakeErr := s.wake(ctx, repo, run, manifest, profile, reason, process.Report, browserKind, browserRef)
 		if wakeErr != nil {
 			return result, wakeErr
 		}
-		result.WokenAgentID, result.AgentProfile = agentID, profile
+		result.WokenAgentID, result.AgentProfile = sessionID, profile
 	}
 	return result, nil
 }
@@ -425,7 +425,7 @@ func (s *Service) wake(ctx context.Context, repo repository, run storepkg.Automa
 		_ = s.Store.SaveAutomationWakeup(wakeup)
 		return "", err
 	}
-	wakeup.AgentID, wakeup.Status = &agent.ID, "working"
+	wakeup.SessionID, wakeup.Status = &agent.ID, "working"
 	if err := s.Store.SaveAutomationWakeup(wakeup); err != nil {
 		return agent.ID, err
 	}

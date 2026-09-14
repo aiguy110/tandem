@@ -41,7 +41,7 @@ func TestMCPHandshakeAndTakeoverBlocksUntilRelease(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, inR, outW, Config{ControlURL: server.URL, Token: "secret", AgentID: "api-58", PollInterval: 10 * time.Millisecond})
+		done <- Run(ctx, inR, outW, Config{ControlURL: server.URL, Token: "secret", SessionID: "api-58", PollInterval: 10 * time.Millisecond})
 	}()
 	responses := make(chan map[string]any, 8)
 	go func() {

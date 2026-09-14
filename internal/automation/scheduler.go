@@ -218,12 +218,12 @@ func (s *Scheduler) activeWakeup(job storepkg.AutomationJob) bool {
 		return false
 	}
 	for _, wakeup := range wakeups {
-		if wakeup.AgentID == nil {
+		if wakeup.SessionID == nil {
 			continue
 		}
 		switch job.WakeSuppression {
 		case "", WakeSuppressionUntilClosed:
-			agent, agentErr := s.Service.Store.Agent(*wakeup.AgentID)
+			agent, agentErr := s.Service.Store.Session(*wakeup.SessionID)
 			if agentErr == nil && agent != nil && agent.ClosedAt == nil {
 				return true
 			}
@@ -231,7 +231,7 @@ func (s *Scheduler) activeWakeup(job storepkg.AutomationJob) bool {
 			if s.Service.Agents == nil {
 				continue
 			}
-			agent := s.Service.Agents.Get(*wakeup.AgentID)
+			agent := s.Service.Agents.Get(*wakeup.SessionID)
 			if agent == nil {
 				continue
 			}

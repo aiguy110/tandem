@@ -23,7 +23,7 @@ type HistorySession struct {
 	Source          string
 	Agent           string
 	ExternalID      string
-	AgentID         string
+	SessionID         string
 	CWD             string
 	Title           string
 	CreatedAt       *int64
@@ -113,7 +113,7 @@ indexedAt, resumable, sourceKey, sourceMeta, importerId, importerVersion, missin
 		var created, updated sql.NullInt64
 		var missing sql.NullInt64
 		var sourceMeta string
-		if err := rows.Scan(&value.Source, &value.Agent, &value.ExternalID, &value.AgentID,
+		if err := rows.Scan(&value.Source, &value.Agent, &value.ExternalID, &value.SessionID,
 			&value.CWD, &value.Title, &created, &updated, &value.IndexedAt,
 			&value.Resumable, &value.SourceKey, &sourceMeta, &value.ImporterID,
 			&value.ImporterVersion, &missing); err != nil {
@@ -345,7 +345,7 @@ agentId=excluded.agentId, cwd=excluded.cwd, title=excluded.title, createdAt=excl
 updatedAt=excluded.updatedAt, indexedAt=excluded.indexedAt, resumable=excluded.resumable,
 sourceKey=excluded.sourceKey, sourceMeta=excluded.sourceMeta, importerId=excluded.importerId,
 importerVersion=excluded.importerVersion, missingSince=NULL`,
-		session.Source, session.Agent, session.ExternalID, session.AgentID, session.CWD, session.Title,
+		session.Source, session.Agent, session.ExternalID, session.SessionID, session.CWD, session.Title,
 		session.CreatedAt, session.UpdatedAt, session.IndexedAt, session.Resumable, session.SourceKey,
 		string(session.SourceMeta), session.ImporterID, session.ImporterVersion)
 	if err != nil {
@@ -391,7 +391,7 @@ LIMIT ?`, match, limit)
 		var sourceMeta string
 		var marked string
 		if err := rows.Scan(
-			&hit.Session.Source, &hit.Session.Agent, &hit.Session.ExternalID, &hit.Session.AgentID,
+			&hit.Session.Source, &hit.Session.Agent, &hit.Session.ExternalID, &hit.Session.SessionID,
 			&hit.Session.CWD, &hit.Session.Title, &created, &updated, &hit.Session.IndexedAt,
 			&resumable, &hit.Session.SourceKey, &sourceMeta,
 			&hit.EntryID, &hit.ExternalID, &hit.Ordinal, &hit.Role, &hit.Kind, &timestamp,
@@ -467,30 +467,30 @@ func tandemAgent(spec json.RawMessage) string {
 	return parsed.Agent
 }
 
-func upsertTandemHistorySession(tx *sql.Tx, agent Agent, indexedAt int64) error {
-	updatedAt := agent.CreatedAt
-	if agent.ClosedAt != nil {
-		updatedAt = *agent.ClosedAt
+func upsertTandemHistorySession(tx *sql.Tx, sess Session, indexedAt int64) error {
+	updatedAt := sess.CreatedAt
+	if sess.ClosedAt != nil {
+		updatedAt = *sess.ClosedAt
 	}
-	sourceMeta, _ := json.Marshal(map[string]string{"agentId": agent.ID})
+	sourceMeta, _ := json.Marshal(map[string]string{"agentId": sess.ID})
 	_, err := replaceHistorySessionRow(tx, HistorySession{
-		Source: tandemHistorySource, Agent: tandemAgent(agent.Spec), ExternalID: agent.ID,
-		AgentID: agent.ID, CWD: agent.CWD, Title: agent.Name, CreatedAt: &agent.CreatedAt,
+		Source: tandemHistorySource, Agent: tandemAgent(sess.Spec), ExternalID: sess.ID,
+		SessionID: sess.ID, CWD: sess.CWD, Title: sess.Name, CreatedAt: &sess.CreatedAt,
 		UpdatedAt: &updatedAt, IndexedAt: indexedAt, Resumable: true,
-		SourceKey: agent.ID, SourceMeta: sourceMeta,
+		SourceKey: sess.ID, SourceMeta: sourceMeta,
 	})
 	return err
 }
 
-func indexTandemEvent(tx *sql.Tx, agentID string, seq int64, kind, payload string, ts, indexedAt int64) error {
+func indexTandemEvent(tx *sql.Tx, sessionID string, seq int64, kind, payload string, ts, indexedAt int64) error {
 	role, text := tandemEventText(kind, payload)
 	if text == "" {
 		return nil
 	}
-	var agent Agent
+	var sess Session
 	var spec string
 	if err := tx.QueryRow(`SELECT id, name, spec, cwd, acpSessionId, status, createdAt, closedAt
-FROM agents WHERE id = ?`, agentID).Scan(&agent.ID, &agent.Name, &spec, &agent.CWD, &agent.ACPSessionID, &agent.Status, &agent.CreatedAt, &agent.ClosedAt); err != nil {
+FROM agents WHERE id = ?`, sessionID).Scan(&sess.ID, &sess.Name, &spec, &sess.CWD, &sess.ExternalSessionID, &sess.Status, &sess.CreatedAt, &sess.ClosedAt); err != nil {
 		// EventLog is intentionally usable without a registry-owned agent row
 		// (tests and embedders rely on that). Such streams remain durable but
 		// lack enough metadata to become resume-history sessions.
@@ -499,20 +499,21 @@ FROM agents WHERE id = ?`, agentID).Scan(&agent.ID, &agent.Name, &spec, &agent.C
 		}
 		return err
 	}
-	agent.Spec = json.RawMessage(spec)
-	if err := upsertTandemHistorySession(tx, agent, indexedAt); err != nil {
+	sess.Spec = json.RawMessage(spec)
+	if err := upsertTandemHistorySession(tx, sess, indexedAt); err != nil {
 		return err
 	}
-	var sessionID int64
+	// historyRowID is the history_sessions primary key, not a session id.
+	var historyRowID int64
 	if err := tx.QueryRow("SELECT id FROM history_sessions WHERE source = ? AND agent = ? AND externalId = ?",
-		tandemHistorySource, tandemAgent(agent.Spec), agentID).Scan(&sessionID); err != nil {
+		tandemHistorySource, tandemAgent(sess.Spec), sessionID).Scan(&historyRowID); err != nil {
 		return err
 	}
 	if role == "assistant" {
 		var previousID int64
 		var previousRole string
 		err := tx.QueryRow(`SELECT id, role FROM history_entries
-WHERE sessionId = ? ORDER BY ordinal DESC LIMIT 1`, sessionID).Scan(&previousID, &previousRole)
+WHERE sessionId = ? ORDER BY ordinal DESC LIMIT 1`, historyRowID).Scan(&previousID, &previousRole)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -528,7 +529,7 @@ SET ordinal = ?, ts = ?, text = text || ? WHERE id = ?`, seq, ts, text, previous
 (sessionId, externalId, ordinal, role, kind, ts, text, truncated) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(sessionId, externalId) DO UPDATE SET ordinal=excluded.ordinal, role=excluded.role,
 kind=excluded.kind, ts=excluded.ts, text=excluded.text`,
-		sessionID, strconv.FormatInt(seq, 10), seq, role, kind, ts, text)
+		historyRowID, strconv.FormatInt(seq, 10), seq, role, kind, ts, text)
 	return err
 }
 
@@ -568,7 +569,7 @@ ORDER BY a.id, e.seq`)
 		return err
 	}
 	type row struct {
-		agent   Agent
+		sess    Session
 		seq, ts int64
 		kind    string
 		payload string
@@ -577,12 +578,12 @@ ORDER BY a.id, e.seq`)
 	for rows.Next() {
 		var item row
 		var spec string
-		if err := rows.Scan(&item.agent.ID, &item.agent.Name, &spec, &item.agent.CWD, &item.agent.ACPSessionID,
-			&item.agent.Status, &item.agent.CreatedAt, &item.agent.ClosedAt, &item.seq, &item.kind, &item.payload, &item.ts); err != nil {
+		if err := rows.Scan(&item.sess.ID, &item.sess.Name, &spec, &item.sess.CWD, &item.sess.ExternalSessionID,
+			&item.sess.Status, &item.sess.CreatedAt, &item.sess.ClosedAt, &item.seq, &item.kind, &item.payload, &item.ts); err != nil {
 			rows.Close()
 			return err
 		}
-		item.agent.Spec = json.RawMessage(spec)
+		item.sess.Spec = json.RawMessage(spec)
 		pending = append(pending, item)
 	}
 	if err := rows.Close(); err != nil {
@@ -590,7 +591,7 @@ ORDER BY a.id, e.seq`)
 	}
 	indexedAt := s.now().UnixMilli()
 	for _, item := range pending {
-		if err := indexTandemEvent(tx, item.agent.ID, item.seq, item.kind, item.payload, item.ts, indexedAt); err != nil {
+		if err := indexTandemEvent(tx, item.sess.ID, item.seq, item.kind, item.payload, item.ts, indexedAt); err != nil {
 			return err
 		}
 	}

@@ -27,7 +27,7 @@ const (
 type Config struct {
 	ControlURL   string
 	Token        string
-	AgentID      string
+	SessionID      string
 	WorkspaceCWD string
 	HTTPClient   *http.Client
 }
@@ -147,7 +147,7 @@ func (s *server) call(ctx context.Context, tool string, args map[string]any) (an
 	for k, v := range args {
 		body[k] = v
 	}
-	body["agentId"] = s.cfg.AgentID
+	body["agentId"] = s.cfg.SessionID
 	body["workspaceCwd"] = s.cfg.WorkspaceCWD
 	data, err := json.Marshal(body)
 	if err != nil {
