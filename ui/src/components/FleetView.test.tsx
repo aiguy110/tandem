@@ -16,6 +16,15 @@ describe('projectFleet', () => {
   });
 });
 
+  it('keeps every node fully inside the graph bounds', () => {
+    const topology = projectFleet([
+      { id: LOCAL_HOST_ID, name: 'Control', local: true },
+      { id: 'worker', name: 'Worker' },
+    ]);
+
+    expect(topology.nodes.every((node) => node.x >= 130 && node.x <= topology.width - 130)).toBe(true);
+  });
+
 describe('FleetView', () => {
   it('displays node versions and directs every rendered edge from slave to master', () => {
     useStore.setState({
@@ -35,6 +44,10 @@ describe('FleetView', () => {
     expect(screen.getByText('build v1.2.8 · protocol v1')).toBeTruthy();
     expect(screen.getByText('Arrows point from slave to master')).toBeTruthy();
 
+    expect(view.container.querySelector('.fleet-stage')).toBeTruthy();
+    expect(view.container.querySelector('.fleet-graph')?.getAttribute('width')).toBeTruthy();
+    expect(view.container.querySelectorAll('clipPath')).toHaveLength(3);
+    expect(view.container.querySelectorAll('.fleet-node > g[clip-path]')).toHaveLength(3);
     const relayEdge = view.container.querySelector<SVGPathElement>('[data-slave-id="relay"][data-master-id="local"]');
     const gpuEdge = view.container.querySelector<SVGPathElement>('[data-slave-id="gpu"][data-master-id="relay"]');
     expect(relayEdge?.getAttribute('marker-end')).toBe('url(#fleet-master-arrow)');
