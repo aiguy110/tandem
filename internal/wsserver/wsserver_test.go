@@ -632,6 +632,41 @@ func recv(t *testing.T, c *websocket.Conn) map[string]any {
 	}
 	return v
 }
+
+func TestFederationUploadStorageCommandsUseOwningHostStores(t *testing.T) {
+	var savedName, savedData, assetMIME, assetData string
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(opts *Options) {
+		opts.HasUploadDirectory = func(id string) (bool, error) { return id == "remote-1", nil }
+		opts.SaveUpload = func(id, name string, data []byte) (string, error) {
+			if id != "remote-1" {
+				t.Fatalf("save session=%q", id)
+			}
+			savedName, savedData = name, string(data)
+			return ".tandem/uploads/" + name, nil
+		}
+		opts.PutAsset = func(id string, data []byte, mime string) (assets.Stored, error) {
+			if id != "remote-1" {
+				t.Fatalf("asset session=%q", id)
+			}
+			assetMIME, assetData = mime, string(data)
+			return assets.Stored{AssetID: "img-9", MIMEType: mime, Size: int64(len(data))}, nil
+		}
+	})
+	c := dial(t, url)
+
+	send(t, c, map[string]any{"t": "has_upload_directory", "sessionId": "remote-1", "corrId": "u1"})
+	if got := recv(t, c); got["configured"] != true || got["corrId"] != "u1" {
+		t.Fatalf("configured=%#v", got)
+	}
+	send(t, c, map[string]any{"t": "save_upload", "sessionId": "remote-1", "name": "photo.png", "bytesB64": base64.StdEncoding.EncodeToString([]byte("workspace-data")), "corrId": "u2"})
+	if got := recv(t, c); got["path"] != ".tandem/uploads/photo.png" || savedName != "photo.png" || savedData != "workspace-data" {
+		t.Fatalf("save response=%#v name=%q data=%q", got, savedName, savedData)
+	}
+	send(t, c, map[string]any{"t": "put_asset", "sessionId": "remote-1", "mimeType": "image/png", "bytesB64": base64.StdEncoding.EncodeToString([]byte("image-data")), "corrId": "u3"})
+	if got := recv(t, c); got["assetId"] != "img-9" || assetMIME != "image/png" || assetData != "image-data" {
+		t.Fatalf("asset response=%#v mime=%q data=%q", got, assetMIME, assetData)
+	}
+}
 func waitHead(t *testing.T, s *session.Session, n int64) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

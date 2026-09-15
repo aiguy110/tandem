@@ -282,7 +282,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		// A federated agent's images live on the host that owns it; the
 		// federated store fetches them over the tunnel on a local miss.
 		Token: token, Version: buildinfo.Version, BootstrapURL: bootstrapURL, UIDir: cfg.UIDir, Assets: federatedAssetStore{local: assetStore, federation: federationService},
-		Uploads: agents,
+		Uploads: federatedUploadStore{local: agents, federation: federationService},
 		Voice:   voiceRenderer,
 		MessageText: func(sessionID string, seq int64) (string, error) {
 			return transcriptMessageText(db, sessionID, seq)
@@ -377,7 +377,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	defer handler.Close()
 	updateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -545,15 +545,109 @@ func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, se
 	return voice.Audio{Data: data, MIMEType: envelope.MIMEType}, nil
 }
 
-// federatedAssetStore serves local assets directly and, for a namespaced
-// federated session ID with no local copy, fetches the image from the host
-// that owns the session. Uploads are always stored locally.
+// federatedAssetStore serves local assets directly and routes assets for a
+// namespaced session to the daemon that owns it.
 type federatedAssetStore struct {
 	local      *assets.Store
 	federation *federation.Service
 }
 
+type federatedUploadStore struct {
+	local      *registry.Registry
+	federation *federation.Service
+}
+
+func (s federatedUploadStore) Save(sessionID, name string, data []byte) (string, error) {
+	hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID)
+	if !ok {
+		return s.local.Save(sessionID, name, data)
+	}
+	var envelope struct {
+		Error string `json:"error"`
+		Path  string `json:"path"`
+	}
+	err := remoteUploadCall(s.federation, hostID, map[string]any{
+		"t": "save_upload", "sessionId": localID, "name": name,
+		"bytesB64": base64.StdEncoding.EncodeToString(data),
+	}, &envelope)
+	if err != nil {
+		slog.Warn("remote workspace upload failed", "host_id", hostID, "session_id", localID, "name", name, "bytes", len(data), "error", err)
+		return "", err
+	}
+	return envelope.Path, nil
+}
+
+func (s federatedUploadStore) HasConfiguredDirectory(sessionID string) (bool, error) {
+	hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID)
+	if !ok {
+		return s.local.HasConfiguredDirectory(sessionID)
+	}
+	var envelope struct {
+		Error      string `json:"error"`
+		Configured bool   `json:"configured"`
+	}
+	err := remoteUploadCall(s.federation, hostID, map[string]any{
+		"t": "has_upload_directory", "sessionId": localID,
+	}, &envelope)
+	if err != nil {
+		slog.Warn("remote upload settings lookup failed", "host_id", hostID, "session_id", localID, "error", err)
+		return false, err
+	}
+	return envelope.Configured, nil
+}
+
+func remoteUploadCall(svc *federation.Service, hostID string, payload any, envelope any) error {
+	if svc == nil {
+		return errors.New("remote hosts are unavailable")
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	response, err := svc.Call(ctx, hostID, raw)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(response, envelope); err != nil {
+		return fmt.Errorf("remote host returned an invalid upload response: %w", err)
+	}
+	var status struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(response, &status); err != nil {
+		return err
+	}
+	if status.Error != "" {
+		return errors.New(status.Error)
+	}
+	return nil
+}
+
+func remotePutAsset(_ context.Context, svc *federation.Service, hostID, sessionID string, data []byte, declaredMIME string) (assets.Stored, error) {
+	var envelope struct {
+		Error    string `json:"error"`
+		AssetID  string `json:"assetId"`
+		MIMEType string `json:"mimeType"`
+		Size     int64  `json:"size"`
+	}
+	err := remoteUploadCall(svc, hostID, map[string]any{
+		"t": "put_asset", "sessionId": sessionID, "mimeType": declaredMIME,
+		"bytesB64": base64.StdEncoding.EncodeToString(data),
+	}, &envelope)
+	if err != nil {
+		slog.Warn("remote asset upload failed", "host_id", hostID, "session_id", sessionID, "mime_type", declaredMIME, "bytes", len(data), "error", err)
+		return assets.Stored{}, err
+	}
+	return assets.Stored{AssetID: envelope.AssetID, MIMEType: envelope.MIMEType, Size: envelope.Size}, nil
+}
+
 func (s federatedAssetStore) Put(sessionID string, data []byte, declaredMIME string) (assets.Stored, error) {
+	hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID)
+	if ok {
+		return remotePutAsset(context.Background(), s.federation, hostID, localID, data, declaredMIME)
+	}
 	return s.local.Put(sessionID, data, declaredMIME)
 }
 
