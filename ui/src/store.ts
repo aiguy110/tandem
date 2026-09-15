@@ -1231,7 +1231,13 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({
           t: 'resume_session',
-		  externalSessionId: session.externalSessionId,
+          // A Tandem row has two identities: its durable Tandem ID and the
+          // upstream agent's opaque session ID.  Use the durable ID when it
+          // is available so the daemon can recover its saved workspace even
+          // if the upstream ID is no longer discoverable.
+          externalSessionId: session.source === 'tandem' && session.sessionId
+            ? session.sessionId
+            : session.externalSessionId,
           source: session.source,
           agent: session.agent,
           cwd: session.cwd || undefined,

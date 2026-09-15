@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1388,6 +1389,20 @@ func (r *Registry) externalSessions(ctx context.Context) ([]ResumableSession, []
 // imports an ACP/history session using only the selected agent's configured
 // resume policy. Source disambiguates history policy from ACP discovery.
 func (r *Registry) Resume(ctx context.Context, externalSessionID, agent, cwd, source string) (*session.Session, error) {
+	// Tandem catalog rows send their durable session ID.  It is deliberately
+	// distinct from the agent's opaque external ID, and lets us recover the
+	// persisted worktree even when that external ID has changed or is missing
+	// from a history-search result.
+	if source == "tandem" {
+		rec, err := r.store.Session(externalSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil {
+			slog.Info("resuming Tandem session by durable ID", "session_id", rec.ID, "workspace_cwd", rec.CWD)
+			return r.resumeTandemRecord(ctx, rec)
+		}
+	}
 	for _, s := range r.List() {
 		sessionAgent := s.Spec.Agent
 		if sessionAgent == "" {
@@ -1402,30 +1417,7 @@ func (r *Registry) Resume(ctx context.Context, externalSessionID, agent, cwd, so
 		return nil, err
 	}
 	if rec != nil {
-		if live := r.Get(rec.ID); live != nil {
-			return live, nil
-		}
-		var spec agentadapter.Spec
-		if err := json.Unmarshal(rec.Spec, &spec); err != nil {
-			return nil, err
-		}
-		rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
-		if err != nil {
-			return nil, err
-		}
-		if err := r.store.ReopenSession(rec.ID); err != nil {
-			return nil, err
-		}
-		rec.ClosedAt, rec.Status = nil, "idle"
-		resume := externalSessionID
-		// Same rationale as RestoreAll: an ACP session that never saw a
-		// prompt may never have been persisted by the agent harness, so
-		// loading it after the live connection is gone fails. Start a fresh
-		// ACP session in the same durable agent/workspace instead.
-		if prompted, err := hasUserMessage(r.store, rec.ID); err == nil && !prompted {
-			resume = ""
-		}
-		return r.start(ctx, *rec, spec, resume)
+		return r.resumeTandemRecord(ctx, rec)
 	}
 	if agent == "" || cwd == "" {
 		return nil, errors.New("resume: unknown session — agent and cwd are required to resume an external session")
@@ -1434,6 +1426,44 @@ func (r *Registry) Resume(ctx context.Context, externalSessionID, agent, cwd, so
 		return r.resumeHistory(ctx, agent, cwd, externalSessionID)
 	}
 	return r.spawnResumed(ctx, agent, cwd, externalSessionID, "acp")
+}
+
+func (r *Registry) resumeTandemRecord(ctx context.Context, rec *store.Session) (*session.Session, error) {
+	if live := r.Get(rec.ID); live != nil {
+		return live, nil
+	}
+	var spec agentadapter.Spec
+	if err := json.Unmarshal(rec.Spec, &spec); err != nil {
+		return nil, err
+	}
+	originalCWD := rec.CWD
+	_, statErr := os.Stat(originalCWD)
+	missingWorktree := spec.Workspace.Kind == workspace.KindWorktree && os.IsNotExist(statErr)
+	var err error
+	rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
+	if err != nil {
+		slog.Warn("failed to reattach Tandem session workspace", "session_id", rec.ID, "workspace_kind", spec.Workspace.Kind, "workspace_cwd", originalCWD, "branch", spec.Workspace.Branch, "error", err)
+		return nil, err
+	}
+	if missingWorktree {
+		slog.Info("reattached missing Tandem worktree", "session_id", rec.ID, "workspace_cwd", rec.CWD, "branch", spec.Workspace.Branch)
+	}
+	if err := r.store.ReopenSession(rec.ID); err != nil {
+		return nil, err
+	}
+	rec.ClosedAt, rec.Status = nil, "idle"
+	resume := ""
+	if rec.ExternalSessionID != nil {
+		resume = *rec.ExternalSessionID
+	}
+	// Same rationale as RestoreAll: an ACP session that never saw a prompt may
+	// never have been persisted by the agent harness, so loading it after the
+	// live connection is gone fails. Start a fresh ACP session in its durable
+	// workspace instead.
+	if prompted, err := hasUserMessage(r.store, rec.ID); err == nil && !prompted {
+		resume = ""
+	}
+	return r.start(ctx, *rec, spec, resume)
 }
 
 func (r *Registry) tandemSession(agent, externalSessionID string) (*store.Session, error) {

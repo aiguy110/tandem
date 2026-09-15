@@ -564,6 +564,58 @@ func TestDirtyWorktreeRefusesClose(t *testing.T) {
 	}
 }
 
+func TestResumeTandemSessionRecreatesMissingWorktreeByDurableID(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	repo := t.TempDir()
+	run := func(dir string, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@e")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run(repo, "init")
+	run(repo, "commit", "--allow-empty", "-m", "init")
+
+	original, err := r.Spawn(context.Background(), agentadapter.Spec{Adapter: "acp", Workspace: workspace.Workspace{Kind: workspace.KindWorktree, Repo: repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.store.Session(original.ID)
+	if err != nil || rec == nil {
+		t.Fatalf("session record=%+v err=%v", rec, err)
+	}
+	cwd := rec.CWD
+	branch := original.Spec.Workspace.Branch
+	if ok, err := r.Close(context.Background(), original.ID, false, true, false); !ok || err != nil {
+		t.Fatalf("close worktree ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(cwd); !os.IsNotExist(err) {
+		t.Fatalf("closed worktree remains: %v", err)
+	}
+
+	resumed, err := r.Resume(context.Background(), original.ID, "fake", cwd, "tandem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ID != original.ID {
+		t.Fatalf("resumed ID=%s want %s", resumed.ID, original.ID)
+	}
+	if _, err := os.Stat(cwd); err != nil {
+		t.Fatalf("recreated worktree missing: %v", err)
+	}
+	if got := run(cwd, "branch", "--show-current"); got != branch {
+		t.Fatalf("recreated branch=%q want %q", got, branch)
+	}
+}
+
 func TestACPEnvironmentInheritsDaemonAndAppliesLaunchOverlay(t *testing.T) {
 	t.Setenv("TANDEM_INHERITED_FIXTURE", "parent")
 	t.Setenv("TANDEM_OVERLAID_FIXTURE", "parent")
