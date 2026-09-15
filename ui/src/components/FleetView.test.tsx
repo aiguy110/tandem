@@ -70,4 +70,20 @@ describe('FleetView', () => {
     expect(relayEdge?.querySelector('title')?.textContent).toBe('Relay → Control (slave → master)');
     expect(gpuEdge?.querySelector('title')?.textContent).toBe('GPU worker → Relay (slave → master)');
   });
+
+  it('pulses a host requested by the dock Details action', () => {
+    const clearFleetFocusHost = vi.fn();
+    useStore.setState({
+      hosts: [
+        { id: LOCAL_HOST_ID, name: 'Control', local: true, status: 'connected' },
+        { id: 'worker', name: 'Worker', status: 'connected' },
+      ],
+      fleetFocusHostId: 'worker',
+      clearFleetFocusHost,
+    });
+
+    const view = render(<FleetView />);
+    expect(view.container.querySelector('[data-host-id="worker"]')?.classList.contains('fleet-node-pulse')).toBe(true);
+    expect(clearFleetFocusHost).toHaveBeenCalledOnce();
+  });
 });

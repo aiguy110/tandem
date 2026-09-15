@@ -30,6 +30,8 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const renameAgent = useStore((s) => s.renameAgent);
   const handOffAgent = useStore((s) => s.handOffAgent);
   const restartHarness = useStore((s) => s.restartHarness);
+	const openSpawnAtHost = useStore((s) => s.openSpawnAtHost);
+	const openFleetAtHost = useStore((s) => s.openFleetAtHost);
 	const collapsed = useStore((s) => s.sessionsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleSessionsRail);
   // Keep the familiar uninterrupted rail until federation has at least one
@@ -153,15 +155,11 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
             // as the group is on screen: the next one pushes it out at the top.
             <section className="session-host-group" key={group.hostId}>
               {federationGrouping && (
-                <div className="session-host-divider">
-                  <span>{group.label}</span>
-                  {group.link && (
-                    <span className={`session-host-link ${group.link.tone}`} title={group.link.title}>
-                      <span className="session-host-link-dot" />
-                      {group.link.label}
-                    </span>
-                  )}
-                </div>
+                <HostHeader
+                  group={group}
+                  onSpawn={() => openSpawnAtHost(group.hostId)}
+                  onDetails={() => openFleetAtHost(group.hostId)}
+                />
               )}
               {group.ids.map((id) => (
                 <Row
@@ -324,6 +322,51 @@ function hostLinkBadge(status: FederationHost['status']): HostLink {
 
 type HostLink = { label: string; tone: string; title: string };
 type HostGroup = { hostId: string; label: string; link: HostLink | null; ids: string[] };
+
+function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: () => void; onDetails: () => void }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = () => setMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') dismiss(); };
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menu]);
+  return (
+    <div
+      className="session-host-divider"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenu({ x: event.clientX, y: event.clientY });
+      }}
+    >
+      <span>{group.label}</span>
+      {group.link && (
+        <span className={`session-host-link ${group.link.tone}`} title={group.link.title}>
+          <span className="session-host-link-dot" />
+          {group.link.label}
+        </span>
+      )}
+      {menu && (
+        <div
+          className="session-context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+          aria-label={`Actions for ${group.label}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" role="menuitem" onClick={() => { onSpawn(); setMenu(null); }}>Spawn agent here</button>
+          <button type="button" role="menuitem" onClick={() => { onDetails(); setMenu(null); }}>Details</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function groupedAgentRows(order: string[], agents: Record<string, SessionView>, hosts: FederationHost[]): HostGroup[] {
   const groups = new Map<string, HostGroup>();

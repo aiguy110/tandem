@@ -993,6 +993,11 @@ body.dock-resizing .app { transition: none; }
 .fleet-edge { fill: none; stroke: var(--border-strong); stroke-width: 2; }
 .fleet-arrowhead { fill: var(--border-strong); }
 .fleet-node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
+.fleet-node-pulse rect { animation: fleet-node-pulse-kf 1.15s ease-out 2; }
+@keyframes fleet-node-pulse-kf {
+  0%, 38% { stroke: var(--agent); stroke-width: 3; filter: drop-shadow(0 0 7px var(--agent)); }
+  56%, 100% { stroke: var(--border-strong); stroke-width: 1; filter: none; }
+}
 .fleet-node circle { fill: var(--text-faint); }
 .fleet-node.fleet-connected circle, .fleet-node.fleet-accepted circle { fill: var(--ok); }
 .fleet-node.fleet-pending circle { fill: var(--warn); }

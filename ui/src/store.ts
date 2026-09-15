@@ -221,6 +221,10 @@ interface StoreState {
   // Agent the spawn palette should offer to hand off from ('' / null = none).
   // Set by the rail's "Hand off" action; cleared whenever the modal changes.
   spawnHandoffFrom: string | null;
+  // Optional host scopes supplied by host-level dock actions. They are kept in
+  // the store so the modal can receive the selection on its first render.
+  spawnHostId: string | null;
+  fleetFocusHostId: string | null;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
@@ -271,6 +275,9 @@ interface StoreState {
   toggleSessionsRail: () => void;
   toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
+  openSpawnAtHost: (hostId: string) => void;
+  openFleetAtHost: (hostId: string) => void;
+  clearFleetFocusHost: () => void;
   // Open the spawn palette pre-selected to hand off from this agent.
   handOffAgent: (sessionId: string) => void;
   toggleInspector: () => void;
@@ -1000,6 +1007,8 @@ export const useStore = create<StoreState>((set, get) => {
     pane: 'chat',
     modal: 'none',
     spawnHandoffFrom: null,
+    spawnHostId: null,
+    fleetFocusHostId: null,
     inspectorOpen: false,
     dirs: [],
     agentCatalog: null,
@@ -1144,8 +1153,17 @@ export const useStore = create<StoreState>((set, get) => {
       if (m === 'fleet') get().refreshHosts();
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
-      set({ modal: m, spawnHandoffFrom: null });
+      set({ modal: m, spawnHandoffFrom: null, spawnHostId: null, fleetFocusHostId: null });
     },
+    openSpawnAtHost: (hostId) => {
+      get().refreshHosts();
+      set({ modal: 'spawn', spawnHandoffFrom: null, spawnHostId: hostId, fleetFocusHostId: null });
+    },
+    openFleetAtHost: (hostId) => {
+      get().refreshHosts();
+      set({ modal: 'fleet', spawnHandoffFrom: null, spawnHostId: null, fleetFocusHostId: hostId });
+    },
+    clearFleetFocusHost: () => set({ fleetFocusHostId: null }),
     handOffAgent: (sessionId) => {
       get().setModal('spawn');
       set({ spawnHandoffFrom: sessionId });

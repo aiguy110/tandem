@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent } from 'react';
 import { useStore, LOCAL_HOST_ID } from '../store';
 import type { FederationHost } from '../wire';
@@ -113,11 +113,44 @@ export function FleetView() {
   const hosts = useStore((state) => state.hosts);
   const setModal = useStore((state) => state.setModal);
   const refreshHosts = useStore((state) => state.refreshHosts);
+  const focusHostId = useStore((state) => state.fleetFocusHostId);
+  const clearFocusHost = useStore((state) => state.clearFleetFocusHost);
   const fleet = useMemo(() => projectFleet(hosts), [hosts]);
   const nodeByID = useMemo(() => new Map(fleet.nodes.map((node) => [node.host.id, node])), [fleet.nodes]);
   const panStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
+  const [pulseHostId, setPulseHostId] = useState<string | null>(focusHostId);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  // A host-level Details action opens this modal at its normal centered
+  // position, then moves only far enough to reveal the requested node with a
+  // small breathing room around it.
+  useLayoutEffect(() => {
+    if (!focusHostId || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const node = Array.from(canvas.querySelectorAll<SVGGElement>('[data-host-id]'))
+      .find((candidate) => candidate.dataset.hostId === focusHostId);
+    if (!node) return;
+    const margin = 28;
+    const bounds = canvas.getBoundingClientRect();
+    const target = node.getBoundingClientRect();
+    const left = bounds.left + margin;
+    const right = bounds.right - margin;
+    const top = bounds.top + margin;
+    const bottom = bounds.bottom - margin;
+    const x = target.left < left ? left - target.left : target.right > right ? right - target.right : 0;
+    const y = target.top < top ? top - target.top : target.bottom > bottom ? bottom - target.bottom : 0;
+    setPanOffset((current) => ({ x: current.x + x, y: current.y + y }));
+    setPulseHostId(focusHostId);
+    clearFocusHost();
+  }, [focusHostId, fleet.nodes, clearFocusHost]);
+
+  useEffect(() => {
+    if (!pulseHostId) return;
+    const timeout = window.setTimeout(() => setPulseHostId(null), 2300);
+    return () => window.clearTimeout(timeout);
+  }, [pulseHostId]);
 
   const beginPan = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -168,6 +201,7 @@ export function FleetView() {
         <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from slave to master</div>
         <div
           className={`fleet-canvas${panning ? ' panning' : ''}`}
+          ref={canvasRef}
           aria-label="Fleet topology graph. Drag or use arrow keys to pan."
           tabIndex={0}
           onKeyDown={panWithKeyboard}
@@ -208,7 +242,7 @@ export function FleetView() {
             </g>
             <g className="fleet-nodes">
               {fleet.nodes.map((node, index) => (
-                <g className={`fleet-node fleet-${statusLabel(node.host)}`} transform={`translate(${node.x - NODE_WIDTH / 2} ${node.y - NODE_HEIGHT / 2})`} key={node.host.id}>
+                <g className={`fleet-node fleet-${statusLabel(node.host)}${pulseHostId === node.host.id ? ' fleet-node-pulse' : ''}`} data-host-id={node.host.id} transform={`translate(${node.x - NODE_WIDTH / 2} ${node.y - NODE_HEIGHT / 2})`} key={node.host.id}>
                   <title>{`${node.host.name ?? node.host.id}, ${version(node.host)}`}</title>
                   <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx="8" />
                   <g clipPath={`url(#fleet-node-content-${index})`}>

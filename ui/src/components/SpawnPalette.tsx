@@ -111,8 +111,9 @@ export function SpawnPalette() {
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.sessions);
   const spawnHandoffFrom = useStore((s) => s.spawnHandoffFrom);
+  const spawnHostId = useStore((s) => s.spawnHostId);
   const agentCatalog = useStore((s) => s.agentCatalog);
-  const [hostId, setHostId] = useState(LOCAL_HOST_ID);
+  const [hostId, setHostId] = useState(() => spawnHostId ?? LOCAL_HOST_ID);
   const selectedHost = hosts.find((host) => host.id === hostId) ?? hosts[0];
   const remote = !!selectedHost && !selectedHost.local && selectedHost.id !== LOCAL_HOST_ID;
   const scopedDirs = remote ? (dirsByHost[hostId] ?? []) : dirs;
@@ -186,6 +187,10 @@ export function SpawnPalette() {
     const source = agents[spawnHandoffFrom];
     if (source) setHostId(source.hostId ?? LOCAL_HOST_ID);
   }, [spawnHandoffFrom, agents]);
+
+  useEffect(() => {
+    if (spawnHostId) setHostId(spawnHostId);
+  }, [spawnHostId]);
 
   // Host discovery is intentionally lazy: opening the palette continues to
   // work against an older daemon, while choosing a connected slave asks the
