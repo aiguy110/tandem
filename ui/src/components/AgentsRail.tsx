@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePresence, useValuePresence } from '../transitions';
 import { usesSoftKeyboard } from '../mobile';
 import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
@@ -351,7 +352,7 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
           {group.link.label}
         </span>
       )}
-      {menu && (
+      {menu && createPortal(
         <div
           className="session-context-menu"
           style={{ left: menu.x, top: menu.y }}
@@ -362,7 +363,8 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
         >
           <button type="button" role="menuitem" onClick={() => { onSpawn(); setMenu(null); }}>Spawn agent here</button>
           <button type="button" role="menuitem" onClick={() => { onDetails(); setMenu(null); }}>Details</button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
