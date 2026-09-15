@@ -256,7 +256,10 @@ body.dock-resizing .app { transition: none; }
 .session-row .rename-btn:hover { color: var(--agent); background: var(--agent-soft); }
 .session-row .delete-btn:hover { color: var(--err); background: var(--err-soft); }
 .session-context-menu {
-  position: fixed; z-index: 20; min-width: 150px; padding: 4px;
+  /* This menu is shared by cards and host dividers. Reset the latter's compact
+     uppercase mono heading font so both menus use the same UI text treatment. */
+  position: fixed; z-index: 60; min-width: 150px; padding: 4px;
+  font: 400 var(--fs-base) var(--font-ui); letter-spacing: normal; text-transform: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
   box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
 }
