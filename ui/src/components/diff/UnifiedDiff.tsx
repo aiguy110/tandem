@@ -78,6 +78,10 @@ export function UnifiedDiff({ patch, collapseRevision }: { patch: string; collap
     setOpenFiles(Object.fromEntries(files.map((file) => [file.key, collapseRevision === undefined && !file.isBinary])));
   }, [patch, collapseRevision]);
 
+  const setFileOpen = (key: string, open: boolean) => {
+    setOpenFiles((current) => ({ ...current, [key]: open }));
+  };
+
   return (
     <div className="unified-diff">
       {files.map((file) => (
@@ -85,7 +89,7 @@ export function UnifiedDiff({ patch, collapseRevision }: { patch: string; collap
           className="diff-file"
           key={file.key}
           open={openFiles[file.key] ?? !file.isBinary}
-          onToggle={(event) => setOpenFiles((current) => ({ ...current, [file.key]: event.currentTarget.open }))}
+          onToggle={(event) => setFileOpen(file.key, event.currentTarget.open)}
         >
           <summary>
             <span className="diff-file-chevron" aria-hidden="true">›</span>
