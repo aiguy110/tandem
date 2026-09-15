@@ -497,6 +497,60 @@ func TestFederatedAssetStoreFetchesFromTheOwningHost(t *testing.T) {
 	}
 }
 
+type federatedUploadLocal struct{}
+
+func (federatedUploadLocal) Snapshot(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`{"t":"agents","agents":[]}`), nil
+}
+func (federatedUploadLocal) Execute(_ context.Context, raw json.RawMessage) (json.RawMessage, error) {
+	var m struct {
+		T         string `json:"t"`
+		SessionID string `json:"sessionId"`
+		Name      string `json:"name"`
+		MIMEType  string `json:"mimeType"`
+		BytesB64  string `json:"bytesB64"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(m.BytesB64)
+	if err != nil {
+		return nil, err
+	}
+	switch m.T {
+	case "has_upload_directory":
+		return json.Marshal(map[string]any{"t": m.T, "configured": m.SessionID == "faraday-66"})
+	case "save_upload":
+		return json.Marshal(map[string]any{"t": m.T, "path": ".tandem/uploads/" + m.Name + "-" + string(data)})
+	case "put_asset":
+		return json.Marshal(map[string]any{"t": m.T, "assetId": "remote-img", "mimeType": m.MIMEType, "size": len(data)})
+	default:
+		return nil, fmt.Errorf("unexpected command %q", m.T)
+	}
+}
+
+func TestFederatedUploadsAreStoredOnTheOwningHost(t *testing.T) {
+	master, hostID := connectFederatedHost(t, federatedUploadLocal{})
+	remoteID := "fed~" + hostID + "~faraday-66"
+	uploads := federatedUploadStore{federation: master}
+	configured, err := uploads.HasConfiguredDirectory(remoteID)
+	if err != nil || !configured {
+		t.Fatalf("configured=%v err=%v", configured, err)
+	}
+	path, err := uploads.Save(remoteID, "photo.png", []byte("workspace"))
+	if err != nil || path != ".tandem/uploads/photo.png-workspace" {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+	assetStore := federatedAssetStore{federation: master}
+	stored, err := assetStore.Put(remoteID, []byte("image"), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.AssetID != "remote-img" || stored.MIMEType != "image/png" || stored.Size != 5 {
+		t.Fatalf("stored=%#v", stored)
+	}
+}
+
 func TestRemoteMessageAudioSurfacesTheOwningHostsError(t *testing.T) {
 	master, hostID := connectFederatedHost(t, federatedAudioLocal{err: "voice rendering is not configured; run tandem setup"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

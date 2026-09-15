@@ -93,6 +93,12 @@ type Options struct {
 	// command, which exists so a master can fetch a federated agent's image
 	// over the tunnel; browsers fetch local assets from the HTTP asset route.
 	Asset func(sessionID, assetID string) (assets.Stored, error)
+	// SaveUpload and HasUploadDirectory back the federation-only upload
+	// commands. Browser HTTP uploads for a remote session are forwarded to the
+	// owning daemon, which must write into its own workspace.
+	SaveUpload         func(sessionID, name string, data []byte) (string, error)
+	HasUploadDirectory func(sessionID string) (bool, error)
+	PutAsset           func(sessionID string, data []byte, declaredMIME string) (assets.Stored, error)
 }
 
 // Federation is the master-side transport used for host-qualified browser
@@ -339,6 +345,7 @@ type clientMessage struct {
 	NotificationID    string                     `json:"notificationId"`
 	HostID            string                     `json:"hostId"`
 	AssetID           string                     `json:"assetId"`
+	MIMEType          string                     `json:"mimeType"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -517,6 +524,62 @@ func (c *connection) getAsset(m clientMessage) {
 		return
 	}
 	reply(map[string]any{"mimeType": stored.MIMEType, "data": base64.StdEncoding.EncodeToString(stored.Data)})
+}
+
+func (c *connection) handleUploadStorage(m clientMessage) {
+	reply := func(extra map[string]any) {
+		envelope := map[string]any{"t": m.T, "sessionId": m.SessionID}
+		for k, v := range extra {
+			envelope[k] = v
+		}
+		c.send(withCorr(envelope, m.CorrID))
+	}
+	if m.SessionID == "" {
+		reply(map[string]any{"error": "sessionId is required"})
+		return
+	}
+	switch m.T {
+	case "has_upload_directory":
+		if c.server.opts.HasUploadDirectory == nil {
+			reply(map[string]any{"error": "workspace uploads are not configured"})
+			return
+		}
+		configured, err := c.server.opts.HasUploadDirectory(m.SessionID)
+		if err != nil {
+			reply(map[string]any{"error": err.Error()})
+			return
+		}
+		reply(map[string]any{"configured": configured})
+	case "save_upload", "put_asset":
+		data, err := base64.StdEncoding.DecodeString(m.BytesB64)
+		if err != nil {
+			reply(map[string]any{"error": "invalid upload data"})
+			return
+		}
+		if m.T == "save_upload" {
+			if c.server.opts.SaveUpload == nil {
+				reply(map[string]any{"error": "workspace uploads are not configured"})
+				return
+			}
+			path, err := c.server.opts.SaveUpload(m.SessionID, m.Name, data)
+			if err != nil {
+				reply(map[string]any{"error": err.Error()})
+				return
+			}
+			reply(map[string]any{"path": path})
+			return
+		}
+		if c.server.opts.PutAsset == nil {
+			reply(map[string]any{"error": "asset storage is not configured"})
+			return
+		}
+		stored, err := c.server.opts.PutAsset(m.SessionID, data, m.MIMEType)
+		if err != nil {
+			reply(map[string]any{"error": err.Error()})
+			return
+		}
+		reply(map[string]any{"assetId": stored.AssetID, "mimeType": stored.MIMEType, "size": stored.Size})
+	}
 }
 
 func (c *connection) setAudioFocus(m clientMessage) {
@@ -1112,6 +1175,8 @@ func (c *connection) handle(m clientMessage) {
 		c.renderMessageAudio(m)
 	case "get_asset":
 		c.getAsset(m)
+	case "has_upload_directory", "save_upload", "put_asset":
+		c.handleUploadStorage(m)
 	case "set_audio_position":
 		updatedAt, err := c.server.opts.Registry.SetAudioPosition(m.SessionID, m.Seq, m.PositionMs)
 		if err != nil {
