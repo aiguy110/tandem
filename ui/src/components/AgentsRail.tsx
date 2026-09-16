@@ -52,7 +52,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   // contents stay clipped by the shrinking dock rather than disappearing at
   // the start of the transition.
   const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
-  const [pendingConfirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview } | null>(null);
+  const [pendingConfirmation, setConfirmation] = useState<{ id: string; preview: ClosePreview; forceReason?: string } | null>(null);
   // Hold the dialog on screen while it animates away.
   const { rendered: confirmation, closing: confirmClosing } = useValuePresence(pendingConfirmation);
   const [deleteWorktree, setDeleteWorktree] = useState(true);
@@ -88,6 +88,14 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           setDeleteWorktree(true);
           setDeinitSubmodules(true);
           setConfirmation({ id, preview });
+        } else if (result.error?.startsWith('orphaned_worktree')) {
+          // The preview can still look clean when the checkout's recorded parent
+          // repository has disappeared. Teardown is the first operation that
+          // detects that condition, so recover by offering the same explicit
+          // force-confirmation used for other destructive closes.
+          setDeleteWorktree(true);
+          setDeinitSubmodules(false);
+          setConfirmation({ id, preview, forceReason: result.error.replace(/^orphaned_worktree:\s*/, '') });
         } else if (result.error) setCloseError(result.error);
         return;
       }
@@ -233,6 +241,13 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                 </>
               ) : (
                 <>
+                  {confirmation.forceReason && (
+                    <section>
+                      <strong>Orphaned worktree</strong>
+                      <p>{confirmation.forceReason}</p>
+                      <p>Deleting will force-remove this checkout. Its original repository and branch are already unavailable.</p>
+                    </section>
+                  )}
                   {confirmation.preview.uncommitted && (
                     <section><strong>Uncommitted changes</strong><pre>{confirmation.preview.uncommitted}</pre></section>
                   )}

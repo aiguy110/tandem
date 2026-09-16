@@ -58,6 +58,8 @@ func (f *testFederation) Call(_ context.Context, hostID string, payload json.Raw
 		return json.RawMessage(`{"t":"ack"}`), nil
 	case "spawn_agent", "resume_session":
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
+	case "close_agent":
+		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
 	case "subscribe":
 		if subscriber != nil {
 			subscriber(hostID, json.RawMessage(`{"t":"snapshot","agentId":"remote-agent","seq":0,"transcript":[],"status":"idle","pendingApprovals":[]}`))
@@ -540,6 +542,25 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	}
 	if !strings.Contains(string(spawnPayload), `"handoffFrom":"remote-agent"`) {
 		t.Fatalf("slave payload did not localize hand-off source: %s", spawnPayload)
+	}
+
+	send(t, c, map[string]any{"t": "close_agent", "agentId": remoteID, "force": true, "deleteWorktree": true, "corrId": "close"})
+	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != remoteID || got["corrId"] != "close" {
+		t.Fatalf("remote close ack = %#v", got)
+	}
+	fed.mu.Lock()
+	closePayload := append(json.RawMessage(nil), fed.calls[len(fed.calls)-1]...)
+	fed.mu.Unlock()
+	var forwardedClose struct {
+		AgentID        string `json:"agentId"`
+		Force          bool   `json:"force"`
+		DeleteWorktree *bool  `json:"deleteWorktree"`
+	}
+	if err := json.Unmarshal(closePayload, &forwardedClose); err != nil {
+		t.Fatalf("decode forwarded close: %v", err)
+	}
+	if forwardedClose.AgentID != "remote-agent" || !forwardedClose.Force || forwardedClose.DeleteWorktree == nil || !*forwardedClose.DeleteWorktree {
+		t.Fatalf("remote close flags were not preserved: %s", closePayload)
 	}
 
 	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript", "browser"}, "corrId": "sub"})

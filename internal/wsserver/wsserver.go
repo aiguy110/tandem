@@ -1220,15 +1220,19 @@ func (c *connection) handle(m clientMessage) {
 		if m.DeleteWorktree != nil {
 			deleteWorktree = *m.DeleteWorktree
 		}
+		slog.Info("closing agent", "session_id", m.SessionID, "force", m.Force, "delete_worktree", deleteWorktree, "deinit_submodules", m.DeinitSubmodules)
 		closed, err := c.server.opts.Registry.Close(context.Background(), m.SessionID, m.Force, deleteWorktree, m.DeinitSubmodules)
 		if err != nil {
+			slog.Warn("close agent failed", "session_id", m.SessionID, "force", m.Force, "delete_worktree", deleteWorktree, "deinit_submodules", m.DeinitSubmodules, "error", err)
 			c.commandError(m, err)
 			return
 		}
 		if !closed {
+			slog.Warn("close agent found no session", "session_id", m.SessionID, "force", m.Force, "delete_worktree", deleteWorktree)
 			c.commandError(m, errors.New("no such agent"))
 			return
 		}
+		slog.Info("agent closed", "session_id", m.SessionID, "force", m.Force, "delete_worktree", deleteWorktree)
 		c.server.broadcastClosed(m.SessionID)
 		if c.server.opts.Federation != nil {
 			c.server.broadcastAgents()
@@ -1383,7 +1387,15 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	hostID := m.HostID
-	slog.Info("routing browser command to remote host", "type", m.T, "host_id", hostID, "session_id", m.SessionID)
+	routeLogArgs := []any{"type", m.T, "host_id", hostID, "session_id", m.SessionID}
+	routedDeleteWorktree := true
+	if m.DeleteWorktree != nil {
+		routedDeleteWorktree = *m.DeleteWorktree
+	}
+	if m.T == "close_agent" {
+		routeLogArgs = append(routeLogArgs, "force", m.Force, "delete_worktree", routedDeleteWorktree, "deinit_submodules", m.DeinitSubmodules)
+	}
+	slog.Info("routing browser command to remote host", routeLogArgs...)
 	if m.T == "spawn_agent" && m.Spec.HandoffFrom != "" {
 		if sourceHostID, sourceSessionID, ok := SplitRemoteSessionID(m.Spec.HandoffFrom); ok {
 			if sourceHostID != hostID {
@@ -1447,6 +1459,9 @@ func (c *connection) forwardFederation(m clientMessage) {
 	if err := json.Unmarshal(response, &envelope); err != nil {
 		c.commandError(m, fmt.Errorf("remote host returned invalid protocol response: %w", err))
 		return
+	}
+	if remoteErr, _ := envelope["error"].(string); remoteErr != "" {
+		slog.Warn("remote browser command returned error", append(routeLogArgs, "error", remoteErr)...)
 	}
 	normalizeSessionEnvelope(envelope)
 	// Master corrIds are authoritative. A stale or malicious slave response
