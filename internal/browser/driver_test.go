@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -160,5 +161,23 @@ func TestDriverSelection(t *testing.T) {
 	}
 	if _, err := NewDriver(DriverConfig{Driver: "mystery"}); err == nil {
 		t.Fatal("unknown driver accepted")
+	}
+}
+
+// A headless browser has no permission UI, so Chrome's Local Network Access
+// prompt auto-denies and pages that call a loopback agent (device-compliance
+// checks, local dev servers) break with no way to grant access from the
+// shared-browser pane. The launch line must opt out of those checks.
+func TestLocalLaunchArgsDisableLocalNetworkAccessChecks(t *testing.T) {
+	t.Parallel()
+	args := localLaunchArgs(9222, "/tmp/profile")
+	if !slices.Contains(args, "--disable-features=LocalNetworkAccessChecks") {
+		t.Fatalf("launch args missing local network access opt-out: %v", args)
+	}
+	if args[len(args)-1] != "about:blank" {
+		t.Fatalf("initial URL must stay last, got %v", args)
+	}
+	if !slices.Contains(args, "--remote-debugging-port=9222") || !slices.Contains(args, "--user-data-dir=/tmp/profile") {
+		t.Fatalf("launch args dropped port/profile: %v", args)
 	}
 }

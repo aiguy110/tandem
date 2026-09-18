@@ -74,6 +74,24 @@ func DiscoverChromium(configured string) (string, error) {
 	return "", errors.New("chromium executable not found; configure TANDEM_CHROMIUM_EXECUTABLE")
 }
 
+// localNetworkAccessArgs disables Chrome's Local Network Access checks for the
+// daemon-owned browser. LNA gates public-origin subresource requests to loopback
+// and private IPs behind a permission prompt; headless Chrome has no permission
+// UI, so the prompt auto-denies and any page that talks to a local agent (device
+// compliance/posture checks, dev servers, printer and IoT consoles) breaks with
+// no way for the user to grant access from the shared-browser pane.
+var localNetworkAccessArgs = []string{"--disable-features=LocalNetworkAccessChecks"}
+
+// localLaunchArgs builds the Chromium command line for a daemon-owned browser
+// listening for CDP on port and using profile as its user-data-dir.
+func localLaunchArgs(port int, profile string) []string {
+	args := []string{"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+		fmt.Sprintf("--remote-debugging-port=%d", port), "--user-data-dir=" + profile,
+		"--no-first-run", "--no-default-browser-check", "--window-size=1280,800"}
+	args = append(args, localNetworkAccessArgs...)
+	return append(args, "about:blank")
+}
+
 type LocalConfig struct {
 	UserDataRoot  string
 	Executable    string
@@ -160,9 +178,7 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 			}
 		}
 	}
-	args := []string{"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-		fmt.Sprintf("--remote-debugging-port=%d", port), "--user-data-dir=" + profile,
-		"--no-first-run", "--no-default-browser-check", "--window-size=1280,800", "about:blank"}
+	args := localLaunchArgs(port, profile)
 	cmd := exec.Command(exe, args...)
 	if err := cmd.Start(); err != nil {
 		return ProvisionResult{}, fmt.Errorf("launch chromium: %w", err)
