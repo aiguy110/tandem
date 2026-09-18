@@ -112,6 +112,14 @@ func TestUpdateReplacesExecutable(t *testing.T) {
 	if string(got) != string(newBinary) {
 		t.Fatalf("updated binary = %q, want %q", got, newBinary)
 	}
+	marker, err := os.ReadFile(target + selfUpdateMarkerSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMarker := "v1.1.0\t1.0.0\t" + fmt.Sprintf("%x", sha256.Sum256(newBinary)) + "\n"
+	if string(marker) != wantMarker {
+		t.Fatalf("self-update marker = %q, want %q", marker, wantMarker)
+	}
 	if got := downloads.Load(); got != 2 {
 		t.Fatalf("download requests = %d, want 2", got)
 	}
