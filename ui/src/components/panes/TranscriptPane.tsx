@@ -181,6 +181,57 @@ interface SelectionAnchor {
   role: string;
   quote: string;
   rect: { top: number; left: number; width: number; height: number };
+  // Offsets in the annotatable transcript row. These make the selection
+  // independently recoverable from the popup, rather than relying on a quote
+  // search that could choose the wrong repeated text after a refresh.
+  range?: { start: number; end: number };
+}
+
+interface CommentDraft {
+  anchor: SelectionAnchor;
+  position: { top: number; left: number };
+  text: string;
+}
+
+const COMMENT_DRAFTS_STORAGE_KEY = 'tandem.annotationCommentDrafts';
+
+function readCommentDraft(sessionId: string): CommentDraft | null {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(COMMENT_DRAFTS_STORAGE_KEY) ?? '{}');
+    if (!saved || typeof saved !== 'object') return null;
+    const draft = (saved as Record<string, unknown>)[sessionId];
+    if (!draft || typeof draft !== 'object') return null;
+    const { anchor, position, text } = draft as Record<string, unknown>;
+    if (!anchor || typeof anchor !== 'object' || !position || typeof position !== 'object' || typeof text !== 'string') return null;
+    const selection = anchor as Record<string, unknown>;
+    const box = position as Record<string, unknown>;
+    if (
+      typeof selection.seq !== 'number' || typeof selection.role !== 'string' || typeof selection.quote !== 'string' ||
+      !selection.rect || typeof selection.rect !== 'object' || typeof box.top !== 'number' || typeof box.left !== 'number'
+    ) return null;
+    const rect = selection.rect as Record<string, unknown>;
+    if (typeof rect.top !== 'number' || typeof rect.left !== 'number' || typeof rect.width !== 'number' || typeof rect.height !== 'number') return null;
+    const range = selection.range;
+    const validRange = range && typeof range === 'object' && typeof (range as Record<string, unknown>).start === 'number' && typeof (range as Record<string, unknown>).end === 'number'
+      ? { start: (range as Record<string, number>).start, end: (range as Record<string, number>).end }
+      : undefined;
+    return { anchor: { seq: selection.seq, role: selection.role, quote: selection.quote, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }, range: validRange }, position: { top: box.top, left: box.left }, text };
+  } catch {
+    return null;
+  }
+}
+
+function writeCommentDraft(sessionId: string, draft: CommentDraft | null) {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(COMMENT_DRAFTS_STORAGE_KEY) ?? '{}');
+    const drafts = saved && typeof saved === 'object' ? saved as Record<string, CommentDraft> : {};
+    if (draft) drafts[sessionId] = draft;
+    else delete drafts[sessionId];
+    localStorage.setItem(COMMENT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {
+    // Draft persistence is best effort: private-mode or quota failures must
+    // never prevent someone from adding an annotation.
+  }
 }
 
 // A quote can point to either a pending annotation in the review tray or a
@@ -312,12 +363,16 @@ export function TranscriptPane() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverText, setPopoverText] = useState('');
   const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
+  // Keep the owner alongside the local state. The pane stays mounted while
+  // changing chats, so this prevents a previous chat's draft flashing in the
+  // newly focused chat before its own draft has been restored.
+  const [popoverSessionId, setPopoverSessionId] = useState<string | null>(null);
   const popoverDragOffset = useRef<{ x: number; y: number } | null>(null);
   const captureSelectionRef = useRef<() => void>(() => {});
   // Memoized so useValuePresence sees a stable identity across re-renders.
   const popoverView = useMemo(
-    () => (selAnchor && popoverOpen && popoverPosition ? { anchor: selAnchor, position: popoverPosition } : null),
-    [selAnchor, popoverOpen, popoverPosition],
+    () => (agent && popoverSessionId === agent.id && selAnchor && popoverOpen && popoverPosition ? { anchor: selAnchor, position: popoverPosition } : null),
+    [agent?.id, popoverSessionId, selAnchor, popoverOpen, popoverPosition],
   );
   const { rendered: shownPopover, closing: popoverClosing } = useValuePresence(popoverView);
 
@@ -452,12 +507,40 @@ export function TranscriptPane() {
   };
 
   const clearSelectionUi = () => {
+    if (popoverSessionId) writeCommentDraft(popoverSessionId, null);
     setSelAnchor(null);
     setPopoverOpen(false);
     setPopoverText('');
     setPopoverPosition(null);
+    setPopoverSessionId(null);
     popoverDragOffset.current = null;
   };
+
+  // Keep every in-progress popup independently in browser-local storage. This
+  // is deliberately synchronous localStorage rather than daemon state: it is
+  // a private draft and must survive both a browser refresh and chat switches.
+  useEffect(() => {
+    if (!popoverSessionId || !popoverOpen || !selAnchor || !popoverPosition) return;
+    writeCommentDraft(popoverSessionId, { anchor: selAnchor, position: popoverPosition, text: popoverText });
+  }, [popoverSessionId, popoverOpen, selAnchor, popoverPosition, popoverText]);
+
+  useLayoutEffect(() => {
+    if (!agent) return;
+    const draft = readCommentDraft(agent.id);
+    if (!draft) {
+      setSelAnchor(null);
+      setPopoverOpen(false);
+      setPopoverText('');
+      setPopoverPosition(null);
+      setPopoverSessionId(null);
+      return;
+    }
+    setSelAnchor(draft.anchor);
+    setPopoverOpen(true);
+    setPopoverText(draft.text);
+    setPopoverPosition(draft.position);
+    setPopoverSessionId(agent.id);
+  }, [agent?.id]);
 
   const flash = (el: HTMLElement, className: string, duration = 2550) => {
     el.classList.remove(className);
@@ -525,11 +608,29 @@ export function TranscriptPane() {
       clearSelectionUi();
       return;
     }
+    const range = sel.getRangeAt(0);
+    let offsets: { start: number; end: number } | undefined;
+    try {
+      // A Range's endpoints can be element boundaries as well as text nodes;
+      // clone the row prefix instead of assuming either form. The offsets are
+      // retained with the draft so its exact source range is recoverable.
+      const beforeStart = document.createRange();
+      beforeStart.selectNodeContents(rowEl);
+      beforeStart.setEnd(range.startContainer, range.startOffset);
+      const beforeEnd = document.createRange();
+      beforeEnd.selectNodeContents(rowEl);
+      beforeEnd.setEnd(range.endContainer, range.endOffset);
+      offsets = { start: beforeStart.toString().length, end: beforeEnd.toString().length };
+    } catch {
+      // The quote remains a valid annotation anchor when a browser supplies a
+      // selection endpoint it will not let us serialize.
+    }
     setSelAnchor({
       seq,
       role,
       quote: text.length > ANNOTATION_QUOTE_MAX ? text.slice(0, ANNOTATION_QUOTE_MAX) : text,
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+      range: offsets,
     });
     setPopoverOpen(false);
     setPopoverText('');
@@ -550,19 +651,6 @@ export function TranscriptPane() {
       document.removeEventListener('selectionchange', onSelectionChange);
     };
   }, []);
-
-  // Dismiss the floating button/popover on any click outside them (including
-  // the start of a fresh selection drag).
-  useEffect(() => {
-    if (!selAnchor) return;
-    const onDocPointerDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.closest('.annotation-comment-btn') || target.closest('.annotation-popover')) return;
-      clearSelectionUi();
-    };
-    document.addEventListener('pointerdown', onDocPointerDown);
-    return () => document.removeEventListener('pointerdown', onDocPointerDown);
-  }, [selAnchor]);
 
   if (!agent) return null;
 
@@ -600,7 +688,7 @@ export function TranscriptPane() {
               ↓ Latest
             </button>
           )}
-          {selAnchor && !popoverOpen && (
+          {selAnchor && !popoverOpen && (!popoverSessionId || popoverSessionId === agent.id) && (
             <button
               type="button"
               className="annotation-comment-btn"
@@ -609,16 +697,22 @@ export function TranscriptPane() {
                 left: selAnchor.rect.left + selAnchor.rect.width / 2,
               }}
               onClick={() => {
-                setPopoverPosition(usesSoftKeyboard()
+                const position = usesSoftKeyboard()
                   ? mobilePopoverPosition()
-                  : { top: selAnchor.rect.top - 34, left: selAnchor.rect.left });
+                  : { top: selAnchor.rect.top - 34, left: selAnchor.rect.left };
+                // Write immediately at the browser-input boundary, rather
+                // than waiting for React to schedule an effect, so a refresh
+                // directly after opening never loses the draft.
+                writeCommentDraft(agent.id, { anchor: selAnchor, position, text: popoverText });
+                setPopoverPosition(position);
                 setPopoverOpen(true);
+                setPopoverSessionId(agent.id);
               }}
             >
               💬 Comment
             </button>
           )}
-          {shownPopover && (
+          {shownPopover && popoverSessionId === agent.id && (
             <div className={`annotation-popover${popoverClosing ? ' closing' : ''}`} style={shownPopover.position}>
               <div
                 className="annotation-popover-quote annotation-popover-drag-handle"
@@ -636,7 +730,7 @@ export function TranscriptPane() {
                   const width = popover?.offsetWidth ?? 260;
                   const height = popover?.offsetHeight ?? 160;
                   const gutter = 8;
-                  setPopoverPosition({
+                  const position = {
                     top: Math.min(
                       Math.max(e.clientY - offset.y, viewport.top + gutter),
                       Math.max(viewport.top + gutter, viewport.top + viewport.height - height - gutter),
@@ -645,7 +739,9 @@ export function TranscriptPane() {
                       Math.max(e.clientX - offset.x, viewport.left + gutter),
                       Math.max(viewport.left + gutter, viewport.left + viewport.width - width - gutter),
                     ),
-                  });
+                  };
+                  setPopoverPosition(position);
+                  writeCommentDraft(agent.id, { anchor: shownPopover.anchor, position, text: popoverText });
                 }}
                 onPointerUp={(e) => {
                   popoverDragOffset.current = null;
@@ -660,12 +756,15 @@ export function TranscriptPane() {
                 rows={2}
                 placeholder="Add a comment…"
                 value={popoverText}
-                onChange={(e) => setPopoverText(e.target.value)}
+                onChange={(e) => {
+                  const text = e.target.value;
+                  setPopoverText(text);
+                  // Do not debounce this: the point is to survive a refresh
+                  // between any two keystrokes.
+                  writeCommentDraft(agent.id, { anchor: shownPopover.anchor, position: shownPopover.position, text });
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    clearSelectionUi();
-                  } else if (e.key === 'Enter' && !e.shiftKey) {
+                  if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     void addAnnotation(agent.id, { seq: shownPopover.anchor.seq, role: shownPopover.anchor.role, quote: shownPopover.anchor.quote }, popoverText.trim());
                     window.getSelection()?.removeAllRanges();
