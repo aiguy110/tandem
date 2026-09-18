@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	tandem "github.com/aiguy110/tandem"
@@ -112,5 +113,14 @@ func TestSemverNewer(t *testing.T) {
 		if got := semverNewer(tc.candidate, tc.current); got != tc.want {
 			t.Errorf("semverNewer(%q,%q)=%v want %v", tc.candidate, tc.current, got, tc.want)
 		}
+	}
+}
+
+func TestSortVersionsNewestFirst(t *testing.T) {
+	versions := []string{"1.8.0", "1.12.0", "1.9.0"}
+	sortVersions(versions)
+	want := []string{"1.12.0", "1.9.0", "1.8.0"}
+	if !slices.Equal(versions, want) {
+		t.Fatalf("versions=%v want %v", versions, want)
 	}
 }

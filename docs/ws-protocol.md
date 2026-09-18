@@ -245,6 +245,8 @@ type ClientMsg =
   | { t: 'restart_browser'; sessionId: string; snapshotId?: string } // starts/replaces the browser; omitted snapshotId means fresh state
   | { t: 'list_system_notifications' }
   | { t: 'system_notification_action'; notificationId: string; action: string }
+  | { t: 'list_agent_distributions' }
+  | { t: 'install_agent_distribution'; agent: string; version: string }
   | { t: 'browser_input'; sessionId: string; event: BrowserInputWire }   // Phase 5: user mouse/key/wheel (owner=user only)
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
@@ -304,6 +306,7 @@ type ServerMsg =
   | { t: 'agents';   sessions: SessionSummary[] }                         // Phase 4: reply to list_agents
   | { t: 'agent_catalog'; catalog: AgentCatalog }                       // reply to list_agent_catalog
   | { t: 'system_notifications'; notifications: SystemNotification[] }  // daemon-owned operational notifications
+  | { t: 'agent_distributions'; adapters?: ManagedAdapter[]; error?: string }
   | { t: 'dirs';     dirs: RepoInfo[] }                                 // reply to list_dirs
   | { t: 'spawn_options'; options?: SpawnOptions; error?: string }      // reply to get_spawn_options
   | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions

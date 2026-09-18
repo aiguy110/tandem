@@ -10,6 +10,7 @@ import { FocusArea } from './components/FocusArea';
 import { Inspector } from './components/Inspector';
 import { SpawnPalette } from './components/SpawnPalette';
 import { CommandPalette } from './components/CommandPalette';
+import { AdapterManagerModal } from './components/AdapterManagerModal';
 import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
 import { FleetView } from './components/FleetView';
@@ -118,6 +119,7 @@ function ModalHost({ modal }: { modal: string }) {
       {rendered === 'resume' && <ResumePalette />}
       {rendered === 'automation' && <AutomationModal />}
       {rendered === 'fleet' && <FleetView />}
+      {rendered === 'adapters' && <AdapterManagerModal />}
     </div>
   );
 }

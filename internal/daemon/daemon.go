@@ -382,7 +382,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	defer handler.Close()
 	updateService.Start(ctx)
 	agentUpdateService.Start(ctx)

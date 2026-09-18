@@ -10,18 +10,14 @@ import (
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 )
 
-func TestServiceOffersInstallsAndRollsBackUpdate(t *testing.T) {
+func TestServiceOffersAndInstallsUpdate(t *testing.T) {
 	center := notifications.New()
 	installed := ""
-	rolledBack := false
 	s := NewService(Options{Center: center, Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
 		return []runtimeinstall.UpdateInfo{{Agent: "codex", CurrentVersion: "1.8.0", LatestVersion: "1.9.0"}}, nil
 	}, Install: func(_ context.Context, _ config.Config, agent, version string, _ io.Writer) (runtimeinstall.LockedAgent, error) {
 		installed = agent + "@" + version
 		return runtimeinstall.LockedAgent{Version: version}, nil
-	}, Rollback: func(context.Context, config.Config, string) (runtimeinstall.LockedAgent, error) {
-		rolledBack = true
-		return runtimeinstall.LockedAgent{Version: "1.8.0"}, nil
 	}})
 	s.poll(context.Background())
 	items := center.List()
@@ -34,15 +30,8 @@ func TestServiceOffersInstallsAndRollsBackUpdate(t *testing.T) {
 	if installed != "codex@1.9.0" {
 		t.Fatalf("installed=%q", installed)
 	}
-	item := center.List()[0]
-	if item.Severity != "success" || item.Actions[0].ID != "rollback" {
-		t.Fatalf("installed notification=%#v", item)
-	}
-	if _, err := s.HandleAction(context.Background(), item.ID, "rollback"); err != nil {
-		t.Fatal(err)
-	}
-	if !rolledBack {
-		t.Fatal("rollback not called")
+	if len(center.List()) != 0 {
+		t.Fatalf("completed update notification was not dismissed: %#v", center.List())
 	}
 }
 

@@ -281,11 +281,17 @@ periodically resolves the newest package version allowed by the compatibility
 range shipped with Tandem and surfaces an `Update available` notification in
 the same daemon-owned notification rail as Tandem releases.
 
+The command palette's **Manage ACP adapters…** command opens the version
+manager. It lists the active version, retained installs, and every version in
+Tandem's compatible range. Selecting the newest version updates the adapter;
+selecting any older compatible version installs or rolls back to that exact
+version. Operations acknowledge immediately in the UI while npm work continues.
+
 Installing an update changes the preferred version for new sessions only.
 Every new session persists its exact npm package, version, integrity value,
 and install path in `ResolvedLaunch`; existing and restored sessions therefore
 continue using the version with which they were created. Previous versions are
-retained for durable sessions and one-click rollback. Custom agent commands
+retained for durable sessions and version-specific rollback. Custom agent commands
 remain operator-managed and are not queried or changed.
 
 The preferred resolutions live in
