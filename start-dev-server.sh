@@ -10,6 +10,28 @@ version="$(tandem_development_version)"
 commit="$(git rev-parse HEAD)"
 build_time="$(git show -s --format=%cI HEAD)"
 
+# A release self-update replaces ./tandem and records what source-built version
+# it replaced. Keep running that verified release while this checkout remains
+# on the same clean revision. Otherwise this launcher's unconditional build
+# would overwrite the update with the older source on every restart.
+self_update_marker=./tandem.self-update
+if [[ -x ./tandem && -r "$self_update_marker" ]]; then
+  IFS=$'\t' read -r installed_version replaced_version installed_sha < "$self_update_marker" || true
+  binary_version="$(./tandem version 2>/dev/null | sed -n 's/^tandem version=\([^ ]*\).*/\1/p' || true)"
+  if command -v sha256sum >/dev/null 2>&1; then
+    binary_sha="$(sha256sum ./tandem 2>/dev/null | awk '{print $1}' || true)"
+  else
+    binary_sha="$(shasum -a 256 ./tandem 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  source_changes="$(git status --porcelain --untracked-files=normal)"
+  if [[ -n "${installed_version:-}" && "$binary_version" == "$installed_version" && "$binary_sha" == "$installed_sha" && "$version" == "$replaced_version" && -z "$source_changes" ]]; then
+    echo "==> Starting self-updated Tandem $installed_version; source remains $version"
+    exec ./tandem
+  fi
+  echo "==> Source or binary changed since the self-update; rebuilding from $version"
+  rm -f -- "$self_update_marker"
+fi
+
 go_cmd="${TANDEM_GO_CMD:-}"
 if [[ -z "$go_cmd" ]]; then
   if command -v go >/dev/null 2>&1; then

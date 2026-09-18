@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +24,8 @@ import (
 const defaultRepository = "aiguy110/tandem"
 
 const updateSetupTimeout = 5 * time.Second
+
+const selfUpdateMarkerSuffix = ".self-update"
 
 var developmentVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+\.[0-9a-f]{8}$`)
 
@@ -138,8 +141,55 @@ func UpdateWithResult(ctx context.Context, opts Options) (bool, error) {
 	if err := replaceExecutable(ctx, opts, binary.DownloadURL, wantSHA); err != nil {
 		return false, err
 	}
+	if err := writeSelfUpdateMarker(opts.Executable, opts.CurrentVersion, latest.TagName, wantSHA); err != nil {
+		slog.Error("self-update handoff failed", "executable", opts.Executable, "from_version", opts.CurrentVersion, "to_version", latest.TagName, "error", err)
+		return false, err
+	}
+	slog.Info("self-update binary installed", "executable", opts.Executable, "from_version", opts.CurrentVersion, "to_version", latest.TagName)
 	fmt.Fprintf(opts.Log, "tandem: updated %s from %s to %s\n", opts.Executable, opts.CurrentVersion, latest.TagName)
 	return true, nil
+}
+
+// writeSelfUpdateMarker tells a source checkout launcher that the executable
+// was deliberately replaced by a verified release. The launcher keeps using
+// that release while its source revision is unchanged, instead of immediately
+// rebuilding the old source over it on restart.
+func writeSelfUpdateMarker(executable, previousVersion, installedVersion, sha string) error {
+	target, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return fmt.Errorf("resolve updated executable for handoff: %w", err)
+	}
+	for name, value := range map[string]string{"previous version": previousVersion, "installed version": installedVersion, "checksum": sha} {
+		if value == "" || strings.ContainsAny(value, "\t\r\n") {
+			return fmt.Errorf("record self-update handoff: invalid %s", name)
+		}
+	}
+	marker := target + selfUpdateMarkerSuffix
+	temp, err := os.CreateTemp(filepath.Dir(marker), ".tandem-self-update-*")
+	if err != nil {
+		return fmt.Errorf("create self-update handoff: %w", err)
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return fmt.Errorf("secure self-update handoff: %w", err)
+	}
+	if _, err := fmt.Fprintf(temp, "%s\t%s\t%s\n", installedVersion, previousVersion, strings.ToLower(sha)); err != nil {
+		temp.Close()
+		return fmt.Errorf("write self-update handoff: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("sync self-update handoff: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close self-update handoff: %w", err)
+	}
+	if err := os.Rename(tempName, marker); err != nil {
+		return fmt.Errorf("publish self-update handoff: %w", err)
+	}
+	return nil
 }
 
 // isUnversionedDevelopmentVersion identifies builds for which no release
