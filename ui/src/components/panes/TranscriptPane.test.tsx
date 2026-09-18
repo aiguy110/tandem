@@ -724,11 +724,11 @@ describe('TranscriptPane annotations', () => {
     fireEvent.pointerDown(document.body);
     expect((view.getByPlaceholderText('Add a comment…') as HTMLTextAreaElement).value).toBe('Keep this draft.');
     const saved = JSON.parse(localStorage.getItem('tandem.annotationCommentDrafts') ?? '{}');
-    expect(saved['session-1']).toMatchObject({
+    expect(saved['session-1'][0]).toMatchObject({
       text: 'Keep this draft.',
       anchor: { seq: 1, role: 'assistant', quote: 'Select these words', range: { start: 0, end: 18 } },
     });
-    expect(saved['session-1'].position).toEqual({ top: 8, left: 332 });
+    expect(saved['session-1'][0].position).toEqual({ top: 8, left: 332 });
 
     act(() => useStore.setState({ focusedId: 'session-2' }));
     await waitFor(() => expect(view.queryByPlaceholderText('Add a comment…')).toBeNull());
@@ -739,8 +739,39 @@ describe('TranscriptPane annotations', () => {
     const restored = render(<TranscriptPane />);
     await waitFor(() => expect((restored.getByPlaceholderText('Add a comment…') as HTMLTextAreaElement).value).toBe('Keep this draft.'));
     const popover = restored.container.querySelector<HTMLElement>('.annotation-popover')!;
-    expect(popover.style.top).toBe(`${saved['session-1'].position.top}px`);
-    expect(popover.style.left).toBe(`${saved['session-1'].position.left}px`);
+    expect(popover.style.top).toBe(`${saved['session-1'][0].position.top}px`);
+    expect(popover.style.left).toBe(`${saved['session-1'][0].position.left}px`);
+  });
+
+  it('keeps multiple selected comment boxes editable at the same time', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    const text = view.container.querySelector('.ev.msg p')?.firstChild!;
+    const select = async (start: number, end: number, left: number) => {
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      Object.defineProperty(range, 'getBoundingClientRect', { value: () => ({ top: 100, left, width: 80, height: 20, right: left + 80, bottom: 120, x: left, y: 100, toJSON: () => ({}) }) });
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      fireEvent.click(await waitFor(() => view.getByRole('button', { name: /comment/i })));
+    };
+
+    await select(0, 6, 20);
+    fireEvent.change(view.getAllByPlaceholderText('Add a comment…')[0], { target: { value: 'First draft' } });
+    await select(7, 12, 140);
+    const inputs = view.getAllByPlaceholderText('Add a comment…') as HTMLTextAreaElement[];
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0].value).toBe('First draft');
+    fireEvent.change(inputs[1], { target: { value: 'Second draft' } });
+    expect((view.getAllByPlaceholderText('Add a comment…') as HTMLTextAreaElement[]).map((input) => input.value)).toEqual(['First draft', 'Second draft']);
+    expect(JSON.parse(localStorage.getItem('tandem.annotationCommentDrafts') ?? '{}')['session-1']).toHaveLength(2);
   });
 });
 

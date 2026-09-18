@@ -9,7 +9,7 @@ import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
 import { PermissionRequestDetails } from '../PermissionRequest';
-import { usePresence, useUpdateFlash, useValuePresence } from '../../transitions';
+import { usePresence, useUpdateFlash } from '../../transitions';
 import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition, renderClip, restoreLocalPosition, seedDurations, setPlaylist, useEngineState } from '../../audio/engine';
 import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
 import { InlineAudioBar } from '../audio/InlineAudioBar';
@@ -188,6 +188,7 @@ interface SelectionAnchor {
 }
 
 interface CommentDraft {
+  id: string;
   anchor: SelectionAnchor;
   position: { top: number; left: number };
   text: string;
@@ -195,39 +196,52 @@ interface CommentDraft {
 
 const COMMENT_DRAFTS_STORAGE_KEY = 'tandem.annotationCommentDrafts';
 
-function readCommentDraft(sessionId: string): CommentDraft | null {
+function draftID(anchor: SelectionAnchor) {
+  const range = anchor.range;
+  return `${anchor.seq}:${anchor.role}:${range?.start ?? -1}:${range?.end ?? -1}:${anchor.quote}`;
+}
+
+function parseCommentDraft(value: unknown): CommentDraft | null {
+  if (!value || typeof value !== 'object') return null;
+  const { anchor, position, text } = value as Record<string, unknown>;
+  if (!anchor || typeof anchor !== 'object' || !position || typeof position !== 'object' || typeof text !== 'string') return null;
+  const selection = anchor as Record<string, unknown>;
+  const box = position as Record<string, unknown>;
+  if (
+    typeof selection.seq !== 'number' || typeof selection.role !== 'string' || typeof selection.quote !== 'string' ||
+    !selection.rect || typeof selection.rect !== 'object' || typeof box.top !== 'number' || typeof box.left !== 'number'
+  ) return null;
+  const rect = selection.rect as Record<string, unknown>;
+  if (typeof rect.top !== 'number' || typeof rect.left !== 'number' || typeof rect.width !== 'number' || typeof rect.height !== 'number') return null;
+  const range = selection.range;
+  const validRange = range && typeof range === 'object' && typeof (range as Record<string, unknown>).start === 'number' && typeof (range as Record<string, unknown>).end === 'number'
+    ? { start: (range as Record<string, number>).start, end: (range as Record<string, number>).end }
+    : undefined;
+  const parsedAnchor = { seq: selection.seq, role: selection.role, quote: selection.quote, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }, range: validRange };
+  return { id: typeof (value as Record<string, unknown>).id === 'string' ? (value as Record<string, string>).id : draftID(parsedAnchor), anchor: parsedAnchor, position: { top: box.top, left: box.left }, text };
+}
+
+function readCommentDrafts(sessionId: string): CommentDraft[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(COMMENT_DRAFTS_STORAGE_KEY) ?? '{}');
-    if (!saved || typeof saved !== 'object') return null;
-    const draft = (saved as Record<string, unknown>)[sessionId];
-    if (!draft || typeof draft !== 'object') return null;
-    const { anchor, position, text } = draft as Record<string, unknown>;
-    if (!anchor || typeof anchor !== 'object' || !position || typeof position !== 'object' || typeof text !== 'string') return null;
-    const selection = anchor as Record<string, unknown>;
-    const box = position as Record<string, unknown>;
-    if (
-      typeof selection.seq !== 'number' || typeof selection.role !== 'string' || typeof selection.quote !== 'string' ||
-      !selection.rect || typeof selection.rect !== 'object' || typeof box.top !== 'number' || typeof box.left !== 'number'
-    ) return null;
-    const rect = selection.rect as Record<string, unknown>;
-    if (typeof rect.top !== 'number' || typeof rect.left !== 'number' || typeof rect.width !== 'number' || typeof rect.height !== 'number') return null;
-    const range = selection.range;
-    const validRange = range && typeof range === 'object' && typeof (range as Record<string, unknown>).start === 'number' && typeof (range as Record<string, unknown>).end === 'number'
-      ? { start: (range as Record<string, number>).start, end: (range as Record<string, number>).end }
-      : undefined;
-    return { anchor: { seq: selection.seq, role: selection.role, quote: selection.quote, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }, range: validRange }, position: { top: box.top, left: box.left }, text };
+    if (!saved || typeof saved !== 'object') return [];
+    const drafts = (saved as Record<string, unknown>)[sessionId];
+    // v0.9.11 stored one object. Read it as a one-item list so existing local
+    // drafts continue to work when upgrading to independently editable boxes.
+    const candidates = Array.isArray(drafts) ? drafts : [drafts];
+    return candidates.map(parseCommentDraft).filter((draft): draft is CommentDraft => draft !== null);
   } catch {
-    return null;
+    return [];
   }
 }
 
-function writeCommentDraft(sessionId: string, draft: CommentDraft | null) {
+function writeCommentDrafts(sessionId: string, commentDrafts: CommentDraft[]) {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(COMMENT_DRAFTS_STORAGE_KEY) ?? '{}');
-    const drafts = saved && typeof saved === 'object' ? saved as Record<string, CommentDraft> : {};
-    if (draft) drafts[sessionId] = draft;
-    else delete drafts[sessionId];
-    localStorage.setItem(COMMENT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    const savedDrafts = saved && typeof saved === 'object' ? saved as Record<string, unknown> : {};
+    if (commentDrafts.length) savedDrafts[sessionId] = commentDrafts;
+    else delete savedDrafts[sessionId];
+    localStorage.setItem(COMMENT_DRAFTS_STORAGE_KEY, JSON.stringify(savedDrafts));
   } catch {
     // Draft persistence is best effort: private-mode or quota failures must
     // never prevent someone from adding an annotation.
@@ -346,6 +360,66 @@ function mobilePopoverPosition() {
   return { top: viewport.top + 8, left: viewport.left + (viewport.width - width) / 2 };
 }
 
+function CommentPopover({ draft, autoFocus, onChange, onCancel, onAdd }: {
+  draft: CommentDraft;
+  autoFocus: boolean;
+  onChange: (change: Partial<Pick<CommentDraft, 'position' | 'text'>>) => void;
+  onCancel: () => void;
+  onAdd: () => void;
+}) {
+  const dragOffset = useRef<{ x: number; y: number } | null>(null);
+  return (
+    <div className="annotation-popover" style={draft.position}>
+      <div
+        className="annotation-popover-quote annotation-popover-drag-handle"
+        title="Drag to move comment"
+        onPointerDown={(e) => {
+          dragOffset.current = { x: e.clientX - draft.position.left, y: e.clientY - draft.position.top };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          e.preventDefault();
+        }}
+        onPointerMove={(e) => {
+          const offset = dragOffset.current;
+          if (!offset) return;
+          const popover = e.currentTarget.parentElement;
+          const viewport = visibleViewport();
+          const width = popover?.offsetWidth ?? 260;
+          const height = popover?.offsetHeight ?? 160;
+          const gutter = 8;
+          onChange({ position: {
+            top: Math.min(Math.max(e.clientY - offset.y, viewport.top + gutter), Math.max(viewport.top + gutter, viewport.top + viewport.height - height - gutter)),
+            left: Math.min(Math.max(e.clientX - offset.x, viewport.left + gutter), Math.max(viewport.left + gutter, viewport.left + viewport.width - width - gutter)),
+          } });
+        }}
+        onPointerUp={(e) => {
+          dragOffset.current = null;
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        }}
+        onPointerCancel={() => { dragOffset.current = null; }}
+      >
+        &ldquo;{previewText(draft.anchor.quote, 160)}&rdquo;
+      </div>
+      <textarea
+        autoFocus={autoFocus}
+        rows={2}
+        placeholder="Add a comment…"
+        value={draft.text}
+        onChange={(e) => onChange({ text: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            onAdd();
+          }
+        }}
+      />
+      <div className="annotation-popover-actions">
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn primary" onClick={onAdd}>Add</button>
+      </div>
+    </div>
+  );
+}
+
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined)) as SessionView | undefined;
   const respond = useStore((s) => s.respond);
@@ -360,21 +434,10 @@ export function TranscriptPane() {
   const stick = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [selAnchor, setSelAnchor] = useState<SelectionAnchor | null>(null);
-  const [popoverOpen, setPopoverOpen] = useState(false);
-  const [popoverText, setPopoverText] = useState('');
-  const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(null);
-  // Keep the owner alongside the local state. The pane stays mounted while
-  // changing chats, so this prevents a previous chat's draft flashing in the
-  // newly focused chat before its own draft has been restored.
-  const [popoverSessionId, setPopoverSessionId] = useState<string | null>(null);
-  const popoverDragOffset = useRef<{ x: number; y: number } | null>(null);
+  const [commentDrafts, setCommentDrafts] = useState<CommentDraft[]>([]);
+  const [draftsSessionId, setDraftsSessionId] = useState<string | null>(null);
+  const [focusedDraftId, setFocusedDraftId] = useState<string | null>(null);
   const captureSelectionRef = useRef<() => void>(() => {});
-  // Memoized so useValuePresence sees a stable identity across re-renders.
-  const popoverView = useMemo(
-    () => (agent && popoverSessionId === agent.id && selAnchor && popoverOpen && popoverPosition ? { anchor: selAnchor, position: popoverPosition } : null),
-    [agent?.id, popoverSessionId, selAnchor, popoverOpen, popoverPosition],
-  );
-  const { rendered: shownPopover, closing: popoverClosing } = useValuePresence(popoverView);
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
@@ -506,40 +569,21 @@ export function TranscriptPane() {
     setAtBottom(nearBottom);
   };
 
-  const clearSelectionUi = () => {
-    if (popoverSessionId) writeCommentDraft(popoverSessionId, null);
+  const clearPendingSelection = () => {
     setSelAnchor(null);
-    setPopoverOpen(false);
-    setPopoverText('');
-    setPopoverPosition(null);
-    setPopoverSessionId(null);
-    popoverDragOffset.current = null;
   };
 
-  // Keep every in-progress popup independently in browser-local storage. This
-  // is deliberately synchronous localStorage rather than daemon state: it is
-  // a private draft and must survive both a browser refresh and chat switches.
-  useEffect(() => {
-    if (!popoverSessionId || !popoverOpen || !selAnchor || !popoverPosition) return;
-    writeCommentDraft(popoverSessionId, { anchor: selAnchor, position: popoverPosition, text: popoverText });
-  }, [popoverSessionId, popoverOpen, selAnchor, popoverPosition, popoverText]);
+  const saveCommentDrafts = (drafts: CommentDraft[]) => {
+    setCommentDrafts(drafts);
+    if (agent) writeCommentDrafts(agent.id, drafts);
+  };
 
   useLayoutEffect(() => {
     if (!agent) return;
-    const draft = readCommentDraft(agent.id);
-    if (!draft) {
-      setSelAnchor(null);
-      setPopoverOpen(false);
-      setPopoverText('');
-      setPopoverPosition(null);
-      setPopoverSessionId(null);
-      return;
-    }
-    setSelAnchor(draft.anchor);
-    setPopoverOpen(true);
-    setPopoverText(draft.text);
-    setPopoverPosition(draft.position);
-    setPopoverSessionId(agent.id);
+    setSelAnchor(null);
+    setCommentDrafts(readCommentDrafts(agent.id));
+    setDraftsSessionId(agent.id);
+    setFocusedDraftId(null);
   }, [agent?.id]);
 
   const flash = (el: HTMLElement, className: string, duration = 2550) => {
@@ -578,34 +622,31 @@ export function TranscriptPane() {
   // selectionchange listener below is therefore the primary mobile path;
   // mouseup/touchend remain useful fast-paths and compatibility fallbacks.
   const captureSelection = () => {
-    // Focusing the comment textarea collapses the native selection. Keep the
-    // already-captured anchor while the popover is being used.
-    if (popoverOpen) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      clearSelectionUi();
+      clearPendingSelection();
       return;
     }
     const text = sel.toString().trim();
     if (!text) {
-      clearSelectionUi();
+      clearPendingSelection();
       return;
     }
     const rowEl = closestRow(sel.anchorNode);
     if (!rowEl || !rowEl.dataset.seq || !scrollRef.current?.contains(rowEl)) {
-      clearSelectionUi();
+      clearPendingSelection();
       return;
     }
     const seq = Number(rowEl.dataset.seq);
     const role = rowEl.dataset.role ?? 'assistant';
     // Never offer annotation on the row still streaming in.
     if (agent?.status === 'working' && lastMessageItem && rowEl.dataset.key === lastMessageItem.key) {
-      clearSelectionUi();
+      clearPendingSelection();
       return;
     }
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
-      clearSelectionUi();
+      clearPendingSelection();
       return;
     }
     const range = sel.getRangeAt(0);
@@ -632,8 +673,6 @@ export function TranscriptPane() {
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
       range: offsets,
     });
-    setPopoverOpen(false);
-    setPopoverText('');
   };
   captureSelectionRef.current = captureSelection;
 
@@ -688,7 +727,7 @@ export function TranscriptPane() {
               ↓ Latest
             </button>
           )}
-          {selAnchor && !popoverOpen && (!popoverSessionId || popoverSessionId === agent.id) && (
+          {selAnchor && (
             <button
               type="button"
               className="annotation-comment-btn"
@@ -700,94 +739,32 @@ export function TranscriptPane() {
                 const position = usesSoftKeyboard()
                   ? mobilePopoverPosition()
                   : { top: selAnchor.rect.top - 34, left: selAnchor.rect.left };
-                // Write immediately at the browser-input boundary, rather
-                // than waiting for React to schedule an effect, so a refresh
-                // directly after opening never loses the draft.
-                writeCommentDraft(agent.id, { anchor: selAnchor, position, text: popoverText });
-                setPopoverPosition(position);
-                setPopoverOpen(true);
-                setPopoverSessionId(agent.id);
+                const draft: CommentDraft = { id: draftID(selAnchor), anchor: selAnchor, position, text: '' };
+                // Reopening an existing selection focuses its box instead of
+                // duplicating it; different selections stay open together.
+                const existing = commentDrafts.find((item) => item.id === draft.id);
+                saveCommentDrafts(existing ? commentDrafts : [...commentDrafts, draft]);
+                setFocusedDraftId(draft.id);
+                clearPendingSelection();
               }}
             >
               💬 Comment
             </button>
           )}
-          {shownPopover && popoverSessionId === agent.id && (
-            <div className={`annotation-popover${popoverClosing ? ' closing' : ''}`} style={shownPopover.position}>
-              <div
-                className="annotation-popover-quote annotation-popover-drag-handle"
-                title="Drag to move comment"
-                onPointerDown={(e) => {
-                  popoverDragOffset.current = { x: e.clientX - shownPopover.position.left, y: e.clientY - shownPopover.position.top };
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  e.preventDefault();
-                }}
-                onPointerMove={(e) => {
-                  const offset = popoverDragOffset.current;
-                  if (!offset) return;
-                  const popover = e.currentTarget.parentElement;
-                  const viewport = visibleViewport();
-                  const width = popover?.offsetWidth ?? 260;
-                  const height = popover?.offsetHeight ?? 160;
-                  const gutter = 8;
-                  const position = {
-                    top: Math.min(
-                      Math.max(e.clientY - offset.y, viewport.top + gutter),
-                      Math.max(viewport.top + gutter, viewport.top + viewport.height - height - gutter),
-                    ),
-                    left: Math.min(
-                      Math.max(e.clientX - offset.x, viewport.left + gutter),
-                      Math.max(viewport.left + gutter, viewport.left + viewport.width - width - gutter),
-                    ),
-                  };
-                  setPopoverPosition(position);
-                  writeCommentDraft(agent.id, { anchor: shownPopover.anchor, position, text: popoverText });
-                }}
-                onPointerUp={(e) => {
-                  popoverDragOffset.current = null;
-                  if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-                }}
-                onPointerCancel={() => { popoverDragOffset.current = null; }}
-              >
-                &ldquo;{previewText(shownPopover.anchor.quote, 160)}&rdquo;
-              </div>
-              <textarea
-                autoFocus
-                rows={2}
-                placeholder="Add a comment…"
-                value={popoverText}
-                onChange={(e) => {
-                  const text = e.target.value;
-                  setPopoverText(text);
-                  // Do not debounce this: the point is to survive a refresh
-                  // between any two keystrokes.
-                  writeCommentDraft(agent.id, { anchor: shownPopover.anchor, position: shownPopover.position, text });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void addAnnotation(agent.id, { seq: shownPopover.anchor.seq, role: shownPopover.anchor.role, quote: shownPopover.anchor.quote }, popoverText.trim());
-                    window.getSelection()?.removeAllRanges();
-                    clearSelectionUi();
-                  }
-                }}
-              />
-              <div className="annotation-popover-actions">
-                <button type="button" onClick={clearSelectionUi}>Cancel</button>
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => {
-                    void addAnnotation(agent.id, { seq: shownPopover.anchor.seq, role: shownPopover.anchor.role, quote: shownPopover.anchor.quote }, popoverText.trim());
-                    window.getSelection()?.removeAllRanges();
-                    clearSelectionUi();
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          )}
+          {draftsSessionId === agent.id && commentDrafts.map((draft) => (
+            <CommentPopover
+              key={draft.id}
+              draft={draft}
+              autoFocus={focusedDraftId === draft.id}
+              onChange={(change) => saveCommentDrafts(commentDrafts.map((item) => item.id === draft.id ? { ...item, ...change } : item))}
+              onCancel={() => saveCommentDrafts(commentDrafts.filter((item) => item.id !== draft.id))}
+              onAdd={() => {
+                void addAnnotation(agent.id, { seq: draft.anchor.seq, role: draft.anchor.role, quote: draft.anchor.quote }, draft.text.trim());
+                window.getSelection()?.removeAllRanges();
+                saveCommentDrafts(commentDrafts.filter((item) => item.id !== draft.id));
+              }}
+            />
+          ))}
         </div>
         {annotations.length > 0 && (
           <AnnotationTray
