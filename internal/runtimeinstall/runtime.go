@@ -5,15 +5,19 @@ package runtimeinstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	tandem "github.com/aiguy110/tandem"
+	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/noderuntime"
 )
@@ -21,17 +25,18 @@ import (
 // pin describes one npm package Tandem installs into Config.RuntimeRoot on
 // demand, and the file whose presence indicates it is already installed.
 type pin struct {
-	spec string // npm install argument, e.g. "pkg@^1.2.3"
-	dist string // path relative to RuntimeRoot that must exist once installed
+	packageName string
+	spec        string // npm install argument, e.g. "pkg@^1.2.3"
+	dist        string // path relative to RuntimeRoot that must exist once installed
 }
 
 // agentPins maps an agent id (config.Agent key / SpawnSpec.agent) to the ACP
 // server package Tandem installs for it. Agents absent from this map are
 // unmanaged/custom launches; EnsureAgent is a no-op for them.
 var agentPins = map[string]pin{
-	"claude": {spec: "@agentclientprotocol/claude-agent-acp@^0.59.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "claude-agent-acp", "dist", "index.js")},
-	"codex":  {spec: "@agentclientprotocol/codex-acp@^1.8.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "codex-acp", "dist", "index.js")},
-	"pi":     {spec: "pi-acp@^0.0.31", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
+	"claude": {packageName: "@agentclientprotocol/claude-agent-acp", spec: "@agentclientprotocol/claude-agent-acp@^0.70.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "claude-agent-acp", "dist", "index.js")},
+	"codex":  {packageName: "@agentclientprotocol/codex-acp", spec: "@agentclientprotocol/codex-acp@^1.8.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "codex-acp", "dist", "index.js")},
+	"pi":     {packageName: "pi-acp", spec: "pi-acp@^0.0.31", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
 }
 
 // playwrightPin is the Playwright MCP server Tandem installs alongside an
@@ -43,6 +48,353 @@ var historyPin = pin{spec: "tsx@4.23.1", dist: filepath.Join("node_modules", "ts
 // installMu serializes all installs into the shared RuntimeRoot node_modules;
 // concurrent `npm install`s into the same node_modules can corrupt it.
 var installMu sync.Mutex
+
+const lockFileName = "agents.lock.json"
+
+type LockedAgent struct {
+	Package         string `json:"package"`
+	Constraint      string `json:"constraint"`
+	Version         string `json:"version"`
+	Integrity       string `json:"integrity,omitempty"`
+	Path            string `json:"path"`
+	PreviousVersion string `json:"previousVersion,omitempty"`
+	PreviousPath    string `json:"previousPath,omitempty"`
+}
+type Lockfile struct {
+	Version int                    `json:"version"`
+	Agents  map[string]LockedAgent `json:"agents"`
+}
+
+func ManagedAgents() map[string]LockedAgent {
+	out := make(map[string]LockedAgent, len(agentPins))
+	for id, p := range agentPins {
+		out[id] = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@")}
+	}
+	return out
+}
+
+func ReadLock(root string) (Lockfile, error) {
+	l := Lockfile{Version: 1, Agents: map[string]LockedAgent{}}
+	b, err := os.ReadFile(filepath.Join(root, lockFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return l, nil
+	}
+	if err != nil {
+		return l, err
+	}
+	if err := json.Unmarshal(b, &l); err != nil {
+		return l, fmt.Errorf("read agent lockfile: %w", err)
+	}
+	if l.Agents == nil {
+		l.Agents = map[string]LockedAgent{}
+	}
+	return l, nil
+}
+
+func writeLock(root string, l Lockfile) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(l, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	tmp, err := os.CreateTemp(root, ".agents-lock-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(b); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, filepath.Join(root, lockFileName))
+}
+
+// EnsureManaged installs (once) and pins a managed adapter for a newly-created
+// session. Existing sessions already carrying a Distribution never call this.
+func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.Writer) (*agentadapter.Distribution, error) {
+	p, ok := agentPins[agent]
+	if !ok {
+		return nil, nil
+	}
+	installMu.Lock()
+	defer installMu.Unlock()
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	locked, ok := l.Agents[agent]
+	if !ok || !distExists(locked.Path, p.dist) {
+		if cfg.Node.Managed {
+			if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
+				return nil, err
+			}
+		}
+		npm, err := resolveNpm(cfg)
+		if err != nil {
+			return nil, err
+		}
+		// Ask npm for the concrete version selected by Tandem's compatibility range.
+		version, err := npmView(ctx, cfg, npm, p.spec, "version")
+		if err != nil {
+			return nil, err
+		}
+		integrity, _ := npmView(ctx, cfg, npm, p.packageName+"@"+version, "dist.integrity")
+		root := filepath.Join(cfg.RuntimeRoot, "agents", agent, version)
+		if !distExists(root, p.dist) {
+			if err := ensureRuntimeRoot(root); err != nil {
+				return nil, err
+			}
+			if err := installAt(ctx, cfg, npm, root, p.packageName+"@"+version, log); err != nil {
+				return nil, err
+			}
+		}
+		if !distExists(root, p.dist) {
+			return nil, fmt.Errorf("provision agent %s: npm completed without required ACP module", agent)
+		}
+		locked = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: version, Integrity: integrity, Path: root}
+		l.Agents[agent] = locked
+		if err := writeLock(cfg.RuntimeRoot, l); err != nil {
+			return nil, err
+		}
+	}
+	return &agentadapter.Distribution{Source: "npm", Package: locked.Package, Version: locked.Version, Integrity: locked.Integrity, Path: locked.Path}, nil
+}
+
+func npmView(ctx context.Context, cfg config.Config, npm, spec, field string) (string, error) {
+	cmd := exec.CommandContext(ctx, npm, "view", spec, field, "--json")
+	cmd.Env = buildEnv(cfg)
+	b, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", spec, err)
+	}
+	var value string
+	if json.Unmarshal(b, &value) != nil {
+		var values []string
+		if json.Unmarshal(b, &values) == nil && len(values) > 0 {
+			value = values[len(values)-1]
+		} else {
+			value = strings.Trim(strings.TrimSpace(string(b)), "\"")
+		}
+	}
+	if value == "" {
+		return "", fmt.Errorf("inspect %s: npm returned no %s", spec, field)
+	}
+	return value, nil
+}
+
+func installAt(ctx context.Context, cfg config.Config, npm, root, spec string, log io.Writer) error {
+	fmt.Fprintf(log, "tandem: installing managed ACP distribution %s in %s\n", spec, root)
+	cmd := exec.CommandContext(ctx, npm, "install", spec, "--omit=dev", "--no-audit", "--no-fund", "--save-exact")
+	cmd.Dir = root
+	cmd.Stdout = log
+	cmd.Stderr = log
+	cmd.Env = buildEnv(cfg)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("provision %s with npm install: %w", spec, err)
+	}
+	return nil
+}
+
+func EntryPoint(agent string, d *agentadapter.Distribution) (string, bool) {
+	p, ok := agentPins[agent]
+	if !ok || d == nil {
+		return "", false
+	}
+	return filepath.Join(d.Path, p.dist), true
+}
+
+type UpdateInfo struct{ Agent, Package, Constraint, CurrentVersion, LatestVersion string }
+
+// CheckUpdates asks npm for the newest version allowed by Tandem's declared
+// compatibility range. It never mutates the runtime.
+func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) {
+	if os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
+		return nil, nil
+	}
+	installMu.Lock()
+	defer installMu.Unlock()
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	npm, err := resolveNpm(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var out []UpdateInfo
+	for agent, p := range agentPins {
+		locked, ok := l.Agents[agent]
+		if !ok || locked.Version == "" {
+			if version, found := installedVersion(cfg.RuntimeRoot, p); found {
+				locked = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: version, Path: cfg.RuntimeRoot}
+			} else {
+				continue
+			}
+		}
+		latest, err := npmView(ctx, cfg, npm, p.spec, "version")
+		if err != nil {
+			return nil, fmt.Errorf("check %s update: %w", agent, err)
+		}
+		if semverNewer(latest, locked.Version) {
+			out = append(out, UpdateInfo{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: locked.Version, LatestVersion: latest})
+		}
+	}
+	return out, nil
+}
+
+func semverNewer(candidate, current string) bool {
+	parse := func(v string) ([3]int, string, bool) {
+		var n [3]int
+		v = strings.TrimPrefix(v, "v")
+		parts := strings.SplitN(v, "-", 2)
+		core := strings.Split(parts[0], ".")
+		if len(core) != 3 {
+			return n, "", false
+		}
+		for i := range core {
+			value, err := strconv.Atoi(core[i])
+			if err != nil {
+				return n, "", false
+			}
+			n[i] = value
+		}
+		pre := ""
+		if len(parts) == 2 {
+			pre = parts[1]
+		}
+		return n, pre, true
+	}
+	a, ap, aok := parse(candidate)
+	b, bp, bok := parse(current)
+	if !aok || !bok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return ap == "" && bp != ""
+}
+
+// InstallUpdate installs a selected compatible version beside all existing
+// versions, then atomically changes the preferred resolution for new sessions.
+func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string, log io.Writer) (LockedAgent, error) {
+	installMu.Lock()
+	defer installMu.Unlock()
+	p, ok := agentPins[agent]
+	if !ok {
+		return LockedAgent{}, fmt.Errorf("agent %s is not managed", agent)
+	}
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return LockedAgent{}, err
+	}
+	current, ok := l.Agents[agent]
+	if !ok {
+		if installed, found := installedVersion(cfg.RuntimeRoot, p); found {
+			current = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: installed, Path: cfg.RuntimeRoot}
+		} else {
+			return LockedAgent{}, fmt.Errorf("agent %s is not installed", agent)
+		}
+	}
+	npm, err := resolveNpm(cfg)
+	if err != nil {
+		return LockedAgent{}, err
+	}
+	allowed, err := npmView(ctx, cfg, npm, p.spec, "version")
+	if err != nil {
+		return LockedAgent{}, err
+	}
+	if version != allowed {
+		return LockedAgent{}, fmt.Errorf("version %s is outside Tandem's compatible resolution %s", version, allowed)
+	}
+	// Adopt a legacy shared-node_modules install into an immutable directory
+	// before replacing it, so rollback and old session restoration cannot be
+	// affected by a future mutation of the shared runtime.
+	if current.Path == cfg.RuntimeRoot {
+		oldRoot := filepath.Join(cfg.RuntimeRoot, "agents", agent, current.Version)
+		if !distExists(oldRoot, p.dist) {
+			if err := ensureRuntimeRoot(oldRoot); err != nil {
+				return LockedAgent{}, err
+			}
+			if err := installAt(ctx, cfg, npm, oldRoot, p.packageName+"@"+current.Version, log); err != nil {
+				return LockedAgent{}, err
+			}
+		}
+		current.Path = oldRoot
+	}
+	root := filepath.Join(cfg.RuntimeRoot, "agents", agent, version)
+	if !distExists(root, p.dist) {
+		if err := ensureRuntimeRoot(root); err != nil {
+			return LockedAgent{}, err
+		}
+		if err := installAt(ctx, cfg, npm, root, p.packageName+"@"+version, log); err != nil {
+			return LockedAgent{}, err
+		}
+	}
+	if !distExists(root, p.dist) {
+		return LockedAgent{}, fmt.Errorf("update agent %s: required entry point is missing", agent)
+	}
+	integrity, _ := npmView(ctx, cfg, npm, p.packageName+"@"+version, "dist.integrity")
+	next := LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: version, Integrity: integrity, Path: root, PreviousVersion: current.Version, PreviousPath: current.Path}
+	l.Agents[agent] = next
+	if err := writeLock(cfg.RuntimeRoot, l); err != nil {
+		return LockedAgent{}, err
+	}
+	return next, nil
+}
+
+func installedVersion(root string, p pin) (string, bool) {
+	packageDir := filepath.Dir(filepath.Dir(filepath.Join(root, p.dist)))
+	// Scoped packages have one additional directory between node_modules and package.
+	if strings.HasPrefix(p.packageName, "@") {
+		packageDir = filepath.Dir(filepath.Dir(filepath.Join(root, p.dist)))
+	}
+	b, err := os.ReadFile(filepath.Join(packageDir, "package.json"))
+	if err != nil {
+		return "", false
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(b, &manifest) != nil || manifest.Version == "" {
+		return "", false
+	}
+	return manifest.Version, true
+}
+
+func Rollback(ctx context.Context, cfg config.Config, agent string) (LockedAgent, error) {
+	installMu.Lock()
+	defer installMu.Unlock()
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return LockedAgent{}, err
+	}
+	current, ok := l.Agents[agent]
+	if !ok || current.PreviousVersion == "" {
+		return LockedAgent{}, fmt.Errorf("agent %s has no rollback version", agent)
+	}
+	p := agentPins[agent]
+	if !distExists(current.PreviousPath, p.dist) {
+		return LockedAgent{}, fmt.Errorf("rollback distribution %s is missing", current.PreviousVersion)
+	}
+	previous := LockedAgent{Package: current.Package, Constraint: current.Constraint, Version: current.PreviousVersion, Path: current.PreviousPath, PreviousVersion: current.Version, PreviousPath: current.Path}
+	l.Agents[agent] = previous
+	if err := writeLock(cfg.RuntimeRoot, l); err != nil {
+		return LockedAgent{}, err
+	}
+	return previous, nil
+}
 
 // EnsureAgent installs the ACP server package (and, if enabled, the
 // Playwright MCP server) that sessionID needs before it can be spawned. It is

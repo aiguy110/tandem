@@ -46,8 +46,12 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	if launch.ACP == nil {
 		return nil, errors.New("ACP launch is missing")
 	}
-	if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
-		return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
+	if launch.Distribution == nil {
+		if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
+			return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
+		}
+	} else if entry, ok := runtimeinstall.EntryPoint(req.Spec.Agent, launch.Distribution); !ok || launch.ACP == nil || len(launch.ACP.Args) == 0 || launch.ACP.Args[0] != entry {
+		return nil, fmt.Errorf("managed agent %s has an invalid pinned distribution", req.Spec.Agent)
 	}
 	fs, err := workspacefs.Open(req.CWD)
 	if err != nil {

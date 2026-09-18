@@ -135,9 +135,10 @@ The daemon serves the built UI (`ui/dist`) via `TANDEM_UI_DIR`; there is no sepa
 - **Stage 3 — ACP Registry discovery:** fetch/cache registry manifests, expose available
   agents and versions in settings, and resolve supported distribution types without
   installing during ordinary daemon startup.
-- **Stage 4 — managed installs:** install into versioned `$TANDEM_HOME/agents/` locations,
-  record exact resolutions in a lockfile and persisted sessions, detect updates explicitly,
-  retain versions needed by resumable sessions, and support rollback.
+- **Stage 4 — managed installs (npm built-ins complete):** built-in ACP bridges install into
+  versioned runtime locations, record exact resolutions in a lockfile and persisted sessions,
+  detect compatible updates, retain old versions, and support rollback. Extend this lifecycle
+  to future ACP Registry distribution types.
 - **Stage 5 — custom Git manifests:** accept pinned tags or commit SHAs only, require an
   explicit registry-compatible build/launch manifest, and never guess or execute an
   arbitrary repository's installation workflow.

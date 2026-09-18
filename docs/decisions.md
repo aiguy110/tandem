@@ -218,9 +218,13 @@ environment-variable overrides. Launch commands use argv arrays, not shell strin
 ACP-session resume are separate templates because some agents cannot resume an ACP session
 in their native CLI.
 
-**Deferred:** Registry discovery, installation/update management, and custom Git sources.
-Those features must preserve resolved versions for durable-session restoration rather than
-silently changing the executable beneath an existing session.
+**Managed distributions:** Built-in npm ACP bridges install side-by-side under the Tandem
+runtime root. A lockfile selects the default for new sessions, while every session persists
+its exact distribution in `ResolvedLaunch`. Update notifications can therefore install and
+roll back defaults without silently changing the executable beneath a durable session.
+
+**Deferred:** ACP Registry manifest discovery and custom Git sources. Custom sources must
+still be pinned and provide registry-compatible build and launch metadata.
 
 ## D17 — Go ACP client: generated schema types, internal transport
 

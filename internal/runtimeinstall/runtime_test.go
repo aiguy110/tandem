@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tandem "github.com/aiguy110/tandem"
+	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 )
 
@@ -81,5 +82,35 @@ func TestEnsureAgentFastPathSkipsInstallWhenAlreadyPresent(t *testing.T) {
 	}
 	if log.Len() != 0 {
 		t.Fatalf("expected no log output on the fast path, got %q", log.String())
+	}
+}
+
+func TestLockfileRoundTripAndEntryPoint(t *testing.T) {
+	root := t.TempDir()
+	want := Lockfile{Version: 1, Agents: map[string]LockedAgent{"codex": {Package: "@agentclientprotocol/codex-acp", Version: "1.9.0", Path: filepath.Join(root, "agents", "codex", "1.9.0")}}}
+	if err := writeLock(root, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agents["codex"].Version != "1.9.0" {
+		t.Fatalf("lock=%#v", got)
+	}
+	entry, ok := EntryPoint("codex", &agentadapter.Distribution{Path: got.Agents["codex"].Path})
+	if !ok || entry != filepath.Join(got.Agents["codex"].Path, agentPins["codex"].dist) {
+		t.Fatalf("entry=%q ok=%v", entry, ok)
+	}
+}
+
+func TestSemverNewer(t *testing.T) {
+	for _, tc := range []struct {
+		candidate, current string
+		want               bool
+	}{{"1.12.0", "1.8.0", true}, {"1.8.0", "1.12.0", false}, {"1.8.0", "1.8.0", false}, {"1.8.0", "1.8.0-beta.1", true}, {"1.8.0-beta.2", "1.8.0", false}} {
+		if got := semverNewer(tc.candidate, tc.current); got != tc.want {
+			t.Errorf("semverNewer(%q,%q)=%v want %v", tc.candidate, tc.current, got, tc.want)
+		}
 	}
 }

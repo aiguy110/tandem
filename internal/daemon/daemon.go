@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/agentupdates"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/automation"
 	"github.com/aiguy110/tandem/internal/browser"
@@ -315,6 +316,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		Home:    cfg.Home, Center: notificationCenter, Agents: agents, Log: stdout,
 		Restart: func() { deferred.Request() },
 	})
+	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout})
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/federation/") {
 			federationService.ServeHTTP(w, r)
@@ -375,11 +377,15 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		if sessionID, handled, actionErr := federationService.HandleNotificationAction(actionCtx, id, action); handled {
 			return sessionID, actionErr
 		}
+		if strings.HasPrefix(id, agentupdates.Prefix) {
+			return agentUpdateService.HandleAction(actionCtx, id, action)
+		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
 	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	defer handler.Close()
 	updateService.Start(ctx)
+	agentUpdateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
