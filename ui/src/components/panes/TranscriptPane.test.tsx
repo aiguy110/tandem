@@ -692,6 +692,56 @@ describe('TranscriptPane annotations', () => {
       'First line\nSecond line',
     );
   });
+
+  it('keeps and restores an open comment draft across outside clicks, refreshes, and chat switches', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    const second = agent();
+    second.id = 'session-2';
+    second.name = 'Second chat';
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent(), 'session-2': second },
+      order: ['session-1', 'session-2'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [], 'session-2': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    const text = view.container.querySelector('.ev.msg p')?.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 18);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({ top: 100, left: 20, width: 140, height: 20, right: 160, bottom: 120, x: 20, y: 100, toJSON: () => ({}) }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    fireEvent.click(await waitFor(() => view.getByRole('button', { name: /comment/i })));
+    fireEvent.change(view.getByPlaceholderText('Add a comment…'), { target: { value: 'Keep this draft.' } });
+
+    // Outside interaction is intentionally inert while a comment is open.
+    fireEvent.pointerDown(document.body);
+    expect((view.getByPlaceholderText('Add a comment…') as HTMLTextAreaElement).value).toBe('Keep this draft.');
+    const saved = JSON.parse(localStorage.getItem('tandem.annotationCommentDrafts') ?? '{}');
+    expect(saved['session-1']).toMatchObject({
+      text: 'Keep this draft.',
+      anchor: { seq: 1, role: 'assistant', quote: 'Select these words', range: { start: 0, end: 18 } },
+    });
+    expect(saved['session-1'].position).toEqual({ top: 8, left: 332 });
+
+    act(() => useStore.setState({ focusedId: 'session-2' }));
+    await waitFor(() => expect(view.queryByPlaceholderText('Add a comment…')).toBeNull());
+    act(() => useStore.setState({ focusedId: 'session-1' }));
+    await waitFor(() => expect((view.getByPlaceholderText('Add a comment…') as HTMLTextAreaElement).value).toBe('Keep this draft.'));
+
+    view.unmount();
+    const restored = render(<TranscriptPane />);
+    await waitFor(() => expect((restored.getByPlaceholderText('Add a comment…') as HTMLTextAreaElement).value).toBe('Keep this draft.'));
+    const popover = restored.container.querySelector<HTMLElement>('.annotation-popover')!;
+    expect(popover.style.top).toBe(`${saved['session-1'].position.top}px`);
+    expect(popover.style.left).toBe(`${saved['session-1'].position.left}px`);
+  });
 });
 
 describe('TranscriptPane steering', () => {
