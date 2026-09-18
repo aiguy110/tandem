@@ -34,6 +34,8 @@ pnpm-debug.log*
 *.pid
 *.sock
 .tandem/
+/runtime/agents/
+/runtime/agents.lock.json
 
 # Playwright MCP scratch output
 .playwright-mcp/
