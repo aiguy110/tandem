@@ -273,13 +273,33 @@ agent's `SpawnSpec` + ACP `sessionId` (and its worktree/branch). On daemon resta
   `loadSession` capability;
 - otherwise start a fresh session and re-render history from the persisted event log.
 
+## Managed ACP adapter updates
+
+Tandem-managed Claude, Codex, and Pi ACP bridge packages are installed into
+immutable version directories under `$TANDEM_HOME/runtime/agents/`. The daemon
+periodically resolves the newest package version allowed by the compatibility
+range shipped with Tandem and surfaces an `Update available` notification in
+the same daemon-owned notification rail as Tandem releases.
+
+Installing an update changes the preferred version for new sessions only.
+Every new session persists its exact npm package, version, integrity value,
+and install path in `ResolvedLaunch`; existing and restored sessions therefore
+continue using the version with which they were created. Previous versions are
+retained for durable sessions and one-click rollback. Custom agent commands
+remain operator-managed and are not queried or changed.
+
+The preferred resolutions live in
+`$TANDEM_HOME/runtime/agents.lock.json`. Install and lockfile replacement are
+serialized and atomic, so a failed download or install leaves the previous
+resolution active.
+
 ## Deferred
 
 - **Sandboxing** (containers / per-agent isolation beyond the filesystem) — future; for now
   agents share the host with host-level permissions.
-- **Managed agent distribution** — ACP Registry discovery, versioned installs and rollback,
-  and custom pinned Git manifests are separate lifecycle work; the current catalog launches
-  commands already installed on the host.
+- **ACP Registry manifests and custom Git sources** — npm-backed built-in ACP
+  bridges are managed, but remote registry manifests and custom Git
+  distributions still require pinned, registry-compatible launch metadata.
 
 See [`decisions.md`](decisions.md) D8–D10 for the rationale.
 

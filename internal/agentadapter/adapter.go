@@ -85,9 +85,21 @@ type TerminalLaunch struct {
 	Env        map[string]string `json:"env,omitempty"`
 }
 type ResolvedLaunch struct {
-	Agent    string          `json:"agent"`
-	ACP      *Launch         `json:"acp,omitempty"`
-	Terminal *TerminalLaunch `json:"terminal,omitempty"`
+	Agent        string          `json:"agent"`
+	ACP          *Launch         `json:"acp,omitempty"`
+	Terminal     *TerminalLaunch `json:"terminal,omitempty"`
+	Distribution *Distribution   `json:"distribution,omitempty"`
+}
+
+// Distribution pins a daemon-managed ACP adapter to an immutable install.
+// Persisting it with the session prevents a later update from changing the
+// executable used when that session is restored.
+type Distribution struct {
+	Source    string `json:"source"`
+	Package   string `json:"package"`
+	Version   string `json:"version"`
+	Integrity string `json:"integrity,omitempty"`
+	Path      string `json:"path"`
 }
 type Spec struct {
 	// HostID selects a registered federation host at the browser boundary. It

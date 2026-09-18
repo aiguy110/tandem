@@ -21,6 +21,7 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/uploads"
@@ -715,6 +716,18 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	spec, err = r.resolve(spec)
 	if err != nil {
 		return nil, err
+	}
+	if spec.Adapter == "acp" && spec.ResolvedLaunch.Distribution == nil {
+		distribution, provisionErr := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
+		if provisionErr != nil {
+			return nil, fmt.Errorf("provision agent %s: %w", spec.Agent, provisionErr)
+		}
+		if distribution != nil {
+			spec.ResolvedLaunch.Distribution = distribution
+			if entry, ok := runtimeinstall.EntryPoint(spec.Agent, distribution); ok && spec.ResolvedLaunch.ACP != nil && len(spec.ResolvedLaunch.ACP.Args) > 0 {
+				spec.ResolvedLaunch.ACP.Args[0] = entry
+			}
+		}
 	}
 	// Rendered before anything is provisioned so a bad source id fails the
 	// spawn outright rather than leaving a worktree behind. It is deliberately
