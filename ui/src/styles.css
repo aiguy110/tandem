@@ -959,6 +959,19 @@ body.dock-resizing .app { transition: none; }
 .modal .foot { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-faint); flex-wrap: wrap; }
 .modal .foot .kbd { margin-right: 4px; }
 .automation-modal { width: min(760px, 92vw); }
+.adapter-modal { width: min(820px, 94vw); }
+.adapter-rows { max-height: 62vh !important; }
+.adapter-row { display: flex; align-items: center; gap: 18px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.adapter-row:last-child { border-bottom: 0; }
+.adapter-main { flex: 1; min-width: 0; }
+.adapter-heading { display: flex; align-items: center; gap: 9px; }
+.adapter-heading .primary { font-weight: 600; text-transform: capitalize; }
+.adapter-current { padding: 1px 6px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-installed { margin-top: 6px; color: var(--text-faint); font-size: var(--fs-xs); }
+.adapter-controls { display: flex; align-items: center; gap: 8px; }
+.adapter-controls select, .adapter-controls button { padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
+.adapter-controls .adapter-latest { border-color: var(--agent); background: var(--agent-soft); color: var(--agent); }
+.adapter-controls button:disabled, .adapter-controls select:disabled { cursor: default; opacity: .5; }
 .automation-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .automation-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .automation-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }

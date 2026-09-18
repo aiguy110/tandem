@@ -462,6 +462,8 @@ export type ClientMsg =
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'list_system_notifications'; corrId?: string }
   | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
+  | { t: 'list_agent_distributions'; corrId?: string }
+  | { t: 'install_agent_distribution'; agent: string; version: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
   | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; corrId?: string }
@@ -526,6 +528,7 @@ export type ServerMsg =
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
+  | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; hostId?: string }
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string; hostId?: string }
@@ -539,3 +542,12 @@ export type ServerMsg =
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; sessionId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; sessionId: string; active: boolean; controlOwner: 'agent' | 'user' };
+
+export interface ManagedAdapter {
+  agent: string;
+  package: string;
+  constraint: string;
+  currentVersion: string;
+  installedVersions: string[];
+  availableVersions: string[];
+}

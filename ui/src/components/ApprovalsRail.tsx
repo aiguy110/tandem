@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useStore, allApprovals, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
 import type { NotifSeverity } from '../store';
 import { PermissionRequestDetails } from './PermissionRequest';
@@ -23,6 +24,7 @@ const SEVERITY_LABEL: Record<NotifSeverity, string> = {
 // Right rail — the conductor's inbox for completed turns, approvals, and browser
 // requests across every agent. Clicking a completed-turn card marks it read.
 export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
+	const [pendingSystemAction, setPendingSystemAction] = useState<string | null>(null);
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
   const notifications = useStore(allTurnNotifications);
@@ -86,9 +88,14 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                 <button
                   key={action.id}
                   className={action.primary ? 'btn-approve' : 'btn-deny'}
-                  onClick={() => void actOnSystemNotification(notification.id, action.id)}
+                  disabled={pendingSystemAction === `${notification.id}:${action.id}`}
+                  onClick={() => {
+                    const key = `${notification.id}:${action.id}`;
+                    setPendingSystemAction(key);
+                    void actOnSystemNotification(notification.id, action.id).finally(() => setPendingSystemAction(null));
+                  }}
                 >
-                  {action.label}
+                  {pendingSystemAction === `${notification.id}:${action.id}` ? 'Working…' : action.label}
                 </button>
               ))}
             </div>

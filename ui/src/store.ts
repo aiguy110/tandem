@@ -25,6 +25,7 @@ import type {
   ClosePreview,
   ClientMsg,
   GitRefInfo,
+  ManagedAdapter,
   FederationHost,
   Profile,
   RepoInfo,
@@ -195,7 +196,7 @@ export interface SessionView {
   audioPosition: AudioPosition | null;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters';
 
 export interface AckResult {
   sessionId?: string;
@@ -304,6 +305,8 @@ interface StoreState {
   restartShell: (sessionId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
+  listAgentDistributions: () => Promise<ManagedAdapter[]>;
+  installAgentDistribution: (agent: string, version: string) => Promise<void>;
   getSpawnOptions: (agent: string, cwd: string, harness?: string, hostId?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string, hostId?: string) => Promise<GitRefInfo[]>;
   listWorkspaceEntries: (sessionId: string, path: string) => Promise<WorkspaceEntry[]>;
@@ -357,6 +360,7 @@ const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) =
 const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
 const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
 const pendingAutomation = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+const pendingAgentDistributions = new Map<string, { resolve: (adapters: ManagedAdapter[]) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -656,6 +660,15 @@ export const useStore = create<StoreState>((set, get) => {
       case 'system_notifications':
         set({ systemNotifications: msg.notifications });
         return;
+      case 'agent_distributions': {
+        const pending = msg.corrId ? pendingAgentDistributions.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingAgentDistributions.delete(msg.corrId);
+          if (msg.error) pending.reject(new Error(msg.error));
+          else pending.resolve(msg.adapters ?? []);
+        }
+        return;
+      }
       case 'profiles': {
         const pending = msg.corrId ? pendingProfiles.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -1310,6 +1323,12 @@ export const useStore = create<StoreState>((set, get) => {
         });
         client.send({ t: 'system_notification_action', notificationId, action, corrId });
       }),
+    listAgentDistributions: () => new Promise<ManagedAdapter[]>((resolve,reject) => {
+      const corrId=nextCorr(); pendingAgentDistributions.set(corrId,{resolve,reject}); client.send({t:'list_agent_distributions',corrId});
+    }),
+    installAgentDistribution: (agent,version) => new Promise<void>((resolve,reject) => {
+      const corrId=nextCorr();pendingAcks.set(corrId,(result)=>result.error?reject(new Error(result.error)):resolve());client.send({t:'install_agent_distribution',agent,version,corrId});
+    }),
     getSpawnOptions: (agent, cwd, harness, hostId) =>
       new Promise<SpawnOptions>((resolve, reject) => {
         const corrId = nextCorr();

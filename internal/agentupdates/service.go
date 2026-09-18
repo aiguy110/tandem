@@ -35,6 +35,22 @@ type Service struct {
 	dismissed map[string]string
 }
 
+func (s *Service) Catalog(ctx context.Context) ([]runtimeinstall.AdapterStatus, error) {
+	return runtimeinstall.AdapterCatalog(ctx, s.opts.Config)
+}
+func (s *Service) InstallVersion(ctx context.Context, agent, version string) error {
+	_, err := s.opts.Install(ctx, s.opts.Config, agent, version, s.opts.Log)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.available, agent)
+	s.mu.Unlock()
+	s.opts.Center.Remove(Prefix + agent)
+	slog.Info("ACP adapter version selected", "agent", agent, "version", version)
+	return nil
+}
+
 func NewService(o Options) *Service {
 	if o.Center == nil {
 		o.Center = notifications.New()
@@ -129,7 +145,7 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		s.mu.Lock()
 		delete(s.available, agent)
 		s.mu.Unlock()
-		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "success", Title: agent + " ACP update complete", Message: fmt.Sprintf("New sessions will use %s. Existing sessions remain pinned to their original version.", locked.Version), Actions: []notifications.Action{{ID: "rollback", Label: "Roll back"}}})
+		s.opts.Center.Remove(id)
 		slog.Info("ACP adapter update installed", "agent", agent, "from_version", u.CurrentVersion, "to_version", locked.Version)
 		return "", nil
 	case "rollback":

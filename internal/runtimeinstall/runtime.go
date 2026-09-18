@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,25 +172,31 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 }
 
 func npmView(ctx context.Context, cfg config.Config, npm, spec, field string) (string, error) {
+	values, err := npmViewValues(ctx, cfg, npm, spec, field)
+	if err != nil {
+		return "", err
+	}
+	return values[len(values)-1], nil
+}
+
+func npmViewValues(ctx context.Context, cfg config.Config, npm, spec, field string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, npm, "view", spec, field, "--json")
 	cmd.Env = buildEnv(cfg)
 	b, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("inspect %s: %w", spec, err)
+		return nil, fmt.Errorf("inspect %s: %w", spec, err)
 	}
+	var values []string
 	var value string
-	if json.Unmarshal(b, &value) != nil {
-		var values []string
-		if json.Unmarshal(b, &values) == nil && len(values) > 0 {
-			value = values[len(values)-1]
-		} else {
-			value = strings.Trim(strings.TrimSpace(string(b)), "\"")
-		}
+	if json.Unmarshal(b, &value) == nil {
+		values = []string{value}
+	} else if json.Unmarshal(b, &values) != nil {
+		values = []string{strings.Trim(strings.TrimSpace(string(b)), "\"")}
 	}
-	if value == "" {
-		return "", fmt.Errorf("inspect %s: npm returned no %s", spec, field)
+	if len(values) == 0 || values[len(values)-1] == "" {
+		return nil, fmt.Errorf("inspect %s: npm returned no %s", spec, field)
 	}
-	return value, nil
+	return values, nil
 }
 
 func installAt(ctx context.Context, cfg config.Config, npm, root, spec string, log io.Writer) error {
@@ -213,6 +221,72 @@ func EntryPoint(agent string, d *agentadapter.Distribution) (string, bool) {
 }
 
 type UpdateInfo struct{ Agent, Package, Constraint, CurrentVersion, LatestVersion string }
+
+type AdapterStatus struct {
+	Agent             string   `json:"agent"`
+	Package           string   `json:"package"`
+	Constraint        string   `json:"constraint"`
+	CurrentVersion    string   `json:"currentVersion"`
+	InstalledVersions []string `json:"installedVersions"`
+	AvailableVersions []string `json:"availableVersions"`
+}
+
+func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, error) {
+	installMu.Lock()
+	defer installMu.Unlock()
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	npm, err := resolveNpm(cfg)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(agentPins))
+	for id := range agentPins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]AdapterStatus, 0, len(ids))
+	for _, agent := range ids {
+		p := agentPins[agent]
+		versions, err := npmViewValues(ctx, cfg, npm, p.spec, "version")
+		if err != nil {
+			return nil, fmt.Errorf("list %s versions: %w", agent, err)
+		}
+		sortVersions(versions)
+		locked := l.Agents[agent]
+		current := locked.Version
+		if current == "" {
+			current, _ = installedVersion(cfg.RuntimeRoot, p)
+		}
+		installed := installedVersions(cfg.RuntimeRoot, agent, p)
+		if current != "" && !slices.Contains(installed, current) {
+			installed = append(installed, current)
+			sortVersions(installed)
+		}
+		out = append(out, AdapterStatus{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: current, InstalledVersions: installed, AvailableVersions: versions})
+	}
+	return out, nil
+}
+
+func installedVersions(root, agent string, p pin) []string {
+	entries, err := os.ReadDir(filepath.Join(root, "agents", agent))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		if entry.IsDir() && distExists(filepath.Join(root, "agents", agent, entry.Name()), p.dist) {
+			out = append(out, entry.Name())
+		}
+	}
+	sortVersions(out)
+	return out
+}
+func sortVersions(values []string) {
+	sort.Slice(values, func(i, j int) bool { return semverNewer(values[i], values[j]) })
+}
 
 // CheckUpdates asks npm for the newest version allowed by Tandem's declared
 // compatibility range. It never mutates the runtime.
@@ -311,12 +385,12 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 	if err != nil {
 		return LockedAgent{}, err
 	}
-	allowed, err := npmView(ctx, cfg, npm, p.spec, "version")
+	allowed, err := npmViewValues(ctx, cfg, npm, p.spec, "version")
 	if err != nil {
 		return LockedAgent{}, err
 	}
-	if version != allowed {
-		return LockedAgent{}, fmt.Errorf("version %s is outside Tandem's compatible resolution %s", version, allowed)
+	if !slices.Contains(allowed, version) {
+		return LockedAgent{}, fmt.Errorf("version %s is outside Tandem's compatible range %s", version, strings.TrimPrefix(p.spec, p.packageName+"@"))
 	}
 	// Adopt a legacy shared-node_modules install into an immutable directory
 	// before replacing it, so rollback and old session restoration cannot be

@@ -27,6 +27,7 @@ import (
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/voice"
@@ -68,16 +69,18 @@ type Backend interface {
 }
 
 type Options struct {
-	Token              string
-	Registry           Backend
-	Fallback           http.Handler
-	WriteQueue         int
-	Browser            *browser.Broker
-	History            HistoryLifecycle
-	Automation         AutomationStore
-	Notifications      *notifications.Center
-	NotificationAction func(context.Context, string, string) (string, error)
-	Federation         Federation
+	Token                    string
+	Registry                 Backend
+	Fallback                 http.Handler
+	WriteQueue               int
+	Browser                  *browser.Broker
+	History                  HistoryLifecycle
+	Automation               AutomationStore
+	Notifications            *notifications.Center
+	NotificationAction       func(context.Context, string, string) (string, error)
+	AgentDistributions       func(context.Context) ([]runtimeinstall.AdapterStatus, error)
+	InstallAgentDistribution func(context.Context, string, string) error
+	Federation               Federation
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
@@ -346,6 +349,7 @@ type clientMessage struct {
 	HostID            string                     `json:"hostId"`
 	AssetID           string                     `json:"assetId"`
 	MIMEType          string                     `json:"mimeType"`
+	Version           string                     `json:"version"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -1092,6 +1096,31 @@ func (c *connection) handle(m clientMessage) {
 		// notifications; the reply below carries whatever is already known.
 		go c.server.syncHostNotifications()
 		c.sendSystemNotifications(m.CorrID)
+	case "list_agent_distributions":
+		if c.server.opts.AgentDistributions == nil {
+			c.send(withCorr(map[string]any{"t": "agent_distributions", "error": "managed ACP adapters are unavailable"}, m.CorrID))
+			return
+		}
+		items, err := c.server.opts.AgentDistributions(context.Background())
+		if err != nil {
+			c.send(withCorr(map[string]any{"t": "agent_distributions", "error": err.Error()}, m.CorrID))
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "agent_distributions", "adapters": items}, m.CorrID))
+	case "install_agent_distribution":
+		if c.server.opts.InstallAgentDistribution == nil {
+			c.commandError(m, errors.New("managed ACP adapters are unavailable"))
+			return
+		}
+		if m.Agent == "" || m.Version == "" {
+			c.commandError(m, errors.New("agent and version are required"))
+			return
+		}
+		if err := c.server.opts.InstallAgentDistribution(context.Background(), m.Agent, m.Version); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, "")
 	case "system_notification_action":
 		// A host-namespaced ID belongs to the daemon that raised it, whose
 		// own update service owns the install/restart sequence.
