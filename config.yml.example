@@ -102,13 +102,34 @@ harnesses: {}
 #     headers:
 #       Authorization: "Bearer example"
 
+# Tandem installs each managed agent's ACP server from npm. When one of them is
+# missing something Tandem needs and upstream has not taken the change, an
+# `acpForks:` entry makes Tandem install a pinned fork commit instead, and keeps
+# watching the published package so the fork can be rebased or retired. This is
+# written by `tandem acp fork AGENT ...` rather than by hand; `tandem acp status`
+# reports it and `tandem acp upstream AGENT` retires a fork once its change has
+# landed upstream. Installs are pinned to `commit`, so pushing the fork branch
+# changes nothing until the record is re-pinned.
+#
+# acpForks:
+#   pi:
+#     repo: https://github.com/you/pi-acp      # fork remote (http/https)
+#     ref: tandem                              # branch carrying the fork's commits
+#     commit: 52f61f3850a883b9b5a3bb3245908bd5  # exact tree installed
+#     upstreamPackage: pi-acp                   # npm package watched for releases
+#     upstreamVersion: 0.0.33                   # release the fork is rebased onto
+#     upstreamRepo: https://github.com/svkozak/pi-acp  # for upstreaming checks
+#     reason: Emits ACP usage_update so Tandem can show pi context usage
+#     upstreamPrs: [114]      # PRs that would make the fork unnecessary
+#     clone: ""               # optional; defaults to <runtimeRoot>/forks/<agent>
+
 # The `tandem setup` wizard writes an
 # operator-owned `settings:` block to $TANDEM_HOME/config.yml, separate from
 # the agent catalog above. It is never present in this shipped example file;
 # it's documented here only so the schema is discoverable. All fields are
 # optional — env vars (TANDEM_PROJECT_ROOTS, TANDEM_BIND, TANDEM_PORT,
-# TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_NODE_CMD, and
-# TANDEM_LANGUAGE_MODEL_*, and TANDEM_VOICE_*)
+# TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_NODE_CMD,
+# TANDEM_ACP_FORK_REBASE_PROFILE, and TANDEM_LANGUAGE_MODEL_*, and TANDEM_VOICE_*)
 # override it, and built-in defaults fill any gaps.
 #
 # settings:
@@ -118,6 +139,9 @@ harnesses: {}
 #   bind: 127.0.0.1        # HTTP + WS listen address
 #   port: 7717              # HTTP + WS listen port
 #   browserDriver: local    # "local" (installed Chrome/Chromium) or "steel"
+#   acpForkRebaseProfile: ""  # agent profile spawned to rebase a tracked ACP
+#                             # fork (see acpForks above); empty leaves the
+#                             # rebase offer informational rather than one-click
 #   steelBaseUrl: http://localhost:3000  # required when browserDriver is "steel"
 #   steelApiKey: ""         # optional; config.yml is written owner-only
 #   node:

@@ -972,6 +972,16 @@ body.dock-resizing .app { transition: none; }
 .adapter-controls select, .adapter-controls button { padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
 .adapter-controls .adapter-latest { border-color: var(--agent); background: var(--agent-soft); color: var(--agent); }
 .adapter-controls button:disabled, .adapter-controls select:disabled { cursor: default; opacity: .5; }
+/* Fork-tracked adapter rows. A fork is a liability Tandem is trying to shed, so
+   the row reads as a distinct state rather than as another version choice. */
+.adapter-row-fork { border-left: 2px solid var(--warn); }
+.adapter-row-fork.is-behind { background: var(--warn-soft); }
+.adapter-fork-badge { padding: 1px 6px; border-radius: 999px; background: var(--agent-soft); color: var(--agent); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-behind { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-pending { padding: 1px 6px; border-radius: 999px; border: 1px dashed var(--border-strong); color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-reason { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-xs); }
+.adapter-controls-fork { align-self: flex-start; }
+.adapter-fork-cmd { padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
 .automation-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .automation-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .automation-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }

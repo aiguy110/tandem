@@ -19,7 +19,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [--master URL|setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|update|version|debug config]"
+const usage = "usage: tandem [--master URL|setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|acp status|acp fork AGENT [flags]|acp upstream AGENT|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -66,6 +66,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
 		return addMCP(args[2:], stdout, stderr)
+	}
+	// ACP server fork tracking. Reached before the single-argument dispatch below
+	// because every acp form takes a subcommand.
+	if len(args) >= 1 && args[0] == "acp" {
+		return runACP(args[1:], stdout, stderr)
 	}
 	if len(args) == 0 {
 		return runDaemon(stdout, stderr, "")

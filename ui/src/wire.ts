@@ -550,4 +550,28 @@ export interface ManagedAdapter {
   currentVersion: string;
   installedVersions: string[];
   availableVersions: string[];
+  /**
+   * Set when this agent's ACP server runs from a tracked fork rather than the
+   * published package. While it is set, `availableVersions` describes what the
+   * agent would return to if the fork were retired, not what is running.
+   */
+  fork?: ForkTracking;
+}
+
+export interface ForkTracking {
+  repo: string;
+  ref: string;
+  commit: string;
+  shortCommit: string;
+  clone: string;
+  upstreamPackage: string;
+  upstreamRepo?: string;
+  /** Published release the fork is currently rebased onto. */
+  upstreamVersion: string;
+  /** Only present when a newer release exists: the fork is behind. */
+  latestUpstreamVersion?: string;
+  reason?: string;
+  upstreamPrs?: number[];
+  /** False when the pinned commit has not been built yet. */
+  installed: boolean;
 }

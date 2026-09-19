@@ -133,10 +133,13 @@ type Config struct {
 	Agents         map[string]Agent        `json:"agents"`
 	Harnesses      map[string]Harness      `json:"harnesses"`
 	DefaultHarness string                  `json:"defaultHarness,omitempty"`
-	Browser        BrowserConfig           `json:"browser"`
-	Node           NodeConfig              `json:"node"`
-	LanguageModel  LanguageModelConfig     `json:"languageModel"`
-	Voice          VoiceConfig             `json:"voice"`
+	// ACPForkRebaseProfile is the agent profile spawned to rebase a tracked ACP
+	// server fork. Empty disables the one-click rebase offer.
+	ACPForkRebaseProfile string              `json:"acpForkRebaseProfile,omitempty"`
+	Browser              BrowserConfig       `json:"browser"`
+	Node                 NodeConfig          `json:"node"`
+	LanguageModel        LanguageModelConfig `json:"languageModel"`
+	Voice                VoiceConfig         `json:"voice"`
 }
 
 // LanguageModelConfig is the daemon-side OpenAI-compatible Chat Completions
@@ -195,16 +198,21 @@ type Settings struct {
 	// operator completed with tandem setup. It is intentionally independent of
 	// the Tandem release version: releases only advance it when configuration
 	// compatibility changes.
-	ConfigVersion int                   `yaml:"configVersion,omitempty"`
-	ProjectRoots  []string              `yaml:"projectRoots,omitempty"`
-	Bind          string                `yaml:"bind,omitempty"`
-	Port          int                   `yaml:"port,omitempty"`
-	BrowserDriver string                `yaml:"browserDriver,omitempty"`
-	SteelBaseURL  string                `yaml:"steelBaseUrl,omitempty"`
-	SteelAPIKey   string                `yaml:"steelApiKey,omitempty"`
-	Node          NodeSettings          `yaml:"node,omitempty"`
-	LanguageModel LanguageModelSettings `yaml:"languageModel,omitempty"`
-	Voice         VoiceSettings         `yaml:"voice,omitempty"`
+	ConfigVersion int      `yaml:"configVersion,omitempty"`
+	ProjectRoots  []string `yaml:"projectRoots,omitempty"`
+	Bind          string   `yaml:"bind,omitempty"`
+	Port          int      `yaml:"port,omitempty"`
+	BrowserDriver string   `yaml:"browserDriver,omitempty"`
+	SteelBaseURL  string   `yaml:"steelBaseUrl,omitempty"`
+	SteelAPIKey   string   `yaml:"steelApiKey,omitempty"`
+	// ACPForkRebaseProfile names the agent profile Tandem spawns to rebase a
+	// tracked ACP server fork onto a new upstream release. Empty leaves the
+	// rebase offer informational rather than one-click; see internal/runtimeinstall
+	// fork tracking and `tandem acp`.
+	ACPForkRebaseProfile string                `yaml:"acpForkRebaseProfile,omitempty"`
+	Node                 NodeSettings          `yaml:"node,omitempty"`
+	LanguageModel        LanguageModelSettings `yaml:"languageModel,omitempty"`
+	Voice                VoiceSettings         `yaml:"voice,omitempty"`
 }
 
 // CurrentConfigVersion is written by the current setup wizard. The initial
@@ -568,10 +576,11 @@ func LoadWithOptions(o Options) (Config, error) {
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
-		Browser:       BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
-		Node:          node,
-		LanguageModel: resolveLanguageModel(env, settings.LanguageModel, settings.Voice),
-		Voice:         resolveVoice(env, settings.Voice),
+		ACPForkRebaseProfile: strings.TrimSpace(value(env, "TANDEM_ACP_FORK_REBASE_PROFILE", settings.ACPForkRebaseProfile)),
+		Browser:              BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", NodeRuntime: nodeRuntime, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
+		Node:                 node,
+		LanguageModel:        resolveLanguageModel(env, settings.LanguageModel, settings.Voice),
+		Voice:                resolveVoice(env, settings.Voice),
 	}, nil
 }
 

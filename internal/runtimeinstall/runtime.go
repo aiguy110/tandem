@@ -38,7 +38,9 @@ type pin struct {
 var agentPins = map[string]pin{
 	"claude": {packageName: "@agentclientprotocol/claude-agent-acp", spec: "@agentclientprotocol/claude-agent-acp@^0.70.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "claude-agent-acp", "dist", "index.js")},
 	"codex":  {packageName: "@agentclientprotocol/codex-acp", spec: "@agentclientprotocol/codex-acp@^1.8.0", dist: filepath.Join("node_modules", "@agentclientprotocol", "codex-acp", "dist", "index.js")},
-	"pi":     {packageName: "pi-acp", spec: "pi-acp@^0.0.31", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
+	// NOTE: tilde, not caret. npm reads ^0.0.x as exactly 0.0.x, so a caret here
+	// would make this range a single version and the update check inert.
+	"pi": {packageName: "pi-acp", spec: "pi-acp@~0.0.33", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
 }
 
 // playwrightPin is the Playwright MCP server Tandem installs alongside an
@@ -61,6 +63,9 @@ type LockedAgent struct {
 	Path            string `json:"path"`
 	PreviousVersion string `json:"previousVersion,omitempty"`
 	PreviousPath    string `json:"previousPath,omitempty"`
+	// Fork is set when this distribution was installed from a tracked fork
+	// rather than from the published package. See fork.go.
+	Fork *LockedFork `json:"fork,omitempty"`
 }
 type Lockfile struct {
 	Version int                    `json:"version"`
@@ -133,7 +138,38 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 	if err != nil {
 		return nil, err
 	}
+	fork, forked, err := ForkFor(cfg, agent)
+	if err != nil {
+		return nil, err
+	}
 	locked, ok := l.Agents[agent]
+	// A fork-tracked agent resolves against the pinned commit, so a re-pinned
+	// record (or a stale upstream install left over from before tracking began)
+	// must provision the fork tree rather than reuse what the lockfile names.
+	if forked && !forkLockCurrent(locked, fork, p.dist) {
+		if cfg.Node.Managed {
+			if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
+				return nil, err
+			}
+		}
+		npm, err := resolveNpm(cfg)
+		if err != nil {
+			return nil, err
+		}
+		next, err := installFork(ctx, cfg, npm, agent, fork, log)
+		if err != nil {
+			return nil, err
+		}
+		next.PreviousVersion, next.PreviousPath = locked.Version, locked.Path
+		l.Agents[agent] = next
+		if err := writeLock(cfg.RuntimeRoot, l); err != nil {
+			return nil, err
+		}
+		return forkDistribution(next), nil
+	}
+	if forked {
+		return forkDistribution(locked), nil
+	}
 	if !ok || !distExists(locked.Path, p.dist) {
 		if cfg.Node.Managed {
 			if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
@@ -220,7 +256,24 @@ func EntryPoint(agent string, d *agentadapter.Distribution) (string, bool) {
 	return filepath.Join(d.Path, p.dist), true
 }
 
-type UpdateInfo struct{ Agent, Package, Constraint, CurrentVersion, LatestVersion string }
+// UpdateKind distinguishes the two things a newer upstream release can mean.
+const (
+	// UpdateKindRelease is a plain published upgrade: install it.
+	UpdateKindRelease = "release"
+	// UpdateKindRebase is a new upstream release for an agent whose ACP server
+	// Tandem carries as a fork. It cannot be installed directly without losing
+	// the fork's change, so it is offered as a rebase for an agent to perform.
+	UpdateKindRebase = "rebase"
+)
+
+type UpdateInfo struct {
+	Agent, Package, Constraint, CurrentVersion, LatestVersion string
+	// Kind is UpdateKindRelease or UpdateKindRebase.
+	Kind string
+	// Fork carries the tracking record when Kind is UpdateKindRebase, so the
+	// notification and the rebase agent have the repo, ref and reason to hand.
+	Fork *config.ACPFork
+}
 
 type AdapterStatus struct {
 	Agent             string   `json:"agent"`
@@ -229,6 +282,10 @@ type AdapterStatus struct {
 	CurrentVersion    string   `json:"currentVersion"`
 	InstalledVersions []string `json:"installedVersions"`
 	AvailableVersions []string `json:"availableVersions"`
+	// Fork is set when this agent's ACP server is tracked as a fork. While it is
+	// set, the published versions above are not what runs: they are what the
+	// agent would return to once the fork is retired.
+	Fork *ForkStatus `json:"fork,omitempty"`
 }
 
 func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, error) {
@@ -239,6 +296,10 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 		return nil, err
 	}
 	npm, err := resolveNpm(cfg)
+	if err != nil {
+		return nil, err
+	}
+	forks, err := config.LoadACPForks(cfg.Home)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +326,26 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 			installed = append(installed, current)
 			sortVersions(installed)
 		}
-		out = append(out, AdapterStatus{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: current, InstalledVersions: installed, AvailableVersions: versions})
+		row := AdapterStatus{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: current, InstalledVersions: installed, AvailableVersions: versions}
+		if fork, tracked := forks[agent]; tracked {
+			status := &ForkStatus{
+				Repo: fork.Repo, Ref: fork.Ref, Commit: fork.Commit, ShortCommit: fork.ShortCommit(),
+				Clone:           config.ForkCloneDir(cfg.RuntimeRoot, agent, fork),
+				UpstreamPackage: fork.UpstreamPackage, UpstreamRepo: fork.UpstreamRepo,
+				UpstreamVersion: fork.UpstreamVersion, Reason: fork.Reason, UpstreamPRs: fork.UpstreamPRs,
+				Installed: forkLockCurrent(locked, fork, p.dist),
+			}
+			// Newest published release, so the UI can say whether the fork is
+			// behind without a second round trip. Only set when it is actually
+			// ahead of the fork's baseline: a fork may sit on a release newer
+			// than anything the compatibility range admits.
+			if len(versions) > 0 && semverNewer(versions[0], fork.UpstreamVersion) {
+				status.LatestUpstreamVersion = versions[0]
+			}
+			row.CurrentVersion = fork.DistributionVersion()
+			row.Fork = status
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }
@@ -277,7 +357,11 @@ func installedVersions(root, agent string, p pin) []string {
 	}
 	var out []string
 	for _, entry := range entries {
-		if entry.IsDir() && distExists(filepath.Join(root, "agents", agent, entry.Name()), p.dist) {
+		// Fork builds live beside published versions but are not points on the
+		// published version line: offering one as a selectable version would
+		// produce a choice InstallUpdate must then refuse. They are reported
+		// through AdapterStatus.Fork instead.
+		if entry.IsDir() && !config.IsForkVersion(entry.Name()) && distExists(filepath.Join(root, "agents", agent, entry.Name()), p.dist) {
 			out = append(out, entry.Name())
 		}
 	}
@@ -304,8 +388,27 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 	if err != nil {
 		return nil, err
 	}
+	forks, err := config.LoadACPForks(cfg.Home)
+	if err != nil {
+		return nil, err
+	}
 	var out []UpdateInfo
 	for agent, p := range agentPins {
+		// A fork-tracked agent is compared against the release its fork sits on,
+		// not against the installed distribution: the installed version is a
+		// fork build and is not a point on the published version line.
+		if fork, tracked := forks[agent]; tracked {
+			latest, err := npmView(ctx, cfg, npm, fork.UpstreamPackage+"@"+strings.TrimPrefix(p.spec, p.packageName+"@"), "version")
+			if err != nil {
+				return nil, fmt.Errorf("check %s upstream release: %w", agent, err)
+			}
+			if semverNewer(latest, fork.UpstreamVersion) {
+				record := fork
+				out = append(out, UpdateInfo{Agent: agent, Package: fork.UpstreamPackage, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"),
+					CurrentVersion: fork.UpstreamVersion, LatestVersion: latest, Kind: UpdateKindRebase, Fork: &record})
+			}
+			continue
+		}
 		locked, ok := l.Agents[agent]
 		if !ok || locked.Version == "" {
 			if version, found := installedVersion(cfg.RuntimeRoot, p); found {
@@ -319,7 +422,7 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 			return nil, fmt.Errorf("check %s update: %w", agent, err)
 		}
 		if semverNewer(latest, locked.Version) {
-			out = append(out, UpdateInfo{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: locked.Version, LatestVersion: latest})
+			out = append(out, UpdateInfo{Agent: agent, Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), CurrentVersion: locked.Version, LatestVersion: latest, Kind: UpdateKindRelease})
 		}
 	}
 	return out, nil
@@ -374,6 +477,19 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 		return LockedAgent{}, err
 	}
 	current, ok := l.Agents[agent]
+	// Installing a published version over a tracked fork would silently drop the
+	// change the fork carries. Retiring a fork is a deliberate act with its own
+	// entry point, so point the caller at it instead of guessing.
+	if current.Fork != nil {
+		forks, forkErr := config.LoadACPForks(cfg.Home)
+		if forkErr != nil {
+			return LockedAgent{}, forkErr
+		}
+		if _, tracked := forks[agent]; tracked {
+			return LockedAgent{}, fmt.Errorf("agent %s tracks the ACP fork %s (%s); rebase it, or run 'tandem acp upstream %s' to return to the published package",
+				agent, current.Fork.Repo, current.Fork.Ref, agent)
+		}
+	}
 	if !ok {
 		if installed, found := installedVersion(cfg.RuntimeRoot, p); found {
 			current = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: installed, Path: cfg.RuntimeRoot}

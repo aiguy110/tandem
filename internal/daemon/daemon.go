@@ -316,7 +316,27 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		Home:    cfg.Home, Center: notificationCenter, Agents: agents, Log: stdout,
 		Restart: func() { deferred.Request() },
 	})
-	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout})
+	// A fork rebase is offered as an agent spawn rather than performed by the
+	// daemon: deciding between rebasing the fork and retiring it because the
+	// change was upstreamed needs judgement about the upstream diff.
+	var spawnRebase func(context.Context, runtimeinstall.UpdateInfo) (string, error)
+	if profile := cfg.ACPForkRebaseProfile; profile != "" {
+		spawnRebase = func(ctx context.Context, u runtimeinstall.UpdateInfo) (string, error) {
+			if u.Fork == nil {
+				return "", fmt.Errorf("agent %s does not track an ACP fork", u.Agent)
+			}
+			clone, err := runtimeinstall.EnsureForkClone(ctx, cfg, u.Agent, *u.Fork, stdout)
+			if err != nil {
+				return "", err
+			}
+			session, err := agents.SpawnProfile(ctx, profile, clone, agentupdates.RebasePrompt(u, clone))
+			if err != nil {
+				return "", err
+			}
+			return session.ID, nil
+		}
+	}
+	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout, SpawnRebase: spawnRebase})
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/federation/") {
 			federationService.ServeHTTP(w, r)
