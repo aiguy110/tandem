@@ -549,5 +549,39 @@ export interface ManagedAdapter {
   constraint: string;
   currentVersion: string;
   installedVersions: string[];
+  /** Every published version, newest first — including ones beyond `constraint`. */
   availableVersions: string[];
+  /** The subset of `availableVersions` inside `constraint`, i.e. tested. */
+  compatibleVersions: string[];
+  /**
+   * Newest published release. Use this rather than `availableVersions[0]`, which
+   * can be a prerelease (1.12.1-preview.1 outranks 1.12.0 in semver).
+   */
+  latestVersion?: string;
+  /** Newest release inside `constraint`; set only when it differs from `latestVersion`. */
+  latestCompatibleVersion?: string;
+  /**
+   * Set when this agent's ACP server runs from a tracked fork rather than the
+   * published package. While it is set, `availableVersions` describes what the
+   * agent would return to if the fork were retired, not what is running.
+   */
+  fork?: ForkTracking;
+}
+
+export interface ForkTracking {
+  repo: string;
+  ref: string;
+  commit: string;
+  shortCommit: string;
+  clone: string;
+  upstreamPackage: string;
+  upstreamRepo?: string;
+  /** Published release the fork is currently rebased onto. */
+  upstreamVersion: string;
+  /** Only present when a newer release exists: the fork is behind. */
+  latestUpstreamVersion?: string;
+  reason?: string;
+  upstreamPrs?: number[];
+  /** False when the pinned commit has not been built yet. */
+  installed: boolean;
 }

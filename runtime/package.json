@@ -13,7 +13,7 @@
     "@agentclientprotocol/codex-acp": "^1.8.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@playwright/mcp": "^0.0.78",
-    "pi-acp": "^0.0.31",
+    "pi-acp": "~0.0.33",
     "playwright-core": "^1.61.1",
     "tsx": "4.23.1"
   },

@@ -5,7 +5,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	tandem "github.com/aiguy110/tandem"
@@ -102,25 +101,5 @@ func TestLockfileRoundTripAndEntryPoint(t *testing.T) {
 	entry, ok := EntryPoint("codex", &agentadapter.Distribution{Path: got.Agents["codex"].Path})
 	if !ok || entry != filepath.Join(got.Agents["codex"].Path, agentPins["codex"].dist) {
 		t.Fatalf("entry=%q ok=%v", entry, ok)
-	}
-}
-
-func TestSemverNewer(t *testing.T) {
-	for _, tc := range []struct {
-		candidate, current string
-		want               bool
-	}{{"1.12.0", "1.8.0", true}, {"1.8.0", "1.12.0", false}, {"1.8.0", "1.8.0", false}, {"1.8.0", "1.8.0-beta.1", true}, {"1.8.0-beta.2", "1.8.0", false}} {
-		if got := semverNewer(tc.candidate, tc.current); got != tc.want {
-			t.Errorf("semverNewer(%q,%q)=%v want %v", tc.candidate, tc.current, got, tc.want)
-		}
-	}
-}
-
-func TestSortVersionsNewestFirst(t *testing.T) {
-	versions := []string{"1.8.0", "1.12.0", "1.9.0"}
-	sortVersions(versions)
-	want := []string{"1.12.0", "1.9.0", "1.8.0"}
-	if !slices.Equal(versions, want) {
-		t.Fatalf("versions=%v want %v", versions, want)
 	}
 }
