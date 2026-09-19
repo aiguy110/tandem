@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
 import type { ForkTracking, ManagedAdapter } from '../wire';
@@ -14,6 +14,8 @@ function adapter(overrides: Partial<ManagedAdapter> = {}): ManagedAdapter {
     currentVersion: '1.12.0',
     installedVersions: ['1.12.0'],
     availableVersions: ['1.12.0', '1.9.0'],
+    compatibleVersions: ['1.12.0', '1.9.0'],
+    latestVersion: '1.12.0',
     ...overrides,
   };
 }
@@ -93,4 +95,62 @@ it('keeps normal and fork rows side by side', async () => {
   expect(await screen.findByLabelText('codex version')).toBeTruthy();
   expect(screen.getByText('tracking fork')).toBeTruthy();
   expect(screen.getByText(/2 managed adapters, 1 tracking a fork/)).toBeTruthy();
+});
+
+it('never offers a prerelease as "latest"', async () => {
+  // availableVersions leads with 1.12.1-preview.1 because it outranks 1.12.0 in
+  // semver; "Update to latest" must still mean the newest release.
+  mount([
+    adapter({
+      currentVersion: '1.9.0',
+      installedVersions: ['1.9.0'],
+      availableVersions: ['1.12.1-preview.1', '1.12.0', '1.9.0'],
+      compatibleVersions: ['1.12.0', '1.9.0'],
+      latestVersion: '1.12.0',
+    }),
+  ]);
+  const install = useStore.getState().installAgentDistribution;
+  (await screen.findByText('Update to latest')).click();
+  await waitFor(() => expect(install).toHaveBeenCalledWith('codex', '1.12.0'));
+});
+
+it('marks versions beyond the tested range and still allows installing them', async () => {
+  // The claude case: pinned ^0.70.0 while upstream is on 0.79.0. An optimistic
+  // check surfaces it, so the UI has to label it rather than hide it.
+  mount([
+    adapter({
+      agent: 'claude',
+      package: '@agentclientprotocol/claude-agent-acp',
+      constraint: '^0.70.0',
+      currentVersion: '0.70.0',
+      installedVersions: ['0.70.0'],
+      availableVersions: ['0.79.0', '0.70.0'],
+      compatibleVersions: ['0.70.0'],
+      latestVersion: '0.79.0',
+      latestCompatibleVersion: '0.70.0',
+    }),
+  ]);
+  const select = (await screen.findByLabelText('claude version')) as HTMLSelectElement;
+  const untested = [...select.options].find((o) => o.value === '0.79.0');
+  expect(untested?.textContent).toContain('untested');
+  expect(screen.getByText(/newest tested 0\.70\.0, newest published 0\.79\.0/)).toBeTruthy();
+
+  fireEvent.change(select, { target: { value: '0.79.0' } });
+  const install = useStore.getState().installAgentDistribution;
+  screen.getByText('Use anyway').click();
+  await waitFor(() => expect(install).toHaveBeenCalledWith('claude', '0.79.0'));
+});
+
+it('flags a current version that has fallen outside the tested range', async () => {
+  mount([
+    adapter({
+      currentVersion: '2.0.0',
+      installedVersions: ['2.0.0'],
+      availableVersions: ['2.0.0', '1.12.0'],
+      compatibleVersions: ['1.12.0'],
+      latestVersion: '2.0.0',
+      latestCompatibleVersion: '1.12.0',
+    }),
+  ]);
+  expect(await screen.findByText('beyond tested range')).toBeTruthy();
 });

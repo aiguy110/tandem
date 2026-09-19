@@ -112,8 +112,10 @@ func (s *Service) poll(ctx context.Context) {
 			s.opts.Center.Upsert(s.rebaseNotification(u))
 			continue
 		}
-		slog.Info("ACP adapter update available", "agent", u.Agent, "installed_version", u.CurrentVersion, "available_version", u.LatestVersion)
-		s.opts.Center.Upsert(notifications.Notification{ID: Prefix + u.Agent, Severity: "attention", Title: u.Agent + " ACP update available", Message: fmt.Sprintf("%s is available (installed %s). New sessions will use it after updating.", u.LatestVersion, u.CurrentVersion), Actions: []notifications.Action{{ID: "install", Label: "Update", Primary: true}, {ID: "dismiss", Label: "Later"}}})
+		slog.Info("ACP adapter update available", "agent", u.Agent, "installed_version", u.CurrentVersion,
+			"available_version", u.LatestVersion, "within_tested_range", u.Compatible, "tested_range", u.Constraint,
+			"newest_published", u.NewestPublished)
+		s.opts.Center.Upsert(s.releaseNotification(u))
 	}
 	for agent := range s.available {
 		if !seen[agent] {
@@ -121,6 +123,29 @@ func (s *Service) poll(ctx context.Context) {
 			s.opts.Center.Remove(Prefix + agent)
 		}
 	}
+}
+
+// releaseNotification describes an available published update. Tandem checks
+// optimistically, so an offer can point past the compatibility range Tandem was
+// tested against; when it does, the message says so rather than presenting it as
+// a routine upgrade.
+func (s *Service) releaseNotification(u runtimeinstall.UpdateInfo) notifications.Notification {
+	message := fmt.Sprintf("%s is available (installed %s). New sessions will use it after updating.", u.LatestVersion, u.CurrentVersion)
+	if !u.Compatible {
+		message = fmt.Sprintf("%s is available (installed %s). It is beyond the range Tandem is tested against (%s), so it may not be compatible — the previous version stays installed and you can roll back.",
+			u.LatestVersion, u.CurrentVersion, u.Constraint)
+	} else if u.NewestPublished != "" {
+		// A newer release exists but sits outside the tested range, so the offer
+		// was held back to the compatible one. Say both, so the operator is not
+		// left thinking LatestVersion is the newest that exists.
+		message += fmt.Sprintf(" %s is also out, beyond Tandem's tested range (%s); pick it in the ACP manager to try it.", u.NewestPublished, u.Constraint)
+	}
+	title := u.Agent + " ACP update available"
+	if !u.Compatible {
+		title = u.Agent + " ACP update available (untested)"
+	}
+	return notifications.Notification{ID: Prefix + u.Agent, Severity: "attention", Title: title, Message: message,
+		Actions: []notifications.Action{{ID: "install", Label: "Update", Primary: true}, {ID: "dismiss", Label: "Later"}}}
 }
 
 // rebaseNotification describes a fork that has fallen behind upstream. The

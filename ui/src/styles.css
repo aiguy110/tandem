@@ -982,6 +982,9 @@ body.dock-resizing .app { transition: none; }
 .adapter-fork-reason { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-xs); }
 .adapter-controls-fork { align-self: flex-start; }
 .adapter-fork-cmd { padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
+/* Updates are offered optimistically, so a version can sit outside the range
+   Tandem is tested against. Mark it rather than hide it. */
+.adapter-untested { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .automation-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .automation-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .automation-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }

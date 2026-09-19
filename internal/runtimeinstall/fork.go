@@ -195,9 +195,22 @@ func ReturnToUpstream(ctx context.Context, cfg config.Config, agent, version str
 		return LockedAgent{}, err
 	}
 	if version == "" {
-		if version, err = npmView(ctx, cfg, npm, p.spec, "version"); err != nil {
+		published, listErr := publishedVersions(ctx, cfg, npm, p.packageName)
+		if listErr != nil {
 			installMu.Unlock()
-			return LockedAgent{}, err
+			return LockedAgent{}, listErr
+		}
+		// Prefer the newest release inside Tandem's tested range, but fall back to
+		// the newest release overall rather than refusing to retire the fork: a
+		// stale pin should not be able to trap an agent on a fork.
+		constraint := strings.TrimPrefix(p.spec, p.packageName+"@")
+		if pick, ok := newestInRange(published, constraint); ok {
+			version = pick
+		} else if pick, ok := newestPublished(published); ok {
+			version = pick
+		} else {
+			installMu.Unlock()
+			return LockedAgent{}, fmt.Errorf("%s has no published release to return to", p.packageName)
 		}
 	}
 	installMu.Unlock()
@@ -236,9 +249,13 @@ func ResolveVersion(ctx context.Context, cfg config.Config, agent, constraint st
 	if err != nil {
 		return "", err
 	}
-	version, err := npmView(ctx, cfg, npm, p.packageName+"@"+constraint, "version")
+	published, err := publishedVersions(ctx, cfg, npm, p.packageName)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s@%s: %w", p.packageName, constraint, err)
+	}
+	version, ok := newestInRange(published, constraint)
+	if !ok {
+		return "", fmt.Errorf("resolve %s@%s: no published version satisfies it", p.packageName, constraint)
 	}
 	return version, nil
 }

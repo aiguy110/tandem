@@ -549,7 +549,17 @@ export interface ManagedAdapter {
   constraint: string;
   currentVersion: string;
   installedVersions: string[];
+  /** Every published version, newest first — including ones beyond `constraint`. */
   availableVersions: string[];
+  /** The subset of `availableVersions` inside `constraint`, i.e. tested. */
+  compatibleVersions: string[];
+  /**
+   * Newest published release. Use this rather than `availableVersions[0]`, which
+   * can be a prerelease (1.12.1-preview.1 outranks 1.12.0 in semver).
+   */
+  latestVersion?: string;
+  /** Newest release inside `constraint`; set only when it differs from `latestVersion`. */
+  latestCompatibleVersion?: string;
   /**
    * Set when this agent's ACP server runs from a tracked fork rather than the
    * published package. While it is set, `availableVersions` describes what the

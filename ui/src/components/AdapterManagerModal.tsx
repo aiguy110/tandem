@@ -101,10 +101,29 @@ export function AdapterManagerModal() {
       <div className="automation-header"><div><div className="primary" id="adapter-title">Managed ACP adapters</div><div className="sub">Choose the version used by new sessions. Existing sessions remain pinned.</div></div><button type="button" className="automation-close" onClick={() => setModal('none')} aria-label="Close adapter manager">×</button></div>
       <div className="rows adapter-rows">
         {loading && adapters.length === 0 && <div className="empty">Checking adapter versions…</div>}
-        {adapters.map((row) => { if (row.fork) return <ForkRow row={row} fork={row.fork} key={row.agent} />; const latest = row.availableVersions[0] ?? ''; const choice = selected[row.agent] ?? row.currentVersion; const changing = busy === row.agent; return <div className="adapter-row" key={row.agent}>
-          <div className="adapter-main"><div className="adapter-heading"><span className="primary">{row.agent}</span><span className="adapter-current">current {row.currentVersion || 'not installed'}</span></div><div className="automation-path">{row.package} · compatible {row.constraint}</div><div className="adapter-installed">Installed: {row.installedVersions.length ? row.installedVersions.join(', ') : 'none'}</div></div>
-          <div className="adapter-controls"><select aria-label={`${row.agent} version`} value={choice} disabled={changing} onChange={(e) => setSelected((all) => ({ ...all, [row.agent]: e.target.value }))}>{row.availableVersions.map((version) => <option value={version} key={version}>{version}{version === row.currentVersion ? ' (current)' : row.installedVersions.includes(version) ? ' (installed)' : ''}</option>)}</select><button type="button" disabled={changing || !choice || choice === row.currentVersion} onClick={() => void choose(row.agent, choice)}>{changing ? 'Installing…' : row.installedVersions.includes(choice) ? 'Roll back' : 'Use version'}</button>{latest !== row.currentVersion && <button type="button" className="adapter-latest" disabled={changing} onClick={() => void choose(row.agent, latest)}>Update to latest</button>}</div>
-        </div>; })}
+        {adapters.map((row) => {
+          if (row.fork) return <ForkRow row={row} fork={row.fork} key={row.agent} />;
+          // Deliberately not availableVersions[0]: that can be a prerelease.
+          const latest = row.latestVersion ?? '';
+          const choice = selected[row.agent] ?? row.currentVersion;
+          const changing = busy === row.agent;
+          const compatible = (version: string) => row.compatibleVersions.includes(version);
+          const beyondRange = Boolean(choice) && !compatible(choice);
+          return <div className="adapter-row" key={row.agent}>
+            <div className="adapter-main">
+              <div className="adapter-heading"><span className="primary">{row.agent}</span><span className="adapter-current">current {row.currentVersion || 'not installed'}</span>{row.currentVersion && !compatible(row.currentVersion) && <span className="adapter-untested" title={`Outside the range Tandem is tested against (${row.constraint})`}>beyond tested range</span>}</div>
+              <div className="automation-path">{row.package} · tested {row.constraint}</div>
+              <div className="adapter-installed">Installed: {row.installedVersions.length ? row.installedVersions.join(', ') : 'none'}{row.latestCompatibleVersion && <> · newest tested {row.latestCompatibleVersion}, newest published {latest}</>}</div>
+            </div>
+            <div className="adapter-controls">
+              <select aria-label={`${row.agent} version`} value={choice} disabled={changing} onChange={(e) => setSelected((all) => ({ ...all, [row.agent]: e.target.value }))}>
+                {row.availableVersions.map((version) => <option value={version} key={version}>{version}{version === row.currentVersion ? ' (current)' : row.installedVersions.includes(version) ? ' (installed)' : ''}{compatible(version) ? '' : ' — untested'}</option>)}
+              </select>
+              <button type="button" disabled={changing || !choice || choice === row.currentVersion} onClick={() => void choose(row.agent, choice)}>{changing ? 'Installing…' : row.installedVersions.includes(choice) ? 'Roll back' : beyondRange ? 'Use anyway' : 'Use version'}</button>
+              {latest && latest !== row.currentVersion && <button type="button" className="adapter-latest" disabled={changing} onClick={() => void choose(row.agent, latest)}>Update to latest</button>}
+            </div>
+          </div>;
+        })}
       </div>
       {error && <div className="modal-err">{error}</div>}
       <div className="foot automation-foot"><span>{adapters.length} managed {adapters.length === 1 ? 'adapter' : 'adapters'}{forked > 0 && `, ${forked} tracking a fork`}</span><button type="button" disabled={loading || !!busy} onClick={() => void refresh()}>Refresh</button></div>
