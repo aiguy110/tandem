@@ -33,6 +33,47 @@ type fakeAdapter struct {
 func newFake() *fakeAdapter {
 	return &fakeAdapter{events: make(chan eventlog.Event, 16), done: make(chan struct{}), gate: make(chan struct{}, 4)}
 }
+
+func TestStreamingChunksAreCoalescedAndRateLimited(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "chunks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	log, err := eventlog.New("chunk-session", db, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newFake()
+	s, err := New("chunk-session", "chunks", agentadapter.Spec{}, adapter, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(chan eventlog.LoggedEvent, 4)
+	s.OnEvent(func(event eventlog.LoggedEvent) { seen <- event })
+	for _, text := range []string{"many ", "tiny ", "chunks"} {
+		payload, _ := json.Marshal(map[string]any{"kind": "message_chunk", "text": text})
+		adapter.events <- eventlog.Event{Kind: "message_chunk", Payload: payload}
+	}
+
+	select {
+	case event := <-seen:
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(event.Event.Payload, &payload); err != nil || payload.Text != "many tiny chunks" {
+			t.Fatalf("coalesced payload=%q err=%v", payload.Text, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for coalesced chunk")
+	}
+	select {
+	case event := <-seen:
+		t.Fatalf("unexpected extra event within rate limit: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
 func (f *fakeAdapter) Capabilities() agentadapter.Capabilities {
 	return agentadapter.Capabilities{Structured: true, Image: f.image}
 }

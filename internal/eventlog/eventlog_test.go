@@ -97,11 +97,11 @@ func TestRingEvictionColdReplayAndRestart(t *testing.T) {
 		t.Fatalf("earliest=%d want 3", got)
 	}
 	hot, err := log.ReplaySince(2)
-	if err != nil || hot.Source != ReplayHot || seqs(hot.Events) != "3,4" {
+	if err != nil || hot.Source != ReplayHot || seqs(hot.Events) != "4" || eventText(hot.Events[0]) != "threefour" {
 		t.Fatalf("hot=%#v err=%v", hot, err)
 	}
 	cold, err := log.ReplaySince(1)
-	if err != nil || cold.Source != ReplayCold || seqs(cold.Events) != "2,3,4" {
+	if err != nil || cold.Source != ReplayCold || seqs(cold.Events) != "4" || eventText(cold.Events[0]) != "twothreefour" {
 		t.Fatalf("cold=%#v err=%v", cold, err)
 	}
 	restarted, err := New("api-1", s, 2)
@@ -112,15 +112,15 @@ func TestRingEvictionColdReplayAndRestart(t *testing.T) {
 		t.Fatalf("restart head=%d earliest=%d", restarted.Head(), restarted.EarliestInRing())
 	}
 	fromDisk, err := restarted.ReplaySince(2)
-	if err != nil || fromDisk.Source != ReplayCold || seqs(fromDisk.Events) != "3,4" {
+	if err != nil || fromDisk.Source != ReplayCold || seqs(fromDisk.Events) != "4" || eventText(fromDisk.Events[0]) != "threefour" {
 		t.Fatalf("restart replay=%#v err=%v", fromDisk, err)
 	}
 	fresh, err := restarted.ReplaySince(0)
-	if err != nil || fresh.Source != ReplaySnapshot || seqs(fresh.Events) != "1,2,3,4" {
+	if err != nil || fresh.Source != ReplaySnapshot || seqs(fresh.Events) != "4" || eventText(fresh.Events[0]) != "onetwothreefour" {
 		t.Fatalf("snapshot=%#v err=%v", fresh, err)
 	}
 	future, err := restarted.ReplaySince(10)
-	if err != nil || future.Source != ReplaySnapshot || seqs(future.Events) != "1,2,3,4" {
+	if err != nil || future.Source != ReplaySnapshot || seqs(future.Events) != "4" || eventText(future.Events[0]) != "onetwothreefour" {
 		t.Fatalf("future snapshot=%#v err=%v", future, err)
 	}
 }
@@ -147,11 +147,11 @@ INSERT INTO events VALUES ('api-1', 3, 'message_chunk', '{"kind":"message_chunk"
 		t.Fatal(err)
 	}
 	replay, err := log.ReplaySince(1)
-	if err != nil || replay.Source != ReplaySnapshot || seqs(replay.Events) != "3,4" {
+	if err != nil || replay.Source != ReplaySnapshot || seqs(replay.Events) != "4" || eventText(replay.Events[0]) != "threefour" {
 		t.Fatalf("gap replay=%#v err=%v", replay, err)
 	}
 	covered, err := log.ReplaySince(2)
-	if err != nil || covered.Source != ReplayCold || seqs(covered.Events) != "3,4" {
+	if err != nil || covered.Source != ReplayCold || seqs(covered.Events) != "4" || eventText(covered.Events[0]) != "threefour" {
 		t.Fatalf("covered replay=%#v err=%v", covered, err)
 	}
 }
@@ -247,4 +247,12 @@ func seqs(events []LoggedEvent) string {
 		b = append(b, byte('0'+event.Seq))
 	}
 	return string(b)
+}
+
+func eventText(event LoggedEvent) string {
+	var payload struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(event.Event.Payload, &payload)
+	return payload.Text
 }

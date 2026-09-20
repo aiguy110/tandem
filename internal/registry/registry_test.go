@@ -230,7 +230,8 @@ func TestCounterSeededAcrossClosedAndMultiAgentIsolation(t *testing.T) {
 	}
 	f.adapters[a.ID].events <- ev("a")
 	f.adapters[b.ID].events <- ev("b")
-	time.Sleep(10 * time.Millisecond)
+	// Streaming text is intentionally emitted at most four times per second.
+	time.Sleep(300 * time.Millisecond)
 	ha, _ := a.Log.FullHistory()
 	hb, _ := b.Log.FullHistory()
 	if len(ha) != 1 || len(hb) != 1 || ha[0].Seq != 1 || hb[0].Seq != 1 {
