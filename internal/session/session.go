@@ -144,13 +144,65 @@ func NewWithStatus(id, name string, spec agentadapter.Spec, adapter agentadapter
 }
 
 func (s *Session) pump(adapter agentadapter.Adapter, epoch uint64, onExit func()) {
-	for ev := range adapter.Events() {
-		s.mu.RLock()
-		current := epoch == s.adapterEpoch
-		s.mu.RUnlock()
-		if current {
-			s.emit(ev)
+	const chunkInterval = 250 * time.Millisecond
+	var pending eventlog.Event
+	var pendingKey string
+	var pendingChunks int
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	flush := func() {
+		if pendingKey == "" {
+			return
 		}
+		s.emit(pending)
+		if pendingChunks > 1 {
+			slog.Debug("coalesced streaming agent chunks", "session_id", s.ID, "kind", pending.Kind, "chunks", pendingChunks)
+		}
+		pending, pendingKey, pendingChunks = eventlog.Event{}, "", 0
+		timerC = nil
+	}
+	for {
+		select {
+		case ev, ok := <-adapter.Events():
+			if !ok {
+				flush()
+				goto stopped
+			}
+			s.mu.RLock()
+			current := epoch == s.adapterEpoch
+			s.mu.RUnlock()
+			if !current {
+				continue
+			}
+			key, text, chunk := streamChunk(ev)
+			if !chunk {
+				flush()
+				s.emit(ev)
+				continue
+			}
+			if pendingKey != "" && pendingKey != key {
+				flush()
+			}
+			if pendingKey == "" {
+				pending, pendingKey, pendingChunks = ev, key, 1
+				if timer == nil {
+					timer = time.NewTimer(chunkInterval)
+				} else {
+					timer.Reset(chunkInterval)
+				}
+				timerC = timer.C
+			} else {
+				pending = mergeStreamChunk(pending, text)
+				pendingChunks++
+			}
+		case <-timerC:
+			flush()
+		}
+	}
+
+stopped:
+	if timer != nil {
+		timer.Stop()
 	}
 	s.mu.RLock()
 	// A disposed session is on its way out with its store already closing;
@@ -160,6 +212,34 @@ func (s *Session) pump(adapter agentadapter.Adapter, epoch uint64, onExit func()
 	if current && onExit != nil {
 		onExit()
 	}
+}
+
+// streamChunk identifies chunks that belong to the same rendered block. ACP
+// adapters are free to split text at arbitrary byte boundaries; parentId is
+// part of the key so subagent/tool-attributed blocks are never joined.
+func streamChunk(ev eventlog.Event) (key, text string, ok bool) {
+	if ev.Kind != "message_chunk" && ev.Kind != "thought_chunk" {
+		return "", "", false
+	}
+	var payload struct {
+		Text     string `json:"text"`
+		ParentID string `json:"parentId"`
+	}
+	if json.Unmarshal(ev.Payload, &payload) != nil {
+		return "", "", false
+	}
+	return ev.Kind + "\x00" + payload.ParentID, payload.Text, true
+}
+
+func mergeStreamChunk(ev eventlog.Event, suffix string) eventlog.Event {
+	var payload map[string]any
+	if json.Unmarshal(ev.Payload, &payload) != nil {
+		return ev
+	}
+	payload["text"], _ = payload["text"].(string)
+	payload["text"] = payload["text"].(string) + suffix
+	ev.Payload, _ = json.Marshal(payload)
+	return ev
 }
 
 func (s *Session) emit(ev eventlog.Event) {
