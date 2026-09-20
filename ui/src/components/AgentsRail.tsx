@@ -543,7 +543,7 @@ function Row({
   return (
     <div
       className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
-      draggable={!editing && !usesSoftKeyboard()}
+      draggable={!editing}
       title={editing ? undefined : 'Drag to reorder session'}
       onClick={() => {
         if (longPressOpened.current) {

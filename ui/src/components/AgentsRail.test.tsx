@@ -78,6 +78,20 @@ describe('SessionsRail close recovery', () => {
 });
 
 describe('SessionsRail touch context menu', () => {
+  it('keeps cards draggable on touch-capable devices', () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+    const agent = session();
+    useStore.setState({ sessions: { [agent.id]: agent }, order: [agent.id] });
+    const view = render(<SessionsRail />);
+
+    expect(view.container.querySelector('.session-row')?.getAttribute('draggable')).toBe('true');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
   it('opens from a stationary touch long-press and suppresses the following row click', async () => {
     vi.useFakeTimers();
     const agent = session();
