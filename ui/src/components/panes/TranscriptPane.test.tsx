@@ -775,6 +775,38 @@ describe('TranscriptPane annotations', () => {
   });
 });
 
+describe('TranscriptPane thinking blocks', () => {
+  function renderThought() {
+    const withThought = agent();
+    withThought.events = [{ seq: 1, event: { kind: 'thought_chunk', text: 'I should check the mobile interaction.' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withThought }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    return render(<TranscriptPane />).container.querySelector<HTMLDetailsElement>('details.ev.thought')!;
+  }
+
+  it('collapses an expanded thought when its body is tapped on mobile', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    const thought = renderThought();
+    thought.open = true;
+
+    fireEvent.click(thought);
+
+    expect(thought.open).toBe(false);
+  });
+
+  it('keeps an expanded thought open when its body is clicked on desktop', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    const thought = renderThought();
+    thought.open = true;
+
+    fireEvent.click(thought);
+
+    expect(thought.open).toBe(true);
+  });
+});
+
 describe('TranscriptPane steering', () => {
   it('shows a steering-wheel action beside the other working controls', () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));

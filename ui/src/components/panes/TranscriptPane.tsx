@@ -985,6 +985,19 @@ function Row({
     onJumpToLinkedBlock(targetId);
   };
 
+  // Native <details> only toggles from its summary. On a phone the expanded
+  // thought body is otherwise a large dead tap target, so make a normal tap in
+  // it dismiss the thought as well. Keep summary taps native (and desktop text
+  // selection/click behavior unchanged).
+  const onThoughtClick = (event: React.MouseEvent<HTMLDetailsElement>) => {
+    onSourceClick(event);
+    if (
+      usesSoftKeyboard()
+      && event.currentTarget.open
+      && !(event.target as HTMLElement).closest('summary')
+    ) event.currentTarget.open = false;
+  };
+
   switch (item.kind) {
     case 'user':
       return (
@@ -1015,7 +1028,7 @@ function Row({
       );
     case 'thought':
       return (
-        <details ref={sourceRef as React.RefObject<HTMLDetailsElement>} className="ev thought" data-seq={item.seq} data-role="thought" data-key={item.key} onClick={onSourceClick}>
+        <details ref={sourceRef as React.RefObject<HTMLDetailsElement>} className="ev thought" data-seq={item.seq} data-role="thought" data-key={item.key} onClick={onThoughtClick}>
           <summary>thinking…</summary>
           {item.text}
         </details>
