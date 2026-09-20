@@ -1747,6 +1747,7 @@ func (r *Registry) RestartHarness(ctx context.Context, id string) error {
 
 	spec := cloneSpec(s.Spec)
 	resume := ""
+	repinnedFrom := ""
 	if spec.Adapter == "acp" {
 		if rec.ExternalSessionID != nil {
 			resume = *rec.ExternalSessionID
@@ -1754,6 +1755,7 @@ func (r *Registry) RestartHarness(ctx context.Context, id string) error {
 		if resume == "" {
 			resume = s.ExternalSessionID()
 		}
+		repinnedFrom = r.refreshDistribution(ctx, id, &spec)
 	} else if spec.ResolvedLaunch != nil && spec.ResolvedLaunch.Terminal != nil {
 		// StartArgs may contain an old expansion. Rebuild them for this process;
 		// prefer the resume command when the agent exposes one.
@@ -1779,7 +1781,76 @@ func (r *Registry) RestartHarness(ctx context.Context, id string) error {
 	if sid := s.ExternalSessionID(); sid != "" {
 		_ = r.store.SetExternalSessionID(id, sid)
 	}
+	// Persist the new pin only once the replacement has actually started, so a
+	// distribution that fails to launch is not recorded as this session's.
+	if repinnedFrom != "" {
+		raw, marshalErr := json.Marshal(spec)
+		if marshalErr != nil {
+			slog.Error("could not record repinned ACP distribution", "session", id, "error", marshalErr)
+		} else {
+			rec.Spec = raw
+			if err := r.store.UpsertSession(*rec); err != nil {
+				// The restart succeeded and the session is running the new
+				// distribution; only the record is stale, and the next restart
+				// re-resolves it again.
+				slog.Error("could not persist repinned ACP distribution", "session", id, "error", err)
+			}
+		}
+	}
 	return nil
+}
+
+// refreshDistribution re-resolves a managed ACP distribution during a harness
+// restart, updating spec in place and returning the version it moved away from
+// (empty when nothing changed).
+//
+// A restart is an explicit relaunch of the harness, which makes it the right
+// moment to adopt a changed managed distribution — an adapter update the
+// operator selected, or a newly tracked fork. Restore deliberately does not do
+// this: reconnecting to a live session must never silently swap the code running
+// underneath it, which is why the distribution is pinned into the session spec
+// in the first place.
+//
+// Provisioning failures are not fatal. Restarting onto the distribution the
+// session already had is far better than refusing to restart because npm or the
+// network is unavailable.
+func (r *Registry) refreshDistribution(ctx context.Context, id string, spec *agentadapter.Spec) string {
+	if spec.ResolvedLaunch == nil || spec.ResolvedLaunch.ACP == nil || len(spec.ResolvedLaunch.ACP.Args) == 0 {
+		return ""
+	}
+	current := spec.ResolvedLaunch.Distribution
+	next, err := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
+	if err != nil {
+		slog.Warn("could not re-resolve ACP distribution on harness restart; keeping the pinned one",
+			"session", id, "agent", spec.Agent, "pinned_version", distributionVersion(current), "error", err)
+		return ""
+	}
+	// Unmanaged agents launch an arbitrary command Tandem does not provision.
+	if next == nil {
+		return ""
+	}
+	entry, ok := runtimeinstall.EntryPoint(spec.Agent, next)
+	if !ok {
+		return ""
+	}
+	if current != nil && current.Path == next.Path && current.Version == next.Version &&
+		spec.ResolvedLaunch.ACP.Args[0] == entry {
+		return ""
+	}
+	from := distributionVersion(current)
+	slog.Info("repinning ACP distribution on harness restart",
+		"session", id, "agent", spec.Agent, "from_version", from, "to_version", next.Version,
+		"to_source", next.Source, "to_path", next.Path)
+	spec.ResolvedLaunch.Distribution = next
+	spec.ResolvedLaunch.ACP.Args[0] = entry
+	return from
+}
+
+func distributionVersion(d *agentadapter.Distribution) string {
+	if d == nil {
+		return "unpinned"
+	}
+	return d.Version
 }
 
 func (r *Registry) LeaveTerminal(ctx context.Context, id string) error {

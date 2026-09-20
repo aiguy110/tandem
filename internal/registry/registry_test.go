@@ -16,6 +16,7 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/workspace"
 )
@@ -102,7 +103,7 @@ func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{Home: home, WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake"}, Agents: map[string]config.Agent{"fake": {ACP: &config.Launch{Cmd: "fake"}, Terminal: &config.ResumeLaunch{Cmd: "fake"}}}, Harnesses: map[string]config.Harness{}}
+	cfg := config.Config{Home: home, RuntimeRoot: filepath.Join(home, "runtime"), WorktreesDir: filepath.Join(home, "worktrees"), ACP: config.ACPConfig{Default: "fake"}, Agents: map[string]config.Agent{"fake": {ACP: &config.Launch{Cmd: "fake"}, Terminal: &config.ResumeLaunch{Cmd: "fake"}}}, Harnesses: map[string]config.Harness{}}
 	r, err := New(Options{Store: db, Config: cfg, Factory: f, RingCapacity: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -656,5 +657,168 @@ func TestCloseForceRemovesDurableOrphanWithoutLiveSession(t *testing.T) {
 	rec, err := db.Session("orphan")
 	if err != nil || rec == nil || rec.ClosedAt == nil {
 		t.Fatalf("record=%+v err=%v", rec, err)
+	}
+}
+
+// writePiDist lays down a lockfile entry and the dist file EnsureManaged probes,
+// so it resolves from the lockfile without shelling out to npm.
+func writePiDist(t *testing.T, runtimeRoot, version string, fork *runtimeinstall.LockedFork) string {
+	t.Helper()
+	root := filepath.Join(runtimeRoot, "agents", "pi", version)
+	dist := filepath.Join(root, "node_modules", "pi-acp", "dist", "index.js")
+	if err := os.MkdirAll(filepath.Dir(dist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dist, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock := runtimeinstall.Lockfile{Version: 1, Agents: map[string]runtimeinstall.LockedAgent{
+		"pi": {Package: "pi-acp", Constraint: "~0.0.33", Version: version, Path: root, Fork: fork},
+	}}
+	raw, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(runtimeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeRoot, "agents.lock.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dist
+}
+
+func piSpecPinnedTo(dir, version, entry string) agentadapter.Spec {
+	spec := existing(dir)
+	spec.Agent = "pi"
+	spec.ResolvedLaunch = &agentadapter.ResolvedLaunch{
+		ACP:          &agentadapter.Launch{Cmd: "node", Args: []string{entry}},
+		Distribution: &agentadapter.Distribution{Source: "npm", Package: "pi-acp", Version: version, Path: filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(entry))))},
+	}
+	return spec
+}
+
+func TestRefreshDistributionRepinsWhenTheResolutionMoved(t *testing.T) {
+	r, _, cfg := setup(t, &fakeFactory{})
+	// The runtime now resolves pi to a fork build, while the session is still
+	// pinned to the published version it was spawned on.
+	forkEntry := writePiDist(t, cfg.RuntimeRoot, "0.0.33+fork.abc123def456",
+		&runtimeinstall.LockedFork{Repo: "https://github.com/me/pi-acp", Ref: "tandem", Commit: "abc123def456", UpstreamVersion: "0.0.33"})
+	oldEntry := filepath.Join(cfg.RuntimeRoot, "agents", "pi", "0.0.31", "node_modules", "pi-acp", "dist", "index.js")
+	spec := piSpecPinnedTo(t.TempDir(), "0.0.31", oldEntry)
+
+	from := r.refreshDistribution(context.Background(), "agent-1", &spec)
+	if from != "0.0.31" {
+		t.Fatalf("expected a repin away from 0.0.31, got %q", from)
+	}
+	if got := spec.ResolvedLaunch.Distribution.Version; got != "0.0.33+fork.abc123def456" {
+		t.Errorf("distribution version=%q", got)
+	}
+	if got := spec.ResolvedLaunch.ACP.Args[0]; got != forkEntry {
+		t.Errorf("acp args[0]=%q want %q", got, forkEntry)
+	}
+}
+
+func TestRefreshDistributionIsANoopWhenAlreadyCurrent(t *testing.T) {
+	r, _, cfg := setup(t, &fakeFactory{})
+	entry := writePiDist(t, cfg.RuntimeRoot, "0.0.33", nil)
+	spec := piSpecPinnedTo(t.TempDir(), "0.0.33", entry)
+
+	if from := r.refreshDistribution(context.Background(), "agent-1", &spec); from != "" {
+		t.Fatalf("expected no repin, got %q", from)
+	}
+	if got := spec.ResolvedLaunch.ACP.Args[0]; got != entry {
+		t.Errorf("acp args[0] changed to %q", got)
+	}
+}
+
+func TestRefreshDistributionLeavesUnmanagedAndMalformedSpecsAlone(t *testing.T) {
+	r, _, _ := setup(t, &fakeFactory{})
+	// An unmanaged agent launches an arbitrary command Tandem never provisions.
+	custom := existing(t.TempDir())
+	custom.Agent = "some-custom-agent"
+	custom.ResolvedLaunch = &agentadapter.ResolvedLaunch{ACP: &agentadapter.Launch{Cmd: "custom", Args: []string{"serve"}}}
+	if from := r.refreshDistribution(context.Background(), "agent-1", &custom); from != "" {
+		t.Fatalf("unmanaged agent was repinned: %q", from)
+	}
+	if custom.ResolvedLaunch.ACP.Args[0] != "serve" {
+		t.Error("unmanaged launch args were rewritten")
+	}
+	// A spec with nothing to rewrite must not panic.
+	bare := existing(t.TempDir())
+	bare.Agent = "pi"
+	if from := r.refreshDistribution(context.Background(), "agent-1", &bare); from != "" {
+		t.Fatalf("bare spec was repinned: %q", from)
+	}
+}
+
+func TestRestartHarnessAdoptsANewDistributionAndPersistsIt(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	dir := t.TempDir()
+	oldEntry := filepath.Join(cfg.RuntimeRoot, "agents", "pi", "0.0.31", "node_modules", "pi-acp", "dist", "index.js")
+	s, err := r.Spawn(context.Background(), piSpecPinnedTo(dir, "0.0.31", oldEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The operator installs a newer adapter after this session was spawned.
+	newEntry := writePiDist(t, cfg.RuntimeRoot, "0.0.33", nil)
+
+	if err := r.RestartHarness(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The replacement process must be launched on the new distribution.
+	f.mu.Lock()
+	req := f.requests[s.ID]
+	f.mu.Unlock()
+	if got := req.Spec.ResolvedLaunch.ACP.Args[0]; got != newEntry {
+		t.Fatalf("restarted on %q, want %q", got, newEntry)
+	}
+	// ...and the record must carry it, so a later restore does not fall back.
+	rec, err := db.Session(s.ID)
+	if err != nil || rec == nil {
+		t.Fatalf("session record: %v", err)
+	}
+	var persisted agentadapter.Spec
+	if err := json.Unmarshal(rec.Spec, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if got := persisted.ResolvedLaunch.Distribution.Version; got != "0.0.33" {
+		t.Fatalf("persisted distribution=%q want 0.0.33", got)
+	}
+	if got := persisted.ResolvedLaunch.ACP.Args[0]; got != newEntry {
+		t.Fatalf("persisted args[0]=%q want %q", got, newEntry)
+	}
+}
+
+func TestRestoreKeepsThePinnedDistribution(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, cfg := setup(t, f)
+	dir := t.TempDir()
+	oldEntry := filepath.Join(cfg.RuntimeRoot, "agents", "pi", "0.0.31", "node_modules", "pi-acp", "dist", "index.js")
+	s, err := r.Spawn(context.Background(), piSpecPinnedTo(dir, "0.0.31", oldEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID
+	// A newer distribution becomes available while the session is not running.
+	writePiDist(t, cfg.RuntimeRoot, "0.0.33", nil)
+	r.DisposeAll(context.Background())
+
+	restored, err := New(Options{Store: db, Config: cfg, Factory: f, RingCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restored.DisposeAll(context.Background()) })
+	if err := restored.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Restore must not move a live session onto different code behind the
+	// operator's back; only an explicit harness restart re-resolves.
+	f.mu.Lock()
+	req := f.requests[id]
+	f.mu.Unlock()
+	if got := req.Spec.ResolvedLaunch.ACP.Args[0]; got != oldEntry {
+		t.Fatalf("restore changed the distribution to %q; it must stay pinned to %q", got, oldEntry)
 	}
 }
