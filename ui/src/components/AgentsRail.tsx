@@ -443,6 +443,11 @@ function Row({
   const [pendingDetails, setDetails] = useState<{ x: number; y: number } | null>(null);
   const { rendered: contextMenu, closing: menuClosing } = useValuePresence(pendingContextMenu);
   const { rendered: details, closing: detailsClosing } = useValuePresence(pendingDetails);
+  // A browser-generated `contextmenu` is dependable for a mouse, but a touch
+  // long-press is inconsistently delivered (and is commonly claimed by scroll
+  // or native drag handling). Recognize that gesture ourselves instead.
+  const longPress = useRef<{ pointerId: number; x: number; y: number; timer: number } | null>(null);
+  const longPressOpened = useRef(false);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -518,12 +523,58 @@ function Row({
     });
     setContextMenu(null);
   };
+  const openContextMenu = (origin: { x: number; y: number }) => {
+    // Keep the whole menu reachable when the invocation point is at a screen
+    // edge. The dimensions intentionally include a little room for borders and
+    // the menu's opening animation.
+    const width = 190;
+    const height = 230;
+    setContextMenu({
+      x: Math.max(8, Math.min(origin.x, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(origin.y, window.innerHeight - height - 8)),
+    });
+  };
+  const cancelLongPress = () => {
+    if (!longPress.current) return;
+    window.clearTimeout(longPress.current.timer);
+    longPress.current = null;
+  };
+  useEffect(() => cancelLongPress, []);
   return (
     <div
       className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
-      draggable={!editing}
+      draggable={!editing && !usesSoftKeyboard()}
       title={editing ? undefined : 'Drag to reorder session'}
-      onClick={onClick}
+      onClick={() => {
+        if (longPressOpened.current) {
+          longPressOpened.current = false;
+          return;
+        }
+        onClick();
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType !== 'touch' || editing) return;
+        cancelLongPress();
+        longPressOpened.current = false;
+        const { pointerId, clientX: x, clientY: y } = event;
+        const timer = window.setTimeout(() => {
+          longPress.current = null;
+          longPressOpened.current = true;
+          openContextMenu({ x, y });
+        }, 550);
+        longPress.current = { pointerId, x, y, timer };
+      }}
+      onPointerMove={(event) => {
+        const gesture = longPress.current;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        // Preserve ordinary rail scrolling: movement beyond a small natural
+        // finger drift turns this interaction back into a pan.
+        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 12) cancelLongPress();
+      }}
+      onPointerUp={(event) => {
+        if (event.pointerId === longPress.current?.pointerId) cancelLongPress();
+      }}
+      onPointerCancel={cancelLongPress}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', agent.id);
@@ -543,7 +594,8 @@ function Row({
       onDragEnd={onDragEnd}
       onContextMenu={(event) => {
         event.preventDefault();
-        setContextMenu({ x: event.clientX, y: event.clientY });
+        cancelLongPress();
+        openContextMenu({ x: event.clientX, y: event.clientY });
       }}
       onPointerEnter={(event) => {
         if (event.pointerType === 'mouse') setMouseHovered(true);
