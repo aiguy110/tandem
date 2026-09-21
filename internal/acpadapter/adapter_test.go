@@ -878,3 +878,20 @@ func TestParentToolCallMetaAbsentLeavesToolCallFlat(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPServerMarshalJSONKeepsRequiredArrays(t *testing.T) {
+	http, err := json.Marshal(MCPServer{Name: "mem0", Type: "http", URL: "http://localhost:8081/mcp"})
+	if err != nil {
+		t.Fatalf("marshal http server: %v", err)
+	}
+	if got, want := string(http), `{"name":"mem0","type":"http","url":"http://localhost:8081/mcp","headers":[]}`; got != want {
+		t.Fatalf("http server JSON = %s, want %s", got, want)
+	}
+	stdio, err := json.Marshal(MCPServer{Name: "tandem-control", Command: "/usr/bin/tandem"})
+	if err != nil {
+		t.Fatalf("marshal stdio server: %v", err)
+	}
+	if got, want := string(stdio), `{"name":"tandem-control","command":"/usr/bin/tandem","args":[],"env":[]}`; got != want {
+		t.Fatalf("stdio server JSON = %s, want %s", got, want)
+	}
+}
