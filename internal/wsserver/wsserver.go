@@ -57,6 +57,7 @@ type Backend interface {
 	ListProfiles(string) ([]store.Profile, []string, error)
 	RenameProfile(string, string) error
 	DeleteProfile(string) error
+	ForgetProfile(string, string) error
 	Rename(string, string) error
 	ListAnnotations(string) ([]store.Annotation, error)
 	UpsertAnnotation(store.Annotation) error
@@ -1219,6 +1220,13 @@ func (c *connection) handle(m clientMessage) {
 		// need this to keep a resumed player in sync, so they get it.
 		c.server.broadcastAudioPosition(m.SessionID, m.Seq, m.PositionMs, updatedAt, c)
 		c.commandAck(m, m.SessionID)
+	case "forget_profile":
+		if err := c.server.opts.Registry.ForgetProfile(m.ID, m.Project); err != nil {
+			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
+			return
+		}
+		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
+		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))

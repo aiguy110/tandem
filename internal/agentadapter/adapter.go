@@ -132,7 +132,12 @@ type Spec struct {
 // browser snapshot id ("" = fresh browser state). When present, the daemon
 // resolves-or-creates a Profile from these settings at spawn.
 type ProfileSpec struct {
-	ID         string `json:"id,omitempty"` // resolved/created profile id (filled in by the daemon)
+	// ID selects an existing profile when its settings still match exactly;
+	// otherwise the daemon resolves or creates one and fills in the id.
+	ID string `json:"id,omitempty"`
+	// Name, when set, names a new profile explicitly (and matches only a
+	// user-named profile with these settings). Empty means auto-named.
+	Name       string `json:"name,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Effort     string `json:"effort,omitempty"`
 	Permission string `json:"permission,omitempty"`

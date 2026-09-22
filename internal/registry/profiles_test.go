@@ -81,3 +81,67 @@ func TestApplyProfileSnapshotNaming(t *testing.T) {
 		t.Fatalf("snapshotId = %q", profiles[0].SnapshotID)
 	}
 }
+
+func TestApplyProfileCustomizeNeverMutatesSource(t *testing.T) {
+	r := testRegistry(t)
+	spawn := func(sessionID string, p agentadapter.ProfileSpec) string {
+		spec := agentadapter.Spec{Agent: "claude", Profile: &p}
+		r.applyProfile(sessionID, "/repo", &spec)
+		return spec.Profile.ID
+	}
+	auto := spawn("a1", agentadapter.ProfileSpec{Model: "sonnet"})
+	if err := r.RenameProfile(auto, "Everyday"); err != nil {
+		t.Fatal(err)
+	}
+	// Picking the named profile by id reuses it.
+	if got := spawn("a2", agentadapter.ProfileSpec{ID: auto, Model: "sonnet"}); got != auto {
+		t.Fatalf("picked named profile resolved to %s, want %s", got, auto)
+	}
+	// Customizing it without a name yields a new auto-named profile, even when
+	// the settings are unchanged, and leaves the named one intact.
+	unnamed := spawn("a3", agentadapter.ProfileSpec{Model: "sonnet"})
+	if unnamed == auto {
+		t.Fatal("unnamed spawn reused a user-named profile")
+	}
+	changed := spawn("a4", agentadapter.ProfileSpec{ID: auto, Model: "opus"})
+	if changed == auto || changed == unnamed {
+		t.Fatalf("customized settings resolved to existing profile %s", changed)
+	}
+	// An explicit name creates a separately named profile, then reuses it.
+	named := spawn("a5", agentadapter.ProfileSpec{Model: "opus", Name: "Deep"})
+	if named == changed {
+		t.Fatal("explicitly named spawn reused the auto-named profile")
+	}
+	if again := spawn("a6", agentadapter.ProfileSpec{Model: "opus", Name: "Deep"}); again != named {
+		t.Fatalf("named re-spawn resolved to %s, want %s", again, named)
+	}
+	source, _ := r.store.Profile(auto)
+	if source == nil || source.Name != "Everyday" || source.Model != "sonnet" {
+		t.Fatalf("source profile mutated: %+v", source)
+	}
+	created, _ := r.store.Profile(named)
+	if created == nil || created.Name != "Deep" || created.AutoNamed {
+		t.Fatalf("named profile = %+v", created)
+	}
+}
+
+func TestForgetProfileDropsOnlyThatProjectsRecency(t *testing.T) {
+	r := testRegistry(t)
+	spec := agentadapter.Spec{Agent: "claude", Profile: &agentadapter.ProfileSpec{Model: "sonnet"}}
+	r.applyProfile("a1", "/repo-a", &spec)
+	id := spec.Profile.ID
+	r.applyProfile("a2", "/repo-b", &agentadapter.Spec{Agent: "claude", Profile: &agentadapter.ProfileSpec{Model: "sonnet"}})
+	if err := r.ForgetProfile(id, "/repo-a"); err != nil {
+		t.Fatal(err)
+	}
+	profiles, recentA, _ := r.ListProfiles("/repo-a")
+	if len(recentA) != 0 || len(profiles) != 1 {
+		t.Fatalf("after forget: profiles=%d recentA=%v", len(profiles), recentA)
+	}
+	if _, recentB, _ := r.ListProfiles("/repo-b"); len(recentB) != 1 || recentB[0] != id {
+		t.Fatalf("repo-b recency = %v", recentB)
+	}
+	if err := r.ForgetProfile(id, ""); err == nil {
+		t.Fatal("expected an error without a project")
+	}
+}

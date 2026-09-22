@@ -195,6 +195,7 @@ func (b *testBackend) RestartHarness(context.Context, string) error           { 
 func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
 func (b *testBackend) RenameProfile(string, string) error                     { return nil }
 func (b *testBackend) DeleteProfile(string) error                             { return nil }
+func (b *testBackend) ForgetProfile(string, string) error                     { return nil }
 func (*testBackend) ResumeCatalog(context.Context) (registry.ResumeCatalog, error) {
 	return registry.ResumeCatalog{Sessions: []registry.ResumableSession{{
 		SessionID: "vendor-session", Source: "history", Agent: "codex",

@@ -310,7 +310,9 @@ export interface SpawnSpec {
   preset?: string;
   // Human-facing profile identity + browser snapshot seed. The daemon resolves
   // or creates a Profile from these and fills in `id`; snapshot '' = fresh state.
-  profile?: { id?: string; model?: string; effort?: string; permission?: string; snapshot?: string };
+  // `id` reuses that profile while its settings still match; `name` names a new
+  // one explicitly (omitted = auto-named).
+  profile?: { id?: string; name?: string; model?: string; effort?: string; permission?: string; snapshot?: string };
   // Agent id whose transcript is rendered (without any model inference) into
   // this agent's first user message, so it can pick up where that agent stopped.
   handoffFrom?: string;
@@ -470,6 +472,7 @@ export type ClientMsg =
   | { t: 'delete_snapshot'; id: string; corrId?: string }
   | { t: 'list_profiles'; project?: string; corrId?: string }
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
+  | { t: 'forget_profile'; id: string; project: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; sessionId: string; corrId?: string }

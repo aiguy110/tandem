@@ -956,6 +956,38 @@ FROM profiles WHERE agent=? AND harness=? AND model=? AND effort=? AND permissio
 	return p, err
 }
 
+// FindProfileByTupleName narrows FindProfileByTuple to one identity within
+// those settings: an empty name matches only the auto-named profile, while a
+// non-empty name matches only a user-named profile carrying exactly that name.
+// Several profiles may share settings (one auto-named, any number user-named),
+// so an unnamed spawn never silently resolves to someone's named profile.
+func (s *Store) FindProfileByTupleName(agent, harness, model, effort, permission, snapshotID, name string) (*Profile, error) {
+	query := `SELECT id, name, autoNamed, agent, harness, model, effort, permission, snapshotId, createdAt, lastUsedAt
+FROM profiles WHERE agent=? AND harness=? AND model=? AND effort=? AND permission=? AND snapshotId=?`
+	args := []any{agent, harness, model, effort, permission, snapshotID}
+	if name == "" {
+		query += " AND autoNamed=1"
+	} else {
+		query += " AND autoNamed=0 AND name=?"
+		args = append(args, name)
+	}
+	p, err := scanProfile(s.db.QueryRow(query+" ORDER BY lastUsedAt DESC LIMIT 1", args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return p, err
+}
+
+// Profile returns one profile by id, or (nil, nil) if it does not exist.
+func (s *Store) Profile(id string) (*Profile, error) {
+	p, err := scanProfile(s.db.QueryRow(`SELECT id, name, autoNamed, agent, harness, model, effort, permission, snapshotId, createdAt, lastUsedAt
+FROM profiles WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return p, err
+}
+
 // RenameProfile sets a user-chosen name and clears the auto-named flag.
 func (s *Store) RenameProfile(id, name string) error {
 	_, err := s.db.Exec("UPDATE profiles SET name=?, autoNamed=0 WHERE id=?", name, id)
@@ -968,6 +1000,13 @@ func (s *Store) DeleteProfile(id string) error {
 		return err
 	}
 	_, err := s.db.Exec("DELETE FROM profiles WHERE id=?", id)
+	return err
+}
+
+// ForgetProfileRecency drops a profile from one project's recency list without
+// deleting the profile itself, which other projects may still use.
+func (s *Store) ForgetProfileRecency(id, project string) error {
+	_, err := s.db.Exec("DELETE FROM profile_recent WHERE project=? AND profileId=?", project, id)
 	return err
 }
 

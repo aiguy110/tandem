@@ -322,6 +322,8 @@ interface StoreState {
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameAgent: (sessionId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  // Drops a profile from one repo's recency list; the profile itself survives.
+  forgetProfile: (id: string, project: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   steer: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   aside: (sessionId: string, question: string) => Promise<AckResult>;
@@ -1408,6 +1410,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingProfiles.set(corrId, { resolve, reject });
         client.send({ t: 'delete_profile', id, project, corrId });
+      }),
+    forgetProfile: (id, project) =>
+      new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingProfiles.set(corrId, { resolve, reject });
+        client.send({ t: 'forget_profile', id, project, corrId });
       }),
     prompt: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {

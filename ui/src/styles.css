@@ -976,7 +976,15 @@ body.dock-resizing .app { transition: none; }
 .resume-disabled-reason { margin-top: 6px; color: var(--err); font-size: var(--fs-xs); }
 .modal .row .repo-details { min-width: 0; flex: 1; }
 .modal .row .repo-details .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.modal .row .profile-button { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .row.repo-row { padding-top: 11px; }
+.modal .row.repo-row:not(:first-child) { border-top: 1px solid var(--border); }
+.modal .row .new-profile { color: var(--text-faint); font-family: var(--font-ui); }
+.modal .row.repo-row.sel .new-profile { color: var(--agent); }
+.modal .row.profile-row { padding: 6px 16px 6px 32px; font-size: var(--fs-sm); -webkit-touch-callout: none; user-select: none; }
+.modal .row.profile-row .profile-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal .row.profile-row .profile-kind { color: var(--text-faint); font-size: var(--fs-xs); }
+/* The spawn palette's scrim sits above the rail's menu layer. */
+.session-context-menu.spawn-profile-menu { z-index: 110; }
 .modal .foot { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-faint); flex-wrap: wrap; }
 .modal .foot .kbd { margin-right: 4px; }
 .automation-modal { width: min(760px, 92vw); }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,23 +33,55 @@ func (r *Registry) applyProfile(sessionID, project string, spec *agentadapter.Sp
 			p.Snapshot = "" // snapshot deleted meanwhile → fall back to fresh
 		}
 	}
-	existing, err := r.store.FindProfileByTuple(spec.Agent, spec.Harness, p.Model, p.Effort, p.Permission, p.Snapshot)
+	id, err := r.resolveProfileID(spec)
 	if err != nil {
+		slog.Warn("profile resolve failed", "session", sessionID, "project", project, "err", err)
 		return
-	}
-	id := ""
-	if existing != nil {
-		id = existing.ID
-	} else {
-		id = "prof-" + randHex(8)
-		_ = r.store.UpsertProfile(store.Profile{
-			ID: id, Name: r.profileAutoName(spec), AutoNamed: true,
-			Agent: spec.Agent, Harness: spec.Harness,
-			Model: p.Model, Effort: p.Effort, Permission: p.Permission, SnapshotID: p.Snapshot,
-		})
 	}
 	p.ID = id
 	_ = r.store.TouchProfile(id, project)
+}
+
+// resolveProfileID picks the profile a spawn records. An explicit id wins while
+// that profile's settings still match the spawn exactly (so picking a named
+// profile reuses it). Otherwise the settings resolve to the profile carrying the
+// requested name — or, unnamed, to the auto-named profile — creating it when
+// missing. Customizing a profile therefore always yields a new profile rather
+// than mutating the one it started from.
+func (r *Registry) resolveProfileID(spec *agentadapter.Spec) (string, error) {
+	p := spec.Profile
+	if p.ID != "" {
+		existing, err := r.store.Profile(p.ID)
+		if err != nil {
+			return "", err
+		}
+		if existing != nil && existing.Agent == spec.Agent && existing.Harness == spec.Harness &&
+			existing.Model == p.Model && existing.Effort == p.Effort && existing.Permission == p.Permission &&
+			existing.SnapshotID == p.Snapshot {
+			return existing.ID, nil
+		}
+	}
+	name := strings.TrimSpace(p.Name)
+	existing, err := r.store.FindProfileByTupleName(spec.Agent, spec.Harness, p.Model, p.Effort, p.Permission, p.Snapshot, name)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		return existing.ID, nil
+	}
+	created := store.Profile{
+		ID: "prof-" + randHex(8), Name: name, AutoNamed: name == "",
+		Agent: spec.Agent, Harness: spec.Harness,
+		Model: p.Model, Effort: p.Effort, Permission: p.Permission, SnapshotID: p.Snapshot,
+	}
+	if created.AutoNamed {
+		created.Name = r.profileAutoName(spec)
+	}
+	if err := r.store.UpsertProfile(created); err != nil {
+		return "", err
+	}
+	slog.Info("profile created", "profile", created.ID, "name", created.Name, "autoNamed", created.AutoNamed, "agent", spec.Agent, "harness", spec.Harness)
+	return created.ID, nil
 }
 
 // profileAutoName builds the default concatenated name for a new profile, e.g.
@@ -184,6 +217,16 @@ func (r *Registry) RenameProfile(id, name string) error {
 		return errors.New("profile name is required")
 	}
 	return r.store.RenameProfile(id, name)
+}
+
+// ForgetProfile removes a profile from one project's recency list; the profile
+// itself survives for other projects and the fuzzy picker.
+func (r *Registry) ForgetProfile(id, project string) error {
+	if project == "" {
+		return errors.New("project is required to forget a profile")
+	}
+	slog.Info("profile forgotten for project", "profile", id, "project", project)
+	return r.store.ForgetProfileRecency(id, project)
 }
 
 // DeleteProfile removes a profile and its recency records.

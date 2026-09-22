@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
 import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
-import { usePresence } from '../transitions';
+import { usePresence, useValuePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
@@ -89,10 +90,19 @@ function proposedBranch(ref: GitRefInfo | undefined, name: string): string {
   return `tandem/${context}/${agent || 'session'}`;
 }
 
-// Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs.
-//   Enter               → spawn worktree defaults + focus jumps
+// A palette row is either a repo header or one of the profiles previously used
+// in that repo (daemon-owned per-repo recency, newest first).
+type PaletteRow =
+  | { kind: 'repo'; dir: RepoInfo }
+  | { kind: 'profile'; dir: RepoInfo; profile: Profile };
+
+// Quick-spawn palette (D9): dir-first fuzzy modal backed by list_dirs. Each
+// matching repo is a header followed by the profiles already used in it.
+//   Enter on a profile  → spawn with that profile + focus jumps
+//   Enter on a repo     → open the form to launch with a new profile
 //   Tab → type task → Enter → spawn AND dispatch
-//   ⌘/Ctrl+Enter        → reveal advanced (adapter / workspace mode / Git refs / name / hand-off)
+//   ⌘/Ctrl+Enter        → customize the selected profile (or new profile on a repo)
+//   right-click / long-press a profile → Customize / Forget
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
   const hosts = useStore((s) => s.hosts);
@@ -104,7 +114,7 @@ export function SpawnPalette() {
   const getSpawnOptions = useStore((s) => s.getSpawnOptions);
   const listGitRefs = useStore((s) => s.listGitRefs);
   const listProfiles = useStore((s) => s.listProfiles);
-  const renameProfileAction = useStore((s) => s.renameProfile);
+  const forgetProfile = useStore((s) => s.forgetProfile);
   const listSnapshots = useStore((s) => s.listSnapshots);
   const snapshots = useStore((s) => s.snapshots);
   const focus = useStore((s) => s.focus);
@@ -138,7 +148,9 @@ export function SpawnPalette() {
   }, [scopedCatalog]);
 
   const [query, setQuery] = useState('');
-  const [sel, setSel] = useState(0);
+  // null = not moved by the user since the query changed; the first profile row
+  // (the repo's latest profile) is then selected so Enter quick-spawns it.
+  const [sel, setSel] = useState<number | null>(null);
   const [taskMode, setTaskMode] = useState(false);
   const [task, setTask] = useState('');
   const [advanced, setAdvanced] = useState(false);
@@ -165,11 +177,17 @@ export function SpawnPalette() {
   const [effort, setEffort] = useState('');
   const [permission, setPermission] = useState('');
   const [snapshot, setSnapshot] = useState('');
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [profileRecent, setProfileRecent] = useState<string[]>([]);
   const [profilesByRepo, setProfilesByRepo] = useState<Record<string, { profiles: Profile[]; recent: string[] }>>({});
-  const [renaming, setRenaming] = useState(false);
-  const [renameText, setRenameText] = useState('');
+  // The repo the advanced form launches into, pinned when the form opens so
+  // profile-list refreshes cannot shift it to another row.
+  const [chosenDir, setChosenDir] = useState<RepoInfo | null>(null);
+  // Profile being customized. Launching with its settings unchanged (and no new
+  // name) reuses it; any change yields a new profile, never an edit of this one.
+  const [baseProfile, setBaseProfile] = useState<Profile | undefined>();
+  const [profileName, setProfileName] = useState('');
+  const [menu, setMenu] = useState<{ x: number; y: number; dir: RepoInfo; profile: Profile } | null>(null);
+  const { rendered: renderedMenu, closing: menuClosing } = useValuePresence(menu);
+  const rowsRef = useRef<HTMLDivElement>(null);
   const [spawnOptions, setSpawnOptions] = useState<SpawnOptions | null>(null);
   const [optionsBusy, setOptionsBusy] = useState(false);
   const [optionsError, setOptionsError] = useState('');
@@ -199,20 +217,19 @@ export function SpawnPalette() {
     refreshHostDirs(hostId);
     refreshAgentCatalog(hostId);
     setQuery('');
-    setSel(0);
+    setSel(null);
     setAdvanced(false);
+    setChosenDir(null);
     // Profiles and browser snapshots are intentionally local-only for this
     // first federation cut. A remote spawn still gets a fresh remote browser;
     // sending a local snapshot/profile ID to a slave would be misleading.
-    setProfiles([]);
-    setProfileRecent([]);
     setProfilesByRepo({});
+    setBaseProfile(undefined);
     setSnapshot('');
     setAgent('agent:claude');
     setModel('');
     setEffort('');
     setPermission('');
-    appliedDirRef.current = '';
   }, [hostId, refreshHostDirs, refreshAgentCatalog]);
 
   const filtered = useMemo(() => {
@@ -225,8 +242,23 @@ export function SpawnPalette() {
     const recent = recentPaths.map((p) => byPath.get(p)).filter((d): d is RepoInfo => !!d);
     return recent.length > 0 ? recent.slice(0, RECENT_DIRS_MAX) : matched.slice(0, RECENT_DIRS_MAX);
   }, [query, scopedDirs, hostId]);
-  useEffect(() => setSel(0), [query]);
-  const selectedDir = filtered[sel];
+  const rows = useMemo(() => filtered.flatMap((dir): PaletteRow[] => {
+    const data = profilesByRepo[dir.path];
+    const used = data
+      ? data.recent.map((id) => data.profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p)
+      : [];
+    return [{ kind: 'repo', dir }, ...used.map((profile): PaletteRow => ({ kind: 'profile', dir, profile }))];
+  }), [filtered, profilesByRepo]);
+  useEffect(() => setSel(null), [query]);
+  const selIndex = Math.min(sel ?? (rows[1]?.kind === 'profile' ? 1 : 0), Math.max(0, rows.length - 1));
+  const selectedRow = rows[selIndex];
+  const selectedDir = advanced && chosenDir ? chosenDir : selectedRow?.dir;
+  useEffect(() => {
+    rowsRef.current?.querySelector('.row.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [selIndex]);
+  // Profiles are global (the picker searches them all); any repo's cached list
+  // is the same set, so prefer the selected repo's freshest copy.
+  const profiles = (selectedDir && profilesByRepo[selectedDir.path]?.profiles) || Object.values(profilesByRepo)[0]?.profiles || [];
   const selectedHarness = harnesses.find((harness) => harness.id === agent) ?? harnesses[0];
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
@@ -262,7 +294,10 @@ export function SpawnPalette() {
     handoffSeeded.current = true;
     setParentSession(spawnHandoffFrom);
     const dir = scopedDirs.find((d) => d.path === source.workspace.repoPath);
-    if (dir) setQuery(dir.path);
+    if (dir) {
+      setQuery(dir.path);
+      openForm(dir);
+    }
     setAdvanced(true);
     if (source.workspace.cwd) setWorkspaceMode('join');
   }, [spawnHandoffFrom, agents, hostId, scopedDirs]);
@@ -309,62 +344,60 @@ export function SpawnPalette() {
     setEffort(p.effort);
     setPermission(p.permission);
     setSnapshot(p.snapshotId);
-    setRenaming(false);
   };
-  const openAdvanced = (dir: RepoInfo, index: number) => {
-    setSel(index);
+  // Open the launch form for a repo. With `base` it customizes that profile;
+  // without, it starts a new profile seeded from the repo's latest one (or the
+  // per-project harness hint + that harness's last settings when it has none).
+  const openForm = (dir: RepoInfo, base?: Profile) => {
+    setChosenDir(dir);
     setAdvanced(true);
-    appliedDirRef.current = '';
-    const cached = profilesByRepo[dir.path];
-    if (cached) {
-      setProfiles(cached.profiles);
-      setProfileRecent(cached.recent);
-      const latest = cached.profiles.find((profile) => profile.id === cached.recent[0]);
-      if (latest) {
-        applyProfile(latest);
-        appliedDirRef.current = dir.path;
-      }
-    }
-  };
-  // Seed the palette for the selected repo from the daemon's per-repo recency
-  // (profile_recent): its most-recent profile is the durable default. Falls back
-  // to the per-project harness hint + that harness's last settings only when the
-  // repo has no recorded profile. Applied once per directory (appliedDirRef) so it
-  // never clobbers edits, and re-runs as profilesByRepo loads in.
-  useEffect(() => {
-    if (!selectedDir) return;
-    const cached = profilesByRepo[selectedDir.path];
-    if (cached) {
-      setProfiles(cached.profiles);
-      setProfileRecent(cached.recent);
-    }
-    if (appliedDirRef.current === selectedDir.path) return;
-    const latest = cached?.profiles.find((p) => p.id === cached.recent[0]);
-    if (latest) {
-      appliedDirRef.current = selectedDir.path;
-      applyProfile(latest);
+    setMenu(null);
+    setProfileName('');
+    setBaseProfile(base);
+    const data = profilesByRepo[dir.path];
+    const seed = base ?? data?.profiles.find((p) => p.id === data.recent[0]);
+    if (seed) {
+      applyProfile(seed);
       return;
     }
-    const matched = harnessForProject(selectedDir.path);
+    const matched = harnessForProject(dir.path);
+    const defaults = profileDefaults(data?.profiles ?? [], matched?.agent ?? '', matched?.harness ?? '');
     setAgent(matched?.id ?? 'agent:claude');
-    // Only lock in the harness-hint fallback once profiles have loaded, so a later
-    // fetch that reveals a recent profile can still take precedence.
-    if (cached) {
-      appliedDirRef.current = selectedDir.path;
-      const defaults = profileDefaults(cached.profiles, matched?.agent ?? '', matched?.harness ?? '');
-      setModel(defaults.model);
-      setEffort(defaults.effort);
-      setPermission(defaults.permission);
+    setModel(defaults.model);
+    setEffort(defaults.effort);
+    setPermission(defaults.permission);
+    setSnapshot('');
+  };
+  const forget = async (dir: RepoInfo, profile: Profile) => {
+    setMenu(null);
+    try {
+      const result = await forgetProfile(profile.id, dir.path);
+      setProfilesByRepo((current) => ({ ...current, [dir.path]: result }));
+    } catch (cause) {
+      setError({ code: 'forget_profile', msg: cause instanceof Error ? cause.message : String(cause), dir });
     }
-    // applyProfile/harnessForProject close over current harnesses; profilesByRepo drives re-runs.
-  }, [selectedDir?.path, profilesByRepo, harnesses, scopedCatalog, hostId]);
+  };
+  const openMenu = (origin: { x: number; y: number }, dir: RepoInfo, profile: Profile) => {
+    const width = 180;
+    const height = 90;
+    setMenu({
+      x: Math.max(8, Math.min(origin.x, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(origin.y, window.innerHeight - height - 8)),
+      dir,
+      profile,
+    });
+  };
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = () => setMenu(null);
+    window.addEventListener('pointerdown', dismiss);
+    return () => window.removeEventListener('pointerdown', dismiss);
+  }, [menu]);
   useEffect(() => {
     if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
     if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
   }, [agent, adapter, selectedHarness]);
-  // Load this repo's profiles + captured snapshots when the advanced panel opens,
-  // and auto-apply the latest-used profile once per selected directory.
-  const appliedDirRef = useRef<string>('');
+  // Prefetch the used-profile lists for every visible repo.
   useEffect(() => {
     if (remote) return;
     let cancelled = false;
@@ -390,8 +423,7 @@ export function SpawnPalette() {
     return () => { cancelled = true; };
   }, [filtered, profilesByRepo, listProfiles, remote]);
   // On advanced open, refresh this repo's profiles + snapshots so the picker
-  // reflects any newly-created profiles. Feeding profilesByRepo lets the seed
-  // effect above project the fresh list (and apply it if not yet applied).
+  // reflects any newly-created profiles.
   useEffect(() => {
     if (remote || !advanced || !selectedDir) return;
     let cancelled = false;
@@ -458,55 +490,44 @@ export function SpawnPalette() {
     if (taskMode) taskRef.current?.focus();
   }, [taskMode]);
 
-  // The profile whose settings exactly match the current selection (if any), and
-  // the auto-name a new profile would get — mirrors the daemon's naming.
+  // The profile the daemon will record for the current form (mirroring its
+  // resolution rules), and the auto-name a new profile would get.
   const currentHarness = selectedHarness?.harness ?? '';
-  const matchedProfile = profiles.find((p) =>
+  const tuple = adapter === 'acp' ? { model, effort, permission } : EMPTY_HARNESS_DEFAULTS;
+  const matchesForm = (p: Profile) =>
     p.agent === agentSlug && (p.harness ?? '') === currentHarness &&
-    p.model === model && p.effort === effort && p.permission === permission && (p.snapshotId ?? '') === snapshot);
+    p.model === tuple.model && p.effort === tuple.effort && p.permission === tuple.permission && (p.snapshotId ?? '') === snapshot;
+  const trimmedProfileName = profileName.trim();
+  const baseUnchanged = !!baseProfile && !trimmedProfileName && matchesForm(baseProfile);
+  const resolvedProfile = trimmedProfileName
+    ? profiles.find((p) => !p.autoNamed && p.name === trimmedProfileName && matchesForm(p))
+    : baseUnchanged ? baseProfile : profiles.find((p) => p.autoNamed && matchesForm(p));
   const snapshotLabel = snapshot ? (snapshots.find((s) => s.id === snapshot)?.name ?? 'snapshot') : 'Fresh';
-  const autoName = [selectedHarness?.name ?? agentSlug, model, effort, permission, snapshotLabel]
+  const autoName = [selectedHarness?.name ?? agentSlug, tuple.model, tuple.effort, tuple.permission, snapshotLabel]
     .filter((part) => part).join(' · ');
   // Profiles offered by default in the picker: this repo's most-recent 3.
-  const recentProfiles = profileRecent.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, 3);
-  const commitRename = async () => {
-    if (!matchedProfile || !renameText.trim()) return;
-    const { profiles: ps, recent } = await renameProfileAction(matchedProfile.id, renameText.trim(), selectedDir?.path);
-    setProfiles(ps);
-    setProfileRecent(recent);
-    setRenaming(false);
-  };
+  const repoRecent = (selectedDir && profilesByRepo[selectedDir.path]?.recent) || [];
+  const recentProfiles = repoRecent.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, 3);
 
-  const doSpawn = async (dir: RepoInfo, forceWorktree = false, existingCwd?: string) => {
+  // Spawn in `dir`. `quick` launches that saved profile as-is (a profile row);
+  // otherwise the advanced form's current settings are used.
+  const doSpawn = async (dir: RepoInfo, { quick, existingCwd }: { quick?: Profile; existingCwd?: string } = {}) => {
     setBusy(true);
     setError(null);
-    let spawnHarness = advanced ? selectedHarness : undefined;
-    let defaults: HarnessDefaults = advanced ? { model, effort, permission } : EMPTY_HARNESS_DEFAULTS;
-    if (!advanced) {
-      // Non-advanced quick-spawn launches this repo's durable default from
-      // profile_recent (harness + settings), falling back to the per-project
-      // harness hint and that harness's most-recent settings. The prefetch effect
-      // usually has the list cached; fetch on a miss (row clicked before prefetch).
-      const data = remote ? { profiles: [], recent: [] } : profilesByRepo[dir.path] ?? await listProfiles(dir.path).catch(() => ({ profiles: [], recent: [] }));
-      const latest = data.profiles.find((p) => p.id === data.recent[0]);
-      if (latest) {
-        spawnHarness = harnessForProfile(latest);
-        defaults = { model: latest.model, effort: latest.effort, permission: latest.permission };
-      } else {
-        spawnHarness = harnessForProject(dir.path);
-        defaults = profileDefaults(data.profiles, spawnHarness?.agent ?? '', spawnHarness?.harness ?? '');
-      }
-    }
-    const spawnAgent = spawnHarness?.agent ?? agentSlug;
-    const spawnHarnessID = spawnHarness?.harness;
-    const spawnAdapter = advanced ? adapter : (spawnHarness?.hasAcp ? 'acp' : 'pty');
-    const mode = existingCwd ? 'existing' : forceWorktree ? 'create' : advanced ? workspaceMode : 'create';
+    const spawnHarness = quick ? harnessForProfile(quick) : selectedHarness;
+    const defaults: HarnessDefaults = quick
+      ? { model: quick.model, effort: quick.effort, permission: quick.permission }
+      : { model, effort, permission };
+    const spawnAgent = spawnHarness?.agent ?? quick?.agent ?? agentSlug;
+    const spawnHarnessID = spawnHarness?.harness ?? (quick ? quick.harness || undefined : undefined);
+    const spawnAdapter = quick ? (spawnHarness?.hasAcp === false ? 'pty' : 'acp') : adapter;
+    const mode = existingCwd ? 'existing' : quick ? 'create' : workspaceMode;
     // "join" resolves to the source agent's checkout: the daemon recognizes an
     // already-occupied directory and lets the new agent share that workspace
     // (branch, merge target and all) instead of provisioning its own.
     const cwd = existingCwd ?? (mode === 'join' ? joinCwd : dir.path);
-    const workSource = advanced ? (mode === 'attach' ? selectedAttachRef : selectedGitRef) : undefined;
-    let effectiveOptions = advanced ? spawnOptions : null;
+    const workSource = quick ? undefined : (mode === 'attach' ? selectedAttachRef : selectedGitRef);
+    let effectiveOptions = quick ? null : spawnOptions;
     if (spawnAdapter === 'acp' && !effectiveOptions) {
       try {
         effectiveOptions = await getSpawnOptions(spawnAgent, dir.path, spawnHarnessID, hostId);
@@ -524,14 +545,14 @@ export function SpawnPalette() {
       permission: defaults.permission && effectiveOptions?.modes?.availableModes.some((mode) => mode.id === defaults.permission)
         ? defaults.permission : '',
     } : EMPTY_HARNESS_DEFAULTS;
-    const spawnSnapshot = advanced && !remote ? snapshot : '';
+    const spawnSnapshot = remote ? '' : quick ? quick.snapshotId : snapshot;
     const spec: SpawnSpec = {
       ...(remote ? { hostId } : {}),
       adapter: spawnAdapter,
       agent: spawnAgent,
       harness: spawnHarnessID,
       terminalArgs: spawnAdapter === 'pty'
-        ? (advanced ? terminalArgsText : '').split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
+        ? (quick ? '' : terminalArgsText).split('\n').map((arg) => arg.endsWith('\r') ? arg.slice(0, -1) : arg).filter((arg) => arg.length > 0)
         : undefined,
       workspace: mode === 'existing' || mode === 'join'
         ? { kind: 'existing', cwd }
@@ -541,12 +562,12 @@ export function SpawnPalette() {
             branchMode: mode,
             branch: mode === 'attach' ? selectedAttachRef?.displayName : agentBranch || undefined,
             source: workSource ? { ref: workSource.ref, commit: workSource.commit } : undefined,
-            integration: advanced && selectedGitRef ? {
+            integration: !quick && selectedGitRef ? {
               kind: selectedGitRef.kind === 'local-branch' || selectedGitRef.kind === 'remote-branch' ? selectedGitRef.kind : 'detached',
               ref: selectedGitRef.ref,
             } : undefined,
           },
-      name: advanced ? name || undefined : undefined,
+      name: quick ? undefined : name || undefined,
       task: task.trim() || undefined,
       sessionConfig: spawnAdapter === 'acp' ? {
         modeId: resolvedDefaults.permission || undefined,
@@ -558,6 +579,8 @@ export function SpawnPalette() {
       // Profile identity + browser snapshot seed. The daemon resolves-or-creates
       // the profile from these and records per-repo recency.
       profile: {
+        id: quick?.id ?? (trimmedProfileName ? undefined : baseProfile?.id),
+        name: quick ? undefined : trimmedProfileName || undefined,
         ...(spawnAdapter === 'acp'
           ? {
               model: resolvedDefaults.model || undefined,
@@ -571,7 +594,7 @@ export function SpawnPalette() {
       handoffMode: parentSession && includeTranscript ? handoffMode : undefined,
     };
     saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
-    if (advanced && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
+    if (!quick && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
     const r = await spawn(spec);
     setBusy(false);
     if (r.error) {
@@ -584,16 +607,26 @@ export function SpawnPalette() {
     }
   };
 
+  // Activate a list row: a profile spawns with it, a repo opens the form for a
+  // new profile. `customize` opens the form seeded from the profile instead.
+  const activate = (row: PaletteRow | undefined, customize = false) => {
+    if (!row || busy) return;
+    if (row.kind === 'repo') openForm(row.dir);
+    else if (customize) openForm(row.dir, row.profile);
+    else void doSpawn(row.dir, { quick: row.profile });
+  };
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      setModal('none');
+      if (menu) setMenu(null);
+      else setModal('none');
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      const dir = filtered[sel];
-      if (advanced && dir && !busy) void doSpawn(dir);
-      else if (dir) openAdvanced(dir, sel);
+      if (advanced) {
+        if (selectedDir && !busy) void doSpawn(selectedDir);
+      } else activate(selectedRow, true);
       return;
     }
     if (advanced) return;
@@ -604,18 +637,17 @@ export function SpawnPalette() {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSel((i) => Math.min(filtered.length - 1, i + 1));
+      setSel(Math.min(rows.length - 1, selIndex + 1));
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSel((i) => Math.max(0, i - 1));
+      setSel(Math.max(0, selIndex - 1));
       return;
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      const dir = filtered[sel];
-      if (dir && !busy) void doSpawn(dir);
+      activate(selectedRow);
     }
   };
 
@@ -652,40 +684,52 @@ export function SpawnPalette() {
                 onChange={(e) => setTask(e.target.value)}
               />
             )}
-            <div className="rows">
+            <div className="rows" ref={rowsRef}>
               {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
-              {filtered.map((d, i) => {
-                const repoProfiles = profilesByRepo[d.path];
-                const rowHarness = harnessForProject(d.path);
-                // Quick-spawn launches this repo's most-recent profile (profile_recent).
-                const defaultProfile = repoProfiles?.profiles.find((profile) => profile.id === repoProfiles.recent[0]);
-                return (
-                  <div key={d.path} className={`row${i === sel ? ' sel' : ''}`} onMouseEnter={() => setSel(i)} onClick={() => !busy && doSpawn(d)}>
-                    <div className="repo-details">
-                      <div className="primary">{d.name}</div>
-                      <div className="sub">{d.path}</div>
-                    </div>
-                    <div className="meta">
-                      <span>{d.currentBranch}</span>
-                      {d.dirty && <span className="dirty">● dirty</span>}
-                      {d.hasLiveAgent && <span className="occupied">◆ occupied</span>}
-                    </div>
-                    <button
-                      className="btn profile-button"
-                      type="button"
-                      title="Open advanced launch settings"
-                      disabled={busy}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openAdvanced(d, i);
-                      }}
-                    >
-                      {defaultProfile?.name ?? `${rowHarness?.name ?? 'Agent'} defaults`}
-                    </button>
+              {rows.map((row, i) => row.kind === 'repo' ? (
+                <div
+                  key={row.dir.path}
+                  className={`row repo-row${i === selIndex ? ' sel' : ''}`}
+                  title="Launch with a new profile"
+                  onMouseEnter={() => setSel(i)}
+                  onClick={() => activate(row)}
+                >
+                  <div className="repo-details">
+                    <div className="primary">{row.dir.name}</div>
+                    <div className="sub">{row.dir.path}</div>
                   </div>
-                );
-              })}
+                  <div className="meta">
+                    <span>{row.dir.currentBranch}</span>
+                    {row.dir.dirty && <span className="dirty">● dirty</span>}
+                    {row.dir.hasLiveAgent && <span className="occupied">◆ occupied</span>}
+                    <span className="new-profile">+ new profile</span>
+                  </div>
+                </div>
+              ) : (
+                <ProfileRow
+                  key={`${row.dir.path}::${row.profile.id}`}
+                  profile={row.profile}
+                  selected={i === selIndex}
+                  onHover={() => setSel(i)}
+                  onActivate={() => activate(row)}
+                  onMenu={(origin) => { setSel(i); openMenu(origin, row.dir, row.profile); }}
+                />
+              ))}
             </div>
+            {renderedMenu && createPortal(
+              <div
+                className={`session-context-menu spawn-profile-menu${menuClosing ? ' closing' : ''}`}
+                style={{ left: renderedMenu.x, top: renderedMenu.y }}
+                role="menu"
+                aria-label={`Actions for ${renderedMenu.profile.name}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <button type="button" role="menuitem" onClick={() => openForm(renderedMenu.dir, renderedMenu.profile)}>Customize…</button>
+                <button type="button" role="menuitem" className="danger" onClick={() => void forget(renderedMenu.dir, renderedMenu.profile)}>Forget for this repo</button>
+              </div>,
+              document.body,
+            )}
           </>
         )}
         {advanced && (
@@ -700,29 +744,21 @@ export function SpawnPalette() {
             <div className="adv">
             <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Agent profile</div>
             <label style={{ gridColumn: '1 / -1' }}>
-              Profile <span className="sub">(latest 3 shown; fuzzy-find for more)</span>
-              <ProfilePicker profiles={profiles} recent={recentProfiles} value={matchedProfile} onPick={(p) => {
+              Start from <span className="sub">(latest 3 shown; fuzzy-find for more)</span>
+              <ProfilePicker profiles={profiles} recent={recentProfiles} value={baseProfile} onPick={(p) => {
+                setBaseProfile(p);
                 applyProfile(p);
                 // Move focus to Launch so a subsequent Enter spawns with the picked profile.
                 requestAnimationFrame(() => launchRef.current?.focus());
               }} />
+            </label>
+            <label style={{ gridColumn: '1 / -1' }}>
+              Profile name <span className="sub">(optional)</span>
+              <input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder={baseUnchanged && baseProfile ? baseProfile.name : `auto: ${autoName}`} />
               <div className="sub" style={{ marginTop: 4 }}>
-                {matchedProfile ? (
-                  renaming ? (
-                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                      <input value={renameText} autoFocus onChange={(e) => setRenameText(e.target.value)}
-                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') void commitRename(); if (e.key === 'Escape') setRenaming(false); }} />
-                      <button type="button" className="btn" onClick={() => void commitRename()}>Save</button>
-                      <button type="button" className="btn ghost" onClick={() => setRenaming(false)}>Cancel</button>
-                    </span>
-                  ) : (
-                    <>Using <b>{matchedProfile.name}</b>{' '}
-                      <button type="button" className="btn ghost" onClick={() => { setRenaming(true); setRenameText(matchedProfile.name); }}>Rename</button>
-                    </>
-                  )
-                ) : (
-                  <>New profile will be created: <b>{autoName}</b></>
-                )}
+                {resolvedProfile
+                  ? <>Launches with profile <b>{resolvedProfile.name}</b></>
+                  : <>Creates a new profile: <b>{trimmedProfileName || autoName}</b></>}
               </div>
             </label>
             <label>
@@ -896,7 +932,7 @@ export function SpawnPalette() {
                       className="btn"
                       style={{ marginTop: 8 }}
                       disabled={busy}
-                      onClick={() => void doSpawn(selectedDir, false, selectedAttachRef.checkedOutAt)}
+                      onClick={() => void doSpawn(selectedDir, { existingCwd: selectedAttachRef.checkedOutAt })}
                     >
                       Use this checked-out worktree
                     </button>
@@ -933,6 +969,7 @@ export function SpawnPalette() {
         ) : (
           <div className="foot">
             <span><span className="kbd">↵</span> spawn</span>
+            <span><span className="kbd">⌘↵</span> customize</span>
             <span><span className="kbd">⇥</span> add task</span>
             <span><span className="kbd">↑↓</span> select</span>
             <span><span className="kbd">Esc</span> close</span>
@@ -940,6 +977,77 @@ export function SpawnPalette() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// One previously-used profile listed under its repo. Click/Enter spawns with it;
+// right-click or a touch long-press opens its Customize / Forget menu.
+function ProfileRow({
+  profile,
+  selected,
+  onHover,
+  onActivate,
+  onMenu,
+}: {
+  profile: Profile;
+  selected: boolean;
+  onHover: () => void;
+  onActivate: () => void;
+  onMenu: (origin: { x: number; y: number }) => void;
+}) {
+  // Touch long-press is recognized directly: a browser `contextmenu` for it is
+  // inconsistently delivered (iOS never sends one).
+  const longPress = useRef<{ pointerId: number; x: number; y: number; timer: number } | null>(null);
+  const longPressOpened = useRef(false);
+  const cancelLongPress = () => {
+    if (!longPress.current) return;
+    window.clearTimeout(longPress.current.timer);
+    longPress.current = null;
+  };
+  useEffect(() => cancelLongPress, []);
+  return (
+    <div
+      className={`row profile-row${selected ? ' sel' : ''}`}
+      title="Launch with this profile (right-click or long-press for more)"
+      onMouseEnter={onHover}
+      onClick={() => {
+        if (longPressOpened.current) {
+          longPressOpened.current = false;
+          return;
+        }
+        onActivate();
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        cancelLongPress();
+        onMenu({ x: event.clientX, y: event.clientY });
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType !== 'touch') return;
+        cancelLongPress();
+        longPressOpened.current = false;
+        const { pointerId, clientX: x, clientY: y } = event;
+        const timer = window.setTimeout(() => {
+          longPress.current = null;
+          longPressOpened.current = true;
+          onMenu({ x, y });
+        }, 550);
+        longPress.current = { pointerId, x, y, timer };
+      }}
+      onPointerMove={(event) => {
+        const gesture = longPress.current;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        // Movement beyond natural finger drift is a scroll, not a long-press.
+        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 12) cancelLongPress();
+      }}
+      onPointerUp={(event) => {
+        if (event.pointerId === longPress.current?.pointerId) cancelLongPress();
+      }}
+      onPointerCancel={cancelLongPress}
+    >
+      <span className="profile-name">{profile.name}</span>
+      {!profile.autoNamed && <span className="profile-kind">named</span>}
     </div>
   );
 }
