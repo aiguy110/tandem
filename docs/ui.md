@@ -41,7 +41,10 @@ a set of semi-autonomous sessions, and the UI's job is legibility + intervention
   focuses that agent and the relevant pane. The single most important element in a
   human-as-conductor model.
 - **Top — Conductor bar.** `+ Agent` (dir-first quick-spawn), `Assign task`, `⌘K` command
-  palette (jump / spawn / run commands, with keybindings shown inline), theme toggle. Spawn
+  palette (jump / spawn / run commands, with keybindings shown inline), and `Aa` for the
+  Appearance modal — theme plus the app-wide and terminal font sizes, which can be locked to
+  one ratio or adjusted separately (`src/appearance.ts`; the app size drives `--ui-scale`,
+  which every `--fs-*` token in `styles.css` is expressed against). Spawn
   mechanics and the rebindable single-key + chord keymap live in
   [`spawn-and-workspaces.md`](spawn-and-workspaces.md).
 - **Bottom — Inspector.** Contextual to focus: workspace file tree, current task, raw logs.

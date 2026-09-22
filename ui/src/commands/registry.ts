@@ -163,6 +163,7 @@ export function buildCommands(): Command[] {
         }
       },
     },
+    { id: 'appearance.open', title: 'Appearance…', subtitle: 'Theme and app / terminal font sizes', run: () => s().setModal('appearance') },
     { id: 'theme.toggle', title: 'Toggle theme', subtitle: 'Switch light / dark', run: () => s().toggleTheme() },
     { id: 'inspector.toggle', title: 'Toggle inspector', subtitle: 'Show / hide the bottom inspector', run: () => s().toggleInspector() },
   ];

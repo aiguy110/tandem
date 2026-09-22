@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRenderer, selectedEngine, type EngineName, type TerminalRenderer } from '../../terminal/TerminalRenderer';
+import { useStore } from '../../store';
 
 // A reusable terminal view (docs/terminal.md): mounts the TerminalRenderer
 // (ghostty-web default, @xterm/xterm fallback), rehydrates from a byte hub, and
@@ -62,6 +63,14 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   // Keep the latest callbacks without re-running the mount effect.
   const cbs = useRef({ subscribe, onData, onResize, onEngine, onFirstData });
   cbs.current = { subscribe, onData, onResize, onEngine, onFirstData };
+  // Appearance (src/appearance.ts) owns the terminal font size. The live
+  // renderer and the refit callback are held in refs so a size change can be
+  // applied to an already-mounted terminal without tearing it down.
+  const termFontSize = useStore((s) => s.appearance.termFontSize);
+  const fontSizeRef = useRef(termFontSize);
+  fontSizeRef.current = termFontSize;
+  const rendererRefLive = useRef<TerminalRenderer | null>(null);
+  const refitRef = useRef<(() => void) | null>(null);
 
   // Canvas/WASM terminal renderers cannot summon a phone's soft keyboard. Keep
   // a real, invisible textarea in the terminal and translate its mobile IME
@@ -303,12 +312,13 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     el.addEventListener('paste', onRendererPaste, true);
 
     (async () => {
-      const created = await createRenderer(el, selectedEngine());
+      const created = await createRenderer(el, selectedEngine(), fontSizeRef.current);
       if (disposed) {
         created.renderer.dispose();
         return;
       }
       renderer = created.renderer;
+      rendererRefLive.current = created.renderer;
       cbs.current.onEngine?.(created.engine);
 
       // Feed buffered scrollback + live bytes into the emulator.
@@ -325,6 +335,7 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
         renderer?.fit();
         if (renderer) cbs.current.onResize(renderer.cols, renderer.rows);
       };
+      refitRef.current = doFit;
       doFit();
       ro = new ResizeObserver(doFit);
       ro.observe(el);
@@ -333,6 +344,8 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
 
     return () => {
       disposed = true;
+      rendererRefLive.current = null;
+      refitRef.current = null;
       el.removeEventListener('focusin', onRendererFocusIn);
       el.removeEventListener('paste', onRendererPaste, true);
       ro?.disconnect();
@@ -340,6 +353,16 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       renderer?.dispose();
     };
   }, []);
+
+  // Re-size an already-mounted terminal in place. The container does not
+  // change, so the ResizeObserver never fires; refit explicitly to recompute
+  // cols/rows for the new cell size and report them to the pty.
+  useEffect(() => {
+    const live = rendererRefLive.current;
+    if (!live) return;
+    live.setFontSize(termFontSize);
+    refitRef.current?.();
+  }, [termFontSize]);
 
   const copyDiagnostics = async () => {
     recordGeometry('diagnostics.copy');

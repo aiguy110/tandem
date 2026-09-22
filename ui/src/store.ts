@@ -11,6 +11,7 @@ import { ptyHub } from './terminal/ptyHub';
 import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
 import { frontendVersion } from './version';
+import { loadAppearance, saveAppearance, type Appearance } from './appearance';
 import type {
   SessionStatus,
   SessionSummary,
@@ -196,7 +197,7 @@ export interface SessionView {
   audioPosition: AudioPosition | null;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'appearance';
 
 export interface AckResult {
   sessionId?: string;
@@ -210,6 +211,7 @@ export interface AckResult {
 interface StoreState {
   conn: ConnState;
   theme: 'dark' | 'light';
+  appearance: Appearance;
   sessions: Record<string, SessionView>;
   order: string[];
   focusedId: string | null;
@@ -273,6 +275,8 @@ interface StoreState {
   markAgentUnread: (id: string) => void;
   setPane: (p: PaneId) => void;
   toggleTheme: () => void;
+  setTheme: (theme: 'dark' | 'light') => void;
+  setAppearance: (a: Appearance) => void;
   toggleSessionsRail: () => void;
   toggleApprovalsRail: () => void;
   setModal: (m: ModalKind) => void;
@@ -1013,6 +1017,7 @@ export const useStore = create<StoreState>((set, get) => {
   return {
     conn: 'connecting',
     theme: initialTheme(),
+    appearance: loadAppearance(),
     sessions: {},
     order: initialSessionOrder(),
     focusedId: initialFocusedSession(),
@@ -1155,6 +1160,14 @@ export const useStore = create<StoreState>((set, get) => {
         localStorage.setItem('tandem.theme', theme);
         return { theme };
       }),
+    setTheme: (theme) => {
+      localStorage.setItem('tandem.theme', theme);
+      set({ theme });
+    },
+    setAppearance: (appearance) => {
+      saveAppearance(appearance);
+      set({ appearance });
+    },
 	toggleSessionsRail: () => set((st) => ({ sessionsRailCollapsed: !st.sessionsRailCollapsed })),
     toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {

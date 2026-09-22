@@ -15,11 +15,14 @@ import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
 import { FleetView } from './components/FleetView';
 import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
+import { AppearanceModal } from './components/AppearanceModal';
+import { uiScale } from './appearance';
 import { useValuePresence } from './transitions';
 import { frontendVersion, loadDaemonVersion } from './version';
 
 export function App() {
   const theme = useStore((s) => s.theme);
+  const appearance = useStore((s) => s.appearance);
   const conn = useStore((s) => s.conn);
   const modal = useStore((s) => s.modal);
   const boot = useStore((s) => s.boot);
@@ -53,6 +56,12 @@ export function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Every --fs-* token is expressed as a multiple of --ui-scale (styles.css),
+  // so the whole UI resizes from this one property.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-scale', String(uiScale(appearance)));
+  }, [appearance]);
 
   useEffect(() => {
     boot();
@@ -120,6 +129,7 @@ function ModalHost({ modal }: { modal: string }) {
       {rendered === 'automation' && <AutomationModal />}
       {rendered === 'fleet' && <FleetView />}
       {rendered === 'adapters' && <AdapterManagerModal />}
+      {rendered === 'appearance' && <AppearanceModal />}
     </div>
   );
 }

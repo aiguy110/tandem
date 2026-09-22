@@ -8,6 +8,7 @@ import { ensureTermFont, selectedFontFamily } from './font';
 
 export interface TerminalRenderer {
   write(bytes: Uint8Array): void;
+  setFontSize(px: number): void;
   onData(cb: (data: string) => void): void;
   resize(cols: number, rows: number): void;
   readonly cols: number;
@@ -18,8 +19,6 @@ export interface TerminalRenderer {
 }
 
 export type EngineName = 'ghostty' | 'xterm';
-
-const FONT_SIZE = 12;
 
 // Engine selection: ?term=xterm / localStorage / build flag forces the fallback.
 export function selectedEngine(): EngineName {
@@ -41,6 +40,7 @@ const THEME = {
 // Common shape between ghostty-web's Terminal and @xterm/xterm's Terminal.
 interface XtermLike {
   cols: number;
+  options?: { fontSize?: number };
   rows: number;
   open(el: HTMLElement): void;
   write(data: Uint8Array | string): void;
@@ -52,6 +52,7 @@ interface XtermLike {
 }
 interface GhosttyLike extends XtermLike {
   wasmTerm?: unknown;
+  element?: HTMLElement;
   renderer?: {
     render(buffer: unknown, forceAll?: boolean, viewportY?: number, scrollbackProvider?: unknown): void;
   };
@@ -67,6 +68,12 @@ class Adapter implements TerminalRenderer {
     private fitAddon: FitLike,
     private forceRedraw?: () => void,
   ) {}
+  setFontSize(px: number): void {
+    // Both engines expose xterm.js' mutable options object; assigning fontSize
+    // remeasures the cell grid. The caller refits afterwards so the new grid is
+    // reported to the pty.
+    if (this.term.options) this.term.options.fontSize = px;
+  }
   write(bytes: Uint8Array): void {
     this.term.write(bytes);
     // ghostty-web 0.4's canvas can miss the final cursor-only update in the
@@ -109,16 +116,45 @@ class Adapter implements TerminalRenderer {
 
 // Create a renderer mounted into `el`. Tries ghostty-web first; on any failure
 // (WASM load, init) falls back to @xterm/xterm and reports which engine won.
-export async function createRenderer(el: HTMLElement, engine: EngineName): Promise<{ renderer: TerminalRenderer; engine: EngineName }> {
+// ghostty-web 0.4 sizes a cell as Math.ceil(measureText('M').width) in CSS
+// pixels and its height from the cap height of 'M' plus 2px. Both are wrong for
+// the same reason: they ignore the device pixel ratio and the font's own line
+// box. At 12px Cascadia the advance is 7.03px, so ceiling to 8 stretches every
+// column by ~14% (visibly wider than native Ghostty), while rows come out at
+// 10px against the font's 14px line box. Round the advance to the nearest
+// device pixel instead -- cells still land on whole device pixels, so nothing
+// seams -- and take the height and baseline from the font's bounding box.
+let metricsPatched = false;
+function patchCellMetrics(CanvasRenderer: { prototype: Record<string, unknown> }): void {
+  if (metricsPatched) return;
+  metricsPatched = true;
+  CanvasRenderer.prototype.measureFont = function measureFont(this: {
+    fontSize: number;
+    fontFamily: string;
+    devicePixelRatio: number;
+  }) {
+    const ctx = document.createElement('canvas').getContext('2d')!;
+    ctx.font = `${this.fontSize}px ${this.fontFamily}`;
+    const m = ctx.measureText('M');
+    const dpr = this.devicePixelRatio || 1;
+    const snap = (v: number) => Math.max(1, Math.round(v * dpr)) / dpr;
+    const ascent = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || this.fontSize * 0.8;
+    const descent = m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || this.fontSize * 0.2;
+    return { width: snap(m.width), height: snap(ascent + descent), baseline: snap(ascent) };
+  };
+}
+
+export async function createRenderer(el: HTMLElement, engine: EngineName, fontSize: number): Promise<{ renderer: TerminalRenderer; engine: EngineName }> {
   // Both engines measure their cell grid from the font at construction time, so
   // the face has to be resolved first or the grid is sized to the fallback.
   const fontFamily = selectedFontFamily();
-  await ensureTermFont(fontFamily, FONT_SIZE);
+  await ensureTermFont(fontFamily, fontSize);
   if (engine === 'ghostty') {
     try {
       const g = await import('ghostty-web');
       await g.init();
-      const term = new g.Terminal({ fontSize: FONT_SIZE, fontFamily, cursorBlink: true, theme: THEME } as never) as unknown as GhosttyLike;
+      patchCellMetrics(g.CanvasRenderer as unknown as { prototype: Record<string, unknown> });
+      const term = new g.Terminal({ fontSize, fontFamily, cursorBlink: true, theme: THEME } as never) as unknown as GhosttyLike;
       const fit = new g.FitAddon() as unknown as FitLike;
       term.loadAddon(fit);
       term.open(el);
@@ -142,7 +178,7 @@ export async function createRenderer(el: HTMLElement, engine: EngineName): Promi
   const { Terminal } = await import('@xterm/xterm');
   const { FitAddon } = await import('@xterm/addon-fit');
   await import('@xterm/xterm/css/xterm.css');
-  const term = new Terminal({ fontSize: FONT_SIZE, fontFamily, cursorBlink: true, theme: THEME, convertEol: false }) as unknown as XtermLike;
+  const term = new Terminal({ fontSize, fontFamily, cursorBlink: true, theme: THEME, convertEol: false }) as unknown as XtermLike;
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);

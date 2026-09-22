@@ -86,6 +86,10 @@ deliberate: both engines paint one codepoint per cell, so Cascadia Code's ligatu
 never form, and Mono's patched glyphs are single-width and stay inside their cell (the
 canvas renderer does not clip `fillText`).
 
+Size comes from the Appearance modal (`ui/src/appearance.ts`), which keeps the app-wide and
+terminal font sizes either locked to one ratio or independent; `PtyTerminal` applies a change
+to the live renderer and refits so the new grid reaches the pty.
+
 `ui/src/terminal/font.ts` owns the stack and its overrides (`?termFont=` or
 `localStorage['tandem.termFont']`, mirroring the engine switch). `createRenderer` awaits
 `ensureTermFont()` **before** constructing a terminal: ghostty-web measures cell width and
@@ -93,6 +97,16 @@ baseline once from `measureText('M')` in its constructor, and xterm.js does the 
 `open()`, so a terminal built against an unloaded webfont locks in the *fallback's* metrics
 and every cell stays misaligned. The `@font-face` uses `font-display: block` for the same
 reason. Italics are synthesized; no italic face is bundled.
+
+### Cell metrics
+
+`createRenderer` replaces `CanvasRenderer.prototype.measureFont`. ghostty-web 0.4 sizes a
+cell as `Math.ceil(measureText('M').width)` in **CSS** pixels and derives its height from the
+cap height of `M` plus 2px, ignoring both the device pixel ratio and the font's line box. At
+12px Cascadia the advance is 7.03px, so ceiling to 8 stretches every column by ~14% — visibly
+wider than native Ghostty. The replacement rounds the advance to the nearest *device* pixel
+(cells still land on whole device pixels, so backgrounds do not seam) and takes height and
+baseline from `fontBoundingBoxAscent/Descent`.
 
 User shells are launched with `TERM=xterm-256color` when the daemon environment does not
 provide a terminal identity (as is typical under systemd). Without it, interactive shells

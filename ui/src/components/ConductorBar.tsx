@@ -14,8 +14,6 @@ function PaletteIcon() {
 
 export function ConductorBar({ version }: { version: string | null }) {
   const setModal = useStore((s) => s.setModal);
-  const toggleTheme = useStore((s) => s.toggleTheme);
-  const theme = useStore((s) => s.theme);
   const b = loadBindings();
 
   return (
@@ -31,8 +29,8 @@ export function ConductorBar({ version }: { version: string | null }) {
         <span className="kbd">{prettyBinding(b['palette.open'])}</span>
       </button>
       <div className="spacer" />
-      <button className="btn ghost" onClick={toggleTheme} title="Toggle light / dark">
-        {theme === 'dark' ? '◐ dark' : '◑ light'}
+      <button className="btn ghost" onClick={() => setModal('appearance')} title="Appearance: theme and font sizes">
+        Aa
       </button>
     </div>
   );

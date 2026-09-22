@@ -19,7 +19,13 @@
 :root {
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --fs-xs: 11px; --fs-sm: 12.5px; --fs-base: 13.5px; --fs-md: 15px; --fs-lg: 18px;
+  /* --ui-scale is set from the Appearance modal (src/appearance.ts); every
+     text size in this file is expressed in terms of it, except the Fleet
+     graph's SVG labels, which are laid out against fixed node geometry. */
+  --ui-scale: 1;
+  --fs-xs: calc(11px * var(--ui-scale)); --fs-sm: calc(12.5px * var(--ui-scale));
+  --fs-base: calc(13.5px * var(--ui-scale)); --fs-md: calc(15px * var(--ui-scale));
+  --fs-lg: calc(18px * var(--ui-scale));
   --r-sm: 5px; --r-md: 8px; --r-lg: 12px;
 
   /* dark (default) */
@@ -299,7 +305,7 @@ body.dock-resizing .app { transition: none; }
 .session-details-head:active { cursor: grabbing; }
 .session-details-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .session-details-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
-.session-details-head button { border: 0; background: transparent; color: var(--text-faint); font-size: 20px; line-height: 1; padding: 0 3px; cursor: pointer; }
+.session-details-head button { border: 0; background: transparent; color: var(--text-faint); font-size: calc(20px * var(--ui-scale)); line-height: 1; padding: 0 3px; cursor: pointer; }
 .session-details-head button:hover { color: var(--text); }
 .session-details-status { padding: 2px 6px; border-radius: 999px; color: var(--text); background: var(--surface-3); font-size: var(--fs-xs); text-transform: capitalize; }
 .session-details-status.working { color: var(--working); }
@@ -393,7 +399,7 @@ body.dock-resizing .app { transition: none; }
 .tab .n { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; margin-left: 5px; }
 .pane { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
 .pane-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-faint); text-align: center; padding: 30px; }
-.pane-placeholder .big { font-size: 34px; opacity: .5; }
+.pane-placeholder .big { font-size: calc(34px * var(--ui-scale)); opacity: .5; }
 
 /* ---- reusable unified diff ---- */
 .diff-pane { background: var(--bg); }
@@ -686,13 +692,13 @@ body.dock-resizing .app { transition: none; }
 .prompt-attachment { display: flex; align-items: center; gap: 7px; min-width: 180px; max-width: 300px; padding: 5px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
 .prompt-attachment.error { border-color: var(--err); }
 .prompt-attachment img { width: 42px; height: 42px; border-radius: 4px; object-fit: cover; }
-.attachment-file-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 4px; background: var(--surface-3); color: var(--text-dim); font-size: 20px; }
+.attachment-file-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 4px; background: var(--surface-3); color: var(--text-dim); font-size: calc(20px * var(--ui-scale)); }
 .attachment-meta { display: flex; flex: 1; min-width: 0; flex-direction: column; }
 .attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
 .attachment-meta small { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-meta progress { width: 100%; height: 4px; margin-top: 4px; accent-color: var(--accent); }
 .prompt-attachment.error .attachment-meta small, .prompt-attachment-error { color: var(--err); }
-.prompt-attachment button { appearance: none; border: 0; background: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; font-size: 16px; }
+.prompt-attachment button { appearance: none; border: 0; background: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; font-size: calc(16px * var(--ui-scale)); }
 .prompt-attachment button:hover { color: var(--text); }
 .prompt-attachment-error { font-size: var(--fs-xs); }
 .prompt-queue { display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
@@ -704,7 +710,7 @@ body.dock-resizing .app { transition: none; }
 .prompt-queue-position { color: var(--text-faint); font-family: var(--font-mono); }
 .prompt-queue-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompt-queue-row > button { padding: 0 3px; }
-.prompt-queue-row > button:last-child { font-size: 15px; }
+.prompt-queue-row > button:last-child { font-size: calc(15px * var(--ui-scale)); }
 .stop-btn { width: 30px; padding: 0; justify-content: center; color: var(--err); }
 .stop-btn-icon { width: 7px; height: 7px; background: currentColor; }
 .stop-btn:hover { border-color: var(--err); background: var(--err-soft); }
@@ -767,7 +773,7 @@ body.dock-resizing .app { transition: none; }
   }
   /* Prevent iOS from zooming the viewport when the comment field receives
      focus; the compact desktop size remains unchanged. */
-  .annotation-popover textarea { font-size: 16px; }
+  .annotation-popover textarea { font-size: calc(16px * var(--ui-scale)); }
 }
 
 /* Review tray — reuses the .prompt-queue visual pattern, rendered above the
@@ -898,7 +904,7 @@ body.dock-resizing .app { transition: none; }
 .appr.notification.sev-success { border-color: var(--ok); background: var(--ok-soft); }
 .appr.notification.sev-attention { border-color: var(--warn); background: var(--warn-soft); }
 .appr.notification.sev-failure { border-color: var(--err); background: var(--err-soft); }
-.appr.system-notification .notification-message { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.appr.system-notification .notification-message { margin-top: 5px; color: var(--muted); font-size: calc(12px * var(--ui-scale)); line-height: 1.35; }
 .appr.system-notification .acts { margin-top: 9px; }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
@@ -981,7 +987,7 @@ body.dock-resizing .app { transition: none; }
 .adapter-main { flex: 1; min-width: 0; }
 .adapter-heading { display: flex; align-items: center; gap: 9px; }
 .adapter-heading .primary { font-weight: 600; text-transform: capitalize; }
-.adapter-current { padding: 1px 6px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-current { padding: 1px 6px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
 .adapter-installed { margin-top: 6px; color: var(--text-faint); font-size: var(--fs-xs); }
 .adapter-controls { display: flex; align-items: center; gap: 8px; }
 .adapter-controls select, .adapter-controls button { padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); }
@@ -991,26 +997,26 @@ body.dock-resizing .app { transition: none; }
    the row reads as a distinct state rather than as another version choice. */
 .adapter-row-fork { border-left: 2px solid var(--warn); }
 .adapter-row-fork.is-behind { background: var(--warn-soft); }
-.adapter-fork-badge { padding: 1px 6px; border-radius: 999px; background: var(--agent-soft); color: var(--agent); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
-.adapter-fork-behind { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
-.adapter-fork-pending { padding: 1px 6px; border-radius: 999px; border: 1px dashed var(--border-strong); color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-badge { padding: 1px 6px; border-radius: 999px; background: var(--agent-soft); color: var(--agent); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-behind { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
+.adapter-fork-pending { padding: 1px 6px; border-radius: 999px; border: 1px dashed var(--border-strong); color: var(--text-faint); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
 .adapter-fork-reason { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-xs); }
 .adapter-controls-fork { align-self: flex-start; }
 .adapter-fork-cmd { padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
 /* Updates are offered optimistically, so a version can sit outside the range
    Tandem is tested against. Mark it rather than hide it. */
-.adapter-untested { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.adapter-untested { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
 .automation-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .automation-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .automation-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
-.automation-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: 22px; line-height: 1; }
+.automation-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: calc(22px * var(--ui-scale)); line-height: 1; }
 .automation-rows { max-height: 58vh !important; }
 .automation-row { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .automation-row:last-child { border-bottom: 0; }
 .automation-main { flex: 1; min-width: 0; }
 .automation-title-line { display: flex; align-items: center; gap: 8px; }
 .automation-title-line .primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
-.automation-state, .automation-outcome { padding: 1px 6px; border-radius: 999px; font-size: 10px; line-height: 1.5; text-transform: uppercase; letter-spacing: .04em; }
+.automation-state, .automation-outcome { padding: 1px 6px; border-radius: 999px; font-size: calc(10px * var(--ui-scale)); line-height: 1.5; text-transform: uppercase; letter-spacing: .04em; }
 .automation-state.enabled { background: var(--ok-soft); color: var(--ok); }
 .automation-state.paused { background: var(--surface-2); color: var(--text-faint); }
 .automation-path { margin-top: 3px; overflow: hidden; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
@@ -1026,9 +1032,9 @@ body.dock-resizing .app { transition: none; }
 .fleet-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .fleet-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .fleet-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
-.fleet-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: 22px; line-height: 1; }
+.fleet-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: calc(22px * var(--ui-scale)); line-height: 1; }
 .fleet-legend { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
-.fleet-arrow { color: var(--agent); font-size: 16px; line-height: 1; }
+.fleet-arrow { color: var(--agent); font-size: calc(16px * var(--ui-scale)); line-height: 1; }
 .fleet-canvas { max-height: min(60vh, 560px); overflow: hidden; background: var(--bg); cursor: grab; touch-action: none; user-select: none; }
 .fleet-canvas.panning { cursor: grabbing; }
 .fleet-canvas:focus-visible { outline: 1px solid var(--agent); outline-offset: -1px; }
@@ -1255,3 +1261,26 @@ body.dock-resizing .app { transition: none; }
   .rail-toggle { animation-duration: 1ms; }
   .card-body-wrap, .card-body { transition-duration: 1ms; }
 }
+
+/* Appearance modal (components/AppearanceModal.tsx). */
+.appearance-modal { width: min(520px, 94vw); }
+.appearance-section { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.appearance-heading { margin-bottom: 8px; color: var(--text-dim); font: 600 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
+.appearance-segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-sm); overflow: hidden; }
+.appearance-segmented button { padding: 5px 14px; border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.appearance-segmented button + button { border-left: 1px solid var(--border-strong); }
+.appearance-segmented button.on { background: var(--agent-soft); color: var(--text); }
+.appearance-size { display: flex; align-items: center; gap: 12px; }
+.appearance-label { display: flex; flex-direction: column; min-width: 150px; }
+.appearance-label .primary { font-size: var(--fs-sm); }
+.appearance-label .sub { color: var(--text-faint); font-size: var(--fs-xs); }
+.appearance-stepper { display: flex; flex: 1; align-items: center; gap: 6px; }
+.appearance-stepper input[type='range'] { flex: 1; min-width: 0; accent-color: var(--agent); }
+.appearance-stepper .btn { min-width: 26px; justify-content: center; }
+.appearance-value { min-width: 48px; color: var(--text); font: var(--fs-xs) var(--font-mono); text-align: right; }
+.appearance-link-row { display: flex; justify-content: center; margin: 6px 0; }
+.appearance-link { padding: 2px 10px; border: 1px dashed var(--border-strong); border-radius: 999px; background: transparent; color: var(--text-faint); font-size: var(--fs-xs); cursor: pointer; }
+.appearance-link.on { border-style: solid; border-color: var(--agent); color: var(--agent); background: var(--agent-soft); }
+.appearance-preview { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); overflow: hidden; }
+.appearance-preview pre { margin: 6px 0 0; white-space: pre; }
+.appearance-modal .foot { justify-content: flex-end; }
