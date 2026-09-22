@@ -4,6 +4,8 @@
 // drop-in fallback selected by a config flag. Because ghostty-web mirrors the
 // xterm API, both concrete engines share this adapter with a one-line import diff.
 
+import { ensureTermFont, selectedFontFamily } from './font';
+
 export interface TerminalRenderer {
   write(bytes: Uint8Array): void;
   onData(cb: (data: string) => void): void;
@@ -16,6 +18,8 @@ export interface TerminalRenderer {
 }
 
 export type EngineName = 'ghostty' | 'xterm';
+
+const FONT_SIZE = 12;
 
 // Engine selection: ?term=xterm / localStorage / build flag forces the fallback.
 export function selectedEngine(): EngineName {
@@ -106,11 +110,15 @@ class Adapter implements TerminalRenderer {
 // Create a renderer mounted into `el`. Tries ghostty-web first; on any failure
 // (WASM load, init) falls back to @xterm/xterm and reports which engine won.
 export async function createRenderer(el: HTMLElement, engine: EngineName): Promise<{ renderer: TerminalRenderer; engine: EngineName }> {
+  // Both engines measure their cell grid from the font at construction time, so
+  // the face has to be resolved first or the grid is sized to the fallback.
+  const fontFamily = selectedFontFamily();
+  await ensureTermFont(fontFamily, FONT_SIZE);
   if (engine === 'ghostty') {
     try {
       const g = await import('ghostty-web');
       await g.init();
-      const term = new g.Terminal({ fontSize: 12, cursorBlink: true, theme: THEME } as never) as unknown as GhosttyLike;
+      const term = new g.Terminal({ fontSize: FONT_SIZE, fontFamily, cursorBlink: true, theme: THEME } as never) as unknown as GhosttyLike;
       const fit = new g.FitAddon() as unknown as FitLike;
       term.loadAddon(fit);
       term.open(el);
@@ -134,7 +142,7 @@ export async function createRenderer(el: HTMLElement, engine: EngineName): Promi
   const { Terminal } = await import('@xterm/xterm');
   const { FitAddon } = await import('@xterm/addon-fit');
   await import('@xterm/xterm/css/xterm.css');
-  const term = new Terminal({ fontSize: 12, cursorBlink: true, theme: THEME, convertEol: false }) as unknown as XtermLike;
+  const term = new Terminal({ fontSize: FONT_SIZE, fontFamily, cursorBlink: true, theme: THEME, convertEol: false }) as unknown as XtermLike;
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);

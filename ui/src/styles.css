@@ -1,3 +1,18 @@
+/* Cascadia Mono NF (Microsoft's own Nerd Fonts build, SIL OFL — see
+   src/assets/fonts/LICENSE-Cascadia.txt) is self-hosted so terminals render
+   powerline/Nerd glyphs offline and inside the embedded single-binary UI. The
+   Mono cut is deliberate: ghostty-web paints one codepoint per cell, so Code's
+   ligatures would never form, and Mono's single-width patched glyphs stay
+   inside their cell. font-display: block avoids a fallback-metrics flash in a
+   grid that is measured from the font. */
+@font-face {
+  font-family: 'Cascadia Mono NF';
+  src: url('./assets/fonts/CascadiaMonoNF.woff2') format('woff2');
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: block;
+}
+
 /* Tandem mission-control theme. Tokens lifted from design/index.html. Dark is
    the default; [data-theme="light"] on <html> flips to the light palette. */
 

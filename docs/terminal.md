@@ -77,6 +77,23 @@ Its canvas renderer can also miss the final cursor-only update in a shell's norm
 redraw for output chunks containing BS, keeping the painted cursor and cells aligned with
 Ghostty's already-correct VT buffer.
 
+## Font
+
+Terminals render in **Cascadia Mono NF** — Microsoft's own Nerd Fonts build of Cascadia,
+self-hosted as `ui/src/assets/fonts/CascadiaMonoNF.woff2` (SIL OFL) so powerline and Nerd
+Font glyphs work offline and inside the single-binary embedded UI. The *Mono* cut is
+deliberate: both engines paint one codepoint per cell, so Cascadia Code's ligatures could
+never form, and Mono's patched glyphs are single-width and stay inside their cell (the
+canvas renderer does not clip `fillText`).
+
+`ui/src/terminal/font.ts` owns the stack and its overrides (`?termFont=` or
+`localStorage['tandem.termFont']`, mirroring the engine switch). `createRenderer` awaits
+`ensureTermFont()` **before** constructing a terminal: ghostty-web measures cell width and
+baseline once from `measureText('M')` in its constructor, and xterm.js does the same in
+`open()`, so a terminal built against an unloaded webfont locks in the *fallback's* metrics
+and every cell stays misaligned. The `@font-face` uses `font-display: block` for the same
+reason. Italics are synthesized; no italic face is bundled.
+
 User shells are launched with `TERM=xterm-256color` when the daemon environment does not
 provide a terminal identity (as is typical under systemd). Without it, interactive shells
 such as zsh cannot obtain cursor-left/erase capabilities from terminfo: their line editor
