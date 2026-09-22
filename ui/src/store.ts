@@ -316,14 +316,15 @@ interface StoreState {
   listWorkspaceEntries: (sessionId: string, path: string) => Promise<WorkspaceEntry[]>;
   // Browser snapshots + agent profiles.
   captureSnapshot: (sessionId: string, name: string) => Promise<BrowserSnapshot[]>;
-  listSnapshots: () => Promise<BrowserSnapshot[]>;
+  // hostId scopes to a federated host; only this daemon's list feeds `snapshots`.
+  listSnapshots: (hostId?: string) => Promise<BrowserSnapshot[]>;
   deleteSnapshot: (id: string) => Promise<BrowserSnapshot[]>;
-  listProfiles: (project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  listProfiles: (project?: string, hostId?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameAgent: (sessionId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   // Drops a profile from one repo's recency list; the profile itself survives.
-  forgetProfile: (id: string, project: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
+  forgetProfile: (id: string, project: string, hostId?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   steer: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
   aside: (sessionId: string, question: string) => Promise<AckResult>;
@@ -655,7 +656,8 @@ export const useStore = create<StoreState>((set, get) => {
       case 'snapshots': {
         const pending = msg.corrId ? pendingSnapshots.get(msg.corrId) : undefined;
         const snaps = msg.snapshots ?? [];
-        if (!msg.error && msg.snapshots) set({ snapshots: snaps });
+        // A remote host's list answers only its request; `snapshots` is this daemon's.
+        if (!msg.error && msg.snapshots && !msg.hostId) set({ snapshots: snaps });
         if (pending && msg.corrId) {
           pendingSnapshots.delete(msg.corrId);
           if (msg.error) pending.reject(new Error(msg.error));
@@ -1372,11 +1374,11 @@ export const useStore = create<StoreState>((set, get) => {
         pendingSnapshots.set(corrId, { resolve, reject });
         client.send({ t: 'capture_snapshot', sessionId, name, corrId });
       }),
-    listSnapshots: () =>
+    listSnapshots: (hostId) =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSnapshots.set(corrId, { resolve, reject });
-        client.send({ t: 'list_snapshots', corrId });
+        client.send(isLocalHost(hostId) ? { t: 'list_snapshots', corrId } : { t: 'list_snapshots', hostId, corrId });
       }),
     deleteSnapshot: (id) =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
@@ -1384,11 +1386,11 @@ export const useStore = create<StoreState>((set, get) => {
         pendingSnapshots.set(corrId, { resolve, reject });
         client.send({ t: 'delete_snapshot', id, corrId });
       }),
-    listProfiles: (project) =>
+    listProfiles: (project, hostId) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
         const corrId = nextCorr();
         pendingProfiles.set(corrId, { resolve, reject });
-        client.send({ t: 'list_profiles', project, corrId });
+        client.send(isLocalHost(hostId) ? { t: 'list_profiles', project, corrId } : { t: 'list_profiles', project, hostId, corrId });
       }),
     renameProfile: (id, name, project) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
@@ -1411,11 +1413,11 @@ export const useStore = create<StoreState>((set, get) => {
         pendingProfiles.set(corrId, { resolve, reject });
         client.send({ t: 'delete_profile', id, project, corrId });
       }),
-    forgetProfile: (id, project) =>
+    forgetProfile: (id, project, hostId) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {
         const corrId = nextCorr();
         pendingProfiles.set(corrId, { resolve, reject });
-        client.send({ t: 'forget_profile', id, project, corrId });
+        client.send(isLocalHost(hostId) ? { t: 'forget_profile', id, project, corrId } : { t: 'forget_profile', id, project, hostId, corrId });
       }),
     prompt: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
-import type { GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import type { BrowserSnapshot, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 import { usePresence, useValuePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
@@ -116,7 +116,10 @@ export function SpawnPalette() {
   const listProfiles = useStore((s) => s.listProfiles);
   const forgetProfile = useStore((s) => s.forgetProfile);
   const listSnapshots = useStore((s) => s.listSnapshots);
-  const snapshots = useStore((s) => s.snapshots);
+  const localSnapshots = useStore((s) => s.snapshots);
+  // The target host's own snapshots: a profile's snapshot id only means
+  // something on the daemon that captured it.
+  const [remoteSnapshots, setRemoteSnapshots] = useState<BrowserSnapshot[]>([]);
   const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.sessions);
@@ -127,6 +130,7 @@ export function SpawnPalette() {
   const selectedHost = hosts.find((host) => host.id === hostId) ?? hosts[0];
   const remote = !!selectedHost && !selectedHost.local && selectedHost.id !== LOCAL_HOST_ID;
   const scopedDirs = remote ? (dirsByHost[hostId] ?? []) : dirs;
+  const snapshots = remote ? remoteSnapshots : localSnapshots;
   const scopedCatalog = remote ? (agentCatalogByHost[hostId] ?? null) : agentCatalog;
   const harnesses = useMemo(() => {
     if (!scopedCatalog) return FALLBACK_HARNESSES;
@@ -220,10 +224,10 @@ export function SpawnPalette() {
     setSel(null);
     setAdvanced(false);
     setChosenDir(null);
-    // Profiles and browser snapshots are intentionally local-only for this
-    // first federation cut. A remote spawn still gets a fresh remote browser;
-    // sending a local snapshot/profile ID to a slave would be misleading.
+    // Profiles and browser snapshots belong to the host that recorded them, so
+    // switching hosts drops the previous host's lists.
     setProfilesByRepo({});
+    setRemoteSnapshots([]);
     setBaseProfile(undefined);
     setSnapshot('');
     setAgent('agent:claude');
@@ -371,7 +375,7 @@ export function SpawnPalette() {
   const forget = async (dir: RepoInfo, profile: Profile) => {
     setMenu(null);
     try {
-      const result = await forgetProfile(profile.id, dir.path);
+      const result = await forgetProfile(profile.id, dir.path, hostId);
       setProfilesByRepo((current) => ({ ...current, [dir.path]: result }));
     } catch (cause) {
       setError({ code: 'forget_profile', msg: cause instanceof Error ? cause.message : String(cause), dir });
@@ -399,13 +403,12 @@ export function SpawnPalette() {
   }, [agent, adapter, selectedHarness]);
   // Prefetch the used-profile lists for every visible repo.
   useEffect(() => {
-    if (remote) return;
     let cancelled = false;
     const missing = filtered.filter((dir) => !profilesByRepo[dir.path]);
     if (missing.length === 0) return;
     void Promise.all(missing.map(async (dir) => {
       try {
-        const result = await listProfiles(dir.path);
+        const result = await listProfiles(dir.path, hostId);
         return [dir.path, result] as const;
       } catch {
         return null;
@@ -421,19 +424,21 @@ export function SpawnPalette() {
       });
     });
     return () => { cancelled = true; };
-  }, [filtered, profilesByRepo, listProfiles, remote]);
+  }, [filtered, profilesByRepo, listProfiles, hostId]);
   // On advanced open, refresh this repo's profiles + snapshots so the picker
   // reflects any newly-created profiles.
   useEffect(() => {
-    if (remote || !advanced || !selectedDir) return;
+    if (!advanced || !selectedDir) return;
     let cancelled = false;
-    void listSnapshots().catch(() => {});
-    void listProfiles(selectedDir.path).then(({ profiles: ps, recent }) => {
+    void listSnapshots(hostId).then((list) => {
+      if (!cancelled && remote) setRemoteSnapshots(list);
+    }).catch(() => {});
+    void listProfiles(selectedDir.path, hostId).then(({ profiles: ps, recent }) => {
       if (cancelled) return;
       setProfilesByRepo((current) => ({ ...current, [selectedDir.path]: { profiles: ps, recent } }));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, remote]);
+  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, remote, hostId]);
   useEffect(() => {
     if (!advanced || adapter !== 'acp' || !selectedDir) {
       setSpawnOptions(null);
@@ -545,7 +550,7 @@ export function SpawnPalette() {
       permission: defaults.permission && effectiveOptions?.modes?.availableModes.some((mode) => mode.id === defaults.permission)
         ? defaults.permission : '',
     } : EMPTY_HARNESS_DEFAULTS;
-    const spawnSnapshot = remote ? '' : quick ? quick.snapshotId : snapshot;
+    const spawnSnapshot = quick ? quick.snapshotId : snapshot;
     const spec: SpawnSpec = {
       ...(remote ? { hostId } : {}),
       adapter: spawnAdapter,
@@ -799,15 +804,13 @@ export function SpawnPalette() {
                 />
               </label>
             )}
-            {!remote ? (
-              <label>
-                Browser snapshot <span className="sub">(seed state)</span>
-                <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
-                  <option value="">Fresh state</option>
-                  {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              </label>
-            ) : <div className="sub">Remote browser starts with a fresh state.</div>}
+            <label>
+              Browser snapshot <span className="sub">(seed state)</span>
+              <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+                <option value="">Fresh state</option>
+                {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
             <>
               <div className="adv-section" style={{ gridColumn: '1 / -1' }}>Hand-off</div>
               <label style={{ gridColumn: '1 / -1' }}>

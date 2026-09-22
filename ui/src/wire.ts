@@ -468,11 +468,11 @@ export type ClientMsg =
   | { t: 'install_agent_distribution'; agent: string; version: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
   | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
-  | { t: 'list_snapshots'; corrId?: string }
+  | { t: 'list_snapshots'; hostId?: string; corrId?: string }
   | { t: 'delete_snapshot'; id: string; corrId?: string }
-  | { t: 'list_profiles'; project?: string; corrId?: string }
+  | { t: 'list_profiles'; project?: string; hostId?: string; corrId?: string }
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
-  | { t: 'forget_profile'; id: string; project: string; corrId?: string }
+  | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; sessionId: string; corrId?: string }
@@ -536,7 +536,7 @@ export type ServerMsg =
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string; hostId?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string; hostId?: string }
-  | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string }
+  | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string; hostId?: string }
   | { t: 'profiles'; corrId?: string; profiles?: Profile[]; recent?: string[]; project?: string; error?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
