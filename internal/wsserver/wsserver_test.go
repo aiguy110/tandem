@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -623,6 +624,13 @@ func (*testHistoryLifecycle) Status(agent string) ([]historyimport.AgentStatus, 
 }
 func event(text string) eventlog.Event {
 	b, _ := json.Marshal(map[string]any{"kind": "message_chunk", "text": text})
+	return eventlog.Event{Kind: "message_chunk", Payload: b}
+}
+
+// Streaming chunks of the same block are coalesced into one log entry, so a
+// test that wants one entry per event gives every chunk its own parent block.
+func chunkOfOwnBlock(parent, text string) eventlog.Event {
+	b, _ := json.Marshal(map[string]any{"kind": "message_chunk", "text": text, "parentId": parent})
 	return eventlog.Event{Kind: "message_chunk", Payload: b}
 }
 func status() eventlog.Event {
@@ -1285,7 +1293,7 @@ func TestSendFrameKeepsOnlyLatestPendingFramePerAgent(t *testing.T) {
 func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) {
 	db, b, a, _, url := setupWS(t, 4)
 	for i := 0; i < 5; i++ {
-		a.events <- event("old")
+		a.events <- chunkOfOwnBlock(fmt.Sprintf("old-%d", i), "old")
 	}
 	waitHead(t, b.Get("a"), 5)
 	log, err := eventlog.New("a", db, 2)
@@ -1315,7 +1323,7 @@ func TestColdReplayAfterRestartAndSlowClientDoesNotBlockIngestion(t *testing.T) 
 	payload := strings.Repeat("x", 128*1024)
 	start := time.Now()
 	for i := 0; i < 100; i++ {
-		next.events <- event(payload)
+		next.events <- chunkOfOwnBlock(fmt.Sprintf("flood-%d", i), payload)
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("slow websocket blocked event producer")
