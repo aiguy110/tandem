@@ -43,3 +43,12 @@ var RuntimeHistoryImporterOpenCode []byte
 
 //go:embed runtime/tsconfig.json
 var RuntimeTSConfig []byte
+
+// Pi MCP bridge: pi has no MCP client, so Tandem launches pi through a wrapper
+// that loads an extension exposing the session's MCP servers as pi tools.
+//
+//go:embed runtime/pi/mcp-bridge.ts
+var RuntimePiMCPBridge []byte
+
+//go:embed runtime/pi/tandem-pi
+var RuntimePiWrapper []byte

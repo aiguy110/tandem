@@ -45,6 +45,15 @@ clients of **one** browser; the token serializes them.
   `browser.request_takeover(reason)` (see Attention).
 - Isolation: **one Steel session per agent** (own cookies/auth/state), matching the
   worktree-per-agent model. Agents never collide on one page.
+- **Pi bridge.** pi has no MCP client, and pi-acp accepts `mcpServers` without wiring them
+  into pi. The factory therefore also writes each ACP launch's resolved servers to an
+  owner-only `$TANDEM_HOME/run/mcp/*.json` exported as `TANDEM_MCP_SERVERS_FILE` (removed
+  on close). The Pi catalog entry sets `PI_ACP_PI_COMMAND` to `{runtimeRoot}/pi/tandem-pi`,
+  which loads `runtime/pi/mcp-bridge.ts`: at `session_start` it connects every server
+  (stdio or streamable HTTP) and registers each tool as a pi tool named `<server>_<tool>`
+  (e.g. `tandem-playwright_browser_navigate`). Bridge diagnostics go to
+  `$TANDEM_HOME/logs/mcp-bridge.log`, since pi-acp discards pi's stderr. Sessions whose
+  persisted launch predates the catalog change keep their old launch and lack the bridge.
 
 ## User → browser
 

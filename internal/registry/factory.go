@@ -2,9 +2,13 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -83,15 +87,79 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 			mcpServers = append(mcpServers, acpadapter.MCPServer{Name: server.Name, Type: server.Type, Command: server.Command, Args: server.Args, Env: env, URL: server.URL, Headers: headers})
 		}
 	}
-	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{SessionID: req.SessionID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(launch.ACP.Env), Stderr: os.Stderr}})
+	// Agents whose ACP server ignores session/new mcpServers (pi-acp) load the
+	// same list through an agent-side bridge; see runtime/pi/mcp-bridge.ts.
+	if err := runtimeinstall.StageAgentSupport(f.Config); err != nil {
+		slog.Warn("stage agent support files failed", "session", req.SessionID, "agent", req.Spec.Agent, "err", err)
+	}
+	env := maps.Clone(launch.ACP.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	serversFile, err := f.writeMCPServersFile(req.SessionID, mcpServers)
 	if err != nil {
+		slog.Warn("write MCP servers file failed; bridged agents will lack MCP tools", "session", req.SessionID, "agent", req.Spec.Agent, "err", err)
+	} else if serversFile != "" {
+		env[mcpServersFileEnv] = serversFile
+		env[mcpBridgeLogEnv] = filepath.Join(f.Config.Home, "logs", "mcp-bridge.log")
+		slog.Info("wrote MCP servers file for agent bridge", "session", req.SessionID, "agent", req.Spec.Agent, "servers", len(mcpServers), "path", serversFile)
+	}
+	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{SessionID: req.SessionID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(env), Stderr: os.Stderr}})
+	if err != nil {
+		removeMCPServersFile(serversFile)
 		host.Close(context.Background())
 		fs.Close()
 		return nil, err
 	}
-	wrapped := &acpAdapter{Adapter: a, fs: fs, host: host, appender: proxy, events: make(chan eventlog.Event, 256)}
+	wrapped := &acpAdapter{Adapter: a, fs: fs, host: host, appender: proxy, events: make(chan eventlog.Event, 256), serversFile: serversFile}
 	go wrapped.forwardEvents()
 	return wrapped, nil
+}
+
+const (
+	mcpServersFileEnv = "TANDEM_MCP_SERVERS_FILE"
+	mcpBridgeLogEnv   = "TANDEM_MCP_BRIDGE_LOG"
+)
+
+// writeMCPServersFile persists the session's resolved MCP servers, in the
+// same JSON shape sent in ACP session/new, to an owner-only file whose path is
+// exported to the ACP process as TANDEM_MCP_SERVERS_FILE. The file carries the
+// daemon token (tandem-control's env), so it lives under TANDEM_HOME/run and is
+// removed when the adapter closes.
+func (f DefaultFactory) writeMCPServersFile(sessionID string, servers []acpadapter.MCPServer) (string, error) {
+	if len(servers) == 0 || f.Config.Home == "" {
+		return "", nil
+	}
+	dir := filepath.Join(f.Config.Home, "run", "mcp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(servers)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp(dir, strings.ReplaceAll(sessionID, "/", "-")+"-*.json")
+	if err != nil {
+		return "", err
+	}
+	_, err = file.Write(data)
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
+}
+
+func removeMCPServersFile(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("remove MCP servers file failed", "path", path, "err", err)
+	}
 }
 
 func envList(m map[string]string) []string {
@@ -124,6 +192,8 @@ type acpAdapter struct {
 	host     *terminalhost.Host
 	appender *eventAppender
 	events   chan eventlog.Event
+	// serversFile is the TANDEM_MCP_SERVERS_FILE written for this launch.
+	serversFile string
 }
 
 func (a *acpAdapter) Events() <-chan eventlog.Event { return a.events }
@@ -235,6 +305,7 @@ func (a *acpAdapter) Close(ctx context.Context) error {
 	if e := a.fs.Close(); err == nil {
 		err = e
 	}
+	removeMCPServersFile(a.serversFile)
 	return err
 }
 

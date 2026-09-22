@@ -6,7 +6,8 @@
   "description": "Node runtime dependencies launched by the native Tandem daemon",
   "scripts": {
     "test:history": "tsx --test history/*.test.ts history/importers/*.test.ts",
-    "typecheck:history": "tsc --noEmit"
+    "typecheck:history": "tsc --noEmit",
+    "test:pi": "tsx --test pi/*.test.ts"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.70.0",

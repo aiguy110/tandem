@@ -1,0 +1,5 @@
+#!/bin/sh
+# Launches pi with Tandem's MCP bridge extension. pi-acp runs this via
+# PI_ACP_PI_COMMAND (a single executable, no extra args), appending its own
+# `--mode rpc ...` arguments. TANDEM_PI_COMMAND overrides the pi executable.
+exec "${TANDEM_PI_COMMAND:-pi}" -e "$(dirname "$0")/mcp-bridge.ts" "$@"
