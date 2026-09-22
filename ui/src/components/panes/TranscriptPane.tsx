@@ -1263,16 +1263,19 @@ function formatArgs(rawInput: unknown): string | null {
 }
 
 // A shell command run via the 'execute' tool kind carries its command text in
-// rawInput.command (structured) — fall back to the title, which agents that
-// skip rawInput (e.g. pi's generic tool name) or a bare literal title don't
-// give us a struct for.
-function terminalCommand(item: Extract<Item, { kind: 'tool' }>): string | null {
-  const input = item.rawInput;
-  if (input && typeof input === 'object' && 'command' in input) {
-    const cmd = (input as { command?: unknown }).command;
-    if (typeof cmd === 'string' && cmd) return cmd;
+// rawInput.command (structured) — MCP-routed calls nest their params one level
+// down under `arguments`. Fall back to the title, which agents that skip
+// rawInput (e.g. pi's generic tool name) or a bare literal title don't give us
+// a struct for; `fromInput` records whether the command text actually came
+// from rawInput, since a title fallback leaves the real arguments unshown.
+function terminalCommand(item: Extract<Item, { kind: 'tool' }>): { text: string; fromInput: boolean } | null {
+  for (const source of [item.rawInput, (item.rawInput as { arguments?: unknown } | null)?.arguments]) {
+    if (source && typeof source === 'object' && 'command' in source) {
+      const cmd = (source as { command?: unknown }).command;
+      if (typeof cmd === 'string' && cmd) return { text: cmd, fromInput: true };
+    }
   }
-  if (item.title && item.title !== 'Terminal') return item.title;
+  if (item.title && item.title !== 'Terminal') return { text: item.title, fromInput: false };
   return null;
 }
 
@@ -1302,8 +1305,11 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   const isExecute = item.toolKind === 'execute';
   const command = isExecute ? terminalCommand(item) : null;
   // For a plain execute call, the command *is* the args — showing it again as
-  // a raw JSON "Arguments" blob under a terminal prompt line is noise.
-  const showArgs = args != null && !(isExecute && command != null);
+  // a raw JSON "Arguments" blob under a terminal prompt line is noise. But when
+  // the prompt line is only the tool's title (an MCP `execute` tool whose
+  // params aren't a `command` string, say a script body), the args are the only
+  // place the executed code appears, so they must stay visible.
+  const showArgs = args != null && !(isExecute && command?.fromInput);
   const hasBody = body != null || showArgs || images.length > 0 || diffs.length > 0 || command != null;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
@@ -1314,7 +1320,7 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
         {command != null ? (
           <span className="title tool-cmd-title">
-            <span className="tool-prompt">$</span> {command}
+            <span className="tool-prompt">$</span> {command.text}
           </span>
         ) : (
           <span className="title">{item.title}</span>
@@ -1327,7 +1333,14 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
             <div className="card-body">
           {command != null ? (
             <>
-              <ToolText label="Command" className="tool-terminal-command">{command}</ToolText>
+              {command.fromInput ? (
+                <ToolText label="Command" className="tool-terminal-command">{command.text}</ToolText>
+              ) : showArgs && (
+                <div className="tool-args">
+                  <div className="tool-args-label">Arguments</div>
+                  <pre>{args}</pre>
+                </div>
+              )}
               {body != null ? (
                 <ToolText label="Output" className="tool-terminal-output">{terminalOutput(body)}</ToolText>
               ) : (

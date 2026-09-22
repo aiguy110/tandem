@@ -126,6 +126,51 @@ describe('TranscriptPane voice rendering', () => {
     expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
   });
 
+  it('shows arguments for an execute tool whose input is not a command string', () => {
+    const withTool = agent();
+    const code = 'import bpy\nbpy.ops.mesh.primitive_cube_add()';
+    withTool.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'mcp-1', title: 'mcp.blender.blender_execute_script', status: 'done',
+        toolKind: 'execute', rawInput: { server: 'blender', arguments: { code } },
+      },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    expect(view.getByText('Arguments')).toBeTruthy();
+    expect(view.container.querySelector('.tool-args pre')?.textContent).toContain('primitive_cube_add');
+  });
+
+  it('prefers an MCP-nested command string over the tool title', () => {
+    const withTool = agent();
+    withTool.events = [{
+      seq: 1,
+      event: {
+        kind: 'tool_call', id: 'mcp-2', title: 'mcp.shell.run', status: 'done',
+        toolKind: 'execute', rawInput: { server: 'shell', arguments: { command: 'ls -la' } },
+      },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    expect(view.container.querySelector('.tool-terminal-command')?.textContent).toBe('ls -la');
+    expect(view.queryByText('Arguments')).toBeNull();
+  });
+
   it('removes an outer Markdown code fence from execute output', () => {
     const withTool = agent();
     withTool.events = [{
