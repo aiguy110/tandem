@@ -120,6 +120,10 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	}
 	first := waitForUserMessage(t, db, received.ID)
 	for _, want := range []string{
+		"## Tandem session",
+		".tandem/scripts/",
+		"tandem-scripts",
+		"agent-docs/README.md",
 		"port the parser to the new API",
 		"Started on parser.go, not finished.",
 		source.Name,
@@ -138,6 +142,21 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	}
 	if strings.Contains(string(rec.Spec), "Started on parser.go") {
 		t.Errorf("hand-off transcript was persisted into the spec: %s", rec.Spec)
+	}
+}
+
+func TestFirstPromptAddsTandemGuideBeforeTheUserTask(t *testing.T) {
+	got := firstPrompt("", "fix the parser")
+	for _, want := range []string{"## Tandem session", "tandem-scripts", "agent-docs/README.md", "## User task", "fix the parser"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("first prompt is missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.HasSuffix(got, "fix the parser") {
+		t.Errorf("user task must be last:\n%s", got)
+	}
+	if got := firstPrompt("", ""); got != "" {
+		t.Errorf("firstPrompt with no task or hand-off = %q, want empty", got)
 	}
 }
 

@@ -781,17 +781,31 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	return s, nil
 }
 
-// firstPrompt combines a hand-off transcript with the task the user typed at
-// spawn, keeping the user's own instruction last so it reads as the live ask
-// rather than as part of the handed-off history.
+const tandemSessionPreamble = "## Tandem session\n\n" +
+	"You are in a Tandem-managed session. Repository automations are TypeScript in `.tandem/scripts/`, " +
+	"run through the `tandem-scripts` MCP; a human must approve new grants and schedules. For a user-requested " +
+	"repo-local skill, keep one canonical `skills/<name>/` directory with shared agent bridges. Start with " +
+	"`agent-docs/README.md` for concise guidance and links to deeper documentation."
+
+// firstPrompt prefixes the first real user turn with Tandem-specific guidance,
+// then combines a hand-off transcript with the task the user typed at spawn.
+// The user's own instruction remains last so it reads as the live ask rather
+// than as part of the handed-off history.
 func firstPrompt(handoffText, task string) string {
+	var prompt string
 	if handoffText == "" {
-		return task
+		if task != "" {
+			prompt = "## User task\n\n" + task
+		}
+	} else if task == "" {
+		prompt = handoffText
+	} else {
+		prompt = handoffText + "\n\n## New instruction from the user\n\n" + task
 	}
-	if task == "" {
-		return handoffText
+	if prompt == "" {
+		return ""
 	}
-	return handoffText + "\n\n## New instruction from the user\n\n" + task
+	return tandemSessionPreamble + "\n\n" + prompt
 }
 
 func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapter.Spec, resume string, captureReplay ...bool) (*session.Session, error) {
