@@ -7,6 +7,8 @@ import { usePresence, useValuePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
+// Profiles listed under each repo, most recently used first.
+const PROFILES_PER_REPO = 4;
 const SPAWN_AGENT_KEY = 'tandem.spawnAgent.v1';
 const BRANCH_CONTEXT_KEY = 'tandem.branchContext.v1';
 const FALLBACK_HARNESSES = [
@@ -249,7 +251,7 @@ export function SpawnPalette() {
   const rows = useMemo(() => filtered.flatMap((dir): PaletteRow[] => {
     const data = profilesByRepo[dir.path];
     const used = data
-      ? data.recent.map((id) => data.profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p)
+      ? data.recent.map((id) => data.profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, PROFILES_PER_REPO)
       : [];
     return [{ kind: 'repo', dir }, ...used.map((profile): PaletteRow => ({ kind: 'profile', dir, profile }))];
   }), [filtered, profilesByRepo]);

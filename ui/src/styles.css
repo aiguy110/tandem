@@ -977,9 +977,11 @@ body.dock-resizing .app { transition: none; }
 .modal .row .repo-details { min-width: 0; flex: 1; }
 .modal .row .repo-details .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal .row.repo-row { padding-top: 11px; }
+.modal .row.repo-row:not(.sel) { background: var(--surface-2); }
 .modal .row.repo-row:not(:first-child) { border-top: 1px solid var(--border); }
 .modal .row .new-profile { color: var(--text-faint); font-family: var(--font-ui); }
 .modal .row.repo-row.sel .new-profile { color: var(--agent); }
+.modal .row.profile-row + .row.profile-row { border-top: 1px solid var(--border); }
 .modal .row.profile-row { padding: 6px 16px 6px 32px; font-size: var(--fs-sm); -webkit-touch-callout: none; user-select: none; }
 .modal .row.profile-row .profile-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal .row.profile-row .profile-kind { color: var(--text-faint); font-size: var(--fs-xs); }
