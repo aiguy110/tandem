@@ -4,9 +4,12 @@ import { LOCAL_HOST_ID, useStore } from '../store';
 import type { SessionView } from '../store';
 import { SessionsRail } from './AgentsRail';
 
+// Tests that stub store actions must not leak them into the next test.
+const realActions = { reorderAgent: useStore.getState().reorderAgent };
+
 afterEach(() => {
   cleanup();
-  useStore.setState({ sessions: {}, order: [], focusedId: null });
+  useStore.setState({ sessions: {}, order: [], focusedId: null, ...realActions });
 });
 
 function session(): SessionView {
@@ -190,5 +193,54 @@ describe('SessionsRail drag-to-reorder indicator', () => {
 
     over(rowFor(view, 0), 'top', 'drop');
     expect(reorderAgent).toHaveBeenCalledWith('b', 'a', false);
+  });
+});
+
+describe('SessionsRail drop animation', () => {
+  const dataTransfer = () => ({ setData: vi.fn(), effectAllowed: '', dropEffect: '' });
+  const dragEvent = (type: string, clientY: number) => {
+    const event = new MouseEvent(type, { bubbles: true, clientY });
+    Object.defineProperty(event, 'dataTransfer', { value: dataTransfer() });
+    return event;
+  };
+  // jsdom lays nothing out, so give every row a 40px slot derived from where
+  // it currently sits among its siblings — the reorder then moves it for real.
+  const layOutRows = (view: ReturnType<typeof render>) => {
+    for (const node of view.container.querySelectorAll('.session-row')) {
+      const row = node as HTMLElement;
+      row.getBoundingClientRect = () =>
+        ({ top: [...row.parentElement!.children].indexOf(row) * 40, height: 40 }) as DOMRect;
+    }
+  };
+
+  it('slides displaced cards from where they were to where they landed', () => {
+    const animate = vi.fn();
+    Object.defineProperty(Element.prototype, 'animate', { configurable: true, writable: true, value: animate });
+    const sessions = ['a', 'b', 'c'].map((suffix) => ({
+      ...session(), id: suffix, name: suffix, hostId: LOCAL_HOST_ID, hostName: 'This host',
+    }));
+    useStore.setState({
+      sessions: Object.fromEntries(sessions.map((s) => [s.id, s])),
+      order: ['a', 'b', 'c'],
+      hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }],
+    });
+    const view = render(<SessionsRail />);
+    layOutRows(view);
+    const rows = () => [...view.container.querySelectorAll('.session-row')].map((row) => row.querySelector('.name')?.textContent?.trim());
+
+    const last = view.container.querySelectorAll('.session-row')[2] as HTMLElement;
+    fireEvent(last, dragEvent('dragstart', 0));
+    // The top half of the first row: 'c' goes to the front, 'a' and 'b' shift down.
+    fireEvent(view.container.querySelectorAll('.session-row')[0]!, dragEvent('drop', 4));
+
+    expect(useStore.getState().order).toEqual(['c', 'a', 'b']);
+    expect(rows()[0]).toContain('c');
+    // Each moved card starts the frame at its old offset and slides to zero:
+    // 'c' rose two slots, 'a' and 'b' each dropped one.
+    const offsets = animate.mock.calls.map(([frames]) => (frames as Keyframe[])[0].transform);
+    expect(offsets).toHaveLength(3);
+    expect(offsets).toContain('translateY(80px)');
+    expect(offsets.filter((offset) => offset === 'translateY(-40px)')).toHaveLength(2);
+    for (const [frames] of animate.mock.calls) expect((frames as Keyframe[])[1].transform).toBe('translateY(0)');
   });
 });

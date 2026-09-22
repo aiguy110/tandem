@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePresence, useValuePresence } from '../transitions';
 import { usesSoftKeyboard } from '../mobile';
@@ -60,6 +60,40 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  // A drop rewrites the order and React repaints every affected row in its new
+  // place in one frame, which reads as the cards teleporting. FLIP the rail
+  // instead: measure where the rows sit before the reorder, then after the
+  // commit put each one back where it was and let it slide to where it landed.
+  const rowNodes = useRef(new Map<string, HTMLDivElement>());
+  const rowTops = useRef<Map<string, number> | null>(null);
+  const registerRow = (id: string) => (node: HTMLDivElement | null) => {
+    if (node) rowNodes.current.set(id, node);
+    else rowNodes.current.delete(id);
+  };
+  const captureRowTops = () => {
+    const tops = new Map<string, number>();
+    for (const [id, node] of rowNodes.current) tops.set(id, node.getBoundingClientRect().top);
+    rowTops.current = tops;
+  };
+  // Layout, not paint: the rows have to be displaced before the browser has a
+  // chance to show them in their new places. Runs after every render but only
+  // does anything when a drop asked for it.
+  useLayoutEffect(() => {
+    const tops = rowTops.current;
+    rowTops.current = null;
+    if (!tops) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    for (const [id, node] of rowNodes.current) {
+      const was = tops.get(id);
+      if (was === undefined || typeof node.animate !== 'function') continue;
+      const delta = was - node.getBoundingClientRect().top;
+      if (!delta) continue;
+      node.animate(
+        [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }],
+        { duration: 195, easing: 'cubic-bezier(.2, .8, .2, 1)' },
+      );
+    }
+  });
   // Host dividers stick just below the (already sticky) rail head, so the rail
   // has to publish the head's measured height for the CSS `top` to key off.
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -203,6 +237,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               {group.ids.map((id) => (
                 <Row
                   key={id}
+                  rowRef={registerRow(id)}
                   agent={agents[id]}
                   active={id === focusedId}
                   onClick={() => focus(id)}
@@ -217,7 +252,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onDragOver={(after) => setDropTarget(resolveDrop(id, after))}
                   onDrop={(after) => {
                     const drop = resolveDrop(id, after);
-                    if (draggedId && drop) reorderAgent(draggedId, drop.id, drop.after);
+                    if (draggedId && drop) {
+                      captureRowTops();
+                      reorderAgent(draggedId, drop.id, drop.after);
+                    }
                     setDraggedId(null);
                     setDropTarget(null);
                   }}
@@ -240,7 +278,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
             onDrop={(event) => {
               event.preventDefault();
               const drop = dropAtEnd();
-              if (draggedId && drop) reorderAgent(draggedId, drop.id, drop.after);
+              if (draggedId && drop) {
+                captureRowTops();
+                reorderAgent(draggedId, drop.id, drop.after);
+              }
               setDraggedId(null);
               setDropTarget(null);
             }}
@@ -432,6 +473,7 @@ function groupedAgentRows(order: string[], agents: Record<string, SessionView>, 
 }
 
 function Row({
+  rowRef,
   agent,
   active,
   onClick,
@@ -447,6 +489,7 @@ function Row({
   onDrop,
   onDragEnd,
 }: {
+  rowRef: (node: HTMLDivElement | null) => void;
   agent: SessionView;
   active: boolean;
   onClick: () => void;
@@ -571,6 +614,7 @@ function Row({
   useEffect(() => cancelLongPress, []);
   return (
     <div
+      ref={rowRef}
       className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
       draggable={!editing}
       title={editing ? undefined : 'Drag to reorder session'}
