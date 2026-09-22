@@ -64,15 +64,19 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   // place in one frame, which reads as the cards teleporting. FLIP the rail
   // instead: measure where the rows sit before the reorder, then after the
   // commit put each one back where it was and let it slide to where it landed.
+  // The dragged card is excluded: the pointer already carried it to the crack
+  // it was released at, so sliding it would mean snapping it back first.
   const rowNodes = useRef(new Map<string, HTMLDivElement>());
   const rowTops = useRef<Map<string, number> | null>(null);
   const registerRow = (id: string) => (node: HTMLDivElement | null) => {
     if (node) rowNodes.current.set(id, node);
     else rowNodes.current.delete(id);
   };
-  const captureRowTops = () => {
+  const captureRowTops = (droppedId: string) => {
     const tops = new Map<string, number>();
-    for (const [id, node] of rowNodes.current) tops.set(id, node.getBoundingClientRect().top);
+    for (const [id, node] of rowNodes.current) {
+      if (id !== droppedId) tops.set(id, node.getBoundingClientRect().top);
+    }
     rowTops.current = tops;
   };
   // Layout, not paint: the rows have to be displaced before the browser has a
@@ -253,7 +257,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onDrop={(after) => {
                     const drop = resolveDrop(id, after);
                     if (draggedId && drop) {
-                      captureRowTops();
+                      captureRowTops(draggedId);
                       reorderAgent(draggedId, drop.id, drop.after);
                     }
                     setDraggedId(null);
@@ -279,7 +283,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               event.preventDefault();
               const drop = dropAtEnd();
               if (draggedId && drop) {
-                captureRowTops();
+                captureRowTops(draggedId);
                 reorderAgent(draggedId, drop.id, drop.after);
               }
               setDraggedId(null);

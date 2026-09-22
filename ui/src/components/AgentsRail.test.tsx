@@ -213,7 +213,7 @@ describe('SessionsRail drop animation', () => {
     }
   };
 
-  it('slides displaced cards from where they were to where they landed', () => {
+  it('slides the displaced cards, leaving the dropped one where the pointer left it', () => {
     const animate = vi.fn();
     Object.defineProperty(Element.prototype, 'animate', { configurable: true, writable: true, value: animate });
     const sessions = ['a', 'b', 'c'].map((suffix) => ({
@@ -235,12 +235,10 @@ describe('SessionsRail drop animation', () => {
 
     expect(useStore.getState().order).toEqual(['c', 'a', 'b']);
     expect(rows()[0]).toContain('c');
-    // Each moved card starts the frame at its old offset and slides to zero:
-    // 'c' rose two slots, 'a' and 'b' each dropped one.
+    // 'a' and 'b' each drop a slot from where they were; 'c' is already under
+    // the pointer at the front, so it is not animated at all.
     const offsets = animate.mock.calls.map(([frames]) => (frames as Keyframe[])[0].transform);
-    expect(offsets).toHaveLength(3);
-    expect(offsets).toContain('translateY(80px)');
-    expect(offsets.filter((offset) => offset === 'translateY(-40px)')).toHaveLength(2);
+    expect(offsets).toEqual(['translateY(-40px)', 'translateY(-40px)']);
     for (const [frames] of animate.mock.calls) expect((frames as Keyframe[])[1].transform).toBe('translateY(0)');
   });
 });
