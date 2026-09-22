@@ -80,7 +80,10 @@
         "cmd": "/fixtures/bin/node",
         "args": [
           "/fixtures/tandem/runtime/node_modules/pi-acp/dist/index.js"
-        ]
+        ],
+        "env": {
+          "PI_ACP_PI_COMMAND": "/fixtures/tandem/runtime/pi/tandem-pi"
+        }
       },
       "terminal": {
         "cmd": "pi",

@@ -45,7 +45,10 @@
           "command": "{node}",
           "args": [
             "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
-          ]
+          ],
+          "env": {
+            "PI_ACP_PI_COMMAND": "{runtimeRoot}/pi/tandem-pi"
+          }
         },
         "terminal": {
           "command": "pi",

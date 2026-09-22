@@ -103,3 +103,51 @@ func TestLockfileRoundTripAndEntryPoint(t *testing.T) {
 		t.Fatalf("entry=%q ok=%v", entry, ok)
 	}
 }
+
+func TestStageAgentSupportWritesEmbeddedFilesIdempotently(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{RuntimeRoot: root}
+	if err := StageAgentSupport(cfg); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(root, "pi", "tandem-pi")
+	for path, want := range map[string][]byte{
+		filepath.Join(root, "pi", "mcp-bridge.ts"): tandem.RuntimePiMCPBridge,
+		wrapper: tandem.RuntimePiWrapper,
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s did not match embedded source", path)
+		}
+	}
+	info, err := os.Stat(wrapper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("wrapper mode = %v, want 0755", info.Mode().Perm())
+	}
+	// A stale copy is replaced; an up-to-date one is left alone.
+	if err := os.WriteFile(wrapper, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageAgentSupport(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(wrapper); !bytes.Equal(got, tandem.RuntimePiWrapper) {
+		t.Fatal("stale wrapper was not replaced")
+	}
+	if info, _ := os.Stat(wrapper); info.Mode().Perm() != 0o755 {
+		t.Fatalf("replaced wrapper mode = %v, want 0755", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "pi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("pi support dir has leftover temp files: %v", entries)
+	}
+}

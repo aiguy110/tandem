@@ -4,6 +4,7 @@
 package runtimeinstall
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -853,6 +854,56 @@ func install(ctx context.Context, cfg config.Config, npm, spec string, log io.Wr
 	cmd.Env = buildEnv(cfg)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("provision %s with npm install: %w", spec, err)
+	}
+	return nil
+}
+
+// agentSupportFiles are embedded helper files ACP agent launches reference
+// from RuntimeRoot (see the pi entry in config.yml.example).
+var agentSupportFiles = []struct {
+	rel      string
+	contents []byte
+	mode     os.FileMode
+}{
+	{filepath.Join("pi", "mcp-bridge.ts"), tandem.RuntimePiMCPBridge, 0o644},
+	{filepath.Join("pi", "tandem-pi"), tandem.RuntimePiWrapper, 0o755},
+}
+
+// StageAgentSupport writes the embedded agent helper files into RuntimeRoot.
+// Files already matching the embedded copy are left untouched; changed ones are
+// replaced atomically so a concurrently launching agent never execs or loads a
+// partially written file.
+func StageAgentSupport(cfg config.Config) error {
+	for _, f := range agentSupportFiles {
+		path := filepath.Join(cfg.RuntimeRoot, f.rel)
+		if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, f.contents) {
+			if info, err := os.Stat(path); err == nil && info.Mode().Perm() == f.mode {
+				continue
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("stage agent support: %w", err)
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+		if err != nil {
+			return fmt.Errorf("stage agent support: %w", err)
+		}
+		_, werr := tmp.Write(f.contents)
+		cerr := tmp.Close()
+		if werr == nil {
+			werr = cerr
+		}
+		if werr == nil {
+			werr = os.Chmod(tmp.Name(), f.mode)
+		}
+		if werr == nil {
+			werr = os.Rename(tmp.Name(), path)
+		}
+		if werr != nil {
+			os.Remove(tmp.Name())
+			return fmt.Errorf("stage agent support %s: %w", f.rel, werr)
+		}
+		slog.Info("staged agent support file", "path", path)
 	}
 	return nil
 }

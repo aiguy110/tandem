@@ -48,6 +48,12 @@ agents:
       command: "{node}"
       args:
         - "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
+      env:
+        # pi-acp accepts but ignores session/new mcpServers (pi has no MCP
+        # client), so pi is launched through a wrapper that loads Tandem's MCP
+        # bridge extension. The daemon hands the bridge the session's servers
+        # via TANDEM_MCP_SERVERS_FILE; set TANDEM_PI_COMMAND to override `pi`.
+        PI_ACP_PI_COMMAND: "{runtimeRoot}/pi/tandem-pi"
     terminal:
       command: pi
       startArgs: []
