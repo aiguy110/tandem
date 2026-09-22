@@ -125,3 +125,70 @@ describe('SessionsRail touch context menu', () => {
     vi.useRealTimers();
   });
 });
+
+describe('SessionsRail drag-to-reorder indicator', () => {
+  const dataTransfer = () => ({ setData: vi.fn(), effectAllowed: '', dropEffect: '' });
+  const rowFor = (view: ReturnType<typeof render>, index: number) =>
+    view.container.querySelectorAll('.session-row')[index] as HTMLElement;
+  // jsdom's DragEvent carries no pointer coordinates and lays nothing out, so
+  // dispatch a mouse event under the drag type and give the row a rect.
+  const dragEvent = (type: string, clientY: number) => {
+    const event = new MouseEvent(type, { bubbles: true, clientY });
+    Object.defineProperty(event, 'dataTransfer', { value: dataTransfer() });
+    return event;
+  };
+  const over = (row: HTMLElement, half: 'top' | 'bottom', type: 'dragover' | 'drop') => {
+    row.getBoundingClientRect = () => ({ top: 0, height: 20 }) as DOMRect;
+    fireEvent(row, dragEvent(type, half === 'top' ? 4 : 16));
+  };
+
+  function railWithThree() {
+    const sessions = ['a', 'b', 'c'].map((suffix) => ({
+      ...session(), id: suffix, name: suffix, hostId: LOCAL_HOST_ID, hostName: 'This host',
+    }));
+    const reorderAgent = vi.fn();
+    useStore.setState({
+      sessions: Object.fromEntries(sessions.map((s) => [s.id, s])),
+      order: ['a', 'b', 'c'],
+      hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }],
+      reorderAgent,
+    });
+    const view = render(<SessionsRail />);
+    fireEvent(rowFor(view, 1), dragEvent('dragstart', 0));
+    return { view, reorderAgent };
+  }
+
+  it('shows one line per crack and none for the dragged card’s own slots', () => {
+    const { view } = railWithThree();
+
+    // The crack above the dragged row, reached from the row above's bottom
+    // half or the dragged row itself: no move to promise, so no line.
+    over(rowFor(view, 0), 'bottom', 'dragover');
+    expect(view.container.querySelector('.drop-before, .drop-after')).toBeNull();
+    // The crack below the dragged row, reached from the next row's top half.
+    over(rowFor(view, 2), 'top', 'dragover');
+    expect(view.container.querySelector('.drop-before, .drop-after')).toBeNull();
+
+    // A real destination renders exactly one line, on the row below the crack.
+    over(rowFor(view, 0), 'top', 'dragover');
+    expect(view.container.querySelectorAll('.drop-before, .drop-after')).toHaveLength(1);
+    expect(rowFor(view, 0).className).toContain('drop-before');
+    // Past the last row the line has nowhere below it and hugs that row.
+    over(rowFor(view, 2), 'bottom', 'dragover');
+    expect(rowFor(view, 2).className).toContain('drop-after');
+  });
+
+  it('ignores a release on a crack the dragged card already occupies', () => {
+    const { view, reorderAgent } = railWithThree();
+
+    over(rowFor(view, 0), 'bottom', 'drop');
+    expect(reorderAgent).not.toHaveBeenCalled();
+  });
+
+  it('reorders against the row below the crack the line was drawn at', () => {
+    const { view, reorderAgent } = railWithThree();
+
+    over(rowFor(view, 0), 'top', 'drop');
+    expect(reorderAgent).toHaveBeenCalledWith('b', 'a', false);
+  });
+});

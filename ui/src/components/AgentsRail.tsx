@@ -107,6 +107,36 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
     }
   };
 
+  // Every crack between two rows has two equivalent descriptions — "after the
+  // row above" and "before the row below" — which the pointer flips between as
+  // it crosses a row boundary, painting the indicator a few pixels apart for
+  // what is one and the same destination. Collapse each crack to a single
+  // canonical description so the line holds still, and return null for the two
+  // cracks the dragged row already borders: those drops are no-ops, so
+  // promising them with a line is what makes a release look like it was
+  // ignored. Reordering is meaningful only within a host group, since the rail
+  // re-groups by host on every render and a cross-group move would leave the
+  // card exactly where it was.
+  const resolveDrop = (targetId: string, after: boolean): { id: string; after: boolean } | null => {
+    if (!draggedId || draggedId === targetId) return null;
+    const ids = displayedGroups.find((group) => group.ids.includes(targetId))?.ids;
+    if (!ids) return null;
+    const from = ids.indexOf(draggedId);
+    if (from < 0) return null;
+    const insertion = ids.indexOf(targetId) + (after ? 1 : 0);
+    if (insertion === from || insertion === from + 1) return null;
+    const below = ids[insertion];
+    return below ? { id: below, after: false } : { id: ids[insertion - 1], after: true };
+  };
+
+  // The strip below the last group drops onto the end of the dragged session's
+  // own group, for the same reason cross-group drops are refused above.
+  const dropAtEnd = (): { id: string; after: boolean } | null => {
+    if (!draggedId) return null;
+    const lastId = displayedGroups.find((group) => group.ids.includes(draggedId))?.ids.at(-1);
+    return lastId && lastId !== draggedId ? { id: lastId, after: true } : null;
+  };
+
   const promptForCommitMerge = (id: string) => {
     setConfirmation(null);
     focus(id);
@@ -184,11 +214,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   dragging={id === draggedId}
                   dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
                   onDragStart={() => setDraggedId(id)}
-                  onDragOver={(after) => {
-                    if (draggedId && draggedId !== id) setDropTarget({ id, after });
-                  }}
+                  onDragOver={(after) => setDropTarget(resolveDrop(id, after))}
                   onDrop={(after) => {
-                    if (draggedId && draggedId !== id) reorderAgent(draggedId, id, after);
+                    const drop = resolveDrop(id, after);
+                    if (draggedId && drop) reorderAgent(draggedId, drop.id, drop.after);
                     setDraggedId(null);
                     setDropTarget(null);
                   }}
@@ -206,12 +235,12 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
             onDragOver={(event) => {
               event.preventDefault();
               event.dataTransfer.dropEffect = 'move';
-              setDropTarget(null);
+              setDropTarget(dropAtEnd());
             }}
             onDrop={(event) => {
               event.preventDefault();
-              const lastId = order.at(-1);
-              if (draggedId && lastId && draggedId !== lastId) reorderAgent(draggedId, lastId, true);
+              const drop = dropAtEnd();
+              if (draggedId && drop) reorderAgent(draggedId, drop.id, drop.after);
               setDraggedId(null);
               setDropTarget(null);
             }}
