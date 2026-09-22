@@ -41,6 +41,42 @@ type MCPServer struct {
 	Headers []acp.EnvVariable `json:"headers,omitempty"`
 }
 
+// MarshalJSON emits the transport-specific shape the ACP schema requires.
+// The schema validates mcpServers entries against a union whose stdio branch
+// requires `args` and `env` and whose http/sse branches require `headers`, all
+// as arrays. Go's `omitempty` drops empty slices entirely, so an HTTP server
+// declared without headers (or a stdio server without args) failed every union
+// branch and the agent rejected session/new with -32602 Invalid params.
+func (s MCPServer) MarshalJSON() ([]byte, error) {
+	switch strings.ToLower(s.Type) {
+	case "http", "sse":
+		return json.Marshal(struct {
+			Name    string            `json:"name"`
+			Type    string            `json:"type"`
+			URL     string            `json:"url"`
+			Headers []acp.EnvVariable `json:"headers"`
+		}{Name: s.Name, Type: strings.ToLower(s.Type), URL: s.URL, Headers: nonNilEnv(s.Headers)})
+	default:
+		args := s.Args
+		if args == nil {
+			args = []string{}
+		}
+		return json.Marshal(struct {
+			Name    string            `json:"name"`
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     []acp.EnvVariable `json:"env"`
+		}{Name: s.Name, Command: s.Command, Args: args, Env: nonNilEnv(s.Env)})
+	}
+}
+
+func nonNilEnv(in []acp.EnvVariable) []acp.EnvVariable {
+	if in == nil {
+		return []acp.EnvVariable{}
+	}
+	return in
+}
+
 type AdapterConfig struct {
 	Transport       acp.Config
 	SessionID       string
