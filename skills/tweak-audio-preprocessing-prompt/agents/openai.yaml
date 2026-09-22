@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tweak Audio Preprocessing Prompt"
+  short_description: "Refine prompts for natural audio output"
+  default_prompt: "Use $tweak-audio-preprocessing-prompt to propose a concise fix for this mispronunciation: …"
