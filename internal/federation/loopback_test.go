@@ -1,8 +1,12 @@
 package federation
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -34,5 +38,47 @@ func TestLoopbackDisconnectOnlyFailsWaitersFromOldConnection(t *testing.T) {
 	}
 	if _, ok := l.waiters["new"]; !ok {
 		t.Fatal("replacement connection waiter was removed")
+	}
+}
+
+func TestLoopbackSpawnProgressDoesNotAnswerCommand(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var m struct {
+			CorrID json.RawMessage `json:"corrId"`
+		}
+		if err := conn.ReadJSON(&m); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"t": "spawn_progress", "phase": "Checking…", "corrId": m.CorrID})
+		_ = conn.WriteJSON(map[string]any{"t": "ack", "sessionId": "s-1", "corrId": m.CorrID})
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer srv.Close()
+	l, err := NewLoopbackLocal(srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reply, err := l.Execute(ctx, json.RawMessage(`{"t":"spawn_agent"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		T         string `json:"t"`
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(reply, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.T != "ack" || got.SessionID != "s-1" {
+		t.Fatalf("reply = %s, want the spawn ack", reply)
 	}
 }

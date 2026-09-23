@@ -477,7 +477,8 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
 }
 
 // A spawn the daemon has not acknowledged yet: a spinner (or error) row that
-// can be focused to watch progress, and dismissed once it has failed.
+// can be focused to watch progress, and dismissed (even while in flight, in
+// case its ack never arrives).
 function PendingSpawnRow({ spawn, active, onClick, onDismiss }: { spawn: PendingSpawn; active: boolean; onClick: () => void; onDismiss: () => void }) {
   return (
     <div className={`session-row pending-spawn${active ? ' active' : ''}`} onClick={onClick} title={spawn.error ?? spawn.phase}>
@@ -490,21 +491,19 @@ function PendingSpawnRow({ spawn, active, onClick, onDismiss }: { spawn: Pending
         </div>
         <div className="ws"><span className="ws-text">{spawn.error ? `Spawn failed · ${spawn.label}` : spawn.phase}</span></div>
       </div>
-      {spawn.error && (
-        <div className="session-actions">
-          <button
-            className="delete-btn"
-            title="Dismiss"
-            aria-label="Dismiss failed spawn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss();
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <div className="session-actions">
+        <button
+          className="delete-btn"
+          title="Dismiss"
+          aria-label={spawn.error ? 'Dismiss failed spawn' : 'Dismiss in-progress spawn'}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss();
+          }}
+        >
+          ✕
+        </button>
+      </div>
     </div>
   );
 }

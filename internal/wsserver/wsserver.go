@@ -1474,7 +1474,12 @@ func (c *connection) forwardFederation(m clientMessage) {
 		c.commandError(m, err)
 		return
 	}
-	callCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	callTimeout := 30 * time.Second
+	if m.T == "spawn_agent" {
+		// A remote spawn may install the agent runtime before acknowledging.
+		callTimeout = 10 * time.Minute
+	}
+	callCtx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	var request map[string]any
 	if err := json.Unmarshal(payload, &request); err != nil {

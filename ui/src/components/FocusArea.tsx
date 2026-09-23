@@ -55,6 +55,9 @@ export function FocusArea() {
             <span className="spinner" aria-hidden="true" />
             <div>{pendingSpawn.phase}</div>
             {pendingSpawn.label && <div className="loading-sub">{pendingSpawn.label}</div>}
+            <div className="spawn-error-actions">
+              <button className="btn ghost" type="button" title="Stop tracking this spawn; it appears in the rail if it finishes" onClick={() => dismissPendingSpawn(pendingSpawn.corrId)}>Dismiss</button>
+            </div>
           </div>
         )}
       </div>

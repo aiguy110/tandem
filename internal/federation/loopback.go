@@ -146,9 +146,16 @@ func (l *LoopbackLocal) read(conn *websocket.Conn) {
 			return
 		}
 		var e struct {
+			T      string `json:"t"`
 			CorrID string `json:"corrId"`
 		}
 		_ = json.Unmarshal(data, &e)
+		if e.T == "spawn_progress" {
+			// Interim spawn phases share the command's corrId but are not its
+			// reply; answering with one would drop the real ack. The call
+			// protocol has no streaming, so these stay on the slave.
+			continue
+		}
 		l.mu.Lock()
 		waiter, found := l.waiters[e.CorrID]
 		l.mu.Unlock()
