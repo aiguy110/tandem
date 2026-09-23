@@ -114,6 +114,9 @@ export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
 
 export interface PendingSpawn {
   corrId: string;
+  name?: string;
+  hostId?: string;
+  hostName?: string;
   label: string;
   phase: string;
   error: string | null;
@@ -225,11 +228,13 @@ interface StoreState {
   sessions: Record<string, SessionView>;
   order: string[];
   focusedId: string | null;
-  // A spawn the daemon is still working on. The focus area shows its progress
-  // while focusedId is null; it clears on success (focusing the new session)
-  // or holds the error until dismissed.
-  pendingSpawn: PendingSpawn | null;
-  dismissPendingSpawn: () => void;
+  // Spawns the daemon is still working on, shown as rail entries. Each clears
+  // on success or holds its error until dismissed. When one is focused
+  // (focusedSpawnId, with focusedId null) the focus area shows its progress.
+  pendingSpawns: PendingSpawn[];
+  focusedSpawnId: string | null;
+  focusSpawn: (corrId: string) => void;
+  dismissPendingSpawn: (corrId: string) => void;
   // The selected pane belongs to an agent/session, rather than to the focus
   // area. `pane` remains the currently focused agent's pane for consumers that
   // need a simple current-view value.
@@ -610,7 +615,8 @@ export const useStore = create<StoreState>((set, get) => {
               order.splice(order.indexOf(id), 1);
             }
           }
-          const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : order[0] ?? null;
+          // Viewing an in-progress spawn deliberately has no focused session.
+          const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : st.focusedSpawnId ? null : order[0] ?? null;
           const pane = focusedId ? st.panesBySession[focusedId] ?? 'chat' : 'chat';
           if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
           return { sessions, order, focusedId, pane };
@@ -802,8 +808,8 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'spawn_progress': {
-        set((st) => (st.pendingSpawn && st.pendingSpawn.corrId === msg.corrId
-          ? { pendingSpawn: { ...st.pendingSpawn, phase: msg.phase } }
+        set((st) => (st.pendingSpawns.some((p) => p.corrId === msg.corrId)
+          ? { pendingSpawns: st.pendingSpawns.map((p) => (p.corrId === msg.corrId ? { ...p, phase: msg.phase } : p)) }
           : st));
         return;
       }
@@ -932,7 +938,7 @@ export const useStore = create<StoreState>((set, get) => {
           return {
             sessions,
             order,
-            focusedId: st.focusedId ?? msg.sessionId,
+            focusedId: st.focusedId ?? (st.focusedSpawnId ? null : msg.sessionId),
             annotations: { ...st.annotations, [msg.sessionId]: msg.annotations ?? [] },
           };
         });
@@ -1047,8 +1053,18 @@ export const useStore = create<StoreState>((set, get) => {
     sessions: {},
     order: initialSessionOrder(),
     focusedId: initialFocusedSession(),
-    pendingSpawn: null,
-    dismissPendingSpawn: () => set({ pendingSpawn: null }),
+    pendingSpawns: [],
+    focusedSpawnId: null,
+    focusSpawn: (corrId) => {
+      const previous = get().focusedId;
+      if (previous && wantsPty(previous)) subscribeAgent(previous);
+      set({ focusedId: null, focusedSpawnId: corrId });
+      syncAudioFocus();
+    },
+    dismissPendingSpawn: (corrId) => set((st) => ({
+      pendingSpawns: st.pendingSpawns.filter((p) => p.corrId !== corrId),
+      focusedSpawnId: st.focusedSpawnId === corrId ? null : st.focusedSpawnId,
+    })),
     panesBySession: initialSessionPanes(),
     pane: 'chat',
     modal: 'none',
@@ -1346,27 +1362,41 @@ export const useStore = create<StoreState>((set, get) => {
         pendingAcks.set(corrId, (r) => {
           const st = get();
           const ok = !!r.sessionId && !r.error;
-          if (ok) st.refreshAgents();
-          // Only take over the focus area if the user is still watching this
-          // spawn (they may have clicked into another session meanwhile).
-          const watching = st.pendingSpawn?.corrId === corrId && st.focusedId === null;
-          if (watching && ok) set({ focusedId: r.sessionId, pane: 'chat', pendingSpawn: null });
-          else if (watching) set({ pendingSpawn: { ...st.pendingSpawn!, error: r.error ?? 'Spawn failed' } });
-          else if (st.pendingSpawn?.corrId === corrId) set({ pendingSpawn: null });
+          if (ok) {
+            st.refreshAgents();
+            // Only take over the focus area if the user is still watching this
+            // spawn (they may have moved to another session meanwhile).
+            const watching = st.focusedSpawnId === corrId;
+            set((cur) => ({
+              pendingSpawns: cur.pendingSpawns.filter((p) => p.corrId !== corrId),
+              ...(watching ? { focusedId: r.sessionId, focusedSpawnId: null, pane: 'chat' as const } : {}),
+            }));
+          } else {
+            set((cur) => ({
+              pendingSpawns: cur.pendingSpawns.map((p) => (p.corrId === corrId ? { ...p, error: r.error ?? 'Spawn failed' } : p)),
+            }));
+          }
           resolve(r);
         });
         const remote = spec.hostId ? get().hosts.find((h) => h.id === spec.hostId) : undefined;
         const where = spec.workspace.kind === 'worktree' ? spec.workspace.repo : spec.workspace.cwd;
-        set({
+        const previous = get().focusedId;
+        if (previous && wantsPty(previous)) subscribeAgent(previous);
+        set((st) => ({
           modal: 'none',
           focusedId: null,
-          pendingSpawn: {
+          focusedSpawnId: corrId,
+          pendingSpawns: [...st.pendingSpawns, {
             corrId,
+            name: spec.name,
+            hostId: remote ? remote.id : undefined,
+            hostName: remote ? remote.name ?? remote.id : undefined,
             label: [spec.agent, where.split('/').filter(Boolean).pop()].filter(Boolean).join(' · '),
             phase: remote ? `Starting session on ${remote.name ?? remote.id}…` : 'Starting session…',
             error: null,
-          },
-        });
+          }],
+        }));
+        syncAudioFocus();
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
     actOnSystemNotification: (notificationId, action) =>
@@ -1625,6 +1655,10 @@ export const useStore = create<StoreState>((set, get) => {
 // Do the same for drafts: every keystroke reaches localStorage synchronously,
 // before a refresh or daemon restart can discard the browser state.
 useStore.subscribe((state, previous) => {
+  // Focusing a real session by any route leaves the in-progress spawn view.
+  if (state.focusedId && state.focusedSpawnId && state.focusedId !== previous.focusedId) {
+    useStore.setState({ focusedSpawnId: null });
+  }
   if (state.focusedId !== previous.focusedId) saveFocusedSession(state.focusedId);
   if (state.drafts !== previous.drafts) saveDrafts(state.drafts);
 });

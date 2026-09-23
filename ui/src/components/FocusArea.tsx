@@ -25,7 +25,7 @@ export function FocusArea() {
   const enterTerminal = useStore((s) => s.enterTerminal);
   const leaveTerminal = useStore((s) => s.leaveTerminal);
   const toggleThreadAudio = useStore((s) => s.toggleThreadAudio);
-  const pendingSpawn = useStore((s) => s.pendingSpawn);
+  const pendingSpawn = useStore((s) => s.pendingSpawns.find((p) => p.corrId === s.focusedSpawnId));
   const dismissPendingSpawn = useStore((s) => s.dismissPendingSpawn);
   const setModal = useStore((s) => s.setModal);
   const [confirm, setConfirm] = useState<null | 'to-cli-busy' | 'to-acp'>(null);
@@ -46,8 +46,8 @@ export function FocusArea() {
             <div>Spawn failed{pendingSpawn.label ? ` (${pendingSpawn.label})` : ''}</div>
             <div className="modal-err spawn-error">{pendingSpawn.error}</div>
             <div className="spawn-error-actions">
-              <button className="btn ghost" type="button" onClick={dismissPendingSpawn}>Dismiss</button>
-              <button className="btn" type="button" onClick={() => { dismissPendingSpawn(); setModal('spawn'); }}>Back to spawn</button>
+              <button className="btn ghost" type="button" onClick={() => dismissPendingSpawn(pendingSpawn.corrId)}>Dismiss</button>
+              <button className="btn" type="button" onClick={() => { dismissPendingSpawn(pendingSpawn.corrId); setModal('spawn'); }}>Back to spawn</button>
             </div>
           </div>
         ) : (

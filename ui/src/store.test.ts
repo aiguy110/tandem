@@ -32,7 +32,7 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
+  useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pendingSpawns: [], focusedSpawnId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
@@ -391,5 +391,52 @@ describe('audio focus retention on a hidden document', () => {
     useStore.getState().focus('session-1');
 
     expect(sendSpy).toHaveBeenLastCalledWith({ t: 'set_audio_focus', sessionId: 'session-1', focused: true });
+  });
+});
+
+describe('pending spawns', () => {
+  const spec = { agent: 'claude', adapter: 'acp' as const, workspace: { kind: 'worktree' as const, repo: '/repo/demo' } };
+  function sentSpawnCorr(sendSpy: ReturnType<typeof vi.spyOn>): string {
+    const msg = sendSpy.mock.calls.map((c: unknown[]) => c[0] as { t: string; corrId?: string }).find((m: { t: string }) => m.t === 'spawn_agent');
+    return msg!.corrId!;
+  }
+
+  it('shows progress, then focuses the new session when the user is still watching', async () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const done = useStore.getState().spawn(spec);
+    const corrId = sentSpawnCorr(sendSpy);
+    expect(useStore.getState().focusedSpawnId).toBe(corrId);
+    expect(useStore.getState().pendingSpawns[0]).toMatchObject({ label: 'claude · demo', error: null });
+
+    __testApplyServerMsg({ t: 'spawn_progress', corrId, phase: 'Launching ACP adapter process…' });
+    expect(useStore.getState().pendingSpawns[0].phase).toBe('Launching ACP adapter process…');
+    // A summary refresh mid-spawn must not steal focus from the progress view.
+    __testApplyServerMsg({ t: 'agents', sessions: [summary()] });
+    expect(useStore.getState().focusedId).toBeNull();
+
+    __testApplyServerMsg({ t: 'ack', corrId, sessionId: 'new-1' });
+    await done;
+    expect(useStore.getState()).toMatchObject({ focusedId: 'new-1', focusedSpawnId: null, pendingSpawns: [] });
+    sendSpy.mockRestore();
+  });
+
+  it('keeps a failed spawn in the rail after the user moved elsewhere', async () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    __testApplyServerMsg({ t: 'agents', sessions: [summary()] });
+    const done = useStore.getState().spawn(spec);
+    const corrId = sentSpawnCorr(sendSpy);
+    useStore.getState().focus('session-1');
+    expect(useStore.getState().focusedSpawnId).toBeNull();
+
+    __testApplyServerMsg({ t: 'ack', corrId, error: 'boom' });
+    await done;
+    expect(useStore.getState().focusedId).toBe('session-1');
+    expect(useStore.getState().pendingSpawns).toMatchObject([{ corrId, error: 'boom' }]);
+
+    useStore.getState().focusSpawn(corrId);
+    expect(useStore.getState()).toMatchObject({ focusedId: null, focusedSpawnId: corrId });
+    useStore.getState().dismissPendingSpawn(corrId);
+    expect(useStore.getState()).toMatchObject({ pendingSpawns: [], focusedSpawnId: null });
+    sendSpy.mockRestore();
   });
 });

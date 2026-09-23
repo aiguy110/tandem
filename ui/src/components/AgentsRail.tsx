@@ -4,7 +4,7 @@ import { usePresence, useValuePresence } from '../transitions';
 import { usesSoftKeyboard } from '../mobile';
 import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
-import type { SessionView } from '../store';
+import type { PendingSpawn, SessionView } from '../store';
 import type { ClosePreview, FederationHost } from '../wire';
 
 // Badge color per severity, matching the Notifications panel (red > yellow > green).
@@ -22,6 +22,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const hosts = useStore((s) => s.hosts);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const pendingSpawns = useStore((s) => s.pendingSpawns);
+  const focusedSpawnId = useStore((s) => s.focusedSpawnId);
+  const focusSpawn = useStore((s) => s.focusSpawn);
+  const dismissPendingSpawn = useStore((s) => s.dismissPendingSpawn);
   const reorderAgent = useStore((s) => s.reorderAgent);
   const markAgentUnread = useStore((s) => s.markAgentUnread);
   const setPane = useStore((s) => s.setPane);
@@ -219,13 +223,26 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           Sessions <span className="count">{order.length}</span>
         </span>
       </div>
-      {order.length === 0 ? (
+      {pendingSpawns.length > 0 && (
+        <section className="session-host-group pending-spawns" aria-label="Starting sessions">
+          {pendingSpawns.map((p) => (
+            <PendingSpawnRow
+              key={p.corrId}
+              spawn={p}
+              active={p.corrId === focusedSpawnId}
+              onClick={() => focusSpawn(p.corrId)}
+              onDismiss={() => dismissPendingSpawn(p.corrId)}
+            />
+          ))}
+        </section>
+      )}
+      {order.length === 0 ? (pendingSpawns.length > 0 ? null : (
         <div className="empty">
           No sessions yet.
           <br />
           Press <span className="kbd">C</span> or <b>+ Session</b> to spawn one.
         </div>
-      ) : (
+      )) : (
         <>
           {displayedGroups.map((group) => (
             // Each group is its own box so its divider sticks only for as long
@@ -454,6 +471,39 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
           <button type="button" role="menuitem" onClick={() => { onDetails(); setMenu(null); }}>Details</button>
         </div>,
         document.body,
+      )}
+    </div>
+  );
+}
+
+// A spawn the daemon has not acknowledged yet: a spinner (or error) row that
+// can be focused to watch progress, and dismissed once it has failed.
+function PendingSpawnRow({ spawn, active, onClick, onDismiss }: { spawn: PendingSpawn; active: boolean; onClick: () => void; onDismiss: () => void }) {
+  return (
+    <div className={`session-row pending-spawn${active ? ' active' : ''}`} onClick={onClick} title={spawn.error ?? spawn.phase}>
+      {spawn.error ? <span className="dot error" title="spawn failed" /> : <span className="spinner small" aria-label="starting" />}
+      <div style={{ minWidth: 0 }}>
+        <div className="name">
+          {spawn.error && '⛔ '}
+          {spawn.name || 'New session'}
+          {spawn.hostId && <span className="session-host-badge">{spawn.hostName || spawn.hostId}</span>}
+        </div>
+        <div className="ws"><span className="ws-text">{spawn.error ? `Spawn failed · ${spawn.label}` : spawn.phase}</span></div>
+      </div>
+      {spawn.error && (
+        <div className="session-actions">
+          <button
+            className="delete-btn"
+            title="Dismiss"
+            aria-label="Dismiss failed spawn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss();
+            }}
+          >
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );

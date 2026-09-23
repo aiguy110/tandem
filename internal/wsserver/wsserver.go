@@ -1091,7 +1091,7 @@ func (c *connection) handle(m clientMessage) {
 			if spawnDone.Load() {
 				return
 			}
-			slog.Info("spawn progress", "corr_id", string(m.CorrID), "agent", m.Spec.Agent, "phase", phase)
+			slog.Info("spawn progress", "corr_id", strings.Trim(string(m.CorrID), `"`), "agent", m.Spec.Agent, "phase", phase)
 			c.send(withCorr(map[string]any{"t": "spawn_progress", "phase": phase}, m.CorrID))
 		})
 		sess, err := c.server.opts.Registry.Spawn(spawnCtx, m.Spec)

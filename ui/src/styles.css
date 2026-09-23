@@ -403,6 +403,8 @@ body.dock-resizing .app { transition: none; }
 .loading-state .loading-sub { font-size: var(--fs-xs); opacity: .7; }
 .spinner { width: 22px; height: 22px; border: 2px solid var(--border-strong); border-top-color: var(--accent, currentColor); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.spinner.small { width: 9px; height: 9px; border-width: 1.5px; margin-top: 4px; }
+.session-row.pending-spawn { cursor: pointer; }
 .spawn-error { max-width: 560px; white-space: pre-wrap; text-align: left; }
 .spawn-error-actions { display: flex; gap: 8px; }
 .pane-placeholder .big { font-size: calc(34px * var(--ui-scale)); opacity: .5; }
