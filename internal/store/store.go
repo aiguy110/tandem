@@ -626,6 +626,7 @@ func Open(path string) (*Store, error) {
 	for _, migration := range []struct {
 		sql, name string
 	}{
+		{"ALTER TABLE sessions ADD COLUMN railRank INTEGER", "sessions.railRank"},
 		{"ALTER TABLE history_sessions ADD COLUMN importerId TEXT NOT NULL DEFAULT ''", "history_sessions.importerId"},
 		{"ALTER TABLE history_sessions ADD COLUMN importerVersion INTEGER NOT NULL DEFAULT 0", "history_sessions.importerVersion"},
 		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
@@ -786,6 +787,43 @@ func (s *Store) SetSessionName(id, name string) error {
 	}
 	if _, err := tx.Exec("UPDATE history_sessions SET title = ? WHERE source = 'tandem' AND sessionId = ?", name, id); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// SessionRailRanks returns the persisted sessions-rail position of every live
+// session that has one. Lower ranks sort first; sessions predating rail ranks
+// are absent and ranked by the registry on boot.
+func (s *Store) SessionRailRanks() (map[string]int64, error) {
+	rows, err := s.db.Query("SELECT id, railRank FROM sessions WHERE closedAt IS NULL AND railRank IS NOT NULL")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id string
+		var rank int64
+		if err := rows.Scan(&id, &rank); err != nil {
+			return nil, err
+		}
+		out[id] = rank
+	}
+	return out, rows.Err()
+}
+
+// SetSessionRailRanks persists sessions-rail positions atomically, so a
+// reorder is never observed half-applied after a restart.
+func (s *Store) SetSessionRailRanks(ranks map[string]int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for id, rank := range ranks {
+		if _, err := tx.Exec("UPDATE sessions SET railRank = ? WHERE id = ?", rank, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

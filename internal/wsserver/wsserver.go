@@ -60,6 +60,7 @@ type Backend interface {
 	DeleteProfile(string) error
 	ForgetProfile(string, string) error
 	Rename(string, string) error
+	Reorder(string, string, bool) error
 	ListAnnotations(string) ([]store.Annotation, error)
 	UpsertAnnotation(store.Annotation) error
 	DeleteAnnotation(string) error
@@ -302,6 +303,8 @@ func tokenMatches(got, want string) bool {
 type clientMessage struct {
 	T                 string                     `json:"t"`
 	SessionID         string                     `json:"sessionId"`
+	TargetSessionID   string                     `json:"targetSessionId,omitempty"`
+	After             bool                       `json:"after,omitempty"`
 	Channels          []string                   `json:"channels"`
 	SinceSeq          int64                      `json:"sinceSeq"`
 	CorrID            json.RawMessage            `json:"corrId"`
@@ -721,6 +724,19 @@ func (c *connection) handle(m clientMessage) {
 		if hostID, sessionID, ok := SplitRemoteSessionID(m.SessionID); ok {
 			m.HostID, m.SessionID = hostID, sessionID
 		}
+	}
+	if m.TargetSessionID != "" {
+		// A reorder target must live on the same daemon as the moved session:
+		// each host owns the order of its own sessions.
+		targetHost, targetID, remote := SplitRemoteSessionID(m.TargetSessionID)
+		if !remote {
+			targetID = m.TargetSessionID
+		}
+		if targetHost != m.HostID {
+			c.commandError(m, fmt.Errorf("reorder target %s is not on the same host as %s", m.TargetSessionID, m.SessionID))
+			return
+		}
+		m.TargetSessionID = targetID
 	}
 	if m.HostID != "" {
 		c.forwardFederation(m)
@@ -1198,6 +1214,13 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+	case "reorder_session":
+		if err := c.server.opts.Registry.Reorder(m.SessionID, m.TargetSessionID, m.After); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, m.SessionID)
 	case "rename_agent":
 		if err := c.server.opts.Registry.Rename(m.SessionID, m.Name); err != nil {
 			c.commandError(m, err)
