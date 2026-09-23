@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -396,11 +397,25 @@ func (m *Manager) submoduleClosePreview(ctx context.Context, cwd string) ([]Subm
 }
 
 func (m *Manager) initializedSubmodulePaths(ctx context.Context, cwd string) ([]string, error) {
-	status, err := m.git.Run(ctx, cwd, "submodule", "status", "--recursive")
+	return m.collectSubmodulePaths(ctx, cwd, "", nil)
+}
+
+// collectSubmodulePaths walks submodules level by level instead of using
+// `git submodule status --recursive`, which aborts entirely when any nested
+// repository has a gitlink without a .gitmodules mapping. Such an orphaned
+// gitlink can never be initialized, so inside a submodule it is logged and
+// that level's descendants are skipped. At the top level the error is still
+// returned, because hiding it could let a removal discard real submodules.
+func (m *Manager) collectSubmodulePaths(ctx context.Context, root, prefix string, paths []string) ([]string, error) {
+	dir := filepath.Join(root, prefix)
+	status, err := m.git.Run(ctx, dir, "submodule", "status")
 	if err != nil {
+		if prefix != "" && strings.Contains(err.Error(), "no submodule mapping found") {
+			slog.Warn("skipping nested submodules with unmapped gitlink", "worktree", root, "submodule", prefix, "error", err)
+			return paths, nil
+		}
 		return nil, err
 	}
-	var paths []string
 	for _, line := range strings.Split(status, "\n") {
 		// The format is "<state><commit> <path> ...". A leading '-' means
 		// uninitialized, which deinit will not discard.
@@ -408,8 +423,16 @@ func (m *Manager) initializedSubmodulePaths(ctx context.Context, cwd string) ([]
 			continue
 		}
 		parts := strings.Fields(line[1:])
-		if len(parts) >= 2 {
-			paths = append(paths, parts[1])
+		if len(parts) < 2 {
+			continue
+		}
+		path := parts[1]
+		if prefix != "" {
+			path = prefix + "/" + path
+		}
+		paths = append(paths, path)
+		if paths, err = m.collectSubmodulePaths(ctx, root, path, paths); err != nil {
+			return nil, err
 		}
 	}
 	return paths, nil

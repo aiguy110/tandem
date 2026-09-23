@@ -178,6 +178,44 @@ func TestTeardownDeinitializesSubmodulesOnlyAfterExplicitConfirmation(t *testing
 	}
 }
 
+func TestSubmoduleWithUnmappedNestedGitlinkDoesNotBlockClose(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	sub := filepath.Join(f.root, "submodule-source")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, sub, "init", "-q", "-b", "main")
+	git(t, sub, "config", "user.email", "test@example.com")
+	git(t, sub, "config", "user.name", "Test")
+	write(t, filepath.Join(sub, "README.md"), "submodule\n")
+	git(t, sub, "add", ".")
+	git(t, sub, "commit", "-q", "-m", "init")
+	// A gitlink committed without a .gitmodules entry, as left behind by
+	// `git add` of a nested checkout.
+	git(t, sub, "update-index", "--add", "--cacheinfo", "160000,"+f.initial+",configs")
+	git(t, sub, "commit", "-q", "-m", "stray gitlink")
+	git(t, f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub")
+	git(t, f.repo, "commit", "-qam", "add submodule")
+
+	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
+	wt, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "with-unmapped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, wt.CWD, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+	preview, err := m.ClosePreview(ctx, wt.CWD, wt.Workspace)
+	if err != nil || len(preview.Submodules) != 1 || preview.Submodules[0].Path != "vendor/sub" {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if err := m.Teardown(ctx, wt.Workspace, wt.CWD, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wt.CWD); !os.IsNotExist(err) {
+		t.Fatal("teardown retained checkout")
+	}
+}
+
 func TestTeardownForceRemovesOrphanedManagedWorktree(t *testing.T) {
 	root := t.TempDir()
 	managed := filepath.Join(root, "worktrees")
