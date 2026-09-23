@@ -573,6 +573,10 @@ function Row({
   // or native drag handling). Recognize that gesture ourselves instead.
   const longPress = useRef<{ pointerId: number; x: number; y: number; timer: number } | null>(null);
   const longPressOpened = useRef(false);
+  // Mobile browsers may emit a contextmenu after completing their native drag
+  // sequence. Ignore that trailing event so a successful reorder cannot leave
+  // an actions menu behind.
+  const suppressContextMenuUntil = useRef(0);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -702,6 +706,9 @@ function Row({
       }}
       onPointerCancel={cancelLongPress}
       onDragStart={(event) => {
+        cancelLongPress();
+        setContextMenu(null);
+        suppressContextMenuUntil.current = Date.now() + 750;
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', agent.id);
         onDragStart();
@@ -717,10 +724,15 @@ function Row({
         const bounds = event.currentTarget.getBoundingClientRect();
         onDrop(event.clientY > bounds.top + bounds.height / 2);
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        cancelLongPress();
+        setContextMenu(null);
+        onDragEnd();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         cancelLongPress();
+        if (Date.now() < suppressContextMenuUntil.current) return;
         openContextMenu({ x: event.clientX, y: event.clientY });
       }}
       onPointerEnter={(event) => {

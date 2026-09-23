@@ -127,6 +127,22 @@ describe('SessionsRail touch context menu', () => {
     expect(screen.queryByRole('menu', { name: 'Actions for Remote agent' })).toBeNull();
     vi.useRealTimers();
   });
+
+  it('does not leave a context menu after a mobile drag ends', () => {
+    const agent = session();
+    useStore.setState({ sessions: { [agent.id]: agent }, order: [agent.id] });
+    const view = render(<SessionsRail />);
+    const row = view.container.querySelector('.session-row')!;
+    const dataTransfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const dragStart = new MouseEvent('dragstart', { bubbles: true });
+    Object.defineProperty(dragStart, 'dataTransfer', { value: dataTransfer });
+
+    fireEvent(row, dragStart);
+    fireEvent.dragEnd(row);
+    fireEvent.contextMenu(row);
+
+    expect(screen.queryByRole('menu', { name: 'Actions for Remote agent' })).toBeNull();
+  });
 });
 
 describe('SessionsRail drag-to-reorder indicator', () => {
