@@ -28,6 +28,7 @@ function agent(): SessionView {
     turnNotifications: [],
     hasPty: false,
     shellExited: false,
+    historyLoaded: true,
     shellExitMessage: null,
     browserActive: false,
     browserOwner: 'agent',

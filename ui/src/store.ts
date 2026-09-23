@@ -112,6 +112,13 @@ export function agentBadge(agent: SessionView): { count: number; severity: Notif
 export type PaneId = 'chat' | 'shell' | 'diff' | 'browser';
 export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
 
+export interface PendingSpawn {
+  corrId: string;
+  label: string;
+  phase: string;
+  error: string | null;
+}
+
 export interface SessionView {
   id: string;
   name: string;
@@ -148,6 +155,9 @@ export interface SessionView {
   // shell process ends (shell_exit) so the pane can offer a restart.
   shellExited: boolean;
   shellExitMessage: string | null;
+  // False until the first transcript snapshot for this session arrives, so the
+  // transcript can show a loading state instead of claiming it is empty.
+  historyLoaded: boolean;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
   // holds the wheel, plus any pending session-initiated takeover requests.
   browserActive: boolean;
@@ -215,6 +225,11 @@ interface StoreState {
   sessions: Record<string, SessionView>;
   order: string[];
   focusedId: string | null;
+  // A spawn the daemon is still working on. The focus area shows its progress
+  // while focusedId is null; it clears on success (focusing the new session)
+  // or holds the error until dismissed.
+  pendingSpawn: PendingSpawn | null;
+  dismissPendingSpawn: () => void;
   // The selected pane belongs to an agent/session, rather than to the focus
   // area. `pane` remains the currently focused agent's pane for consumers that
   // need a simple current-view value.
@@ -786,6 +801,12 @@ export const useStore = create<StoreState>((set, get) => {
         }
         return;
       }
+      case 'spawn_progress': {
+        set((st) => (st.pendingSpawn && st.pendingSpawn.corrId === msg.corrId
+          ? { pendingSpawn: { ...st.pendingSpawn, phase: msg.phase } }
+          : st));
+        return;
+      }
       case 'agent_closed': {
         set((st) => {
           if (!st.sessions[msg.sessionId]) return st;
@@ -898,6 +919,7 @@ export const useStore = create<StoreState>((set, get) => {
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
+            historyLoaded: true,
             audioOnTurnEnd,
             audioState,
             audioError,
@@ -1025,6 +1047,8 @@ export const useStore = create<StoreState>((set, get) => {
     sessions: {},
     order: initialSessionOrder(),
     focusedId: initialFocusedSession(),
+    pendingSpawn: null,
+    dismissPendingSpawn: () => set({ pendingSpawn: null }),
     panesBySession: initialSessionPanes(),
     pane: 'chat',
     modal: 'none',
@@ -1320,11 +1344,28 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
-          if (r.sessionId && !r.error) {
-            get().refreshAgents();
-            set({ focusedId: r.sessionId, modal: 'none', pane: 'chat' });
-          }
+          const st = get();
+          const ok = !!r.sessionId && !r.error;
+          if (ok) st.refreshAgents();
+          // Only take over the focus area if the user is still watching this
+          // spawn (they may have clicked into another session meanwhile).
+          const watching = st.pendingSpawn?.corrId === corrId && st.focusedId === null;
+          if (watching && ok) set({ focusedId: r.sessionId, pane: 'chat', pendingSpawn: null });
+          else if (watching) set({ pendingSpawn: { ...st.pendingSpawn!, error: r.error ?? 'Spawn failed' } });
+          else if (st.pendingSpawn?.corrId === corrId) set({ pendingSpawn: null });
           resolve(r);
+        });
+        const remote = spec.hostId ? get().hosts.find((h) => h.id === spec.hostId) : undefined;
+        const where = spec.workspace.kind === 'worktree' ? spec.workspace.repo : spec.workspace.cwd;
+        set({
+          modal: 'none',
+          focusedId: null,
+          pendingSpawn: {
+            corrId,
+            label: [spec.agent, where.split('/').filter(Boolean).pop()].filter(Boolean).join(' · '),
+            phase: remote ? `Starting session on ${remote.name ?? remote.id}…` : 'Starting session…',
+            error: null,
+          },
         });
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
@@ -1638,6 +1679,7 @@ function shell(id: string): SessionView {
     hasPty: false,
     shellExited: false,
     shellExitMessage: null,
+    historyLoaded: false,
     browserActive: false,
     browserOwner: 'agent',
     browserTakeoverHeld: false,

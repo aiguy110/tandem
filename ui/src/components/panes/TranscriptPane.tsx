@@ -704,7 +704,9 @@ export function TranscriptPane() {
             onMouseUp={captureSelection}
             onTouchEnd={() => window.setTimeout(() => captureSelectionRef.current(), 80)}
           >
-            {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
+            {transcriptItems.length === 0 && (agent.historyLoaded
+              ? <div className="empty">No activity yet. Send a prompt below to start a turn.</div>
+              : <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />Loading conversation…</div>)}
             {transcriptItems.map((it) => (
               <Row
                 key={`${agent.id}:${it.key}`}

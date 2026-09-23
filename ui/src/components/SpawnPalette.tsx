@@ -122,7 +122,6 @@ export function SpawnPalette() {
   // The target host's own snapshots: a profile's snapshot id only means
   // something on the daemon that captured it.
   const [remoteSnapshots, setRemoteSnapshots] = useState<BrowserSnapshot[]>([]);
-  const focus = useStore((s) => s.focus);
   const setModal = useStore((s) => s.setModal);
   const agents = useStore((s) => s.sessions);
   const spawnHandoffFrom = useStore((s) => s.spawnHandoffFrom);
@@ -602,16 +601,10 @@ export function SpawnPalette() {
     };
     saveProjectAgent(dir.path, spawnHarness?.id ?? agent);
     if (!quick && selectedGitRef) saveBranchContext(dir.path, selectedGitRef.ref);
+    // store.spawn closes the palette immediately; the focus area shows spawn
+    // progress (and any error) and focuses the new session once it is up.
     const r = await spawn(spec);
-    setBusy(false);
-    if (r.error) {
-      const code = r.error.split(':')[0];
-      setError({ code, msg: r.error, dir: existingCwd ? { ...dir, path: existingCwd } : dir });
-    } else if (r.sessionId) {
-      recordRecentDir(dir.path);
-      focus(r.sessionId);
-      // store.spawn already closes the modal on success
-    }
+    if (!r.error) recordRecentDir(dir.path);
   };
 
   // Activate a list row: a profile spawns with it, a repo opens the form for a

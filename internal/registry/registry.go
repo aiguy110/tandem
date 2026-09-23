@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -718,6 +719,7 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 		return nil, err
 	}
 	if spec.Adapter == "acp" && spec.ResolvedLaunch.Distribution == nil {
+		progress.Report(ctx, "Checking "+spec.Agent+" agent runtime install…")
 		distribution, provisionErr := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
 		if provisionErr != nil {
 			return nil, fmt.Errorf("provision agent %s: %w", spec.Agent, provisionErr)
@@ -735,12 +737,14 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	// re-marshalled into the agent row on every restore.
 	var handoffText string
 	if spec.HandoffFrom != "" {
+		progress.Report(ctx, "Preparing hand-off transcript…")
 		if handoffText, err = r.handoffMessage(spec.HandoffFrom, spec.HandoffMode); err != nil {
 			return nil, err
 		}
 	}
 	name := r.nextName(spec.Name)
 	id := name
+	progress.Report(ctx, "Preparing workspace…")
 	provisioned, err := r.provisionOrJoin(ctx, spec.Workspace, name)
 	if err != nil {
 		r.releaseKnown(id)
@@ -830,6 +834,7 @@ func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapt
 	if err != nil {
 		return nil, err
 	}
+	progress.Report(ctx, "Applying session settings…")
 	if err = applySessionConfig(ctx, a, spec.SessionConfig); err != nil {
 		a.Close(ctx)
 		return nil, fmt.Errorf("restore session config: %w", err)

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -1083,7 +1084,18 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sess.ID)
 	case "spawn_agent":
-		sess, err := c.server.opts.Registry.Spawn(context.Background(), m.Spec)
+		// The adapter may retain a context derived from spawnCtx, so stop
+		// forwarding reports once the spawn has been acknowledged.
+		var spawnDone atomic.Bool
+		spawnCtx := progress.With(context.Background(), func(phase string) {
+			if spawnDone.Load() {
+				return
+			}
+			slog.Info("spawn progress", "corr_id", string(m.CorrID), "agent", m.Spec.Agent, "phase", phase)
+			c.send(withCorr(map[string]any{"t": "spawn_progress", "phase": phase}, m.CorrID))
+		})
+		sess, err := c.server.opts.Registry.Spawn(spawnCtx, m.Spec)
+		spawnDone.Store(true)
 		if err != nil {
 			c.commandError(m, err)
 			return

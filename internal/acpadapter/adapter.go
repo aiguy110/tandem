@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"io"
 	"log"
 	"net/url"
@@ -195,6 +196,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	if transportCfg.Dir == "" {
 		transportCfg.Dir = cfg.Cwd
 	}
+	progress.Report(ctx, "Launching ACP adapter process…")
 	tr, err := acp.Start(childCtx, transportCfg)
 	if err != nil {
 		cancel()
@@ -228,6 +230,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 			} `json:"steering"`
 		} `json:"_meta"`
 	}
+	progress.Report(ctx, "Waiting for ACP adapter to initialize…")
 	if err := tr.Call(ctx, "initialize", map[string]any{
 		"protocolVersion":    1,
 		"clientCapabilities": a.clientCapabilities(),
@@ -251,9 +254,11 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		a.mu.Lock()
 		a.replaying = !cfg.CaptureReplay
 		a.mu.Unlock()
+		progress.Report(ctx, "Waiting for agent to load session…")
 		err = a.load(ctx, cfg.ResumeSessionID)
 		a.endReplay()
 	} else {
+		progress.Report(ctx, "Waiting for agent harness to create session…")
 		err = a.newSession(ctx)
 	}
 	if err != nil {

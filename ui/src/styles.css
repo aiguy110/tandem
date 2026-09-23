@@ -399,6 +399,12 @@ body.dock-resizing .app { transition: none; }
 .tab .n { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .6; margin-left: 5px; }
 .pane { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
 .pane-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-faint); text-align: center; padding: 30px; }
+.loading-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 100%; padding: 30px; color: var(--text-faint); font-size: var(--fs-sm); text-align: center; }
+.loading-state .loading-sub { font-size: var(--fs-xs); opacity: .7; }
+.spinner { width: 22px; height: 22px; border: 2px solid var(--border-strong); border-top-color: var(--accent, currentColor); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spawn-error { max-width: 560px; white-space: pre-wrap; text-align: left; }
+.spawn-error-actions { display: flex; gap: 8px; }
 .pane-placeholder .big { font-size: calc(34px * var(--ui-scale)); opacity: .5; }
 
 /* ---- reusable unified diff ---- */

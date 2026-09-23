@@ -526,6 +526,7 @@ export type ServerMsg =
   | { t: 'annotations'; sessionId: string; annotations: Annotation[] }
   | { t: 'event'; sessionId: string; seq: number; event: WireEvent }
   | { t: 'ack'; corrId?: string; sessionId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
+  | { t: 'spawn_progress'; corrId?: string; phase: string }
   | { t: 'agent_closed'; sessionId: string }
   | { t: 'agents'; corrId?: string; sessions: SessionSummary[]; agentId?: string }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
