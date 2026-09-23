@@ -1016,7 +1016,11 @@ func (r *Registry) RestoreAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	restoreStarted := time.Now()
+	failed := 0
+	slog.Info("restoring live agents", "count", len(rows))
 	for _, rec := range rows {
+		sessionStarted := time.Now()
 		var spec agentadapter.Spec
 		if err = json.Unmarshal(rec.Spec, &spec); err == nil {
 			rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
@@ -1043,9 +1047,12 @@ func (r *Registry) RestoreAll(ctx context.Context) error {
 			}
 		}
 		if err != nil {
+			failed++
 			_ = r.store.SetStatus(rec.ID, "error")
 		}
+		slog.Info("restored agent", "session_id", rec.ID, "agent", spec.Agent, "resume", rec.ExternalSessionID != nil, "duration_ms", time.Since(sessionStarted).Milliseconds(), "error", err)
 	}
+	slog.Info("restored live agents", "count", len(rows), "failed", failed, "duration_ms", time.Since(restoreStarted).Milliseconds())
 	return nil
 }
 

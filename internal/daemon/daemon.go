@@ -73,6 +73,7 @@ func Serve(ctx context.Context, cfg config.Config, stdout io.Writer) error {
 
 // ServeWithOptions is Serve with ephemeral command-line options.
 func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, runOpts RunOptions) error {
+	boot := newBootTimer()
 	token, err := config.EnsureToken(cfg.TokenPath)
 	if err != nil {
 		return fmt.Errorf("ensure bearer token: %w", err)
@@ -82,6 +83,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err := homebase.Ensure(ctx, cfg, stdout); err != nil {
 		fmt.Fprintf(stdout, "tandem: home base setup warning: %v\n", err)
 	}
+	boot.phase("home_base")
 	db, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return err
@@ -91,6 +93,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	boot.phase("store_open")
 	var voiceRenderer voice.Renderer
 	if cfg.Voice.Enabled {
 		languageModel, languageErr := languagemodel.New(cfg.LanguageModel)
@@ -131,6 +134,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err = broker.Start(); err != nil {
 		return err
 	}
+	boot.phase("browser_broker_start", "driver", broker.DriverKind())
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -179,9 +183,11 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	boot.phase("registry_init")
 	if err := agents.RestoreAll(ctx); err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	boot.phase("restore_agents")
 	automationService := &automation.Service{
 		Store: db, Agents: agents, Token: token,
 		Runner: automation.Runner{NodeCommand: cfg.Node.Command},
@@ -259,7 +265,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		defer historyLifecycle.Close()
 		break
 	}
+	boot.phase("automation_and_history_start")
 	reattachBrowsers(ctx, db, driver, broker, agents, stdout)
+	boot.phase("reattach_browsers")
 	defer func() {
 		disposeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -417,6 +425,8 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}()
 	}
 
+	boot.phase("http_and_services_start")
+	boot.done()
 	fmt.Fprintf(stdout, "tandem · http on %s:%d · home %s\n", cfg.Host, port, cfg.Home)
 	fmt.Fprintln(stdout, "websocket: authenticated subscriptions and replay enabled")
 	fmt.Fprintf(stdout, "bootstrap: %s\n", bootstrapURL)
@@ -1013,6 +1023,26 @@ func emitAudioState(s *session.Session, state string, seq int64, message string,
 // live page instead of showing "no browser yet". A session the Steel server has
 // since reclaimed fails to re-provision and is forgotten (its row removed); a
 // row whose agent no longer exists is dropped too.
+// bootTimer logs how long each daemon startup phase took so slow boots can be
+// attributed from the journal without a profiler.
+type bootTimer struct{ start, last time.Time }
+
+func newBootTimer() *bootTimer {
+	now := time.Now()
+	return &bootTimer{start: now, last: now}
+}
+
+func (b *bootTimer) phase(name string, attrs ...any) {
+	now := time.Now()
+	args := append([]any{"phase", name, "duration_ms", now.Sub(b.last).Milliseconds(), "elapsed_ms", now.Sub(b.start).Milliseconds()}, attrs...)
+	slog.Info("daemon startup phase", args...)
+	b.last = now
+}
+
+func (b *bootTimer) done() {
+	slog.Info("daemon startup complete", "total_ms", time.Since(b.start).Milliseconds())
+}
+
 func reattachBrowsers(ctx context.Context, db *store.Store, driver browser.Driver, broker *browser.Broker, agents *registry.Registry, stdout io.Writer) {
 	adopter, ok := driver.(*browser.SteelDriver)
 	if !ok || broker == nil {
@@ -1029,9 +1059,11 @@ func reattachBrowsers(ctx context.Context, db *store.Store, driver browser.Drive
 			continue
 		}
 		adopter.Adopt(ps.SessionID, ps.DriverSessionID, ps.ProfileID, ps.CDPURL)
+		attachStarted := time.Now()
 		attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := broker.EnsureProvisioned(attachCtx, ps.SessionID)
 		cancel()
+		slog.Info("browser re-attach attempted", "session_id", ps.SessionID, "duration_ms", time.Since(attachStarted).Milliseconds(), "ok", err == nil)
 		if err != nil {
 			// EnsureProvisioned already tore the dead session down (which forgets
 			// the persisted row); just note it.

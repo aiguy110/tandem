@@ -4,6 +4,17 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# Report how long each build phase takes so slow restarts can be attributed
+# from the journal (see `journalctl --user -u tandem`).
+launch_started_ms="$(date +%s%3N)"
+phase_started_ms="$launch_started_ms"
+phase_done() {
+  local now_ms
+  now_ms="$(date +%s%3N)"
+  echo "==> [timing] $1 took $((now_ms - phase_started_ms))ms (launcher elapsed $((now_ms - launch_started_ms))ms)"
+  phase_started_ms="$now_ms"
+}
+
 # shellcheck source=scripts/development-build-info.sh
 source ./scripts/development-build-info.sh
 version="$(tandem_development_version)"
@@ -44,13 +55,18 @@ if [[ -z "$go_cmd" ]]; then
   fi
 fi
 
+phase_done "launcher preflight"
+
 VERSION="$version" ./scripts/stage-go-ui.sh
+phase_done "UI install + build + stage"
 
 echo "==> Installing external agent and browser runtimes"
 (cd runtime && npm install)
+phase_done "runtime npm install"
 
 echo "==> Building native daemon"
 "$go_cmd" build -ldflags "-X github.com/aiguy110/tandem/internal/buildinfo.Version=$version -X github.com/aiguy110/tandem/internal/buildinfo.Commit=$commit -X github.com/aiguy110/tandem/internal/buildinfo.BuildTime=$build_time" -o tandem ./cmd/tandem
+phase_done "go build"
 
 echo "==> Starting native daemon with embedded UI"
 exec ./tandem
