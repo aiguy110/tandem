@@ -441,32 +441,14 @@ function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog
 }
 
 function rankSessions(sessions: Record<string, SessionView>, order: string[]): string[] {
-  // `order` is explicitly arranged by the user via the Sessions rail. Filter
-  // stale entries rather than applying a status-based sort over that order.
+  // `order` is the daemon-owned rail order (shared by every browser and
+  // federation master). Filter stale entries rather than re-sorting it.
   return order.filter((id) => !!sessions[id]);
 }
 
 const initialTheme = (): 'dark' | 'light' => {
   const saved = localStorage.getItem('tandem.theme');
   return saved === 'light' ? 'light' : 'dark';
-};
-
-const SESSION_ORDER_STORAGE_KEY = 'tandem.sessionOrder';
-const LEGACY_AGENT_ORDER_STORAGE_KEY = 'tandem.agentOrder';
-const initialSessionOrder = (): string[] => {
-	try {
-		const saved: unknown = JSON.parse(localStorage.getItem(SESSION_ORDER_STORAGE_KEY) ?? localStorage.getItem(LEGACY_AGENT_ORDER_STORAGE_KEY) ?? '[]');
-    return Array.isArray(saved) && saved.every((id) => typeof id === 'string') ? saved : [];
-  } catch {
-    return [];
-  }
-};
-const saveSessionOrder = (order: string[]) => {
-	try {
-		localStorage.setItem(SESSION_ORDER_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    // Reordering still works when browser storage is unavailable.
-  }
 };
 
 const FOCUSED_SESSION_STORAGE_KEY = 'tandem.focusedSession';
@@ -599,14 +581,15 @@ export const useStore = create<StoreState>((set, get) => {
         const newlyDiscovered = msg.sessions.filter((s) => !get().sessions[s.id]).map((s) => s.id);
         set((st) => {
           const sessions = { ...st.sessions };
-          // Retain a saved order only for sessions that still exist locally or
-          // were included by the daemon; this also discards old browser state.
+          // The daemon owns rail order: adopt the reported order, then append
+          // any retained local session it did not report (the cleanup below
+          // drops the ones with no history).
           const live = new Set(msg.sessions.map((a) => a.id));
-          const order = st.order.filter((id) => live.has(id) || !!sessions[id]);
+          const order = msg.sessions.map((a) => a.id);
+          for (const id of st.order) if (!live.has(id) && sessions[id]) order.push(id);
           for (const s of msg.sessions) {
             const prev = sessions[s.id];
             sessions[s.id] = mergeSummary(prev, s);
-            if (!order.includes(s.id)) order.push(s.id);
           }
           // Drop any local agent the daemon no longer reports (e.g. closed elsewhere).
           for (const id of order.slice()) {
@@ -934,7 +917,7 @@ export const useStore = create<StoreState>((set, get) => {
             audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
             audioPosition: msg.audioPosition ?? null,
           };
-          const order = st.order.includes(msg.sessionId) ? st.order : [...st.order, msg.sessionId];
+          const order = st.order.includes(msg.sessionId) ? st.order : [msg.sessionId, ...st.order];
           return {
             sessions,
             order,
@@ -998,7 +981,7 @@ export const useStore = create<StoreState>((set, get) => {
             next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
           }
           const sessions = { ...st.sessions, [sessionId]: next };
-          const order = st.order.includes(sessionId) ? st.order : [...st.order, sessionId];
+          const order = st.order.includes(sessionId) ? st.order : [sessionId, ...st.order];
           return { sessions, order };
         });
         return;
@@ -1051,7 +1034,7 @@ export const useStore = create<StoreState>((set, get) => {
     theme: initialTheme(),
     appearance: loadAppearance(),
     sessions: {},
-    order: initialSessionOrder(),
+    order: [],
     focusedId: initialFocusedSession(),
     pendingSpawns: [],
     focusedSpawnId: null,
@@ -1156,8 +1139,14 @@ export const useStore = create<StoreState>((set, get) => {
       order.splice(from, 1);
       const nextTarget = order.indexOf(targetId);
       order.splice(nextTarget + (after ? 1 : 0), 0, id);
-      saveSessionOrder(order);
+      // Apply optimistically; the daemon persists the move and broadcasts the
+      // authoritative order to every browser (and federation master).
       set({ order });
+      const corrId = nextCorr();
+      pendingAcks.set(corrId, (result) => {
+        if (result.error) get().refreshAgents();
+      });
+      client.send({ t: 'reorder_session', sessionId: id, targetSessionId: targetId, after, corrId });
     },
     // A user can restore the completed-turn badge after acknowledging it. This
     // is deliberately browser-local, like notifications created from live

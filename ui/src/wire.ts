@@ -474,6 +474,7 @@ export type ClientMsg =
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
   | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
+  | { t: 'reorder_session'; sessionId: string; targetSessionId: string; after: boolean; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; sessionId: string; corrId?: string }
   | { t: 'get_diff'; sessionId: string; corrId?: string }

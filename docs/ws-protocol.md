@@ -56,7 +56,7 @@ with durable transcript/session history; there is currently no eager GC.
 
 Implemented and de-risked: `subscribe`/`unsubscribe` (per-agent `channels` + `sinceSeq`),
 `prompt`, `input`, `resize`, `permission_response`, `interrupt`, `set_mode`,
-`set_config_option`, `spawn_agent`, `rename_agent`,
+`set_config_option`, `spawn_agent`, `rename_agent`, `reorder_session`,
 `close_agent` (now backed by the real WorkspaceManager — see below), `list_dirs` (Phase 2,
 repo discovery for the quick-spawn palette), and — Phase 5 — the browser channel:
 `browser_control` (grab/release, real), `browser_input`, `browser_frame`, `browser_state`
@@ -238,6 +238,7 @@ type ClientMsg =
   | { t: 'set_config_option'; sessionId: string; configId: string; value: string | boolean }
   | { t: 'spawn_agent'; spec: SpawnSpec }                               // see spawn-and-workspaces.md
   | { t: 'rename_agent'; sessionId: string; name: string }                // display name only; stable id/worktree unchanged
+  | { t: 'reorder_session'; sessionId: string; targetSessionId: string; after: boolean } // move within the owning host's rail order; `agents` arrays are sent in that order, new sessions first
   | { t: 'get_spawn_options'; agent: string; profile?: string; acpArgs?: string[]; cwd: string }
   | { t: 'close_agent'; sessionId: string; force?: boolean }             // teardown: keep branch, drop checkout
   | { t: 'merge_back';  sessionId: string; mode: 'merge'|'pr' }          // error ack for now (no diff/merge UI yet)

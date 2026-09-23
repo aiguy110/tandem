@@ -93,7 +93,7 @@ describe('system notifications', () => {
 });
 
 describe('agent ordering', () => {
-  it('moves an agent before or after its drop target and saves the result', () => {
+  it('moves an agent before or after its drop target and asks the daemon to persist it', () => {
     useStore.setState({ order: ['one', 'two', 'three'] });
 
     useStore.getState().reorderAgent('one', 'three', false);
@@ -101,7 +101,12 @@ describe('agent ordering', () => {
 
     useStore.getState().reorderAgent('three', 'two', true);
     expect(useStore.getState().order).toEqual(['two', 'three', 'one']);
-    expect(JSON.parse(localStorage.getItem('tandem.sessionOrder') ?? '[]')).toEqual(['two', 'three', 'one']);
+  });
+
+  it('adopts the daemon-reported order', () => {
+    useStore.setState({ order: ['a', 'b'] });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'b' }), summary({ id: 'c' }), summary({ id: 'a' })] });
+    expect(useStore.getState().order).toEqual(['b', 'c', 'a']);
   });
 });
 

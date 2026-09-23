@@ -262,6 +262,48 @@ func TestRenameChangesDisplayNameWithoutChangingStableID(t *testing.T) {
 	}
 }
 
+func TestSessionsRailOrderIsNewestFirstAndReorderPersists(t *testing.T) {
+	r, db, cfg := setup(t, &fakeFactory{})
+	ctx := context.Background()
+	var ids []string
+	for i := 0; i < 3; i++ {
+		s, err := r.Spawn(ctx, existing(t.TempDir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID)
+	}
+	order := func(r *Registry) []string {
+		var out []string
+		for _, s := range r.Summaries(ctx) {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	if got, want := order(r), []string{ids[2], ids[1], ids[0]}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("spawn order = %v, want newest first %v", got, want)
+	}
+	if err := r.Reorder(ids[2], ids[0], true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{ids[1], ids[0], ids[2]}
+	if got := order(r); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reordered = %v, want %v", got, want)
+	}
+	// A fresh registry over the same database (a daemon restart) keeps it.
+	restarted, err := New(Options{Store: db, Config: cfg, Factory: &fakeFactory{}, RingCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.DisposeAll(context.Background()) })
+	if err := restarted.RestoreAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := order(restarted); !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored order = %v, want %v", got, want)
+	}
+}
+
 func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	f := &fakeFactory{fail: map[string]bool{"api-2": true}}
 	r, db, _ := setup(t, f)

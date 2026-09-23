@@ -623,7 +623,7 @@ func TestUpdateMessageAudioDurationBackfillsExistingRow(t *testing.T) {
 
 func TestMalformedRowsAreReported(t *testing.T) {
 	s, _ := openTestStore(t)
-	if _, err := s.db.Exec("INSERT INTO sessions VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
+	if _, err := s.db.Exec("INSERT INTO sessions (id, name, spec, cwd, externalSessionId, status, createdAt, closedAt) VALUES ('bad-json','bad-json','{','',NULL,'idle',1,NULL), ('bad-time','bad-time','{}','',NULL,'idle','never',NULL)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Session("bad-json"); err == nil || !strings.Contains(err.Error(), "malformed spec JSON") {
