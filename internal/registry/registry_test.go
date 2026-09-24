@@ -823,3 +823,99 @@ func TestRestoreKeepsThePinnedDistribution(t *testing.T) {
 		t.Fatalf("restore changed the distribution to %q; it must stay pinned to %q", got, oldEntry)
 	}
 }
+
+// gatedFactory holds every Start until release is closed, recording how many
+// starts were in flight at once.
+type gatedFactory struct {
+	fakeFactory
+	release  chan struct{}
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+}
+
+func (f *gatedFactory) Start(ctx context.Context, r agentadapter.StartRequest) (agentadapter.Adapter, error) {
+	f.mu.Lock()
+	f.inFlight++
+	if f.inFlight > f.peak {
+		f.peak = f.inFlight
+	}
+	f.mu.Unlock()
+	<-f.release
+	f.mu.Lock()
+	f.inFlight--
+	f.mu.Unlock()
+	return f.fakeFactory.Start(ctx, r)
+}
+
+func TestStartRestoreServesPlaceholdersAndRestoresConcurrently(t *testing.T) {
+	f := &gatedFactory{release: make(chan struct{})}
+	r, db, _ := setup(t, &f.fakeFactory)
+	r.factory = f
+	ids := []string{"a-1", "b-2", "c-3"}
+	for i, id := range ids {
+		dir := t.TempDir()
+		raw, _ := json.Marshal(existing(dir))
+		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, Status: "idle", CreatedAt: int64(i + 1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var restoredMu sync.Mutex
+	var restored []string
+	done, err := r.StartRestore(context.Background(), func(id string) {
+		restoredMu.Lock()
+		restored = append(restored, id)
+		restoredMu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every agent is listed while its restore is still blocked.
+	summaries := r.Summaries(context.Background())
+	if len(summaries) != len(ids) {
+		t.Fatalf("summaries during restore = %d, want %d", len(summaries), len(ids))
+	}
+	for i, summary := range summaries {
+		if summary.ID != ids[i] || summary.Name != ids[i] || summary.Status != "idle" {
+			t.Fatalf("placeholder summary %d = %+v", i, summary)
+		}
+	}
+	got := make(chan bool)
+	go func() { got <- r.Get("b-2") != nil }()
+	select {
+	case <-got:
+		t.Fatal("Get returned before the agent's restore finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		peak := f.peak
+		f.mu.Unlock()
+		if peak == len(ids) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peak concurrent restores = %d, want %d", peak, len(ids))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(f.release)
+	if !<-got {
+		t.Fatal("Get did not return the restored agent")
+	}
+	<-done
+	for _, id := range ids {
+		if r.Get(id) == nil {
+			t.Fatalf("%s was not restored", id)
+		}
+	}
+	restoredMu.Lock()
+	defer restoredMu.Unlock()
+	if len(restored) != len(ids) {
+		t.Fatalf("onRestored calls = %v", restored)
+	}
+	if n := len(r.Summaries(context.Background())); n != len(ids) {
+		t.Fatalf("summaries after restore = %d, want %d", n, len(ids))
+	}
+}

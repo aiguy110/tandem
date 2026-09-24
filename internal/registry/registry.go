@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiguy110/tandem/internal/acp"
@@ -54,6 +55,7 @@ var nameWords = []string{
 
 // Save stores a browser-selected file in the live agent's workspace.
 func (r *Registry) Save(id, name string, data []byte) (string, error) {
+	r.awaitRestore(id)
 	r.mu.RLock()
 	_, found := r.sessions[id]
 	cwd := r.cwds[id]
@@ -67,6 +69,7 @@ func (r *Registry) Save(id, name string, data []byte) (string, error) {
 // HasConfiguredDirectory reports whether an agent's workspace opted into
 // retaining uploads in a repository-relative directory.
 func (r *Registry) HasConfiguredDirectory(id string) (bool, error) {
+	r.awaitRestore(id)
 	r.mu.RLock()
 	_, found := r.sessions[id]
 	cwd := r.cwds[id]
@@ -94,6 +97,16 @@ type Registry struct {
 	onSession         func(*session.Session)
 	onAudioPreference func(*session.Session, bool)
 	onAudioFocus      func(*session.Session, string, bool)
+	// restoring holds agents whose startup restore is still in flight, keyed
+	// by session ID. restored is closed once the whole restore pass ends.
+	restoring map[string]restoringAgent
+	restored  chan struct{}
+}
+
+type restoringAgent struct {
+	rec  store.Session
+	spec agentadapter.Spec
+	done chan struct{}
 }
 
 type externalCache struct {
@@ -277,7 +290,7 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, restoring: map[string]restoringAgent{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
 }
 
 func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
@@ -309,7 +322,10 @@ func (r *Registry) SetAudioFocus(id, clientID string, focused bool) error {
 	return nil
 }
 
+// Get returns the live agent, waiting first if its startup restore is still
+// in flight so callers never mistake a restoring agent for a missing one.
 func (r *Registry) Get(id string) *session.Session {
+	r.awaitRestore(id)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.sessions[id]
@@ -334,42 +350,56 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 	for id, s := range r.sessions {
 		items = append(items, item{s, r.cwds[id]})
 	}
+	// An agent still being restored is listed from its durable row so the
+	// client's list is complete while the daemon finishes relaunching it.
+	restoring := make([]restoringAgent, 0, len(r.restoring))
+	for _, pending := range r.restoring {
+		restoring = append(restoring, pending)
+	}
 	r.mu.RUnlock()
-	out := make([]Summary, 0, len(items))
+	out := make([]Summary, 0, len(items)+len(restoring))
 	for _, item := range items {
-		s, cwd, ws := item.s, item.cwd, item.s.Spec.Workspace
-		state, err := r.workspace.GitState(ctx, cwd, ws)
-		if err != nil {
-			// Do not let a failed git query leave the client displaying the last
-			// known state as if it were still authoritative.
-			state.Status = "unknown"
-		}
-		repoPath, repo, branch := ws.Repo, filepath.Base(ws.Repo), ws.Branch
-		if ws.Kind == workspace.KindExisting {
-			repoPath, repo, branch = ws.CWD, filepath.Base(ws.CWD), ""
-		}
-		agent := s.Spec.Agent
-		if agent == "" {
-			agent = r.config.ACP.Default
-		}
-		summary := Summary{ID: s.ID, Name: s.DisplayName(), Agent: agent, Status: s.Status(), PendingApprovals: len(s.PendingApprovals()), ControlMode: s.ControlMode(), Adapter: s.Spec.Adapter, CanHandoff: canHandoff(s.Spec)}
-		if p := s.Spec.Profile; p != nil {
-			summary.Profile = &SummaryProfile{ID: p.ID, Model: p.Model, Effort: p.Effort, Permission: p.Permission, Snapshot: p.Snapshot}
-		}
-		summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
-		if ws.Integration != nil {
-			summary.Workspace.TargetKind = ws.Integration.Kind
-			if summary.Workspace.TargetRef == "" {
-				summary.Workspace.TargetRef = ws.Integration.Ref
-			}
-		}
-		if ws.Source != nil {
-			summary.Workspace.StartCommit = ws.Source.Commit
-		}
-		out = append(out, summary)
+		s := item.s
+		out = append(out, r.summary(ctx, s.ID, s.DisplayName(), s.Spec, item.cwd, s.Status(), len(s.PendingApprovals()), s.ControlMode()))
+	}
+	for _, pending := range restoring {
+		out = append(out, r.summary(ctx, pending.rec.ID, pending.rec.Name, pending.spec, pending.rec.CWD, session.Status(pending.rec.Status), 0, "transcript"))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (r *Registry) summary(ctx context.Context, id, name string, spec agentadapter.Spec, cwd string, status session.Status, pendingApprovals int, controlMode string) Summary {
+	ws := spec.Workspace
+	state, err := r.workspace.GitState(ctx, cwd, ws)
+	if err != nil {
+		// Do not let a failed git query leave the client displaying the last
+		// known state as if it were still authoritative.
+		state.Status = "unknown"
+	}
+	repoPath, repo, branch := ws.Repo, filepath.Base(ws.Repo), ws.Branch
+	if ws.Kind == workspace.KindExisting {
+		repoPath, repo, branch = ws.CWD, filepath.Base(ws.CWD), ""
+	}
+	agent := spec.Agent
+	if agent == "" {
+		agent = r.config.ACP.Default
+	}
+	summary := Summary{ID: id, Name: name, Agent: agent, Status: status, PendingApprovals: pendingApprovals, ControlMode: controlMode, Adapter: spec.Adapter, CanHandoff: canHandoff(spec)}
+	if p := spec.Profile; p != nil {
+		summary.Profile = &SummaryProfile{ID: p.ID, Model: p.Model, Effort: p.Effort, Permission: p.Permission, Snapshot: p.Snapshot}
+	}
+	summary.Workspace = SummaryWorkspace{Kind: ws.Kind, Repo: repo, RepoPath: repoPath, Branch: branch, CWD: cwd, GitState: state.Status, Ahead: state.Ahead, Behind: state.Behind, TargetRef: state.TargetRef}
+	if ws.Integration != nil {
+		summary.Workspace.TargetKind = ws.Integration.Kind
+		if summary.Workspace.TargetRef == "" {
+			summary.Workspace.TargetRef = ws.Integration.Ref
+		}
+	}
+	if ws.Source != nil {
+		summary.Workspace.StartCommit = ws.Source.Commit
+	}
+	return summary
 }
 
 func (r *Registry) ListDirs(ctx context.Context) ([]workspace.RepoInfo, error) {
@@ -402,6 +432,7 @@ func (r *Registry) ListWorkspaceEntries(ctx context.Context, id, dir string) ([]
 	if filepath.IsAbs(dir) {
 		return nil, errors.New("workspace path must be relative")
 	}
+	r.awaitRestore(id)
 	r.mu.RLock()
 	_, found := r.sessions[id]
 	cwd := r.cwds[id]
@@ -524,6 +555,7 @@ func (r *Registry) ListGitRefs(ctx context.Context, repo string) ([]workspace.Gi
 // the agent's worktree. It runs independently of the agent adapter, so it is
 // unaffected by ACP↔CLI handoffs.
 func (r *Registry) OpenUserShell(id string, cols, rows uint16) error {
+	r.awaitRestore(id)
 	r.mu.RLock()
 	s, cwd := r.sessions[id], r.cwds[id]
 	r.mu.RUnlock()
@@ -534,6 +566,7 @@ func (r *Registry) OpenUserShell(id string, cols, rows uint16) error {
 }
 
 func (r *Registry) ClosePreview(ctx context.Context, id string) (*workspace.ClosePreview, error) {
+	r.awaitRestore(id)
 	r.mu.RLock()
 	s, cwd := r.sessions[id], r.cwds[id]
 	r.mu.RUnlock()
@@ -1011,49 +1044,141 @@ func (r *Registry) persistSessionConfig(s *session.Session, update func(*persist
 	return nil
 }
 
+// restoreConcurrency bounds how many agents a restore relaunches at once. Each
+// restore starts an ACP bridge process and replays its session; a restore is
+// mostly waiting on that child, but an unbounded fan-out on a large fleet
+// would still thrash the host.
+const restoreConcurrency = 8
+
+// restoreWaitLimit bounds how long a lookup waits on one agent's restore, so a
+// wedged ACP child cannot stall a client connection indefinitely.
+const restoreWaitLimit = 2 * time.Minute
+
+// RestoreAll relaunches every live agent and waits for all of them.
 func (r *Registry) RestoreAll(ctx context.Context) error {
-	rows, err := r.store.LiveSessions()
+	done, err := r.StartRestore(ctx, nil)
 	if err != nil {
 		return err
 	}
-	restoreStarted := time.Now()
-	failed := 0
-	slog.Info("restoring live agents", "count", len(rows))
+	<-done
+	return nil
+}
+
+// StartRestore relaunches every live agent in the background, several at a
+// time, and returns a channel closed once every restore has finished. Agents
+// are registered as restoring before it returns: until each one finishes,
+// Summaries lists it from its durable row and lookups by its ID wait for it,
+// so the daemon can serve clients while agents come back. onRestored, if set,
+// runs after each agent's restore attempt.
+func (r *Registry) StartRestore(ctx context.Context, onRestored func(id string)) (<-chan struct{}, error) {
+	rows, err := r.store.LiveSessions()
+	if err != nil {
+		return nil, err
+	}
+	all := make(chan struct{})
+	pending := make([]restoringAgent, 0, len(rows))
+	r.mu.Lock()
 	for _, rec := range rows {
-		sessionStarted := time.Now()
 		var spec agentadapter.Spec
-		if err = json.Unmarshal(rec.Spec, &spec); err == nil {
-			rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
+		// A malformed spec fails in restoreOne; the placeholder just lists
+		// the row with an empty spec until then.
+		_ = json.Unmarshal(rec.Spec, &spec)
+		entry := restoringAgent{rec: rec, spec: spec, done: make(chan struct{})}
+		r.restoring[rec.ID] = entry
+		pending = append(pending, entry)
+	}
+	r.restored = all
+	r.mu.Unlock()
+	slog.Info("restoring live agents", "count", len(rows), "concurrency", restoreConcurrency)
+	go func() {
+		defer close(all)
+		started := time.Now()
+		var (
+			wg          sync.WaitGroup
+			failed      atomic.Int32
+			workspaceMu sync.Mutex
+		)
+		slots := make(chan struct{}, restoreConcurrency)
+		for _, entry := range pending {
+			wg.Add(1)
+			slots <- struct{}{}
+			go func(entry restoringAgent) {
+				defer wg.Done()
+				defer func() { <-slots }()
+				if err := r.restoreOne(ctx, entry.rec, &workspaceMu); err != nil {
+					failed.Add(1)
+				}
+				r.mu.Lock()
+				delete(r.restoring, entry.rec.ID)
+				r.mu.Unlock()
+				close(entry.done)
+				if onRestored != nil {
+					onRestored(entry.rec.ID)
+				}
+			}(entry)
+		}
+		wg.Wait()
+		slog.Info("restored live agents", "count", len(rows), "failed", failed.Load(), "duration_ms", time.Since(started).Milliseconds())
+	}()
+	return all, nil
+}
+
+// restoreOne relaunches one live agent, marking its row errored on failure.
+// workspaceMu serializes worktree reattachment: recreating a missing worktree
+// runs git against the shared repository, which does not tolerate concurrent
+// worktree operations.
+func (r *Registry) restoreOne(ctx context.Context, rec store.Session, workspaceMu *sync.Mutex) error {
+	started := time.Now()
+	var spec agentadapter.Spec
+	err := json.Unmarshal(rec.Spec, &spec)
+	if err == nil {
+		workspaceMu.Lock()
+		rec.CWD, err = r.workspace.Reattach(ctx, spec.Workspace, rec.CWD)
+		workspaceMu.Unlock()
+	}
+	if err == nil {
+		resume := ""
+		if rec.ExternalSessionID != nil {
+			resume = *rec.ExternalSessionID
+		}
+		// Some ACP agents do not persist a session/new result until the
+		// first prompt. Loading that ID after a daemon restart fails and
+		// leaves the durable Tandem agent visible but not live. An
+		// unprompted agent has no conversation to recover, so start a new
+		// ACP session in the same durable agent/workspace instead.
+		if resume != "" {
+			var prompted bool
+			prompted, err = hasUserMessage(r.store, rec.ID)
+			if err == nil && !prompted {
+				resume = ""
+			}
 		}
 		if err == nil {
-			resume := ""
-			if rec.ExternalSessionID != nil {
-				resume = *rec.ExternalSessionID
-			}
-			// Some ACP agents do not persist a session/new result until the
-			// first prompt. Loading that ID after a daemon restart fails and
-			// leaves the durable Tandem agent visible but not live. An
-			// unprompted agent has no conversation to recover, so start a new
-			// ACP session in the same durable agent/workspace instead.
-			if resume != "" {
-				var prompted bool
-				prompted, err = hasUserMessage(r.store, rec.ID)
-				if err == nil && !prompted {
-					resume = ""
-				}
-			}
-			if err == nil {
-				_, err = r.start(ctx, rec, spec, resume)
-			}
+			_, err = r.start(ctx, rec, spec, resume)
 		}
-		if err != nil {
-			failed++
-			_ = r.store.SetStatus(rec.ID, "error")
-		}
-		slog.Info("restored agent", "session_id", rec.ID, "agent", spec.Agent, "resume", rec.ExternalSessionID != nil, "duration_ms", time.Since(sessionStarted).Milliseconds(), "error", err)
 	}
-	slog.Info("restored live agents", "count", len(rows), "failed", failed, "duration_ms", time.Since(restoreStarted).Milliseconds())
-	return nil
+	if err != nil {
+		_ = r.store.SetStatus(rec.ID, "error")
+	}
+	slog.Info("restored agent", "session_id", rec.ID, "agent", spec.Agent, "resume", rec.ExternalSessionID != nil, "duration_ms", time.Since(started).Milliseconds(), "error", err)
+	return err
+}
+
+// awaitRestore blocks while the agent's startup restore is in flight.
+func (r *Registry) awaitRestore(id string) {
+	r.mu.RLock()
+	entry, restoring := r.restoring[id]
+	r.mu.RUnlock()
+	if !restoring {
+		return
+	}
+	timer := time.NewTimer(restoreWaitLimit)
+	defer timer.Stop()
+	select {
+	case <-entry.done:
+	case <-timer.C:
+		slog.Warn("gave up waiting for agent restore", "session_id", id, "waited_ms", restoreWaitLimit.Milliseconds())
+	}
 }
 
 func hasUserMessage(db *store.Store, sessionID string) (bool, error) {
@@ -1908,6 +2033,9 @@ func (r *Registry) ResumeCLICommand(id string) (string, error) {
 }
 
 func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, deinitSubmodules bool) (bool, error) {
+	// Closing an agent mid-restore would let the restore relaunch it after the
+	// close, so settle the restore first.
+	r.awaitRestore(id)
 	r.mu.RLock()
 	s := r.sessions[id]
 	cwd := r.cwds[id]
@@ -1964,6 +2092,18 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 	return true, nil
 }
 func (r *Registry) DisposeAll(ctx context.Context) error {
+	// An agent still restoring would otherwise start after this sweep and
+	// outlive the daemon's shutdown.
+	r.mu.RLock()
+	restored := r.restored
+	r.mu.RUnlock()
+	if restored != nil {
+		select {
+		case <-restored:
+		case <-ctx.Done():
+			slog.Warn("disposing agents before restore finished", "error", ctx.Err())
+		}
+	}
 	var errs []error
 	for _, s := range r.List() {
 		if r.browser != nil {

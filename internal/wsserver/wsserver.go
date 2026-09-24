@@ -1831,6 +1831,9 @@ func (h *Handler) broadcastAudioPosition(sessionID string, seq, positionMs, upda
 	}
 }
 
+// BroadcastAgents pushes the current agent list to every connected client.
+func (h *Handler) BroadcastAgents() { h.broadcastAgents() }
+
 func (h *Handler) broadcastAgents() {
 	sessions := h.sessionSummaries()
 	h.mu.Lock()

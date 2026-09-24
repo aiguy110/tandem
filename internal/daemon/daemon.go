@@ -184,10 +184,6 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return err
 	}
 	boot.phase("registry_init")
-	if err := agents.RestoreAll(ctx); err != nil {
-		return fmt.Errorf("restore agents: %w", err)
-	}
-	boot.phase("restore_agents")
 	automationService := &automation.Service{
 		Store: db, Agents: agents, Token: token,
 		Runner: automation.Runner{NodeCommand: cfg.Node.Command},
@@ -266,8 +262,6 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		break
 	}
 	boot.phase("automation_and_history_start")
-	reattachBrowsers(ctx, db, driver, broker, agents, stdout)
-	boot.phase("reattach_browsers")
 	defer func() {
 		disposeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -412,6 +406,20 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}
 	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	defer handler.Close()
+	// Agents restore in the background so the UI is served immediately; a
+	// restoring agent is listed from its durable row and lookups wait for it.
+	// Browser re-attach needs the restored agents, so it follows the restore.
+	adoptedBrowsers := adoptBrowsers(db, driver, stdout)
+	restored, err := agents.StartRestore(ctx, func(string) { handler.BroadcastAgents() })
+	if err != nil {
+		return fmt.Errorf("restore agents: %w", err)
+	}
+	go func() {
+		<-restored
+		boot.phase("restore_agents")
+		reattachBrowsers(ctx, db, broker, agents, adoptedBrowsers, stdout)
+		boot.phase("reattach_browsers")
+	}()
 	updateService.Start(ctx)
 	agentUpdateService.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -1025,7 +1033,10 @@ func emitAudioState(s *session.Session, state string, seq int64, message string,
 // row whose agent no longer exists is dropped too.
 // bootTimer logs how long each daemon startup phase took so slow boots can be
 // attributed from the journal without a profiler.
-type bootTimer struct{ start, last time.Time }
+type bootTimer struct {
+	mu          sync.Mutex
+	start, last time.Time
+}
 
 func newBootTimer() *bootTimer {
 	now := time.Now()
@@ -1033,6 +1044,8 @@ func newBootTimer() *bootTimer {
 }
 
 func (b *bootTimer) phase(name string, attrs ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	now := time.Now()
 	args := append([]any{"phase", name, "duration_ms", now.Sub(b.last).Milliseconds(), "elapsed_ms", now.Sub(b.start).Milliseconds()}, attrs...)
 	slog.Info("daemon startup phase", args...)
@@ -1040,25 +1053,46 @@ func (b *bootTimer) phase(name string, attrs ...any) {
 }
 
 func (b *bootTimer) done() {
-	slog.Info("daemon startup complete", "total_ms", time.Since(b.start).Milliseconds())
+	slog.Info("daemon serving", "total_ms", time.Since(b.start).Milliseconds())
 }
 
-func reattachBrowsers(ctx context.Context, db *store.Store, driver browser.Driver, broker *browser.Broker, agents *registry.Registry, stdout io.Writer) {
+// adoptBrowsers hands persisted Steel sessions of live agents back to the
+// driver. It runs before the daemon serves clients so an early browser request
+// reuses the agent's existing Steel session instead of provisioning a new one.
+// It returns the adopted sessions for reattachBrowsers to connect.
+func adoptBrowsers(db *store.Store, driver browser.Driver, stdout io.Writer) []store.BrowserSession {
 	adopter, ok := driver.(*browser.SteelDriver)
-	if !ok || broker == nil {
-		return
+	if !ok {
+		return nil
 	}
 	sessions, err := db.ListBrowserSessions()
 	if err != nil {
 		fmt.Fprintf(stdout, "browser re-attach: list sessions: %v\n", err)
-		return
+		return nil
 	}
+	adopted := sessions[:0]
 	for _, ps := range sessions {
-		if agents.Get(ps.SessionID) == nil {
+		if rec, lookupErr := db.Session(ps.SessionID); lookupErr != nil || rec == nil || rec.ClosedAt != nil {
 			_ = db.DeleteBrowserSession(ps.SessionID)
 			continue
 		}
 		adopter.Adopt(ps.SessionID, ps.DriverSessionID, ps.ProfileID, ps.CDPURL)
+		adopted = append(adopted, ps)
+	}
+	return adopted
+}
+
+// reattachBrowsers connects adopted Steel sessions once agent restore is done,
+// dropping those whose agent failed to come back.
+func reattachBrowsers(ctx context.Context, db *store.Store, broker *browser.Broker, agents *registry.Registry, adopted []store.BrowserSession, stdout io.Writer) {
+	if broker == nil {
+		return
+	}
+	for _, ps := range adopted {
+		if agents.Get(ps.SessionID) == nil {
+			_ = db.DeleteBrowserSession(ps.SessionID)
+			continue
+		}
 		attachStarted := time.Now()
 		attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := broker.EnsureProvisioned(attachCtx, ps.SessionID)
