@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -81,18 +82,22 @@ func (r *Registry) HasConfiguredDirectory(id string) (bool, error) {
 }
 
 type Registry struct {
-	mu                sync.RWMutex
-	store             *store.Store
-	config            config.Config
-	workspace         *workspace.Manager
-	factory           agentadapter.Factory
-	browser           *browser.Broker
-	ring              int
-	sessions          map[string]*session.Session
-	cwds              map[string]string
-	known             map[string]bool
-	counter           int
-	handoffs          map[string]*sync.Mutex
+	mu        sync.RWMutex
+	store     *store.Store
+	config    config.Config
+	workspace *workspace.Manager
+	factory   agentadapter.Factory
+	browser   *browser.Broker
+	ring      int
+	sessions  map[string]*session.Session
+	cwds      map[string]string
+	known     map[string]bool
+	counter   int
+	handoffs  map[string]*sync.Mutex
+	// ranks is the daemon-owned sessions-rail order of live sessions (lower
+	// first). Every browser, and every federation master viewing this host,
+	// renders Summaries in this order.
+	ranks             map[string]int64
 	external          *externalCache
 	onSession         func(*session.Session)
 	onAudioPreference func(*session.Session, bool)
@@ -286,11 +291,144 @@ func New(o Options) (*Registry, error) {
 	for _, a := range all {
 		known[a.ID] = true
 	}
+	ranks, err := initialRailRanks(o.Store)
+	if err != nil {
+		return nil, err
+	}
 	cap := o.RingCapacity
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, restoring: map[string]restoringAgent{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, restoring: map[string]restoringAgent{}, ranks: ranks, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
+}
+
+// initialRailRanks loads persisted rail positions and places live sessions
+// that predate them above the ranked ones, newest first, matching where a
+// freshly spawned session lands.
+func initialRailRanks(st *store.Store) (map[string]int64, error) {
+	ranks, err := st.SessionRailRanks()
+	if err != nil {
+		return nil, err
+	}
+	live, err := st.LiveSessions()
+	if err != nil {
+		return nil, err
+	}
+	assigned := map[string]int64{}
+	for _, rec := range live { // oldest first
+		if _, ok := ranks[rec.ID]; ok {
+			continue
+		}
+		ranks[rec.ID] = topRank(ranks)
+		assigned[rec.ID] = ranks[rec.ID]
+	}
+	if len(assigned) > 0 {
+		slog.Info("assigned sessions rail ranks to unranked live sessions", "count", len(assigned))
+		if err := st.SetSessionRailRanks(assigned); err != nil {
+			return nil, err
+		}
+	}
+	return ranks, nil
+}
+
+// topRank is a rank that sorts above every rank in ranks.
+func topRank(ranks map[string]int64) int64 {
+	top := int64(0)
+	first := true
+	for _, rank := range ranks {
+		if first || rank < top {
+			top, first = rank, false
+		}
+	}
+	if first {
+		return 0
+	}
+	return top - 1
+}
+
+// placeAtTop gives a session that has no rail position one above every
+// other session. Restored sessions keep their persisted position.
+func (r *Registry) placeAtTop(id string) {
+	r.mu.Lock()
+	if _, ok := r.ranks[id]; ok {
+		r.mu.Unlock()
+		return
+	}
+	rank := topRank(r.ranks)
+	r.ranks[id] = rank
+	r.mu.Unlock()
+	if err := r.store.SetSessionRailRanks(map[string]int64{id: rank}); err != nil {
+		slog.Warn("persist new session rail rank failed", "session_id", id, "rank", rank, "err", err)
+	}
+}
+
+// railOrderLocked lists live sessions in rail order. r.mu must be held.
+func (r *Registry) railOrderLocked() []string {
+	ids := make([]string, 0, len(r.sessions)+len(r.restoring))
+	for id := range r.sessions {
+		ids = append(ids, id)
+	}
+	// Agents still restoring keep their place so a reorder during startup
+	// does not collide with their persisted ranks.
+	for id := range r.restoring {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return railLess(r.ranks, ids[i], ids[j]) })
+	return ids
+}
+
+func railLess(ranks map[string]int64, a, b string) bool {
+	ra, aok := ranks[a]
+	rb, bok := ranks[b]
+	if aok != bok {
+		return aok // unranked sessions are transient; keep them below ranked ones
+	}
+	if ra != rb {
+		return ra < rb
+	}
+	return a < b
+}
+
+// Reorder moves a live session to just before (or after) another in the
+// shared sessions rail and persists the whole resulting order.
+func (r *Registry) Reorder(id, targetID string, after bool) error {
+	if id == targetID {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sessions[id] == nil {
+		return errors.New("no such live agent")
+	}
+	if r.sessions[targetID] == nil {
+		return errors.New("no such live reorder target")
+	}
+	order := r.railOrderLocked()
+	out := make([]string, 0, len(order))
+	for _, other := range order {
+		if other == id {
+			continue
+		}
+		if other == targetID && !after {
+			out = append(out, id)
+		}
+		out = append(out, other)
+		if other == targetID && after {
+			out = append(out, id)
+		}
+	}
+	ranks := make(map[string]int64, len(out))
+	for i, other := range out {
+		ranks[other] = int64(i)
+	}
+	if err := r.store.SetSessionRailRanks(ranks); err != nil {
+		return err
+	}
+	for other, rank := range ranks {
+		r.ranks[other] = rank
+	}
+	slog.Info("reordered sessions rail", "session_id", id, "target_id", targetID, "after", after, "position", ranks[id], "count", len(out))
+	return nil
 }
 
 func (r *Registry) SetAudioEnabled(id string, enabled bool) error {
@@ -365,7 +503,9 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 	for _, pending := range restoring {
 		out = append(out, r.summary(ctx, pending.rec.ID, pending.rec.Name, pending.spec, pending.rec.CWD, session.Status(pending.rec.Status), 0, "transcript"))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	r.mu.RLock()
+	sort.Slice(out, func(i, j int) bool { return railLess(r.ranks, out[i].ID, out[j].ID) })
+	r.mu.RUnlock()
 	return out
 }
 
@@ -751,6 +891,7 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 		return nil, err
 	}
 	if spec.Adapter == "acp" && spec.ResolvedLaunch.Distribution == nil {
+		progress.Report(ctx, "Checking "+spec.Agent+" agent runtime install…")
 		distribution, provisionErr := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
 		if provisionErr != nil {
 			return nil, fmt.Errorf("provision agent %s: %w", spec.Agent, provisionErr)
@@ -768,12 +909,14 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	// re-marshalled into the agent row on every restore.
 	var handoffText string
 	if spec.HandoffFrom != "" {
+		progress.Report(ctx, "Preparing hand-off transcript…")
 		if handoffText, err = r.handoffMessage(spec.HandoffFrom, spec.HandoffMode); err != nil {
 			return nil, err
 		}
 	}
 	name := r.nextName(spec.Name)
 	id := name
+	progress.Report(ctx, "Preparing workspace…")
 	provisioned, err := r.provisionOrJoin(ctx, spec.Workspace, name)
 	if err != nil {
 		r.releaseKnown(id)
@@ -863,6 +1006,7 @@ func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapt
 	if err != nil {
 		return nil, err
 	}
+	progress.Report(ctx, "Applying session settings…")
 	if err = applySessionConfig(ctx, a, spec.SessionConfig); err != nil {
 		a.Close(ctx)
 		return nil, fmt.Errorf("restore session config: %w", err)
@@ -887,6 +1031,7 @@ func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapt
 	r.cwds[rec.ID] = rec.CWD
 	r.known[rec.ID] = true
 	r.mu.Unlock()
+	r.placeAtTop(rec.ID)
 	if r.onSession != nil {
 		r.onSession(s)
 	}
@@ -2079,6 +2224,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 	r.mu.Lock()
 	delete(r.sessions, id)
 	delete(r.cwds, id)
+	delete(r.ranks, id)
 	r.mu.Unlock()
 	if r.browser != nil {
 		_ = r.browser.Teardown(ctx, id)

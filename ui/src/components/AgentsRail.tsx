@@ -4,7 +4,7 @@ import { usePresence, useValuePresence } from '../transitions';
 import { usesSoftKeyboard } from '../mobile';
 import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
-import type { SessionView } from '../store';
+import type { PendingSpawn, SessionView } from '../store';
 import type { ClosePreview, FederationHost } from '../wire';
 
 // Badge color per severity, matching the Notifications panel (red > yellow > green).
@@ -22,6 +22,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const hosts = useStore((s) => s.hosts);
   const focusedId = useStore((s) => s.focusedId);
   const focus = useStore((s) => s.focus);
+  const pendingSpawns = useStore((s) => s.pendingSpawns);
+  const focusedSpawnId = useStore((s) => s.focusedSpawnId);
+  const focusSpawn = useStore((s) => s.focusSpawn);
+  const dismissPendingSpawn = useStore((s) => s.dismissPendingSpawn);
   const reorderAgent = useStore((s) => s.reorderAgent);
   const markAgentUnread = useStore((s) => s.markAgentUnread);
   const setPane = useStore((s) => s.setPane);
@@ -60,6 +64,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  const [contextMenuDismissal, setContextMenuDismissal] = useState<{ id: string; token: number } | null>(null);
+  const dismissContextMenuAfterReorder = (id: string) => {
+    setContextMenuDismissal((previous) => ({ id, token: (previous?.token ?? 0) + 1 }));
+  };
   // A drop rewrites the order and React repaints every affected row in its new
   // place in one frame, which reads as the cards teleporting. FLIP the rail
   // instead: measure where the rows sit before the reorder, then after the
@@ -219,13 +227,26 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           Sessions <span className="count">{order.length}</span>
         </span>
       </div>
-      {order.length === 0 ? (
+      {pendingSpawns.length > 0 && (
+        <section className="session-host-group pending-spawns" aria-label="Starting sessions">
+          {pendingSpawns.map((p) => (
+            <PendingSpawnRow
+              key={p.corrId}
+              spawn={p}
+              active={p.corrId === focusedSpawnId}
+              onClick={() => focusSpawn(p.corrId)}
+              onDismiss={() => dismissPendingSpawn(p.corrId)}
+            />
+          ))}
+        </section>
+      )}
+      {order.length === 0 ? (pendingSpawns.length > 0 ? null : (
         <div className="empty">
           No sessions yet.
           <br />
           Press <span className="kbd">C</span> or <b>+ Session</b> to spawn one.
         </div>
-      ) : (
+      )) : (
         <>
           {displayedGroups.map((group) => (
             // Each group is its own box so its divider sticks only for as long
@@ -252,6 +273,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onRestartHarness={() => restartHarness(id)}
                   dragging={id === draggedId}
                   dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
+                  dismissContextMenuToken={contextMenuDismissal?.id === id ? contextMenuDismissal.token : 0}
                   onDragStart={() => setDraggedId(id)}
                   onDragOver={(after) => setDropTarget(resolveDrop(id, after))}
                   onDrop={(after) => {
@@ -259,6 +281,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                     if (draggedId && drop) {
                       captureRowTops(draggedId);
                       reorderAgent(draggedId, drop.id, drop.after);
+                      dismissContextMenuAfterReorder(draggedId);
                     }
                     setDraggedId(null);
                     setDropTarget(null);
@@ -285,6 +308,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               if (draggedId && drop) {
                 captureRowTops(draggedId);
                 reorderAgent(draggedId, drop.id, drop.after);
+                dismissContextMenuAfterReorder(draggedId);
               }
               setDraggedId(null);
               setDropTarget(null);
@@ -459,6 +483,38 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
   );
 }
 
+// A spawn the daemon has not acknowledged yet: a spinner (or error) row that
+// can be focused to watch progress, and dismissed (even while in flight, in
+// case its ack never arrives).
+function PendingSpawnRow({ spawn, active, onClick, onDismiss }: { spawn: PendingSpawn; active: boolean; onClick: () => void; onDismiss: () => void }) {
+  return (
+    <div className={`session-row pending-spawn${active ? ' active' : ''}`} onClick={onClick} title={spawn.error ?? spawn.phase}>
+      {spawn.error ? <span className="dot error" title="spawn failed" /> : <span className="spinner small" aria-label="starting" />}
+      <div style={{ minWidth: 0 }}>
+        <div className="name">
+          {spawn.error && '⛔ '}
+          {spawn.name || 'New session'}
+          {spawn.hostId && <span className="session-host-badge">{spawn.hostName || spawn.hostId}</span>}
+        </div>
+        <div className="ws"><span className="ws-text">{spawn.error ? `Spawn failed · ${spawn.label}` : spawn.phase}</span></div>
+      </div>
+      <div className="session-actions">
+        <button
+          className="delete-btn"
+          title="Dismiss"
+          aria-label={spawn.error ? 'Dismiss failed spawn' : 'Dismiss in-progress spawn'}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss();
+          }}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function groupedAgentRows(order: string[], agents: Record<string, SessionView>, hosts: FederationHost[]): HostGroup[] {
   const groups = new Map<string, HostGroup>();
   for (const id of order) {
@@ -488,6 +544,7 @@ function Row({
   onRestartHarness,
   dragging,
   dropPosition,
+  dismissContextMenuToken,
   onDragStart,
   onDragOver,
   onDrop,
@@ -504,6 +561,7 @@ function Row({
   onRestartHarness: () => Promise<{ error?: string }>;
   dragging: boolean;
   dropPosition: 'before' | 'after' | null;
+  dismissContextMenuToken: number;
   onDragStart: () => void;
   onDragOver: (after: boolean) => void;
   onDrop: (after: boolean) => void;
@@ -524,6 +582,11 @@ function Row({
   // or native drag handling). Recognize that gesture ourselves instead.
   const longPress = useRef<{ pointerId: number; x: number; y: number; timer: number } | null>(null);
   const longPressOpened = useRef(false);
+  // Mobile browsers may emit a contextmenu after completing their native drag
+  // sequence. Ignore that trailing event so a successful reorder cannot leave
+  // an actions menu behind.
+  const suppressContextMenuUntil = useRef(0);
+  const lastContextMenuDismissal = useRef(dismissContextMenuToken);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -616,6 +679,12 @@ function Row({
     longPress.current = null;
   };
   useEffect(() => cancelLongPress, []);
+  useLayoutEffect(() => {
+    if (!dismissContextMenuToken || dismissContextMenuToken === lastContextMenuDismissal.current) return;
+    lastContextMenuDismissal.current = dismissContextMenuToken;
+    setContextMenu(null);
+    suppressContextMenuUntil.current = Date.now() + 750;
+  }, [dismissContextMenuToken]);
   return (
     <div
       ref={rowRef}
@@ -653,6 +722,7 @@ function Row({
       }}
       onPointerCancel={cancelLongPress}
       onDragStart={(event) => {
+        cancelLongPress();
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', agent.id);
         onDragStart();
@@ -668,10 +738,14 @@ function Row({
         const bounds = event.currentTarget.getBoundingClientRect();
         onDrop(event.clientY > bounds.top + bounds.height / 2);
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        cancelLongPress();
+        onDragEnd();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         cancelLongPress();
+        if (Date.now() < suppressContextMenuUntil.current) return;
         openContextMenu({ x: event.clientX, y: event.clientY });
       }}
       onPointerEnter={(event) => {

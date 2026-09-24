@@ -474,6 +474,7 @@ export type ClientMsg =
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
   | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
+  | { t: 'reorder_session'; sessionId: string; targetSessionId: string; after: boolean; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; sessionId: string; corrId?: string }
   | { t: 'get_diff'; sessionId: string; corrId?: string }
@@ -526,6 +527,7 @@ export type ServerMsg =
   | { t: 'annotations'; sessionId: string; annotations: Annotation[] }
   | { t: 'event'; sessionId: string; seq: number; event: WireEvent }
   | { t: 'ack'; corrId?: string; sessionId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
+  | { t: 'spawn_progress'; corrId?: string; phase: string }
   | { t: 'agent_closed'; sessionId: string }
   | { t: 'agents'; corrId?: string; sessions: SessionSummary[]; agentId?: string }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }

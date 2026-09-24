@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"log/slog"
 	"maps"
 	"os"
@@ -41,6 +42,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		if launch.Terminal == nil {
 			return nil, errors.New("terminal launch is missing")
 		}
+		progress.Report(ctx, "Launching terminal process…")
 		a := ptyadapter.New(req.SessionID)
 		if err := a.Spawn(ctx, ptyadapter.SpawnOptions{Command: launch.Terminal.Cmd, Args: launch.Terminal.StartArgs, Dir: req.CWD, Env: launch.Terminal.Env}); err != nil {
 			return nil, err
@@ -51,6 +53,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		return nil, errors.New("ACP launch is missing")
 	}
 	if launch.Distribution == nil {
+		progress.Report(ctx, "Checking "+req.Spec.Agent+" agent runtime install…")
 		if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
 			return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
 		}
@@ -69,6 +72,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	}
 	var mcpServers []acpadapter.MCPServer
 	if f.MCPServers != nil {
+		progress.Report(ctx, "Preparing MCP servers…")
 		configured, err := f.MCPServers(req.SessionID, req.CWD)
 		if err != nil {
 			fs.Close()

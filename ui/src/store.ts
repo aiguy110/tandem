@@ -112,6 +112,16 @@ export function agentBadge(agent: SessionView): { count: number; severity: Notif
 export type PaneId = 'chat' | 'shell' | 'diff' | 'browser';
 export const PANES: PaneId[] = ['chat', 'shell', 'diff', 'browser'];
 
+export interface PendingSpawn {
+  corrId: string;
+  name?: string;
+  hostId?: string;
+  hostName?: string;
+  label: string;
+  phase: string;
+  error: string | null;
+}
+
 export interface SessionView {
   id: string;
   name: string;
@@ -148,6 +158,9 @@ export interface SessionView {
   // shell process ends (shell_exit) so the pane can offer a restart.
   shellExited: boolean;
   shellExitMessage: string | null;
+  // False until the first transcript snapshot for this session arrives, so the
+  // transcript can show a loading state instead of claiming it is empty.
+  historyLoaded: boolean;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
   // holds the wheel, plus any pending session-initiated takeover requests.
   browserActive: boolean;
@@ -215,6 +228,13 @@ interface StoreState {
   sessions: Record<string, SessionView>;
   order: string[];
   focusedId: string | null;
+  // Spawns the daemon is still working on, shown as rail entries. Each clears
+  // on success or holds its error until dismissed. When one is focused
+  // (focusedSpawnId, with focusedId null) the focus area shows its progress.
+  pendingSpawns: PendingSpawn[];
+  focusedSpawnId: string | null;
+  focusSpawn: (corrId: string) => void;
+  dismissPendingSpawn: (corrId: string) => void;
   // The selected pane belongs to an agent/session, rather than to the focus
   // area. `pane` remains the currently focused agent's pane for consumers that
   // need a simple current-view value.
@@ -421,32 +441,14 @@ function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog
 }
 
 function rankSessions(sessions: Record<string, SessionView>, order: string[]): string[] {
-  // `order` is explicitly arranged by the user via the Sessions rail. Filter
-  // stale entries rather than applying a status-based sort over that order.
+  // `order` is the daemon-owned rail order (shared by every browser and
+  // federation master). Filter stale entries rather than re-sorting it.
   return order.filter((id) => !!sessions[id]);
 }
 
 const initialTheme = (): 'dark' | 'light' => {
   const saved = localStorage.getItem('tandem.theme');
   return saved === 'light' ? 'light' : 'dark';
-};
-
-const SESSION_ORDER_STORAGE_KEY = 'tandem.sessionOrder';
-const LEGACY_AGENT_ORDER_STORAGE_KEY = 'tandem.agentOrder';
-const initialSessionOrder = (): string[] => {
-	try {
-		const saved: unknown = JSON.parse(localStorage.getItem(SESSION_ORDER_STORAGE_KEY) ?? localStorage.getItem(LEGACY_AGENT_ORDER_STORAGE_KEY) ?? '[]');
-    return Array.isArray(saved) && saved.every((id) => typeof id === 'string') ? saved : [];
-  } catch {
-    return [];
-  }
-};
-const saveSessionOrder = (order: string[]) => {
-	try {
-		localStorage.setItem(SESSION_ORDER_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    // Reordering still works when browser storage is unavailable.
-  }
 };
 
 const FOCUSED_SESSION_STORAGE_KEY = 'tandem.focusedSession';
@@ -579,14 +581,15 @@ export const useStore = create<StoreState>((set, get) => {
         const newlyDiscovered = msg.sessions.filter((s) => !get().sessions[s.id]).map((s) => s.id);
         set((st) => {
           const sessions = { ...st.sessions };
-          // Retain a saved order only for sessions that still exist locally or
-          // were included by the daemon; this also discards old browser state.
+          // The daemon owns rail order: adopt the reported order, then append
+          // any retained local session it did not report (the cleanup below
+          // drops the ones with no history).
           const live = new Set(msg.sessions.map((a) => a.id));
-          const order = st.order.filter((id) => live.has(id) || !!sessions[id]);
+          const order = msg.sessions.map((a) => a.id);
+          for (const id of st.order) if (!live.has(id) && sessions[id]) order.push(id);
           for (const s of msg.sessions) {
             const prev = sessions[s.id];
             sessions[s.id] = mergeSummary(prev, s);
-            if (!order.includes(s.id)) order.push(s.id);
           }
           // Drop any local agent the daemon no longer reports (e.g. closed elsewhere).
           for (const id of order.slice()) {
@@ -595,7 +598,8 @@ export const useStore = create<StoreState>((set, get) => {
               order.splice(order.indexOf(id), 1);
             }
           }
-          const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : order[0] ?? null;
+          // Viewing an in-progress spawn deliberately has no focused session.
+          const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : st.focusedSpawnId ? null : order[0] ?? null;
           const pane = focusedId ? st.panesBySession[focusedId] ?? 'chat' : 'chat';
           if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
           return { sessions, order, focusedId, pane };
@@ -786,6 +790,12 @@ export const useStore = create<StoreState>((set, get) => {
         }
         return;
       }
+      case 'spawn_progress': {
+        set((st) => (st.pendingSpawns.some((p) => p.corrId === msg.corrId)
+          ? { pendingSpawns: st.pendingSpawns.map((p) => (p.corrId === msg.corrId ? { ...p, phase: msg.phase } : p)) }
+          : st));
+        return;
+      }
       case 'agent_closed': {
         set((st) => {
           if (!st.sessions[msg.sessionId]) return st;
@@ -898,6 +908,7 @@ export const useStore = create<StoreState>((set, get) => {
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
+            historyLoaded: true,
             audioOnTurnEnd,
             audioState,
             audioError,
@@ -906,11 +917,11 @@ export const useStore = create<StoreState>((set, get) => {
             audioDurations: Object.fromEntries((msg.audioReady ?? []).map((clip) => [clip.seq, clip.durationMs])),
             audioPosition: msg.audioPosition ?? null,
           };
-          const order = st.order.includes(msg.sessionId) ? st.order : [...st.order, msg.sessionId];
+          const order = st.order.includes(msg.sessionId) ? st.order : [msg.sessionId, ...st.order];
           return {
             sessions,
             order,
-            focusedId: st.focusedId ?? msg.sessionId,
+            focusedId: st.focusedId ?? (st.focusedSpawnId ? null : msg.sessionId),
             annotations: { ...st.annotations, [msg.sessionId]: msg.annotations ?? [] },
           };
         });
@@ -970,7 +981,7 @@ export const useStore = create<StoreState>((set, get) => {
             next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
           }
           const sessions = { ...st.sessions, [sessionId]: next };
-          const order = st.order.includes(sessionId) ? st.order : [...st.order, sessionId];
+          const order = st.order.includes(sessionId) ? st.order : [sessionId, ...st.order];
           return { sessions, order };
         });
         return;
@@ -1023,8 +1034,20 @@ export const useStore = create<StoreState>((set, get) => {
     theme: initialTheme(),
     appearance: loadAppearance(),
     sessions: {},
-    order: initialSessionOrder(),
+    order: [],
     focusedId: initialFocusedSession(),
+    pendingSpawns: [],
+    focusedSpawnId: null,
+    focusSpawn: (corrId) => {
+      const previous = get().focusedId;
+      if (previous && wantsPty(previous)) subscribeAgent(previous);
+      set({ focusedId: null, focusedSpawnId: corrId });
+      syncAudioFocus();
+    },
+    dismissPendingSpawn: (corrId) => set((st) => ({
+      pendingSpawns: st.pendingSpawns.filter((p) => p.corrId !== corrId),
+      focusedSpawnId: st.focusedSpawnId === corrId ? null : st.focusedSpawnId,
+    })),
     panesBySession: initialSessionPanes(),
     pane: 'chat',
     modal: 'none',
@@ -1116,8 +1139,14 @@ export const useStore = create<StoreState>((set, get) => {
       order.splice(from, 1);
       const nextTarget = order.indexOf(targetId);
       order.splice(nextTarget + (after ? 1 : 0), 0, id);
-      saveSessionOrder(order);
+      // Apply optimistically; the daemon persists the move and broadcasts the
+      // authoritative order to every browser (and federation master).
       set({ order });
+      const corrId = nextCorr();
+      pendingAcks.set(corrId, (result) => {
+        if (result.error) get().refreshAgents();
+      });
+      client.send({ t: 'reorder_session', sessionId: id, targetSessionId: targetId, after, corrId });
     },
     // A user can restore the completed-turn badge after acknowledging it. This
     // is deliberately browser-local, like notifications created from live
@@ -1320,12 +1349,43 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
-          if (r.sessionId && !r.error) {
-            get().refreshAgents();
-            set({ focusedId: r.sessionId, modal: 'none', pane: 'chat' });
+          const st = get();
+          const ok = !!r.sessionId && !r.error;
+          if (ok) {
+            st.refreshAgents();
+            // Only take over the focus area if the user is still watching this
+            // spawn (they may have moved to another session meanwhile).
+            const watching = st.focusedSpawnId === corrId;
+            set((cur) => ({
+              pendingSpawns: cur.pendingSpawns.filter((p) => p.corrId !== corrId),
+              ...(watching ? { focusedId: r.sessionId, focusedSpawnId: null, pane: 'chat' as const } : {}),
+            }));
+          } else {
+            set((cur) => ({
+              pendingSpawns: cur.pendingSpawns.map((p) => (p.corrId === corrId ? { ...p, error: r.error ?? 'Spawn failed' } : p)),
+            }));
           }
           resolve(r);
         });
+        const remote = spec.hostId ? get().hosts.find((h) => h.id === spec.hostId) : undefined;
+        const where = spec.workspace.kind === 'worktree' ? spec.workspace.repo : spec.workspace.cwd;
+        const previous = get().focusedId;
+        if (previous && wantsPty(previous)) subscribeAgent(previous);
+        set((st) => ({
+          modal: 'none',
+          focusedId: null,
+          focusedSpawnId: corrId,
+          pendingSpawns: [...st.pendingSpawns, {
+            corrId,
+            name: spec.name,
+            hostId: remote ? remote.id : undefined,
+            hostName: remote ? remote.name ?? remote.id : undefined,
+            label: [spec.agent, where.split('/').filter(Boolean).pop()].filter(Boolean).join(' · '),
+            phase: remote ? `Starting session on ${remote.name ?? remote.id}…` : 'Starting session…',
+            error: null,
+          }],
+        }));
+        syncAudioFocus();
         client.send({ t: 'spawn_agent', spec, corrId });
       }),
     actOnSystemNotification: (notificationId, action) =>
@@ -1584,6 +1644,10 @@ export const useStore = create<StoreState>((set, get) => {
 // Do the same for drafts: every keystroke reaches localStorage synchronously,
 // before a refresh or daemon restart can discard the browser state.
 useStore.subscribe((state, previous) => {
+  // Focusing a real session by any route leaves the in-progress spawn view.
+  if (state.focusedId && state.focusedSpawnId && state.focusedId !== previous.focusedId) {
+    useStore.setState({ focusedSpawnId: null });
+  }
   if (state.focusedId !== previous.focusedId) saveFocusedSession(state.focusedId);
   if (state.drafts !== previous.drafts) saveDrafts(state.drafts);
 });
@@ -1638,6 +1702,7 @@ function shell(id: string): SessionView {
     hasPty: false,
     shellExited: false,
     shellExitMessage: null,
+    historyLoaded: false,
     browserActive: false,
     browserOwner: 'agent',
     browserTakeoverHeld: false,

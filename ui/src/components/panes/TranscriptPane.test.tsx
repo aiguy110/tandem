@@ -28,6 +28,7 @@ function agent(): SessionView {
     turnNotifications: [],
     hasPty: false,
     shellExited: false,
+    historyLoaded: true,
     shellExitMessage: null,
     browserActive: false,
     browserOwner: 'agent',
@@ -493,6 +494,8 @@ describe('TranscriptPane composer completions', () => {
     expect(findFileToken('@src/index', 10)).toMatchObject({ start: 0, query: 'src/index' });
     expect(findFileToken('check @src/', 11)).toMatchObject({ start: 6, query: 'src/' });
 	    expect(findFileToken('@~/Projects', 11)).toMatchObject({ start: 0, query: '~/Projects' });
+    expect(findFileToken('@~/Downloads/State of Israel', 28)).toMatchObject({ start: 0, query: '~/Downloads/State of Israel' });
+    expect(findFileToken('@"~/Downloads/State of Israel"', 30)).toMatchObject({ start: 0, query: '~/Downloads/State of Israel' });
     expect(findFileToken('person@example', 14)).toBeNull();
   });
 
@@ -554,17 +557,17 @@ describe('TranscriptPane composer completions', () => {
   it('renders workspace file mentions like slash commands', () => {
     const withCommand = agent();
     withCommand.commands = [{ name: 'help', description: 'Show help' }];
-    withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Read @FIX_ME.md then /help.' } }];
+    withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Read @"docs/State of Israel.md" then /help.' } }];
     useStore.setState({
       ...initialState,
       sessions: { 'session-1': withCommand }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
-      drafts: { 'session-1': 'Read @FIX_ME.md then /help.' },
+      drafts: { 'session-1': 'Read @"docs/State of Israel.md" then /help.' },
     }, true);
 
     const view = render(<TranscriptPane />);
     expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(4);
     expect(Array.from(view.container.querySelectorAll('.skill-mention')).map((node) => node.textContent))
-      .toEqual(['@FIX_ME.md', '/help', '@FIX_ME.md', '/help']);
+      .toEqual(['@"docs/State of Israel.md"', '/help', '@"docs/State of Israel.md"', '/help']);
   });
 
   it('lists and inserts workspace file mentions', async () => {
@@ -613,6 +616,23 @@ describe('TranscriptPane composer completions', () => {
     expect(listWorkspaceEntries).toHaveBeenCalledWith('session-1', '~');
     fireEvent.mouseDown(option);
     expect(composer.value).toBe('@~/Projects/');
+  });
+
+  it('quotes selected file mentions whose paths contain spaces', async () => {
+    const listWorkspaceEntries = vi.fn().mockResolvedValue([{
+      path: '~/Downloads/State of Israel - Ministry of Finance.odt', isDir: false,
+    }]);
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, listWorkspaceEntries,
+    }, true);
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@~/Downloads/State', selectionStart: 18 } });
+
+    const option = await waitFor(() => view.getByText('@~/Downloads/State of Israel - Ministry of Finance.odt'));
+    fireEvent.mouseDown(option);
+    expect(composer.value).toBe('@"~/Downloads/State of Israel - Ministry of Finance.odt" ');
   });
 });
 
@@ -697,6 +717,38 @@ describe('TranscriptPane annotations', () => {
       { seq: 1, role: 'assistant', quote: 'Select these words' },
       'Please clarify.',
     );
+  });
+
+  it('keeps a native selection anchored when a row already has a highlighted annotation', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent() },
+      order: ['session-1'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [{ id: 'a1', sessionId: 'session-1', seq: 1, role: 'assistant', quote: 'Select', comment: 'x', createdAt: 0, updatedAt: 0 }] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    const highlight = view.container.querySelector('.ev.msg .annotation-quote-highlight');
+    expect(highlight?.textContent).toBe('Select');
+    const text = highlight!.nextSibling as Text;
+    expect(text).toBeInstanceOf(Text);
+
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.setEnd(text, 6);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({ top: 100, left: 20, width: 140, height: 20, right: 160, bottom: 120, x: 20, y: 100, toJSON: () => ({}) }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+
+    await waitFor(() => view.getByRole('button', { name: /comment/i }));
+    expect(text.isConnected).toBe(true);
+    expect(selection.anchorNode).toBe(text);
+    expect(selection.toString()).toBe('these');
   });
 
   it('adds a comment on Enter and preserves a newline on Shift+Enter', async () => {

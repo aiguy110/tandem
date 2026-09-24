@@ -127,6 +127,38 @@ describe('SessionsRail touch context menu', () => {
     expect(screen.queryByRole('menu', { name: 'Actions for Remote agent' })).toBeNull();
     vi.useRealTimers();
   });
+
+  it('dismisses the menu only when a mobile drag changes the card position', () => {
+    const [first, second] = ['first', 'second'].map((id) => ({
+      ...session(), id, name: id, hostId: LOCAL_HOST_ID, hostName: 'This host',
+    }));
+    useStore.setState({
+      sessions: { [first.id]: first, [second.id]: second },
+      order: [first.id, second.id],
+    });
+    const view = render(<SessionsRail />);
+    const rows = view.container.querySelectorAll('.session-row');
+    const dataTransfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const dragStart = new MouseEvent('dragstart', { bubbles: true });
+    Object.defineProperty(dragStart, 'dataTransfer', { value: dataTransfer });
+
+    fireEvent.contextMenu(rows[0]!);
+    fireEvent(rows[0]!, dragStart);
+    fireEvent.dragEnd(rows[0]!);
+    expect(screen.getByRole('menu', { name: 'Actions for first' })).toBeTruthy();
+
+    const reorderStart = new MouseEvent('dragstart', { bubbles: true });
+    Object.defineProperty(reorderStart, 'dataTransfer', { value: dataTransfer });
+    fireEvent(rows[0]!, reorderStart);
+    const drop = new MouseEvent('drop', { bubbles: true, clientY: 20 });
+    Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer });
+    (rows[1] as HTMLElement).getBoundingClientRect = () => ({ top: 0, height: 20 }) as DOMRect;
+    fireEvent(rows[1]!, drop);
+    fireEvent.dragEnd(rows[0]!);
+    fireEvent.contextMenu(rows[0]!);
+
+    expect(screen.getByRole('menu', { name: 'Actions for first' }).classList.contains('closing')).toBe(true);
+  });
 });
 
 describe('SessionsRail drag-to-reorder indicator', () => {

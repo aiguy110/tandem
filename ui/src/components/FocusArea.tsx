@@ -25,6 +25,9 @@ export function FocusArea() {
   const enterTerminal = useStore((s) => s.enterTerminal);
   const leaveTerminal = useStore((s) => s.leaveTerminal);
   const toggleThreadAudio = useStore((s) => s.toggleThreadAudio);
+  const pendingSpawn = useStore((s) => s.pendingSpawns.find((p) => p.corrId === s.focusedSpawnId));
+  const dismissPendingSpawn = useStore((s) => s.dismissPendingSpawn);
+  const setModal = useStore((s) => s.setModal);
   const [confirm, setConfirm] = useState<null | 'to-cli-busy' | 'to-acp'>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
 
@@ -34,6 +37,32 @@ export function FocusArea() {
     setConfirm(null);
     setHandoffError(null);
   }, [focusedId, pane]);
+
+  if (!agent && pendingSpawn) {
+    return (
+      <div className="focus">
+        {pendingSpawn.error ? (
+          <div className="pane-placeholder">
+            <div>Spawn failed{pendingSpawn.label ? ` (${pendingSpawn.label})` : ''}</div>
+            <div className="modal-err spawn-error">{pendingSpawn.error}</div>
+            <div className="spawn-error-actions">
+              <button className="btn ghost" type="button" onClick={() => dismissPendingSpawn(pendingSpawn.corrId)}>Dismiss</button>
+              <button className="btn" type="button" onClick={() => { dismissPendingSpawn(pendingSpawn.corrId); setModal('spawn'); }}>Back to spawn</button>
+            </div>
+          </div>
+        ) : (
+          <div className="loading-state" role="status">
+            <span className="spinner" aria-hidden="true" />
+            <div>{pendingSpawn.phase}</div>
+            {pendingSpawn.label && <div className="loading-sub">{pendingSpawn.label}</div>}
+            <div className="spawn-error-actions">
+              <button className="btn ghost" type="button" title="Stop tracking this spawn; it appears in the rail if it finishes" onClick={() => dismissPendingSpawn(pendingSpawn.corrId)}>Dismiss</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (!agent) {
     return (

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiguy110/tandem/internal/progress"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -59,6 +60,7 @@ type Backend interface {
 	DeleteProfile(string) error
 	ForgetProfile(string, string) error
 	Rename(string, string) error
+	Reorder(string, string, bool) error
 	ListAnnotations(string) ([]store.Annotation, error)
 	UpsertAnnotation(store.Annotation) error
 	DeleteAnnotation(string) error
@@ -301,6 +303,8 @@ func tokenMatches(got, want string) bool {
 type clientMessage struct {
 	T                 string                     `json:"t"`
 	SessionID         string                     `json:"sessionId"`
+	TargetSessionID   string                     `json:"targetSessionId,omitempty"`
+	After             bool                       `json:"after,omitempty"`
 	Channels          []string                   `json:"channels"`
 	SinceSeq          int64                      `json:"sinceSeq"`
 	CorrID            json.RawMessage            `json:"corrId"`
@@ -721,6 +725,19 @@ func (c *connection) handle(m clientMessage) {
 			m.HostID, m.SessionID = hostID, sessionID
 		}
 	}
+	if m.TargetSessionID != "" {
+		// A reorder target must live on the same daemon as the moved session:
+		// each host owns the order of its own sessions.
+		targetHost, targetID, remote := SplitRemoteSessionID(m.TargetSessionID)
+		if !remote {
+			targetID = m.TargetSessionID
+		}
+		if targetHost != m.HostID {
+			c.commandError(m, fmt.Errorf("reorder target %s is not on the same host as %s", m.TargetSessionID, m.SessionID))
+			return
+		}
+		m.TargetSessionID = targetID
+	}
 	if m.HostID != "" {
 		c.forwardFederation(m)
 		return
@@ -1083,7 +1100,18 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.commandAck(m, sess.ID)
 	case "spawn_agent":
-		sess, err := c.server.opts.Registry.Spawn(context.Background(), m.Spec)
+		// The adapter may retain a context derived from spawnCtx, so stop
+		// forwarding reports once the spawn has been acknowledged.
+		var spawnDone atomic.Bool
+		spawnCtx := progress.With(context.Background(), func(phase string) {
+			if spawnDone.Load() {
+				return
+			}
+			slog.Info("spawn progress", "corr_id", strings.Trim(string(m.CorrID), `"`), "agent", m.Spec.Agent, "phase", phase)
+			c.send(withCorr(map[string]any{"t": "spawn_progress", "phase": phase}, m.CorrID))
+		})
+		sess, err := c.server.opts.Registry.Spawn(spawnCtx, m.Spec)
+		spawnDone.Store(true)
 		if err != nil {
 			c.commandError(m, err)
 			return
@@ -1186,6 +1214,13 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+	case "reorder_session":
+		if err := c.server.opts.Registry.Reorder(m.SessionID, m.TargetSessionID, m.After); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastAgents()
+		c.commandAck(m, m.SessionID)
 	case "rename_agent":
 		if err := c.server.opts.Registry.Rename(m.SessionID, m.Name); err != nil {
 			c.commandError(m, err)
@@ -1462,7 +1497,12 @@ func (c *connection) forwardFederation(m clientMessage) {
 		c.commandError(m, err)
 		return
 	}
-	callCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	callTimeout := 30 * time.Second
+	if m.T == "spawn_agent" {
+		// A remote spawn may install the agent runtime before acknowledging.
+		callTimeout = 10 * time.Minute
+	}
+	callCtx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	var request map[string]any
 	if err := json.Unmarshal(payload, &request); err != nil {

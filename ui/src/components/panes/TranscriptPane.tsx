@@ -441,7 +441,7 @@ export function TranscriptPane() {
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
-  const transcriptItems = items.filter((item) => item.kind !== 'plan');
+  const transcriptItems = useMemo(() => items.filter((item) => item.kind !== 'plan'), [items]);
   // The actively-streaming last message row never offers annotation — its text
   // is still growing underneath any selection the user made.
   const lastMessageItem = useMemo(
@@ -704,7 +704,9 @@ export function TranscriptPane() {
             onMouseUp={captureSelection}
             onTouchEnd={() => window.setTimeout(() => captureSelectionRef.current(), 80)}
           >
-            {transcriptItems.length === 0 && <div className="empty">No activity yet. Send a prompt below to start a turn.</div>}
+            {transcriptItems.length === 0 && (agent.historyLoaded
+              ? <div className="empty">No activity yet. Send a prompt below to start a turn.</div>
+              : <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />Loading conversation…</div>)}
             {transcriptItems.map((it) => (
               <Row
                 key={`${agent.id}:${it.key}`}
@@ -972,9 +974,15 @@ function Row({
   const userFlash = useUpdateFlash(
     item.kind === 'user' ? item.blocks.map((b) => (b.type === 'text' ? b.text : b.type)).join('\u0000') : null,
   );
+  // Re-highlighting unwraps and rebuilds the text nodes under the row, which
+  // would yank an in-progress native selection anchored inside them. The pane
+  // re-renders on every selectionchange, so key the pass on the links' content
+  // rather than the (freshly allocated) array identity.
+  const quoteLinksKey = quoteLinks.map((link) => `${link.targetId}\u0000${link.quote}`).join('\u0001');
   useLayoutEffect(() => {
     if (sourceRef.current) applyQuoteHighlights(sourceRef.current, quoteLinks);
-  }, [quoteLinks, item]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteLinksKey, item]);
 
   const onSourceClick = (event: React.MouseEvent<HTMLElement>) => {
     const highlight = (event.target as HTMLElement).closest<HTMLElement>('.annotation-quote-highlight');
@@ -1531,8 +1539,17 @@ export function findSlashToken(text: string, caret: number): CompletionToken | n
 // "@" opens the root picker, and a trailing slash lists that directory.
 export function findFileToken(text: string, caret: number): CompletionToken | null {
   if (caret <= 0 || caret > text.length) return null;
+  // A completed path that needs quoting is written as @"path with spaces".
+  // Keep it as one token so the completion UI does not get confused while the
+  // user is editing the path.
+  if (text[caret - 1] === '"') {
+    const quote = text.lastIndexOf('"', caret - 2);
+    if (quote > 0 && text[quote - 1] === '@' && isMentionBoundary(text, quote - 1)) {
+      return { start: quote - 1, end: caret, query: text.slice(quote + 1, caret - 1) };
+    }
+  }
   let i = caret;
-  while (i > 0 && /[A-Za-z0-9_./~-]/.test(text[i - 1])) i--;
+  while (i > 0 && /[A-Za-z0-9_./~ -]/.test(text[i - 1])) i--;
   if (i === 0 || text[i - 1] !== '@' || !isMentionBoundary(text, i - 1)) return null;
   return { start: i - 1, end: caret, query: text.slice(i, caret) };
 }
@@ -1550,7 +1567,7 @@ function SkillText({ text, commands, asideSupport = false }: { text: string; com
   const parts: React.ReactNode[] = [];
   // Keep the highlight layer in sync with the two kinds of composer tokens:
   // known slash commands and workspace file mentions.
-  const pattern = /\/[A-Za-z0-9_-]+|@[A-Za-z0-9_./~-]+/g;
+  const pattern = /\/[A-Za-z0-9_-]+|@(?:"[^"\n]*"|[A-Za-z0-9_./~-]+)/g;
   let previous = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const start = match.index;
@@ -1730,7 +1747,13 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
 
   const applyFile = (entry: WorkspaceEntry | undefined) => {
     if (!file || !entry) return;
-    const insertion = `@${entry.path}${entry.isDir ? '/' : ' '}`;
+    const path = `${entry.path}${entry.isDir ? '/' : ''}`;
+    // Quotes make the path unambiguous to the agent when it contains a space.
+    // Escape the two characters meaningful inside a double-quoted path too,
+    // since POSIX filenames may legally contain either one.
+    const quoted = /\s/.test(path);
+    const mentionPath = quoted ? `"${path.replace(/([\\"])/g, '\\$1')}"` : path;
+    const insertion = `@${mentionPath}${entry.isDir ? '' : ' '}`;
     const next = text.slice(0, file.start) + insertion + text.slice(file.end);
     setDraft(sessionId, next);
     const pos = file.start + insertion.length;
