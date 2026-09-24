@@ -1533,8 +1533,17 @@ export function findSlashToken(text: string, caret: number): CompletionToken | n
 // "@" opens the root picker, and a trailing slash lists that directory.
 export function findFileToken(text: string, caret: number): CompletionToken | null {
   if (caret <= 0 || caret > text.length) return null;
+  // A completed path that needs quoting is written as @"path with spaces".
+  // Keep it as one token so the completion UI does not get confused while the
+  // user is editing the path.
+  if (text[caret - 1] === '"') {
+    const quote = text.lastIndexOf('"', caret - 2);
+    if (quote > 0 && text[quote - 1] === '@' && isMentionBoundary(text, quote - 1)) {
+      return { start: quote - 1, end: caret, query: text.slice(quote + 1, caret - 1) };
+    }
+  }
   let i = caret;
-  while (i > 0 && /[A-Za-z0-9_./~-]/.test(text[i - 1])) i--;
+  while (i > 0 && /[A-Za-z0-9_./~ -]/.test(text[i - 1])) i--;
   if (i === 0 || text[i - 1] !== '@' || !isMentionBoundary(text, i - 1)) return null;
   return { start: i - 1, end: caret, query: text.slice(i, caret) };
 }
@@ -1552,7 +1561,7 @@ function SkillText({ text, commands, asideSupport = false }: { text: string; com
   const parts: React.ReactNode[] = [];
   // Keep the highlight layer in sync with the two kinds of composer tokens:
   // known slash commands and workspace file mentions.
-  const pattern = /\/[A-Za-z0-9_-]+|@[A-Za-z0-9_./~-]+/g;
+  const pattern = /\/[A-Za-z0-9_-]+|@(?:"[^"\n]*"|[A-Za-z0-9_./~-]+)/g;
   let previous = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const start = match.index;
@@ -1732,7 +1741,13 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
 
   const applyFile = (entry: WorkspaceEntry | undefined) => {
     if (!file || !entry) return;
-    const insertion = `@${entry.path}${entry.isDir ? '/' : ' '}`;
+    const path = `${entry.path}${entry.isDir ? '/' : ''}`;
+    // Quotes make the path unambiguous to the agent when it contains a space.
+    // Escape the two characters meaningful inside a double-quoted path too,
+    // since POSIX filenames may legally contain either one.
+    const quoted = /\s/.test(path);
+    const mentionPath = quoted ? `"${path.replace(/([\\"])/g, '\\$1')}"` : path;
+    const insertion = `@${mentionPath}${entry.isDir ? '' : ' '}`;
     const next = text.slice(0, file.start) + insertion + text.slice(file.end);
     setDraft(sessionId, next);
     const pos = file.start + insertion.length;
