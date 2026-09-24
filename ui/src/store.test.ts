@@ -103,6 +103,19 @@ describe('agent ordering', () => {
     expect(useStore.getState().order).toEqual(['two', 'three', 'one']);
   });
 
+  it('keeps an unconfirmed move over a stale daemon order', () => {
+    useStore.setState({ order: ['a', 'b', 'c'] });
+    useStore.getState().reorderAgent('c', 'a', false);
+    expect(useStore.getState().order).toEqual(['c', 'a', 'b']);
+
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'a' }), summary({ id: 'b' }), summary({ id: 'c' })] });
+    expect(useStore.getState().order).toEqual(['c', 'a', 'b']);
+
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'c' }), summary({ id: 'a' }), summary({ id: 'b' })] });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'a' }), summary({ id: 'c' }), summary({ id: 'b' })] });
+    expect(useStore.getState().order).toEqual(['a', 'c', 'b']);
+  });
+
   it('adopts the daemon-reported order', () => {
     useStore.setState({ order: ['a', 'b'] });
     __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'b' }), summary({ id: 'c' }), summary({ id: 'a' })] });

@@ -378,6 +378,36 @@ interface StoreState {
 let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
+
+// Rail moves the daemon has not yet reflected back. An `agents` message built
+// before the move landed (a concurrent broadcast, or a federation master still
+// holding the host's previous snapshot) would otherwise snap the card back
+// until the fresh order arrives, making it flip back and forth. Each move is
+// reapplied over incoming orders until one already satisfies it, or until it
+// expires after the daemon has acknowledged it.
+type PendingReorder = { id: string; targetId: string; after: boolean; expiresAt: number };
+let pendingReorders: PendingReorder[] = [];
+const REORDER_SETTLE_MS = 5000;
+
+function moveInOrder(order: string[], id: string, targetId: string, after: boolean): boolean {
+  const from = order.indexOf(id);
+  if (from < 0 || !order.includes(targetId) || id === targetId) return false;
+  order.splice(from, 1);
+  order.splice(order.indexOf(targetId) + (after ? 1 : 0), 0, id);
+  return true;
+}
+
+function reorderSatisfied(order: string[], move: PendingReorder): boolean {
+  const at = order.indexOf(move.id);
+  const target = order.indexOf(move.targetId);
+  return at < 0 || target < 0 || at === target + (move.after ? 1 : -1);
+}
+
+function applyPendingReorders(order: string[]): void {
+  const now = Date.now();
+  pendingReorders = pendingReorders.filter((move) => move.expiresAt > now && !reorderSatisfied(order, move));
+  for (const move of pendingReorders) moveInOrder(order, move.id, move.targetId, move.after);
+}
 const pendingSpawnOptions = new Map<string, { resolve: (options: SpawnOptions) => void; reject: (error: Error) => void }>();
 const pendingGitRefs = new Map<string, { resolve: (refs: GitRefInfo[]) => void; reject: (error: Error) => void }>();
 const pendingWorkspaceEntries = new Map<string, { resolve: (entries: WorkspaceEntry[]) => void; reject: (error: Error) => void }>();
@@ -587,6 +617,7 @@ export const useStore = create<StoreState>((set, get) => {
           const live = new Set(msg.sessions.map((a) => a.id));
           const order = msg.sessions.map((a) => a.id);
           for (const id of st.order) if (!live.has(id) && sessions[id]) order.push(id);
+          applyPendingReorders(order);
           for (const s of msg.sessions) {
             const prev = sessions[s.id];
             sessions[s.id] = mergeSummary(prev, s);
@@ -1133,18 +1164,20 @@ export const useStore = create<StoreState>((set, get) => {
     },
     reorderAgent: (id, targetId, after) => {
       const order = [...get().order];
-      const from = order.indexOf(id);
-      const target = order.indexOf(targetId);
-      if (from < 0 || target < 0 || from === target) return;
-      order.splice(from, 1);
-      const nextTarget = order.indexOf(targetId);
-      order.splice(nextTarget + (after ? 1 : 0), 0, id);
+      if (!moveInOrder(order, id, targetId, after)) return;
       // Apply optimistically; the daemon persists the move and broadcasts the
       // authoritative order to every browser (and federation master).
       set({ order });
+      const move: PendingReorder = { id, targetId, after, expiresAt: Infinity };
+      pendingReorders.push(move);
       const corrId = nextCorr();
       pendingAcks.set(corrId, (result) => {
-        if (result.error) get().refreshAgents();
+        if (result.error) {
+          pendingReorders = pendingReorders.filter((m) => m !== move);
+          get().refreshAgents();
+          return;
+        }
+        move.expiresAt = Date.now() + REORDER_SETTLE_MS;
       });
       client.send({ t: 'reorder_session', sessionId: id, targetSessionId: targetId, after, corrId });
     },
