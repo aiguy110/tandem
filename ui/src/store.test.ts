@@ -32,11 +32,12 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
-  useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pendingSpawns: [], focusedSpawnId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
+  useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pendingSpawns: [], focusedSpawnId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, dirsStatusByHost: {}, dirsErrorByHost: {}, profilesByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
   localStorage.removeItem('tandem.promptDrafts');
+  localStorage.removeItem('tandem.spawnCache.v1');
 });
 
 function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -442,6 +443,69 @@ describe('pending spawns', () => {
     expect(useStore.getState()).toMatchObject({ focusedId: null, focusedSpawnId: corrId });
     useStore.getState().dismissPendingSpawn(corrId);
     expect(useStore.getState()).toMatchObject({ pendingSpawns: [], focusedSpawnId: null });
+    sendSpy.mockRestore();
+  });
+});
+
+describe('spawn palette data', () => {
+  const repo = (path: string) => ({ path, name: path.split('/').pop() ?? path, currentBranch: 'main', dirty: false, hasLiveAgent: false });
+  const profile = (id: string) => ({ id, name: id, autoNamed: false, agent: 'claude', harness: '', model: '', effort: '', permission: '', snapshotId: '', createdAt: 1, lastUsedAt: 1 });
+  const sentOf = (spy: { mock: { calls: unknown[][] } }, t: string) =>
+    spy.mock.calls.map((c) => c[0] as { t: string; corrId?: string; hostId?: string; all?: boolean }).filter((m) => m.t === t);
+
+  it('tracks a host repo scan from loading through refreshing to ready', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    useStore.getState().refreshHostDirs('worker-1');
+    expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('loading');
+    const [req] = sentOf(sendSpy, 'list_dirs');
+    expect(req.hostId).toBe('worker-1');
+
+    // A daemon answering from its cache while it rescans.
+    __testApplyServerMsg({ t: 'dirs', corrId: req.corrId, dirs: [repo('/r/a')], refreshing: true, hostId: 'worker-1' });
+    expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('refreshing');
+    // The rescan's broadcast (relayed by the master with hostId).
+    __testApplyServerMsg({ t: 'dirs', dirs: [repo('/r/a'), repo('/r/b')], hostId: 'worker-1' });
+    expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('ready');
+    expect(useStore.getState().dirsByHost['worker-1']).toHaveLength(2);
+    // Persisted for the next page load.
+    expect(JSON.parse(localStorage.getItem('tandem.spawnCache.v1') ?? '{}').dirsByHost['worker-1']).toHaveLength(2);
+    sendSpy.mockRestore();
+  });
+
+  it('reports a failed scan instead of an empty list', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    useStore.getState().refreshHostDirs('worker-1');
+    const [req] = sentOf(sendSpy, 'list_dirs');
+    __testApplyServerMsg({ t: 'ack', corrId: req.corrId, error: 'route to "worker-1" is offline' });
+    expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('error');
+    expect(useStore.getState().dirsErrorByHost['worker-1']).toContain('offline');
+    sendSpy.mockRestore();
+  });
+
+  it('caches batch profiles per host and applies broadcasts', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    useStore.getState().refreshProfiles('worker-1');
+    const [req] = sentOf(sendSpy, 'list_profiles');
+    expect(req).toMatchObject({ all: true, hostId: 'worker-1' });
+    __testApplyServerMsg({ t: 'profiles', corrId: req.corrId, hostId: 'worker-1', profiles: [profile('p1')], recentByProject: { '/r/a': ['p1'] } });
+    expect(useStore.getState().profilesByHost['worker-1'].recentByProject['/r/a']).toEqual(['p1']);
+
+    // A spawn elsewhere: the host broadcasts a fresh snapshot.
+    __testApplyServerMsg({ t: 'profiles', hostId: 'worker-1', profiles: [profile('p1'), profile('p2')], recentByProject: { '/r/a': ['p2', 'p1'] } });
+    expect(useStore.getState().profilesByHost['worker-1'].recentByProject['/r/a']).toEqual(['p2', 'p1']);
+    // The local host's cache is untouched by a remote host's broadcast.
+    expect(useStore.getState().profilesByHost[LOCAL_HOST_ID]).toBeUndefined();
+    sendSpy.mockRestore();
+  });
+
+  it('marks a host whose daemon ignores the batch flag as legacy', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    useStore.getState().refreshProfiles('old-host');
+    const [req] = sentOf(sendSpy, 'list_profiles');
+    __testApplyServerMsg({ t: 'profiles', corrId: req.corrId, hostId: 'old-host', profiles: [profile('p1')], recent: [], project: '' });
+    expect(useStore.getState().profilesByHost['old-host'].legacy).toBe(true);
+    // Legacy markers are never persisted: the host may be upgraded.
+    expect(JSON.parse(localStorage.getItem('tandem.spawnCache.v1') ?? '{}').profilesByHost?.['old-host']).toBeUndefined();
     sendSpy.mockRestore();
   });
 });

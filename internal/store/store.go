@@ -1080,6 +1080,25 @@ func (s *Store) ProfileRecency(project string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// AllProfileRecency returns every project's profile ids, most recent first,
+// so a client can render all repos' recent profiles from one query.
+func (s *Store) AllProfileRecency() (map[string][]string, error) {
+	rows, err := s.db.Query("SELECT project, profileId FROM profile_recent ORDER BY project, lastUsedAt DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string][]string)
+	for rows.Next() {
+		var project, id string
+		if err := rows.Scan(&project, &id); err != nil {
+			return nil, err
+		}
+		out[project] = append(out[project], id)
+	}
+	return out, rows.Err()
+}
+
 func scanProfile(row interface{ Scan(...any) error }) (*Profile, error) {
 	var p Profile
 	var auto int

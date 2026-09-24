@@ -111,6 +111,10 @@ export function SpawnPalette() {
   const dirsByHost = useStore((s) => s.dirsByHost);
   const agentCatalogByHost = useStore((s) => s.agentCatalogByHost);
   const refreshHostDirs = useStore((s) => s.refreshHostDirs);
+  const dirsStatusByHost = useStore((s) => s.dirsStatusByHost);
+  const dirsErrorByHost = useStore((s) => s.dirsErrorByHost);
+  const profilesByHost = useStore((s) => s.profilesByHost);
+  const refreshProfiles = useStore((s) => s.refreshProfiles);
   const refreshAgentCatalog = useStore((s) => s.refreshAgentCatalog);
   const spawn = useStore((s) => s.spawn);
   const getSpawnOptions = useStore((s) => s.getSpawnOptions);
@@ -131,6 +135,8 @@ export function SpawnPalette() {
   const selectedHost = hosts.find((host) => host.id === hostId) ?? hosts[0];
   const remote = !!selectedHost && !selectedHost.local && selectedHost.id !== LOCAL_HOST_ID;
   const scopedDirs = remote ? (dirsByHost[hostId] ?? []) : dirs;
+  const dirsStatus = dirsStatusByHost[hostId] ?? 'loading';
+  const dirsError = dirsErrorByHost[hostId] ?? '';
   const snapshots = remote ? remoteSnapshots : localSnapshots;
   const scopedCatalog = remote ? (agentCatalogByHost[hostId] ?? null) : agentCatalog;
   const harnesses = useMemo(() => {
@@ -182,7 +188,16 @@ export function SpawnPalette() {
   const [effort, setEffort] = useState('');
   const [permission, setPermission] = useState('');
   const [snapshot, setSnapshot] = useState('');
+  // Per-repo lists fetched one by one, only for a host whose daemon predates
+  // the batch listing the store keeps in profilesByHost.
   const [profilesByRepo, setProfilesByRepo] = useState<Record<string, { profiles: Profile[]; recent: string[] }>>({});
+  const hostProfiles = profilesByHost[hostId];
+  const legacyProfiles = !!hostProfiles?.legacy;
+  const repoProfiles = (path: string): { profiles: Profile[]; recent: string[] } | undefined => (
+    hostProfiles && !legacyProfiles
+      ? { profiles: hostProfiles.profiles, recent: hostProfiles.recentByProject[path] ?? [] }
+      : profilesByRepo[path]
+  );
   // The repo the advanced form launches into, pinned when the form opens so
   // profile-list refreshes cannot shift it to another row.
   const [chosenDir, setChosenDir] = useState<RepoInfo | null>(null);
@@ -221,6 +236,7 @@ export function SpawnPalette() {
   useEffect(() => {
     refreshHostDirs(hostId);
     refreshAgentCatalog(hostId);
+    refreshProfiles(hostId);
     setQuery('');
     setSel(null);
     setAdvanced(false);
@@ -235,7 +251,7 @@ export function SpawnPalette() {
     setModel('');
     setEffort('');
     setPermission('');
-  }, [hostId, refreshHostDirs, refreshAgentCatalog]);
+  }, [hostId, refreshHostDirs, refreshAgentCatalog, refreshProfiles]);
 
   const filtered = useMemo(() => {
     // Name first: the path's shared ~/Projects prefix otherwise matches every
@@ -248,12 +264,12 @@ export function SpawnPalette() {
     return recent.length > 0 ? recent.slice(0, RECENT_DIRS_MAX) : matched.slice(0, RECENT_DIRS_MAX);
   }, [query, scopedDirs, hostId]);
   const rows = useMemo(() => filtered.flatMap((dir): PaletteRow[] => {
-    const data = profilesByRepo[dir.path];
+    const data = repoProfiles(dir.path);
     const used = data
       ? data.recent.map((id) => data.profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, PROFILES_PER_REPO)
       : [];
     return [{ kind: 'repo', dir }, ...used.map((profile): PaletteRow => ({ kind: 'profile', dir, profile }))];
-  }), [filtered, profilesByRepo]);
+  }), [filtered, profilesByRepo, hostProfiles]);
   useEffect(() => setSel(null), [query]);
   const selIndex = Math.min(sel ?? (rows[1]?.kind === 'profile' ? 1 : 0), Math.max(0, rows.length - 1));
   const selectedRow = rows[selIndex];
@@ -263,7 +279,8 @@ export function SpawnPalette() {
   }, [selIndex]);
   // Profiles are global (the picker searches them all); any repo's cached list
   // is the same set, so prefer the selected repo's freshest copy.
-  const profiles = (selectedDir && profilesByRepo[selectedDir.path]?.profiles) || Object.values(profilesByRepo)[0]?.profiles || [];
+  const profiles = (!legacyProfiles && hostProfiles?.profiles)
+    || (selectedDir && profilesByRepo[selectedDir.path]?.profiles) || Object.values(profilesByRepo)[0]?.profiles || [];
   const selectedHarness = harnesses.find((harness) => harness.id === agent) ?? harnesses[0];
   const selectedGitRef = gitRefs.find((ref) => ref.ref === sourceRef);
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
@@ -359,7 +376,7 @@ export function SpawnPalette() {
     setMenu(null);
     setProfileName('');
     setBaseProfile(base);
-    const data = profilesByRepo[dir.path];
+    const data = repoProfiles(dir.path);
     const seed = base ?? data?.profiles.find((p) => p.id === data.recent[0]);
     if (seed) {
       applyProfile(seed);
@@ -402,8 +419,10 @@ export function SpawnPalette() {
     if (adapter === 'acp' && selectedHarness && !selectedHarness.hasAcp && selectedHarness.hasTerminal) setAdapter('pty');
     if (adapter === 'pty' && selectedHarness && !selectedHarness.hasTerminal && selectedHarness.hasAcp) setAdapter('acp');
   }, [agent, adapter, selectedHarness]);
-  // Prefetch the used-profile lists for every visible repo.
+  // An older host daemon lacks the batch listing: prefetch the used-profile
+  // lists for every visible repo one by one instead.
   useEffect(() => {
+    if (!legacyProfiles) return;
     let cancelled = false;
     const missing = filtered.filter((dir) => !profilesByRepo[dir.path]);
     if (missing.length === 0) return;
@@ -425,7 +444,7 @@ export function SpawnPalette() {
       });
     });
     return () => { cancelled = true; };
-  }, [filtered, profilesByRepo, listProfiles, hostId]);
+  }, [legacyProfiles, filtered, profilesByRepo, listProfiles, hostId]);
   // On advanced open, refresh this repo's profiles + snapshots so the picker
   // reflects any newly-created profiles.
   useEffect(() => {
@@ -434,12 +453,16 @@ export function SpawnPalette() {
     void listSnapshots(hostId).then((list) => {
       if (!cancelled && remote) setRemoteSnapshots(list);
     }).catch(() => {});
+    if (!legacyProfiles) {
+      refreshProfiles(hostId);
+      return () => { cancelled = true; };
+    }
     void listProfiles(selectedDir.path, hostId).then(({ profiles: ps, recent }) => {
       if (cancelled) return;
       setProfilesByRepo((current) => ({ ...current, [selectedDir.path]: { profiles: ps, recent } }));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [advanced, selectedDir?.path, listProfiles, listSnapshots, remote, hostId]);
+  }, [advanced, selectedDir?.path, listProfiles, refreshProfiles, legacyProfiles, listSnapshots, remote, hostId]);
   useEffect(() => {
     if (!advanced || adapter !== 'acp' || !selectedDir) {
       setSpawnOptions(null);
@@ -512,7 +535,7 @@ export function SpawnPalette() {
   const autoName = [selectedHarness?.name ?? agentSlug, tuple.model, tuple.effort, tuple.permission, snapshotLabel]
     .filter((part) => part).join(' · ');
   // Profiles offered by default in the picker: this repo's most-recent 3.
-  const repoRecent = (selectedDir && profilesByRepo[selectedDir.path]?.recent) || [];
+  const repoRecent = (selectedDir && repoProfiles(selectedDir.path)?.recent) || [];
   const recentProfiles = repoRecent.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p).slice(0, 3);
 
   // Spawn in `dir`. `quick` launches that saved profile as-is (a profile row);
@@ -651,6 +674,18 @@ export function SpawnPalette() {
     }
   };
 
+  // Say what the repo list actually knows: an unscanned host is not an empty one.
+  const emptyMessage = scopedDirs.length > 0
+    ? `No repos match “${query}”.`
+    : dirsStatus === 'error'
+      ? `Couldn't list repos: ${dirsError}`
+      : dirsStatus === 'ready'
+        ? 'No git repos found under TANDEM_PROJECT_ROOTS.'
+        : 'Scanning project roots for git repos…';
+  const dirsNotice = dirsStatus === 'error'
+    ? `Couldn't refresh repos (${dirsError}); showing the last known list.`
+    : dirsStatus === 'cached' || dirsStatus === 'refreshing' ? 'Refreshing repo list…' : '';
+
   return (
     <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setModal('none')}>
       <div className="modal" onKeyDown={onKey}>
@@ -685,7 +720,8 @@ export function SpawnPalette() {
               />
             )}
             <div className="rows" ref={rowsRef}>
-              {filtered.length === 0 && <div className="empty">No git repos found under TANDEM_PROJECT_ROOTS.</div>}
+              {filtered.length === 0 && <div className="empty">{emptyMessage}</div>}
+              {filtered.length > 0 && dirsNotice && <div className="spawn-scan-note">{dirsNotice}</div>}
               {rows.map((row, i) => row.kind === 'repo' ? (
                 <div
                   key={row.dir.path}

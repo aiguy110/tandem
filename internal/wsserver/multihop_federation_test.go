@@ -21,6 +21,8 @@ type topologyFederation struct {
 	mu         sync.Mutex
 	calls      []topologyFederationCall
 	subscriber func(string, json.RawMessage)
+	// dirsGate, when set, holds a routed list_dirs until closed.
+	dirsGate chan struct{}
 }
 
 type topologyFederationCall struct {
@@ -48,6 +50,11 @@ func (f *topologyFederation) Call(_ context.Context, hostID string, payload json
 	}
 	_ = json.Unmarshal(payload, &command)
 	switch command.T {
+	case "list_dirs":
+		if f.dirsGate != nil {
+			<-f.dirsGate
+		}
+		return json.RawMessage(`{"t":"dirs","dirs":[{"path":"/remote","name":"remote"}],"refreshing":true}`), nil
 	case "spawn_agent":
 		return json.RawMessage(`{"t":"ack","agentId":"leaf-agent"}`), nil
 	case "subscribe":
@@ -137,5 +144,39 @@ func TestFederationRoutesDescendantHostCommandsAndEvents(t *testing.T) {
 	got = recv(t, c)
 	if got["t"] != "transcript" || got["sessionId"] != remoteID || got["agentId"] != remoteID || got["hostId"] != leafID {
 		t.Fatalf("descendant event = %#v", got)
+	}
+}
+
+// A slave's repository scan can be slow; routing list_dirs must not stall the
+// browser's other commands, and the slave's later broadcast of the refreshed
+// scan must reach the browser attributed to that host.
+func TestFederationListDirsIsAsyncAndRelaysRefresh(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	const hostID = "slave-1"
+	fed := &topologyFederation{
+		hosts:    []federation.Host{{ID: hostID, NodeID: hostID, Name: "slave", Status: "connected", Depth: 1, Route: []string{hostID}}},
+		dirsGate: make(chan struct{}),
+	}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+	t.Cleanup(func() { _ = c.Close() })
+
+	send(t, c, map[string]any{"t": "list_dirs", "hostId": hostID, "corrId": "remote-dirs"})
+	send(t, c, map[string]any{"t": "list_agents", "corrId": "agents"})
+	if got := recv(t, c); got["t"] != "agents" || got["corrId"] != "agents" {
+		t.Fatalf("expected agents while the remote scan is pending, got %#v", got)
+	}
+	close(fed.dirsGate)
+	got := recv(t, c)
+	if got["t"] != "dirs" || got["corrId"] != "remote-dirs" || got["hostId"] != hostID || got["refreshing"] != true {
+		t.Fatalf("remote dirs = %#v", got)
+	}
+	fed.emit(hostID, json.RawMessage(`{"t":"dirs","dirs":[{"path":"/remote","name":"remote"},{"path":"/new","name":"new"}]}`))
+	got = recv(t, c)
+	if got["t"] != "dirs" || got["hostId"] != hostID || len(got["dirs"].([]any)) != 2 {
+		t.Fatalf("relayed refresh = %#v", got)
 	}
 }

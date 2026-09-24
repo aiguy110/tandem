@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Kind string
@@ -816,25 +817,50 @@ var skipDirs = map[string]bool{"node_modules": true, "dist": true, "build": true
 func ListRepos(ctx context.Context, roots []string, depth int, live func(string) bool) ([]RepoInfo, error) {
 	return ListReposWith(ctx, GitRunner{}, roots, depth, live)
 }
+
+// repoInspectWorkers bounds concurrent git calls while inspecting found
+// repositories; serially, a few dozen repos cost seconds after a restart.
+const repoInspectWorkers = 8
+
 func ListReposWith(ctx context.Context, git GitRunner, roots []string, depth int, live func(string) bool) ([]RepoInfo, error) {
-	var out []RepoInfo
+	var paths []string
 	seen := map[string]bool{}
 	for _, root := range roots {
-		dirs := findGitRepos(ctx, root, depth)
-		for _, dir := range dirs {
+		for _, dir := range findGitRepos(ctx, root, depth) {
 			real, e := filepath.Abs(dir)
 			if e != nil || seen[real] {
 				continue
 			}
 			seen[real] = true
-			branch, _ := git.Run(ctx, real, "rev-parse", "--abbrev-ref", "HEAD")
-			status, _ := git.Run(ctx, real, "status", "--porcelain")
-			occupied := false
-			if live != nil {
-				occupied = live(real)
-			}
-			out = append(out, RepoInfo{real, filepath.Base(real), branch, status != "", occupied})
+			paths = append(paths, real)
 		}
+	}
+	out := make([]RepoInfo, len(paths))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < min(repoInspectWorkers, len(paths)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				real := paths[i]
+				branch, _ := git.Run(ctx, real, "rev-parse", "--abbrev-ref", "HEAD")
+				status, _ := git.Run(ctx, real, "status", "--porcelain")
+				occupied := false
+				if live != nil {
+					occupied = live(real)
+				}
+				out[i] = RepoInfo{real, filepath.Base(real), branch, status != "", occupied}
+			}
+		}()
+	}
+	for i := range paths {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	if len(out) == 0 {
+		return nil, nil
 	}
 	return out, nil
 }

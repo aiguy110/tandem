@@ -146,6 +146,7 @@ type Handler struct {
 	// browsers see so a host's update prompt is visible — and actionable —
 	// from mission control.
 	remoteNotifications map[string][]notifications.Notification
+	dirs                dirsCache
 }
 
 func (h *Handler) federationHosts() []federation.Host {
@@ -352,6 +353,7 @@ type clientMessage struct {
 	PositionMs        int64                      `json:"positionMs"`
 	NotificationID    string                     `json:"notificationId"`
 	HostID            string                     `json:"hostId"`
+	All               bool                       `json:"all"`
 	AssetID           string                     `json:"assetId"`
 	MIMEType          string                     `json:"mimeType"`
 	Version           string                     `json:"version"`
@@ -739,6 +741,12 @@ func (c *connection) handle(m clientMessage) {
 		m.TargetSessionID = targetID
 	}
 	if m.HostID != "" {
+		if asyncForwards[m.T] {
+			// Read-only listings may take a slave a while (a repository scan);
+			// they must not stall this browser's other commands meanwhile.
+			go c.forwardFederation(m)
+			return
+		}
 		c.forwardFederation(m)
 		return
 	}
@@ -751,15 +759,9 @@ func (c *connection) handle(m clientMessage) {
 		sessions := c.server.sessionSummaries()
 		c.send(withCorr(map[string]any{"t": "agents", "sessions": sessions, "agents": sessions}, m.CorrID))
 	case "list_dirs":
-		dirs, err := c.server.opts.Registry.ListDirs(context.Background())
-		if err != nil {
-			c.send(withCorr(map[string]any{"t": "ack", "error": err.Error()}, m.CorrID))
-			return
-		}
-		if dirs == nil {
-			dirs = []workspace.RepoInfo{}
-		}
-		c.send(withCorr(map[string]any{"t": "dirs", "dirs": dirs}, m.CorrID))
+		// Scanning every project root can take seconds; answer off the read
+		// loop so this connection's other commands are not queued behind it.
+		go c.listDirs(m)
 	case "list_workspace_entries":
 		if m.SessionID == "" {
 			c.send(withCorr(map[string]any{"t": "workspace_entries", "error": "sessionId is required"}, m.CorrID))
@@ -1120,6 +1122,8 @@ func (c *connection) handle(m clientMessage) {
 			c.server.broadcastAgents()
 		}
 		c.commandAck(m, sess.ID)
+		// The spawn recorded a profile use; refresh every cached palette.
+		c.server.broadcastProfiles("spawn_agent")
 	case "list_system_notifications":
 		// Pick up any host that connected before this master cached its
 		// notifications; the reply below carries whatever is already known.
@@ -1201,6 +1205,16 @@ func (c *connection) handle(m clientMessage) {
 		snaps, _ := c.server.opts.Registry.ListSnapshots()
 		c.send(withCorr(map[string]any{"t": "snapshots", "snapshots": snaps}, m.CorrID))
 	case "list_profiles":
+		if m.All {
+			// Older daemons ignore "all" and answer the per-project form
+			// below; clients detect that by the missing recentByProject.
+			if msg, err := c.server.allProfilesMessage(); err == nil {
+				c.send(withCorr(msg, m.CorrID))
+				return
+			} else {
+				slog.Warn("batch profile listing failed; answering per-project", "error", err)
+			}
+		}
 		profiles, recent, err := c.server.opts.Registry.ListProfiles(m.Project)
 		if err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
@@ -1214,6 +1228,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+		c.server.broadcastProfiles("rename_profile")
 	case "reorder_session":
 		if err := c.server.opts.Registry.Reorder(m.SessionID, m.TargetSessionID, m.After); err != nil {
 			c.commandError(m, err)
@@ -1262,6 +1277,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+		c.server.broadcastProfiles("forget_profile")
 	case "delete_profile":
 		if err := c.server.opts.Registry.DeleteProfile(m.ID); err != nil {
 			c.send(withCorr(map[string]any{"t": "profiles", "error": err.Error()}, m.CorrID))
@@ -1269,6 +1285,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		profiles, recent, _ := c.server.opts.Registry.ListProfiles(m.Project)
 		c.send(withCorr(map[string]any{"t": "profiles", "profiles": profiles, "recent": recent, "project": m.Project}, m.CorrID))
+		c.server.broadcastProfiles("delete_profile")
 	case "get_close_preview":
 		preview, err := c.server.opts.Registry.ClosePreview(context.Background(), m.SessionID)
 		if err != nil {
@@ -1453,6 +1470,11 @@ func (c *connection) handle(m clientMessage) {
 // forwardFederation carries a host-qualified browser request over the
 // persistent slave tunnel. The slave's loopback bridge returns the ordinary
 // browser response unchanged, which preserves commands added after this code.
+// asyncForwards are read-only listings routed to a remote host concurrently
+// with the connection's other commands. Their replies are correlated or
+// idempotent snapshots, so reordering them is harmless.
+var asyncForwards = map[string]bool{"list_dirs": true, "list_profiles": true, "list_agent_catalog": true}
+
 func (c *connection) forwardFederation(m clientMessage) {
 	if c.server.opts.Federation == nil {
 		c.commandError(m, errors.New("remote hosts are unavailable"))

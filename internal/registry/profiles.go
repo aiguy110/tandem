@@ -210,6 +210,20 @@ func (r *Registry) ListProfiles(project string) ([]store.Profile, []string, erro
 	return profiles, recent, nil
 }
 
+// ListAllProfiles returns all profiles plus every project's recency list, the
+// batch form of ListProfiles used to fill the spawn palette in one round trip.
+func (r *Registry) ListAllProfiles() ([]store.Profile, map[string][]string, error) {
+	profiles, err := r.store.ListProfiles()
+	if err != nil {
+		return nil, nil, err
+	}
+	recent, err := r.store.AllProfileRecency()
+	if err != nil {
+		return nil, nil, err
+	}
+	return profiles, recent, nil
+}
+
 // RenameProfile gives a profile a user-chosen name (clearing auto-named).
 func (r *Registry) RenameProfile(id, name string) error {
 	name = strings.TrimSpace(name)
