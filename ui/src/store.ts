@@ -12,6 +12,7 @@ import { shellHub } from './terminal/shellHub';
 import { browserHub } from './terminal/browserHub';
 import { frontendVersion } from './version';
 import { loadAppearance, saveAppearance, type Appearance } from './appearance';
+import { loadSpawnCache, saveSpawnCache, type DirsStatus, type HostProfiles } from './spawnCache';
 import type {
   SessionStatus,
   SessionSummary,
@@ -255,6 +256,13 @@ interface StoreState {
   // local aliases so existing consumers and older daemons need no migration.
   hosts: FederationHost[];
   dirsByHost: Record<string, RepoInfo[]>;
+  // Whether each host's repo list is known, being scanned, or failed, so the
+  // spawn palette never presents "not scanned yet" as "no repos".
+  dirsStatusByHost: Record<string, DirsStatus>;
+  dirsErrorByHost: Record<string, string>;
+  // Every profile plus each project's recency, per host, kept current by
+  // daemon broadcasts so the palette renders recent profiles immediately.
+  profilesByHost: Record<string, HostProfiles>;
   agentCatalogByHost: Record<string, AgentCatalog | null>;
   // Captured browser snapshots (seed states), refreshed on demand.
   snapshots: BrowserSnapshot[];
@@ -312,8 +320,8 @@ interface StoreState {
   // flush-on-teardown schedule. `seq: 0` means "no active section" and clears
   // the daemon's stored position. Throttling is the caller's responsibility.
   setAudioPosition: (sessionId: string, seq: number, positionMs: number) => void;
-  refreshDirs: () => void;
   refreshHostDirs: (hostId: string) => void;
+  refreshProfiles: (hostId: string) => void;
   refreshHosts: () => void;
   refreshAgentCatalog: (hostId: string) => void;
   refreshAgents: () => void;
@@ -414,6 +422,13 @@ const pendingWorkspaceEntries = new Map<string, { resolve: (entries: WorkspaceEn
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
 const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
+// list_dirs / batch list_profiles requests in flight, by corrId → host.
+const pendingDirs = new Map<string, string>();
+const pendingAllProfiles = new Map<string, string>();
+// A 'refreshing' list whose confirming broadcast never arrives (dropped relay
+// event, failed rescan) stops claiming to refresh after this long.
+const DIRS_REFRESH_GIVE_UP_MS = 60_000;
+const dirsRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
 const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
 const pendingAutomation = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
@@ -640,15 +655,36 @@ export const useStore = create<StoreState>((set, get) => {
         for (const id of newlyDiscovered) subscribeAgent(id);
         return;
       }
-      case 'dirs':
+      case 'dirs': {
+        const requested = msg.corrId ? pendingDirs.get(msg.corrId) : undefined;
+        if (msg.corrId) pendingDirs.delete(msg.corrId);
+        // A forwarded reply carries the remote hostId; a local one carries
+        // none, so fall back to the host this corrId was sent for.
+        const hostId = msg.hostId ?? requested ?? LOCAL_HOST_ID;
+        clearTimeout(dirsRefreshTimers.get(hostId));
+        dirsRefreshTimers.delete(hostId);
+        if (msg.refreshing) {
+          dirsRefreshTimers.set(hostId, setTimeout(() => {
+            dirsRefreshTimers.delete(hostId);
+            set((st) => (st.dirsStatusByHost[hostId] === 'refreshing'
+              ? { dirsStatusByHost: { ...st.dirsStatusByHost, [hostId]: 'ready' } }
+              : st));
+          }, DIRS_REFRESH_GIVE_UP_MS));
+        }
         set((st) => {
-          const hostId = msg.hostId ?? LOCAL_HOST_ID;
+          const dirsByHost = { ...st.dirsByHost, [hostId]: msg.dirs };
+          saveSpawnCache(dirsByHost, st.profilesByHost);
+          const dirsErrorByHost = { ...st.dirsErrorByHost };
+          delete dirsErrorByHost[hostId];
           return {
             dirs: isLocalHost(hostId) ? msg.dirs : st.dirs,
-            dirsByHost: { ...st.dirsByHost, [hostId]: msg.dirs },
+            dirsByHost,
+            dirsStatusByHost: { ...st.dirsStatusByHost, [hostId]: msg.refreshing ? 'refreshing' : 'ready' },
+            dirsErrorByHost,
           };
         });
         return;
+      }
       case 'git_refs': {
         const pending = msg.corrId ? pendingGitRefs.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -713,11 +749,37 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'profiles': {
+        const requestedAll = msg.corrId ? pendingAllProfiles.get(msg.corrId) : undefined;
+        if (msg.corrId) pendingAllProfiles.delete(msg.corrId);
+        const hostId = msg.hostId ?? requestedAll ?? LOCAL_HOST_ID;
         const pending = msg.corrId ? pendingProfiles.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
           pendingProfiles.delete(msg.corrId);
           if (msg.error || !msg.profiles) pending.reject(new Error(msg.error ?? 'profiles unavailable'));
           else pending.resolve({ profiles: msg.profiles, recent: msg.recent ?? [] });
+        }
+        if (msg.error || !msg.profiles) break;
+        const profiles = msg.profiles;
+        let next: HostProfiles | undefined;
+        if (msg.recentByProject) {
+          // A batch snapshot: a reply to refreshProfiles or a daemon broadcast
+          // after a spawn or profile edit (relayed with hostId by a master).
+          next = { profiles, recentByProject: msg.recentByProject };
+        } else if (requestedAll !== undefined) {
+          // An older daemon ignored `all`; the palette asks per repo instead.
+          next = { profiles, recentByProject: get().profilesByHost[hostId]?.recentByProject ?? {}, legacy: true };
+        } else if (pending && msg.project) {
+          // A per-project reply (forget/rename/delete) patches that project.
+          const current = get().profilesByHost[hostId];
+          if (current) next = { ...current, profiles, recentByProject: { ...current.recentByProject, [msg.project]: msg.recent ?? [] } };
+        }
+        if (next) {
+          const entry = next;
+          set((st) => {
+            const profilesByHost = { ...st.profilesByHost, [hostId]: entry };
+            saveSpawnCache(st.dirsByHost, profilesByHost);
+            return { profilesByHost };
+          });
         }
         break;
       }
@@ -808,6 +870,21 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'ack': {
+        const dirsHost = msg.corrId ? pendingDirs.get(msg.corrId) : undefined;
+        if (msg.corrId && dirsHost !== undefined) {
+          pendingDirs.delete(msg.corrId);
+          const error = msg.error ?? 'repository list unavailable';
+          set((st) => ({
+            dirsStatusByHost: { ...st.dirsStatusByHost, [dirsHost]: 'error' },
+            dirsErrorByHost: { ...st.dirsErrorByHost, [dirsHost]: error },
+          }));
+          return;
+        }
+        if (msg.corrId && pendingAllProfiles.has(msg.corrId)) {
+          // An unreachable host: keep whatever profiles are cached.
+          pendingAllProfiles.delete(msg.corrId);
+          return;
+        }
         if (msg.corrId && pendingAcks.has(msg.corrId)) {
           pendingAcks.get(msg.corrId)!({
             sessionId: msg.sessionId,
@@ -1041,6 +1118,7 @@ export const useStore = create<StoreState>((set, get) => {
     }
   };
   applyServerMsg = apply;
+  const spawnCache = loadSpawnCache();
 
   client = new WsClient({
     onMessage: apply,
@@ -1055,6 +1133,9 @@ export const useStore = create<StoreState>((set, get) => {
       client.send({ t: 'list_agent_catalog' });
       client.send({ t: 'list_hosts' });
       client.send({ t: 'list_system_notifications' });
+      // Warm the spawn palette so pressing C opens it populated.
+      get().refreshHostDirs(LOCAL_HOST_ID);
+      get().refreshProfiles(LOCAL_HOST_ID);
       // Also re-subscribe to anything we already track, immediately (idempotent).
       for (const id of get().order) subscribeAgent(id);
     },
@@ -1086,10 +1167,13 @@ export const useStore = create<StoreState>((set, get) => {
     spawnHostId: null,
     fleetFocusHostId: null,
     inspectorOpen: false,
-    dirs: [],
+    dirs: spawnCache.dirsByHost[LOCAL_HOST_ID] ?? [],
     agentCatalog: null,
     hosts: normalizedHosts([]),
-    dirsByHost: {},
+    dirsByHost: spawnCache.dirsByHost,
+    dirsStatusByHost: Object.fromEntries(Object.keys(spawnCache.dirsByHost).map((hostId) => [hostId, 'cached' as DirsStatus])),
+    dirsErrorByHost: {},
+    profilesByHost: spawnCache.profilesByHost,
     agentCatalogByHost: {},
     snapshots: [],
     automationJobs: [],
@@ -1237,11 +1321,9 @@ export const useStore = create<StoreState>((set, get) => {
 	toggleSessionsRail: () => set((st) => ({ sessionsRailCollapsed: !st.sessionsRailCollapsed })),
     toggleApprovalsRail: () => set((st) => ({ approvalsRailCollapsed: !st.approvalsRailCollapsed })),
     setModal: (m) => {
-      if (m === 'spawn') {
-        get().refreshDirs();
-        client.send({ t: 'list_agent_catalog' });
-        get().refreshHosts();
-      }
+      // The spawn palette requests its host's dirs, catalog, and profiles
+      // itself on mount (host-scoped), so only the host list is needed here.
+      if (m === 'spawn') get().refreshHosts();
       if (m === 'fleet') get().refreshHosts();
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
@@ -1266,8 +1348,22 @@ export const useStore = create<StoreState>((set, get) => {
       if (agent) client.send({ t: 'set_audio_enabled', sessionId, enabled: !agent.audioOnTurnEnd });
     },
     setAudioPosition: (sessionId, seq, positionMs) => client.send({ t: 'set_audio_position', sessionId, seq, positionMs }),
-    refreshDirs: () => client.send({ t: 'list_dirs' }),
-    refreshHostDirs: (hostId) => client.send(isLocalHost(hostId) ? { t: 'list_dirs' } : { t: 'list_dirs', hostId }),
+    refreshHostDirs: (hostId) => {
+      const corrId = nextCorr();
+      pendingDirs.set(corrId, hostId);
+      set((st) => {
+        const status = st.dirsStatusByHost[hostId];
+        // A shown list stays visible (marked refreshing) while the daemon answers.
+        const next: DirsStatus = !st.dirsByHost[hostId] ? 'loading' : status === 'cached' || status === 'refreshing' ? status : 'ready';
+        return { dirsStatusByHost: { ...st.dirsStatusByHost, [hostId]: next } };
+      });
+      client.send(isLocalHost(hostId) ? { t: 'list_dirs', corrId } : { t: 'list_dirs', hostId, corrId });
+    },
+    refreshProfiles: (hostId) => {
+      const corrId = nextCorr();
+      pendingAllProfiles.set(corrId, hostId);
+      client.send(isLocalHost(hostId) ? { t: 'list_profiles', all: true, corrId } : { t: 'list_profiles', all: true, hostId, corrId });
+    },
     refreshHosts: () => client.send({ t: 'list_hosts' }),
     refreshAgentCatalog: (hostId) => client.send(isLocalHost(hostId) ? { t: 'list_agent_catalog' } : { t: 'list_agent_catalog', hostId }),
     refreshAgents: () => client.send({ t: 'list_agents' }),

@@ -79,6 +79,13 @@ func TestProfileResolveRenameRecency(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(recent, []string{"prof-1", "prof-2"}) {
 		t.Fatalf("ProfileRecency = %v, %v", recent, err)
 	}
+	if err := s.TouchProfile("prof-2", "/repo/c"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.AllProfileRecency()
+	if err != nil || !reflect.DeepEqual(all, map[string][]string{"/repo/a": {"prof-1", "prof-2"}, "/repo/c": {"prof-2"}}) {
+		t.Fatalf("AllProfileRecency = %v, %v", all, err)
+	}
 	// A different project has no recency.
 	if other, _ := s.ProfileRecency("/repo/b"); len(other) != 0 {
 		t.Fatalf("expected empty recency, got %v", other)

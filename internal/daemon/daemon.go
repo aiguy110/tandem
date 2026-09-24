@@ -425,6 +425,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
+	// Scan project roots now, not when the spawn palette first asks, so it
+	// opens populated; the result is pushed to browsers that are connected.
+	handler.WarmDirs()
 	if runOpts.MasterURL != "" {
 		go func() {
 			if federationErr := federationService.RunSlave(ctx); federationErr != nil && ctx.Err() == nil {

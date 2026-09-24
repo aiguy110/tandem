@@ -480,7 +480,7 @@ export type ClientMsg =
   | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; hostId?: string; corrId?: string }
   | { t: 'delete_snapshot'; id: string; corrId?: string }
-  | { t: 'list_profiles'; project?: string; hostId?: string; corrId?: string }
+  | { t: 'list_profiles'; project?: string; all?: boolean; hostId?: string; corrId?: string }
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
   | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
@@ -544,12 +544,12 @@ export type ServerMsg =
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
-  | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; hostId?: string }
+  | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; refreshing?: boolean; hostId?: string }
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string; hostId?: string }
   | { t: 'spawn_options'; corrId?: string; options?: SpawnOptions; error?: string; hostId?: string }
   | { t: 'snapshots'; corrId?: string; snapshots?: BrowserSnapshot[]; captured?: BrowserSnapshot; error?: string; hostId?: string }
-  | { t: 'profiles'; corrId?: string; profiles?: Profile[]; recent?: string[]; project?: string; error?: string }
+  | { t: 'profiles'; corrId?: string; profiles?: Profile[]; recent?: string[]; recentByProject?: Record<string, string[]>; project?: string; error?: string; hostId?: string }
   | { t: 'close_preview'; corrId?: string; preview?: ClosePreview; error?: string }
   | { t: 'diff'; corrId?: string; diff?: WorkspaceDiff; error?: string }
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog; hostId?: string }

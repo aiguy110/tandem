@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,6 +83,9 @@ type testBackend struct {
 	annotations    map[string][]store.Annotation
 	audioPositions map[string]store.AudioPosition
 	now            func() int64
+	// dirsGate, when set, holds ListDirs until closed; dirsCalls counts scans.
+	dirsGate  chan struct{}
+	dirsCalls atomic.Int32
 }
 
 type inertBrowserDriver struct{}
@@ -102,7 +106,11 @@ func (b *testBackend) Get(id string) *session.Session {
 func (*testBackend) Summaries(context.Context) []registry.Summary {
 	return []registry.Summary{{ID: "a", Name: "a", ControlMode: "transcript"}}
 }
-func (*testBackend) ListDirs(context.Context) ([]workspace.RepoInfo, error) {
+func (b *testBackend) ListDirs(context.Context) ([]workspace.RepoInfo, error) {
+	b.dirsCalls.Add(1)
+	if b.dirsGate != nil {
+		<-b.dirsGate
+	}
 	return []workspace.RepoInfo{{Path: "/repo", Name: "repo"}}, nil
 }
 func (*testBackend) ListWorkspaceEntries(context.Context, string, string) ([]registry.WorkspaceEntry, error) {
@@ -194,9 +202,12 @@ func (b *testBackend) DeleteSnapshot(string) error                            { 
 func (b *testBackend) RestartBrowser(context.Context, string, string) error   { return nil }
 func (b *testBackend) RestartHarness(context.Context, string) error           { return nil }
 func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
-func (b *testBackend) RenameProfile(string, string) error                     { return nil }
-func (b *testBackend) DeleteProfile(string) error                             { return nil }
-func (b *testBackend) ForgetProfile(string, string) error                     { return nil }
+func (b *testBackend) ListAllProfiles() ([]store.Profile, map[string][]string, error) {
+	return []store.Profile{{ID: "p1", Name: "one"}}, map[string][]string{"/repo": {"p1"}}, nil
+}
+func (b *testBackend) RenameProfile(string, string) error { return nil }
+func (b *testBackend) DeleteProfile(string) error         { return nil }
+func (b *testBackend) ForgetProfile(string, string) error { return nil }
 func (*testBackend) ResumeCatalog(context.Context) (registry.ResumeCatalog, error) {
 	return registry.ResumeCatalog{Sessions: []registry.ResumableSession{{
 		SessionID: "vendor-session", Source: "history", Agent: "codex",
@@ -850,6 +861,10 @@ func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
 			t.Fatalf("command %#v: %#v", command, got)
 		}
 	}
+	// A spawn records a profile use, so every client gets the fresh profiles.
+	if got := recv(t, c); got["t"] != "profiles" || got["recentByProject"] == nil {
+		t.Fatalf("post-spawn profiles broadcast %#v", got)
+	}
 	send(t, c, map[string]any{"t": "get_spawn_options", "agent": "codex", "cwd": "/repo", "corrId": "options"})
 	if got := recv(t, c); got["t"] != "spawn_options" || got["corrId"] != "options" || got["options"] == nil {
 		t.Fatalf("spawn options %#v", got)
@@ -1061,8 +1076,8 @@ func TestSetAudioPositionPersistsAndBroadcastsWithoutEchoingSender(t *testing.T)
 	if ack := recv(t, one); ack["t"] != "ack" || ack["corrId"] != "pos1" || ack["error"] != nil {
 		t.Fatalf("set_audio_position ack=%#v", ack)
 	}
-	send(t, one, map[string]any{"t": "list_dirs", "corrId": "probe"})
-	if msg := recv(t, one); msg["t"] != "dirs" || msg["corrId"] != "probe" {
+	send(t, one, map[string]any{"t": "list_profiles", "corrId": "probe"})
+	if msg := recv(t, one); msg["t"] != "profiles" || msg["corrId"] != "probe" {
 		t.Fatalf("expected the probe's own reply next (no echoed broadcast in between): %#v", msg)
 	}
 
@@ -1441,5 +1456,61 @@ func TestRemoteSessionIDRoundTrip(t *testing.T) {
 		if _, _, ok := SplitRemoteSessionID(bad); ok {
 			t.Fatalf("%q parsed as a federated ID", bad)
 		}
+	}
+}
+
+func TestListDirsScanDoesNotBlockConnection(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	b.dirsGate = make(chan struct{})
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "list_dirs", "corrId": "dirs"})
+	// A slow scan must not queue the connection's other commands behind it.
+	send(t, c, map[string]any{"t": "list_profiles", "all": true, "corrId": "profiles"})
+	got := recv(t, c)
+	if got["t"] != "profiles" || got["corrId"] != "profiles" {
+		t.Fatalf("expected profiles before the gated scan finished, got %#v", got)
+	}
+	recent, _ := got["recentByProject"].(map[string]any)
+	if ids, _ := recent["/repo"].([]any); len(ids) != 1 || ids[0] != "p1" {
+		t.Fatalf("recentByProject=%#v", got["recentByProject"])
+	}
+	close(b.dirsGate)
+	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != "dirs" || got["refreshing"] != nil {
+		t.Fatalf("dirs=%#v", got)
+	}
+	// Within the freshness window the cached scan answers without rescanning.
+	send(t, c, map[string]any{"t": "list_dirs", "corrId": "again"})
+	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != "again" || got["refreshing"] != nil {
+		t.Fatalf("cached dirs=%#v", got)
+	}
+	if n := b.dirsCalls.Load(); n != 1 {
+		t.Fatalf("scans=%d, want 1", n)
+	}
+}
+
+func TestStaleDirsAnswerFromCacheThenBroadcastRefresh(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	c, peer := dial(t, url), dial(t, url)
+	send(t, c, map[string]any{"t": "list_dirs", "corrId": "first"})
+	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != "first" {
+		t.Fatalf("first=%#v", got)
+	}
+	// The first scan is broadcast to other clients so they need not ask.
+	if got := recv(t, peer); got["t"] != "dirs" || got["corrId"] != nil {
+		t.Fatalf("peer broadcast=%#v", got)
+	}
+	// Treat every completed scan as stale from here on.
+	saved := dirsFreshFor
+	dirsFreshFor = 0
+	t.Cleanup(func() { dirsFreshFor = saved })
+	send(t, c, map[string]any{"t": "list_dirs", "corrId": "stale"})
+	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != "stale" || got["refreshing"] != true {
+		t.Fatalf("stale=%#v", got)
+	}
+	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != nil || got["refreshing"] != nil {
+		t.Fatalf("refresh broadcast=%#v", got)
+	}
+	if n := b.dirsCalls.Load(); n != 2 {
+		t.Fatalf("scans=%d, want 2", n)
 	}
 }
