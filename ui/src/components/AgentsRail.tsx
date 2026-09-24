@@ -64,6 +64,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const [closeError, setCloseError] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  const [contextMenuDismissal, setContextMenuDismissal] = useState<{ id: string; token: number } | null>(null);
+  const dismissContextMenuAfterReorder = (id: string) => {
+    setContextMenuDismissal((previous) => ({ id, token: (previous?.token ?? 0) + 1 }));
+  };
   // A drop rewrites the order and React repaints every affected row in its new
   // place in one frame, which reads as the cards teleporting. FLIP the rail
   // instead: measure where the rows sit before the reorder, then after the
@@ -269,6 +273,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onRestartHarness={() => restartHarness(id)}
                   dragging={id === draggedId}
                   dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
+                  dismissContextMenuToken={contextMenuDismissal?.id === id ? contextMenuDismissal.token : 0}
                   onDragStart={() => setDraggedId(id)}
                   onDragOver={(after) => setDropTarget(resolveDrop(id, after))}
                   onDrop={(after) => {
@@ -276,6 +281,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                     if (draggedId && drop) {
                       captureRowTops(draggedId);
                       reorderAgent(draggedId, drop.id, drop.after);
+                      dismissContextMenuAfterReorder(draggedId);
                     }
                     setDraggedId(null);
                     setDropTarget(null);
@@ -302,6 +308,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               if (draggedId && drop) {
                 captureRowTops(draggedId);
                 reorderAgent(draggedId, drop.id, drop.after);
+                dismissContextMenuAfterReorder(draggedId);
               }
               setDraggedId(null);
               setDropTarget(null);
@@ -537,6 +544,7 @@ function Row({
   onRestartHarness,
   dragging,
   dropPosition,
+  dismissContextMenuToken,
   onDragStart,
   onDragOver,
   onDrop,
@@ -553,6 +561,7 @@ function Row({
   onRestartHarness: () => Promise<{ error?: string }>;
   dragging: boolean;
   dropPosition: 'before' | 'after' | null;
+  dismissContextMenuToken: number;
   onDragStart: () => void;
   onDragOver: (after: boolean) => void;
   onDrop: (after: boolean) => void;
@@ -577,6 +586,7 @@ function Row({
   // sequence. Ignore that trailing event so a successful reorder cannot leave
   // an actions menu behind.
   const suppressContextMenuUntil = useRef(0);
+  const lastContextMenuDismissal = useRef(dismissContextMenuToken);
   const badge = agentBadge(agent);
   const ws = agent.workspace;
   const branch = ws.branch || (ws.kind === 'existing' ? 'no-branch' : '');
@@ -669,6 +679,12 @@ function Row({
     longPress.current = null;
   };
   useEffect(() => cancelLongPress, []);
+  useLayoutEffect(() => {
+    if (!dismissContextMenuToken || dismissContextMenuToken === lastContextMenuDismissal.current) return;
+    lastContextMenuDismissal.current = dismissContextMenuToken;
+    setContextMenu(null);
+    suppressContextMenuUntil.current = Date.now() + 750;
+  }, [dismissContextMenuToken]);
   return (
     <div
       ref={rowRef}
@@ -707,8 +723,6 @@ function Row({
       onPointerCancel={cancelLongPress}
       onDragStart={(event) => {
         cancelLongPress();
-        setContextMenu(null);
-        suppressContextMenuUntil.current = Date.now() + 750;
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', agent.id);
         onDragStart();
@@ -726,7 +740,6 @@ function Row({
       }}
       onDragEnd={() => {
         cancelLongPress();
-        setContextMenu(null);
         onDragEnd();
       }}
       onContextMenu={(event) => {
