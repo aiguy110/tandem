@@ -719,6 +719,38 @@ describe('TranscriptPane annotations', () => {
     );
   });
 
+  it('keeps a native selection anchored when a row already has a highlighted annotation', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent() },
+      order: ['session-1'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [{ id: 'a1', sessionId: 'session-1', seq: 1, role: 'assistant', quote: 'Select', comment: 'x', createdAt: 0, updatedAt: 0 }] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    const highlight = view.container.querySelector('.ev.msg .annotation-quote-highlight');
+    expect(highlight?.textContent).toBe('Select');
+    const text = highlight!.nextSibling as Text;
+    expect(text).toBeInstanceOf(Text);
+
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.setEnd(text, 6);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({ top: 100, left: 20, width: 140, height: 20, right: 160, bottom: 120, x: 20, y: 100, toJSON: () => ({}) }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+
+    await waitFor(() => view.getByRole('button', { name: /comment/i }));
+    expect(text.isConnected).toBe(true);
+    expect(selection.anchorNode).toBe(text);
+    expect(selection.toString()).toBe('these');
+  });
+
   it('adds a comment on Enter and preserves a newline on Shift+Enter', async () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
     const addAnnotation = vi.fn().mockResolvedValue({});
