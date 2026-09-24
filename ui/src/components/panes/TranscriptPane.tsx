@@ -441,7 +441,7 @@ export function TranscriptPane() {
 
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
-  const transcriptItems = items.filter((item) => item.kind !== 'plan');
+  const transcriptItems = useMemo(() => items.filter((item) => item.kind !== 'plan'), [items]);
   // The actively-streaming last message row never offers annotation — its text
   // is still growing underneath any selection the user made.
   const lastMessageItem = useMemo(
@@ -974,9 +974,15 @@ function Row({
   const userFlash = useUpdateFlash(
     item.kind === 'user' ? item.blocks.map((b) => (b.type === 'text' ? b.text : b.type)).join('\u0000') : null,
   );
+  // Re-highlighting unwraps and rebuilds the text nodes under the row, which
+  // would yank an in-progress native selection anchored inside them. The pane
+  // re-renders on every selectionchange, so key the pass on the links' content
+  // rather than the (freshly allocated) array identity.
+  const quoteLinksKey = quoteLinks.map((link) => `${link.targetId}\u0000${link.quote}`).join('\u0001');
   useLayoutEffect(() => {
     if (sourceRef.current) applyQuoteHighlights(sourceRef.current, quoteLinks);
-  }, [quoteLinks, item]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteLinksKey, item]);
 
   const onSourceClick = (event: React.MouseEvent<HTMLElement>) => {
     const highlight = (event.target as HTMLElement).closest<HTMLElement>('.annotation-quote-highlight');
