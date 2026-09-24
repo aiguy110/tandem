@@ -423,7 +423,17 @@ export interface ClosePreview {
   ahead?: number;
   behind?: number;
   notGitRepo?: boolean;
-  submodules?: { path: string; uncommitted?: string; localCommits?: string }[];
+  submodules?: {
+    path: string;
+    uncommitted?: string;
+    untracked?: string;
+    localCommits?: string;
+    head?: string;
+    branch?: string;
+    upstream?: string;
+    ahead?: number;
+    behind?: number;
+  }[];
   // Other open agents working in the same directory. While any remain, closing
   // this agent leaves the worktree in place.
   cohabitants?: string[];

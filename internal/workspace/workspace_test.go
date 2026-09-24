@@ -158,9 +158,20 @@ func TestTeardownDeinitializesSubmodulesOnlyAfterExplicitConfirmation(t *testing
 	git(t, wt.CWD, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
 	write(t, filepath.Join(wt.CWD, "vendor", "sub", "dirty.txt"), "discard me\n")
 	preview, err := m.ClosePreview(ctx, wt.CWD, wt.Workspace)
-	if err != nil || len(preview.Submodules) != 1 || preview.Submodules[0].Path != "vendor/sub" || !strings.Contains(preview.Submodules[0].Uncommitted, "dirty.txt") {
+	if err != nil || len(preview.Submodules) != 1 || preview.Submodules[0].Path != "vendor/sub" || preview.Submodules[0].Untracked != "dirty.txt" || preview.Submodules[0].Uncommitted != "" {
 		t.Fatalf("preview=%+v err=%v", preview, err)
 	}
+	if s := preview.Submodules[0]; s.Head == "" || s.Branch != "" || s.Upstream != "origin/main" || s.Ahead == nil || *s.Ahead != 0 || *s.Behind != 0 {
+		t.Fatalf("detached submodule sync=%+v", s)
+	}
+	subDir := filepath.Join(wt.CWD, "vendor", "sub")
+	git(t, subDir, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "local")
+	write(t, filepath.Join(subDir, "README.md"), "edited\n")
+	preview, err = m.ClosePreview(ctx, wt.CWD, wt.Workspace)
+	if s := preview.Submodules[0]; err != nil || s.Ahead == nil || *s.Ahead != 1 || !strings.Contains(s.Uncommitted, "README.md") {
+		t.Fatalf("diverged submodule sync=%+v err=%v", s, err)
+	}
+	git(t, subDir, "reset", "-q", "--hard", "HEAD~1")
 	if err := os.Remove(filepath.Join(wt.CWD, "vendor", "sub", "dirty.txt")); err != nil {
 		t.Fatal(err)
 	}

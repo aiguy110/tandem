@@ -356,7 +356,9 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                     <section key={submodule.path}>
                       <strong>Submodule: {submodule.path}</strong>
                       <p>This initialized checkout must be deinitialized before its containing worktree can be removed.</p>
+                      <pre>{submoduleSyncSummary(submodule)}</pre>
                       {submodule.uncommitted && <><p>Uncommitted changes will be discarded if you deinitialize this submodule.</p><pre>{submodule.uncommitted}</pre></>}
+                      {submodule.untracked && <><p>Untracked files will be discarded if you deinitialize this submodule.</p><pre>{submodule.untracked}</pre></>}
                       {submodule.localCommits && <><p>Local-only commits should be pushed or saved on a named branch before deletion.</p><pre>{submodule.localCommits}</pre></>}
                     </section>
                   ))}
@@ -421,6 +423,16 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
 // A remote host's rows survive its tunnel dropping (the master keeps the last
 // snapshot), so each remote divider carries a link badge saying whether what
 // is listed under it is live or the last thing that host reported.
+function submoduleSyncSummary(submodule: NonNullable<ClosePreview['submodules']>[number]): string {
+  const lines = [`${submodule.branch ?? 'detached'} @ ${submodule.head ?? 'unknown'}`];
+  if (!submodule.upstream) lines.push('No upstream to compare against');
+  else if (submodule.ahead === undefined) lines.push(`${submodule.upstream}: comparison unavailable`);
+  else if (submodule.ahead === 0 && !submodule.behind) lines.push(`${submodule.upstream}: in sync`);
+  else lines.push(`${submodule.upstream}: ${submodule.ahead} ahead · ${submodule.behind ?? 0} behind`);
+  if (!submodule.uncommitted && !submodule.untracked) lines.push('No uncommitted or untracked changes');
+  return lines.join('\n');
+}
+
 function hostLinkBadge(status: FederationHost['status']): HostLink {
   switch (status) {
     case 'connected':

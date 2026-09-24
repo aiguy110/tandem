@@ -298,7 +298,18 @@ type ClosePreview struct {
 type SubmoduleClosePreview struct {
 	Path         string `json:"path"`
 	Uncommitted  string `json:"uncommitted,omitempty"`
+	Untracked    string `json:"untracked,omitempty"`
 	LocalCommits string `json:"localCommits,omitempty"`
+	// Head is the checked-out commit's short hash; Branch is empty when the
+	// submodule is on a detached HEAD, as `git submodule update` leaves it.
+	Head   string `json:"head,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// Upstream is the branch's tracking ref, or the remote's default branch for
+	// a detached HEAD. Ahead/Behind compare HEAD against it and are omitted
+	// when no upstream can be resolved.
+	Upstream string `json:"upstream,omitempty"`
+	Ahead    *int   `json:"ahead,omitempty"`
+	Behind   *int   `json:"behind,omitempty"`
 }
 
 // Diff separates work that still needs committing from commits that have not
@@ -381,9 +392,13 @@ func (m *Manager) submoduleClosePreview(ctx context.Context, cwd string) ([]Subm
 	var previews []SubmoduleClosePreview
 	for _, path := range paths {
 		submoduleDir := filepath.Join(cwd, path)
-		uncommitted, statusErr := m.git.Run(ctx, submoduleDir, "status", "--short")
+		uncommitted, statusErr := m.git.Run(ctx, submoduleDir, "status", "--short", "--untracked-files=no")
 		if statusErr != nil { // A raced/deleted checkout is safe to ignore.
 			continue
+		}
+		untracked, untrackedErr := m.git.Run(ctx, submoduleDir, "ls-files", "--others", "--exclude-standard")
+		if untrackedErr != nil {
+			return nil, untrackedErr
 		}
 		// Commits reachable only from local branches are not backed by a remote.
 		// They usually survive deinit, but can become unreachable and later pruned.
@@ -391,9 +406,34 @@ func (m *Manager) submoduleClosePreview(ctx context.Context, cwd string) ([]Subm
 		if logErr != nil {
 			return nil, logErr
 		}
-		previews = append(previews, SubmoduleClosePreview{Path: path, Uncommitted: uncommitted, LocalCommits: localCommits})
+		preview := SubmoduleClosePreview{Path: path, Uncommitted: uncommitted, Untracked: untracked, LocalCommits: localCommits}
+		m.fillSubmoduleSync(ctx, submoduleDir, &preview)
+		previews = append(previews, preview)
 	}
 	return previews, nil
+}
+
+// fillSubmoduleSync records where a submodule's HEAD sits relative to its
+// upstream. Every lookup is best-effort: a submodule without a branch, remote,
+// or fetched default branch simply reports less.
+func (m *Manager) fillSubmoduleSync(ctx context.Context, dir string, p *SubmoduleClosePreview) {
+	p.Head, _ = m.git.Run(ctx, dir, "rev-parse", "--short", "HEAD")
+	p.Branch, _ = m.git.Run(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
+	if p.Branch != "" {
+		p.Upstream, _ = m.git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	}
+	if p.Upstream == "" {
+		p.Upstream, _ = m.git.Run(ctx, dir, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
+	}
+	if p.Upstream == "" {
+		return
+	}
+	ahead, behind, err := aheadBehind(ctx, m.git, dir, p.Upstream, "HEAD")
+	if err != nil {
+		slog.Warn("submodule upstream comparison failed", "submodule", dir, "upstream", p.Upstream, "error", err)
+		return
+	}
+	p.Ahead, p.Behind = &ahead, &behind
 }
 
 func (m *Manager) initializedSubmodulePaths(ctx context.Context, cwd string) ([]string, error) {
