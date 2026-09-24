@@ -2059,7 +2059,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
           }}
         />
         <div className="prompt-text-wrap">
-          <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} asideSupport={asideSupport} /></div>
+          <div className="prompt-text-highlight" ref={highlightRef} aria-hidden="true"><SkillText text={text} commands={commands} asideSupport={asideSupport} />{/* A trailing newline renders no line box in pre-wrap, leaving this layer a line shorter than the textarea so it can't follow its scroll. */}{text.endsWith('\n') ? '\u200b' : null}</div>
           <textarea
             ref={textRef}
             data-prompt-agent={sessionId}

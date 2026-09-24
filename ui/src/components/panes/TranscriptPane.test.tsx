@@ -528,6 +528,17 @@ describe('TranscriptPane composer completions', () => {
     expect(highlight?.querySelectorAll('.skill-mention')).toHaveLength(1);
   });
 
+  it('keeps a trailing newline line box in the composer highlight layer', () => {
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'first line\n' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.prompt-text-highlight')?.textContent).toBe('first line\n\u200b');
+  });
+
   it('highlights a leading /btw when asides are supported', () => {
     const withAside = agent();
     withAside.asideSupport = true;
