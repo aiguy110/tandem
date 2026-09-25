@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -1275,6 +1276,35 @@ func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, er
 		}
 		if !json.Valid([]byte(event.Payload)) {
 			return nil, fmt.Errorf("event %q/%d has malformed payload JSON", sessionID, event.Seq)
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+// EventsOfKinds returns every persisted event of the given kinds in sequence
+// order. It lets reconcilers inspect sparse event types without loading a
+// session's whole transcript.
+func (s *Store) EventsOfKinds(sessionID string, kinds ...string) ([]StoredEvent, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	args := []any{sessionID}
+	marks := make([]string, len(kinds))
+	for i, kind := range kinds {
+		marks[i] = "?"
+		args = append(args, kind)
+	}
+	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE sessionId = ? AND kind IN ("+strings.Join(marks, ",")+") ORDER BY seq", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]StoredEvent, 0)
+	for rows.Next() {
+		var event StoredEvent
+		if err := rows.Scan(&event.Seq, &event.Kind, &event.Payload, &event.TS); err != nil {
+			return nil, err
 		}
 		out = append(out, event)
 	}

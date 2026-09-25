@@ -140,14 +140,17 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		defer cancel()
 		_ = broker.Stop(stopCtx)
 	}()
+	takeoverReconcile := newTakeoverReconciler()
 	takeovers = browser.NewTakeovers(browser.TakeoverOptions{
 		Token:       token,
 		AgentExists: func(id string) bool { return agents != nil && agents.Get(id) != nil },
 		OnRequest: func(id, reqID, reason string) {
+			takeoverReconcile.track(id, reqID)
 			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_request", "reqId": reqID, "reason": reason})
 			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "blocked"})
 		},
 		OnResolved: func(id, reqID string) {
+			takeoverReconcile.forget(reqID)
 			// Persist the resolution as well as broadcasting browser_state. A
 			// transcript snapshot must be able to distinguish an old, completed
 			// takeover from one that is still waiting for the human.
@@ -414,6 +417,25 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	takeoverReconcile.events = db.EventsOfKinds
+	takeoverReconcile.live = takeovers.Live
+	takeoverReconcile.abandon = takeovers.Abandon
+	takeoverReconcile.resolve = func(id, reqID string) {
+		pushAgentEvent(agents, id, map[string]any{"kind": "takeover_resolved", "reqId": reqID})
+		if s := agents.Get(id); s != nil {
+			if status := orphanedTakeoverStatus(s, takeovers.HasLive(id)); status != "" {
+				pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": status})
+			}
+		}
+	}
+	go takeoverReconcile.run(ctx, restored, func() []string {
+		sessions := agents.List()
+		ids := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			ids = append(ids, s.ID)
+		}
+		return ids
+	})
 	go func() {
 		<-restored
 		boot.phase("restore_agents")
