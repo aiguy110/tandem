@@ -19,7 +19,7 @@ export function lastAgentReply(events: { seq: number; event: WireEvent }[]): { s
     const event = events[i].event;
     if (event.kind !== 'message_chunk') break;
     chunks.unshift(event.text);
-    seq = events[i].seq;
+    seq = event.startSeq ?? events[i].seq;
   }
   const message = chunks.join('').trim();
   return message ? { seq, text: message } : null;

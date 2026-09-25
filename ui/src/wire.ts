@@ -76,8 +76,10 @@ export type SessionEvent =
   // emitter — e.g. a subagent's parent Task call — normalized by the daemon from
   // an session-specific `_meta` path. Absent for top-level activity. Lets the
   // transcript group subagent output under its spawn instead of interleaving it.
-  | { kind: 'message_chunk'; text: string; parentId?: string }
-  | { kind: 'thought_chunk'; text: string; parentId?: string }
+  // startSeq is set on replayed chunks the daemon merged into one event, whose
+  // own seq is the last merged row; it is the block's first row.
+  | { kind: 'message_chunk'; text: string; parentId?: string; startSeq?: number }
+  | { kind: 'thought_chunk'; text: string; parentId?: string; startSeq?: number }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
   | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown; title?: string; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
   // ACP context compaction (unstable spec). `summary`/`error` follow patch

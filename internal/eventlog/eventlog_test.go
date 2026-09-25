@@ -154,6 +154,13 @@ INSERT INTO events VALUES ('api-1', 3, 'message_chunk', '{"kind":"message_chunk"
 	if err != nil || covered.Source != ReplayCold || seqs(covered.Events) != "4" || eventText(covered.Events[0]) != "threefour" {
 		t.Fatalf("covered replay=%#v err=%v", covered, err)
 	}
+	// Audio clips and annotations identify a block by its first row.
+	var payload struct {
+		StartSeq int64 `json:"startSeq"`
+	}
+	if err := json.Unmarshal(replay.Events[0].Event.Payload, &payload); err != nil || payload.StartSeq != 3 {
+		t.Fatalf("coalesced startSeq=%d err=%v", payload.StartSeq, err)
+	}
 }
 
 func TestIndependentAndConcurrentSequences(t *testing.T) {

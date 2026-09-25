@@ -263,7 +263,9 @@ func (l *Log) FullHistory() ([]LoggedEvent, error) {
 // coalesceStreamChunks turns a persisted run of arbitrary ACP text fragments
 // into one logical block for snapshots, reconnect replay, and history users.
 // The final sequence is retained so a client's replay checkpoint covers every
-// durable row consumed by the merged event.
+// durable row consumed by the merged event. The first row's sequence is kept
+// in the payload as startSeq: it is the block's identity for audio clips and
+// annotations, which a live client derives from the first chunk it saw.
 func coalesceStreamChunks(events []LoggedEvent) []LoggedEvent {
 	out := make([]LoggedEvent, 0, len(events))
 	for _, current := range events {
@@ -272,7 +274,7 @@ func coalesceStreamChunks(events []LoggedEvent) []LoggedEvent {
 			previousKey, _, previousOK := chunkParts(out[len(out)-1].Event)
 			if previousOK && previousKey == currentKey {
 				last := &out[len(out)-1]
-				last.Event = appendChunkText(last.Event, currentText)
+				last.Event = appendChunkText(last.Event, currentText, last.Seq)
 				last.Seq, last.TS = current.Seq, current.TS
 				continue
 			}
@@ -296,13 +298,16 @@ func chunkParts(event Event) (key, text string, ok bool) {
 	return event.Kind + "\x00" + payload.ParentID, payload.Text, true
 }
 
-func appendChunkText(event Event, suffix string) Event {
+func appendChunkText(event Event, suffix string, previousSeq int64) Event {
 	var payload map[string]any
 	if json.Unmarshal(event.Payload, &payload) != nil {
 		return event
 	}
 	text, _ := payload["text"].(string)
 	payload["text"] = text + suffix
+	if _, ok := payload["startSeq"]; !ok {
+		payload["startSeq"] = previousSeq
+	}
 	event.Payload, _ = json.Marshal(payload)
 	return event
 }

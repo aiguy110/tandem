@@ -59,13 +59,13 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       case 'message_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'message') last.text += ev.text;
-        else items.push({ kind: 'message', key: `m${seq}`, seq, text: ev.text });
+        else items.push({ kind: 'message', key: `m${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text });
         break;
       }
       case 'thought_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'thought') last.text += ev.text;
-        else items.push({ kind: 'thought', key: `t${seq}`, seq, text: ev.text });
+        else items.push({ kind: 'thought', key: `t${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text });
         break;
       }
       case 'tool_call': {
