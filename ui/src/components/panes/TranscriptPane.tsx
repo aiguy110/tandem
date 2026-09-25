@@ -1055,7 +1055,7 @@ function Row({
             else handleCodeCopyClick(event);
           }}
         >
-          <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
+          <div className="message-content markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }} />
           <MessageAudio sessionId={sessionId} seq={item.seq} enabled={canRenderAudio} cachedAudio={cachedAudio} renderingAudio={renderingAudio} />
         </div>
       );
@@ -1101,7 +1101,7 @@ function Row({
           <div className="aside-label">Aside · excluded from future turns</div>
           <div className="aside-question"><SkillText text={item.question} commands={commands} /></div>
           {item.thought && <details className="aside-thought"><summary>thinking…</summary>{item.thought}</details>}
-          {item.answer && <div className="aside-answer" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.answer) }} onClick={handleCodeCopyClick} />}
+          {item.answer && <div className="aside-answer markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.answer) }} onClick={handleCodeCopyClick} />}
           {!item.complete && !item.answer && <div className="aside-pending">Asking in existing context…</div>}
           {item.error && <div className="aside-error">{item.error}</div>}
         </section>
@@ -1431,7 +1431,7 @@ function CompactionCard({ item, enterClass }: { item: Extract<Item, { kind: 'com
               {item.summary !== '' && (
                 <div className="tool-text-section">
                   <div className="tool-args-label">Retained summary</div>
-                  <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.summary) }} onClick={handleCodeCopyClick} />
+                  <div className="compaction-summary markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.summary) }} onClick={handleCodeCopyClick} />
                 </div>
               )}
             </div>

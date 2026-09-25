@@ -478,24 +478,28 @@ body.dock-resizing .app { transition: none; }
 .message-content { max-width: 860px; }
 .message-content .math-display { margin: 10px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
 .message-content .katex-display { margin: 0; min-width: max-content; text-align: left; }
-.ev.msg p { margin: 0 0 8px; }
-.ev.msg pre, .aside-answer pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
-.ev.msg code, .aside-answer code { font-family: var(--font-mono); font-size: .92em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
-.ev.msg pre code, .aside-answer pre code { background: none; padding: 0; }
-.ev.msg .code-block, .aside-answer .code-block { position: relative; }
-.ev.msg .code-copy-btn, .aside-answer .code-copy-btn {
+/* Rendered markdown (assistant messages, aside answers, compaction summaries).
+   Reset white-space so a pre-wrap ancestor (e.g. .card-body) doesn't turn the
+   newlines marked emits between tags into visible blank lines. */
+.markdown { white-space: normal; }
+.markdown p { margin: 0 0 8px; }
+.markdown pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); white-space: pre; }
+.markdown code { font-family: var(--font-mono); font-size: .92em; background: var(--surface-2); padding: .1em .35em; border-radius: 4px; }
+.markdown pre code { background: none; padding: 0; }
+.markdown .code-block { position: relative; margin: 0 0 8px; }
+.markdown .code-block pre { margin: 0; }
+.markdown .code-copy-btn {
   position: absolute; top: 6px; right: 6px; padding: 3px 8px;
   font: var(--fs-xs)/1.4 var(--font-mono); color: var(--text-dim);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
   cursor: pointer; opacity: 0; transition: opacity .18s ease;
 }
-.ev.msg .code-block:hover .code-copy-btn, .ev.msg .code-copy-btn:focus-visible,
-.aside-answer .code-block:hover .code-copy-btn, .aside-answer .code-copy-btn:focus-visible { opacity: 1; }
-.ev.msg .code-copy-btn:hover, .aside-answer .code-copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
-.ev.msg .code-copy-btn.copied, .aside-answer .code-copy-btn.copied { color: var(--ok); border-color: var(--ok); opacity: 1; }
-.ev.msg table { border-collapse: collapse; margin: 0 0 8px; font-size: var(--fs-sm); }
-.ev.msg th, .ev.msg td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
-.ev.msg th { background: var(--surface-2); font-weight: 600; }
+.markdown .code-block:hover .code-copy-btn, .markdown .code-copy-btn:focus-visible { opacity: 1; }
+.markdown .code-copy-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.markdown .code-copy-btn.copied { color: var(--ok); border-color: var(--ok); opacity: 1; }
+.markdown table { border-collapse: collapse; margin: 0 0 8px; font-size: var(--fs-sm); }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+.markdown th { background: var(--surface-2); font-weight: 600; }
 .message-audio { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .message-listen { position: absolute; top: calc(100% + 5px); right: 0; margin-top: 0; transform: translateY(-50%); }
 .message-audio > button { appearance: none; border: 0; background: none; color: var(--text-faint); padding: 2px 0; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
@@ -632,6 +636,8 @@ body.dock-resizing .app { transition: none; }
 .chip.done { color: var(--ok); background: var(--ok-soft); }
 .chip.error { color: var(--err); background: var(--err-soft); }
 .compaction-details { color: var(--text-dim); }
+.compaction-summary { font-family: var(--font-ui); font-size: var(--fs-sm); line-height: 1.55; color: var(--text); }
+.compaction-summary > :last-child { margin-bottom: 0; }
 .chip.cancelled { color: var(--text-faint); background: var(--surface-3); }
 
 .task-list.card {
