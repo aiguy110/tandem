@@ -213,7 +213,14 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		h.broadcastSystemNotifications(nil)
 		return
 	}
-	if envelope["t"] == "federation_hosts_changed" {
+	// A relayed "hosts" list is the remote daemon's own view of its fleet (it
+	// follows e.g. a forwarded notification action). Forwarding it would make
+	// browsers replace this daemon's host list with the remote's, dropping the
+	// remote itself and rendering it offline. Treat it as a change signal.
+	if envelope["t"] == "federation_hosts_changed" || envelope["t"] == "hosts" {
+		if envelope["t"] == "hosts" {
+			slog.Debug("replacing relayed remote hosts list with local view", "host_id", hostID)
+		}
 		h.syncHostNotifications()
 		h.mu.Lock()
 		connections := make([]*connection, 0, len(h.connections))

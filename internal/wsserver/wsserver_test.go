@@ -505,11 +505,27 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 		t.Fatalf("forwarded action payload = %s", last)
 	}
 
-	// A host that drops off takes its notifications with it.
-	fed.hosts = []federation.Host{{ID: "host-one", Name: "builder", Status: "offline"}}
+	// The host follows a handled action with its own view of the fleet. That
+	// must not replace the master's host list, which would render the host
+	// itself offline while its tunnel is still live.
 	fed.mu.Lock()
 	subscriber := fed.subscriber
 	fed.mu.Unlock()
+	subscriber("host-one", json.RawMessage(`{"t":"hosts","hosts":[{"id":"local","local":true,"status":"connected"}]}`))
+	for {
+		got := recv(t, c)
+		if got["t"] != "hosts" {
+			continue
+		}
+		hosts, _ := json.Marshal(got["hosts"])
+		if got["hostId"] != nil || !strings.Contains(string(hosts), `"id":"host-one"`) {
+			t.Fatalf("relayed remote hosts list reached the browser: %#v", got)
+		}
+		break
+	}
+
+	// A host that drops off takes its notifications with it.
+	fed.hosts = []federation.Host{{ID: "host-one", Name: "builder", Status: "offline"}}
 	subscriber("host-one", json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for {
 		got := recv(t, c)
