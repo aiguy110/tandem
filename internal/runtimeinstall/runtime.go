@@ -473,6 +473,9 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 			latest, ok := newestPublished(versions)
 			if ok && semverNewer(latest, fork.UpstreamVersion) {
 				record := fork
+				// Resolve the default clone location so consumers (the rebase
+				// notification's by-hand path) never see an empty directory.
+				record.Clone = config.ForkCloneDir(cfg.RuntimeRoot, agent, fork)
 				out = append(out, UpdateInfo{Agent: agent, Package: fork.UpstreamPackage, Constraint: constraint,
 					CurrentVersion: fork.UpstreamVersion, LatestVersion: latest, Compatible: satisfies(latest, constraint),
 					Kind: UpdateKindRebase, Fork: &record})
