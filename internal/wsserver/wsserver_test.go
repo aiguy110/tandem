@@ -1491,6 +1491,14 @@ func TestListDirsScanDoesNotBlockConnection(t *testing.T) {
 func TestStaleDirsAnswerFromCacheThenBroadcastRefresh(t *testing.T) {
 	_, b, _, _, url := setupWS(t, 0)
 	c, peer := dial(t, url), dial(t, url)
+	// A completed handshake does not mean the server has registered the
+	// connection for broadcasts yet; a round trip on each guarantees it.
+	for _, conn := range []*websocket.Conn{c, peer} {
+		send(t, conn, map[string]any{"t": "list_profiles", "all": true, "corrId": "ready"})
+		if got := recv(t, conn); got["corrId"] != "ready" {
+			t.Fatalf("ready=%#v", got)
+		}
+	}
 	send(t, c, map[string]any{"t": "list_dirs", "corrId": "first"})
 	if got := recv(t, c); got["t"] != "dirs" || got["corrId"] != "first" {
 		t.Fatalf("first=%#v", got)
