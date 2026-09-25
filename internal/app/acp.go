@@ -27,7 +27,9 @@ fork flags:
   --rebased-onto VER    published version the fork now sits on
   --upstream-repo URL   source repository, for upstreaming checks
   --reason TEXT         one line on what the fork adds
-  --pr N                upstream PR that would retire the fork (repeatable)
+  --pr N                upstream PR that would retire the fork (repeatable;
+                        replaces the recorded list)
+  --no-prs              clear the recorded upstream PR list
 
 On an existing record every flag is optional and only the given fields change,
 so recording a completed rebase is just:
@@ -167,6 +169,8 @@ func acpFork(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			prs, prsGiven, args = append(prs, n), true, args[2:]
+		case "--no-prs":
+			prs, prsGiven, args = nil, true, args[1:]
 		default:
 			fmt.Fprintf(stderr, "acp: unknown fork flag %q\n%s\n", flag, acpUsage)
 			return 2

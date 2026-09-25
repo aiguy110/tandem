@@ -331,7 +331,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			if err != nil {
 				return "", err
 			}
-			session, err := agents.SpawnProfile(ctx, profile, clone, agentupdates.RebasePrompt(u, clone))
+			session, err := agents.SpawnProfile(ctx, profile, clone, agentupdates.RebasePrompt(u, clone, exe))
 			if err != nil {
 				return "", err
 			}

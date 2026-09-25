@@ -132,22 +132,25 @@ func TestForkRebaseWithoutProfileIsInformational(t *testing.T) {
 }
 
 func TestRebasePromptLeadsWithUpstreamCheck(t *testing.T) {
-	prompt := RebasePrompt(rebaseUpdate(), "/rt/forks/pi")
+	prompt := RebasePrompt(rebaseUpdate(), "/rt/forks/pi", "/opt/bin/tandem")
 	for _, want := range []string{
-		"tandem acp upstream pi",      // the retire path
-		"tandem acp fork pi --commit", // the re-pin path
-		"#114",                        // the PRs to check first
-		"Emits usage_update",          // why the fork exists
-		"git rebase main",             // the rebase itself
-		"/rt/forks/pi",                // where to work
-		"npm run typecheck && npm run lint && npm test", // the checks
+		"/opt/bin/tandem acp upstream pi",      // the retire path, by absolute path
+		"/opt/bin/tandem acp fork pi --commit", // the re-pin path
+		"#114",                                 // the PRs to check first
+		"--no-prs",                             // refreshing the PR list
+		"Emits usage_update",                   // why the fork exists
+		"git rebase upstream/main",             // the rebase itself
+		"/rt/forks/pi",                         // where to work
+		"npm run typecheck && npm run lint && npm test",  // the checks
+		"git -C /rt/forks/pi reset --hard origin/tandem", // syncing the clone
+		"Finish with your worktree clean",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("rebase prompt is missing %q", want)
 		}
 	}
 	// Retiring must be presented before rebasing, or an agent will rebase by reflex.
-	if strings.Index(prompt, "upstreamed") > strings.Index(prompt, "git rebase main") {
+	if strings.Index(prompt, "upstreamed") > strings.Index(prompt, "git rebase upstream/main") {
 		t.Error("the upstreaming check must come before the rebase instructions")
 	}
 }
