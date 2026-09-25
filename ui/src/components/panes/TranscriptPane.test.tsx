@@ -535,6 +535,22 @@ describe('TranscriptPane composer completions', () => {
     expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(1);
   });
 
+  it('renders sent user messages as markdown without highlighting mentions in code', () => {
+    const withCommand = agent();
+    withCommand.commands = [{ name: 'help', description: 'Show help' }];
+    withCommand.events = [{ seq: 1, event: { kind: 'user_message', text: 'Use the **agent** user, then /help.\n```\ncurl /help\n```' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withCommand }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const user = view.container.querySelector('.ev.user');
+    expect(user?.querySelector('strong')?.textContent).toBe('agent');
+    expect(user?.querySelector('pre code')?.textContent).toBe('curl /help\n');
+    expect(user?.querySelectorAll('.skill-mention')).toHaveLength(1);
+  });
+
   it('renders matching slash commands in the composer highlight layer', () => {
     const withCommand = agent();
     withCommand.commands = [{ name: 'help', description: 'Show help' }];

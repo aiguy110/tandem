@@ -471,6 +471,7 @@ body.dock-resizing .app { transition: none; }
   background: var(--human-soft); border: 1px solid var(--human); color: var(--text);
   border-radius: var(--r-md); padding: 8px 12px; line-height: 1.5;
 }
+.user-content > :last-child, .user-content .code-block:last-child { margin-bottom: 0; }
 .transcript-image { display: block; max-width: min(520px, 100%); max-height: 440px; margin-top: 7px; border-radius: var(--r-sm); object-fit: contain; }
 .transcript-image-loading, .transcript-image-failed { margin-top: 7px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); color: var(--text-faint); font-size: var(--fs-xs); }
 .transcript-image-failed { color: var(--err); }

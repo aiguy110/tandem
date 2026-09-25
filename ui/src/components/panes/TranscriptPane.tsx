@@ -1036,7 +1036,7 @@ function Row({
       return (
         <div ref={sourceRef as React.RefObject<HTMLDivElement>} className={`ev user${enterClass}${userFlash ? ` ${userFlash}` : ''}`} data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
           {item.blocks.map((block, i) => {
-            if (block.type === 'text') return <div key={i}><SkillText text={block.text} commands={commands} /></div>;
+            if (block.type === 'text') return <UserMarkdown key={i} text={block.text} commands={commands} />;
             if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
             return <QuoteChip key={i} block={block} targetId={citationTargetId(item.seq, i)} onJump={onJumpToQuote} />;
           })}
@@ -1626,11 +1626,12 @@ function fileCompletionRequest(query: string): { dir: string; filter: string } |
     : { dir: query.slice(0, slash) || '.', filter: query.slice(slash + 1) };
 }
 
-function SkillText({ text, commands, asideSupport = false }: { text: string; commands: SlashCommand[]; asideSupport?: boolean | null }) {
-  const names = new Set(commands.map((command) => command.name));
-  const parts: React.ReactNode[] = [];
-  // Keep the highlight layer in sync with the two kinds of composer tokens:
-  // known slash commands and workspace file mentions.
+type MentionSegment = string | { token: string; aside: boolean };
+
+// Splits text into plain runs and the two kinds of composer tokens: known
+// slash commands and workspace file mentions.
+function mentionSegments(text: string, names: Set<string>, asideSupport: boolean | null = false): MentionSegment[] {
+  const parts: MentionSegment[] = [];
   const pattern = /\/[A-Za-z0-9_-]+|@(?:"[^"\n]*"|[A-Za-z0-9_./~-]+)/g;
   let previous = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
@@ -1648,11 +1649,59 @@ function SkillText({ text, commands, asideSupport = false }: { text: string; com
     const isFileMention = token[0] === '@';
     if (!isMentionBoundary(text, start) || (!isKnownCommand && !isAside && !isFileMention)) continue;
     if (start > previous) parts.push(text.slice(previous, start));
-    parts.push(<span className={isAside ? 'aside-mention' : 'skill-mention'} key={start}>{token}</span>);
+    parts.push({ token, aside: isAside });
     previous = start + token.length;
   }
   if (previous < text.length) parts.push(text.slice(previous));
+  return parts;
+}
+
+function SkillText({ text, commands, asideSupport = false }: { text: string; commands: SlashCommand[]; asideSupport?: boolean | null }) {
+  // Keep the highlight layer in sync with the send path's token rules.
+  const names = new Set(commands.map((command) => command.name));
+  let offset = 0;
+  const parts = mentionSegments(text, names, asideSupport).map((part) => {
+    const start = offset;
+    if (typeof part === 'string') {
+      offset += part.length;
+      return part;
+    }
+    offset += part.token.length;
+    return <span className={part.aside ? 'aside-mention' : 'skill-mention'} key={start}>{part.token}</span>;
+  });
   return <>{parts}</>;
+}
+
+// A sent user prompt rendered as markdown, with slash commands and file
+// mentions still highlighted. Mentions are wrapped in the rendered HTML's text
+// nodes (never inside code), so markdown syntax and mentions don't interfere.
+function renderUserMarkdown(text: string, commands: SlashCommand[]): string {
+  const names = new Set(commands.map((command) => command.name));
+  const template = document.createElement('template');
+  template.innerHTML = renderMarkdown(text);
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
+    acceptNode: (candidate) =>
+      candidate.parentElement?.closest('code, pre, .katex') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
+  for (const node of nodes) {
+    const parts = mentionSegments(node.data, names);
+    if (parts.length === 1 && typeof parts[0] === 'string') continue;
+    node.replaceWith(...parts.map((part) => {
+      if (typeof part === 'string') return part;
+      const span = document.createElement('span');
+      span.className = 'skill-mention';
+      span.textContent = part.token;
+      return span;
+    }));
+  }
+  return template.innerHTML;
+}
+
+function UserMarkdown({ text, commands }: { text: string; commands: SlashCommand[] }) {
+  const html = useMemo(() => renderUserMarkdown(text, commands), [text, commands]);
+  return <div className="user-content markdown" dangerouslySetInnerHTML={{ __html: html }} onClick={handleCodeCopyClick} />;
 }
 
 const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
