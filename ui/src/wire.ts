@@ -80,6 +80,10 @@ export type SessionEvent =
   | { kind: 'thought_chunk'; text: string; parentId?: string }
   | { kind: 'tool_call'; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
   | { kind: 'tool_call_update'; id: string; status?: ToolStatus; content?: unknown; title?: string; rawInput?: unknown; toolKind?: string; terminalId?: string; parentId?: string }
+  // ACP context compaction (unstable spec). `summary`/`error` follow patch
+  // semantics: absent = unchanged, '' = cleared, otherwise a full replacement.
+  | { kind: 'compaction'; id: string; status: ToolStatus; summary?: string; error?: string; trigger?: string; preTokens?: number; postTokens?: number; durationMs?: number }
+  | { kind: 'compaction_summary_chunk'; id: string; text: string }
   | { kind: 'plan'; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal_output'; termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }

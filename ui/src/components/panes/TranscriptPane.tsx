@@ -29,6 +29,7 @@ type Item =
   | { kind: 'message'; key: string; seq: number; text: string }
   | { kind: 'thought'; key: string; seq: number; text: string }
   | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; terminalOutput?: string; terminalTruncated?: boolean }
+  | { kind: 'compaction'; key: string; status: ToolStatus; summary: string; error?: string; trigger?: string; preTokens?: number; postTokens?: number; durationMs?: number }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
@@ -43,6 +44,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   let plan: Extract<Item, { kind: 'plan' }> | undefined;
   const pendingIds = new Set(pending.map((p) => p.reqId));
   const asides = new Map<string, Extract<Item, { kind: 'aside' }>>();
+  const compactions = new Map<string, Extract<Item, { kind: 'compaction' }>>();
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
@@ -101,6 +103,29 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           if (ev.toolKind != null) t.toolKind = ev.toolKind;
           if (ev.terminalId != null) associateTerminal(t, ev.terminalId);
         }
+        break;
+      }
+      case 'compaction': {
+        // An upsert: the first update fixes the card's timeline position and
+        // later ones patch it in place.
+        let item = compactions.get(ev.id);
+        if (!item) {
+          item = { kind: 'compaction', key: `compact${ev.id}`, status: ev.status, summary: '' };
+          compactions.set(ev.id, item);
+          items.push(item);
+        }
+        item.status = ev.status;
+        if (ev.summary != null) item.summary = ev.summary;
+        if (ev.error != null) item.error = ev.error || undefined;
+        if (ev.trigger != null) item.trigger = ev.trigger;
+        if (ev.preTokens != null) item.preTokens = ev.preTokens;
+        if (ev.postTokens != null) item.postTokens = ev.postTokens;
+        if (ev.durationMs != null) item.durationMs = ev.durationMs;
+        break;
+      }
+      case 'compaction_summary_chunk': {
+        const item = compactions.get(ev.id);
+        if (item) item.summary += ev.text;
         break;
       }
       case 'plan':
@@ -1043,6 +1068,8 @@ function Row({
       );
     case 'tool':
       return <ToolCard item={item} enterClass={enterClass} />;
+    case 'compaction':
+      return <CompactionCard item={item} enterClass={enterClass} />;
     case 'plan':
       return <TaskList item={item} />;
     case 'terminal':
@@ -1370,6 +1397,43 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
             </>
           )}
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactionCard({ item, enterClass }: { item: Extract<Item, { kind: 'compaction' }>; enterClass: string }) {
+  const [open, setOpen] = useState(false);
+  const { mounted: bodyMounted, closing: bodyClosing } = usePresence(open, 255);
+  const statusFlash = useUpdateFlash(item.status);
+  const hasBody = item.summary !== '' || item.error != null;
+  const title = item.status === 'running' ? 'Compacting conversation…' : item.status === 'done' ? 'Compacted conversation' : 'Compact conversation';
+  const details = [
+    item.trigger === 'automatic' ? 'auto' : undefined,
+    item.preTokens != null && item.postTokens != null ? `${compactTokens(item.preTokens)} → ${compactTokens(item.postTokens)} tokens` : item.preTokens != null ? `${compactTokens(item.preTokens)} tokens` : undefined,
+    item.durationMs != null ? `${(item.durationMs / 1000).toFixed(1)}s` : undefined,
+  ].filter(Boolean).join(' · ');
+  return (
+    <div className={`card compaction-card${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
+      <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
+        <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
+        <span className="title">{title}{details && <span className="compaction-details"> · {details}</span>}</span>
+        <span className={`chip ${item.status}`}>{item.status}</span>
+      </div>
+      {bodyMounted && hasBody && (
+        <div className={`card-body-wrap${bodyClosing ? ' collapsing' : ' open entering'}`} aria-hidden={bodyClosing}>
+          <div className="card-body-inner">
+            <div className="card-body">
+              {item.error != null && <div className="aside-error">{item.error}</div>}
+              {item.summary !== '' && (
+                <div className="tool-text-section">
+                  <div className="tool-args-label">Retained summary</div>
+                  <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(item.summary) }} onClick={handleCodeCopyClick} />
+                </div>
+              )}
             </div>
           </div>
         </div>

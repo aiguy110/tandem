@@ -16,6 +16,10 @@ type AgentEvent =
   | { kind: 'tool_call';      id: string; title: string;
                               status: 'pending'|'running'|'done'|'error'; content: ToolContent[] }
   | { kind: 'tool_call_update'; id: string; status?: string; content?: ToolContent[] }
+  | { kind: 'compaction';     id: string; status: 'running'|'done'|'error'|'cancelled';
+                              summary?: string; error?: string; trigger?: string;
+                              preTokens?: number; postTokens?: number; durationMs?: number }
+  | { kind: 'compaction_summary_chunk'; id: string; text: string }
   | { kind: 'plan';           entries: PlanEntry[] }
   | { kind: 'terminal_output';   termId: string; chunk: string; truncated: boolean }
   | { kind: 'permission_request'; reqId: string; toolCallId: string; options: PermOption[] }

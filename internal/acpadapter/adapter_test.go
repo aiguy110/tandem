@@ -895,3 +895,58 @@ func TestMCPServerMarshalJSONKeepsRequiredArrays(t *testing.T) {
 		t.Fatalf("stdio server JSON = %s, want %s", got, want)
 	}
 }
+
+func TestClientAdvertisesCompactionCapability(t *testing.T) {
+	a := newUpdateAdapter(nil)
+	encoded, _ := json.Marshal(a.clientCapabilities())
+	if !strings.Contains(string(encoded), `"session":{"compaction":{}}`) {
+		t.Fatalf("client capabilities = %s", encoded)
+	}
+}
+
+func TestCompactionUpdatesNormalizeLifecycleAndSummary(t *testing.T) {
+	a := newUpdateAdapter(nil)
+	send := func(update string) {
+		t.Helper()
+		if err := a.handleUpdate(json.RawMessage(`{"sessionId":"s1","update":` + update + `}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	send(`{"sessionUpdate":"compaction_update","compactionId":"c1","status":"in_progress","_meta":{"contextCompaction":{"version":1}}}`)
+	started := waitEvent(t, a, "compaction", nil)
+	if started["id"] != "c1" || started["status"] != "running" {
+		t.Fatalf("started = %#v", started)
+	}
+	if _, ok := started["summary"]; ok {
+		t.Fatalf("absent summary must stay absent: %#v", started)
+	}
+
+	send(`{"sessionUpdate":"compaction_summary_chunk","compactionId":"c1","content":{"type":"text","text":"Did X."}}`)
+	if chunk := waitEvent(t, a, "compaction_summary_chunk", nil); chunk["id"] != "c1" || chunk["text"] != "Did X." {
+		t.Fatalf("chunk = %#v", chunk)
+	}
+
+	send(`{"sessionUpdate":"compaction_update","compactionId":"c1","status":"completed","summary":[{"type":"text","text":"Did X and Y."}],` +
+		`"_meta":{"contextCompaction":{"version":1,"trigger":"manual","preTokens":180000,"postTokens":12000,"durationMs":4200}}}`)
+	done := waitEvent(t, a, "compaction", nil)
+	if done["status"] != "done" || done["summary"] != "Did X and Y." || done["trigger"] != "manual" ||
+		done["preTokens"] != float64(180000) || done["postTokens"] != float64(12000) || done["durationMs"] != float64(4200) {
+		t.Fatalf("done = %#v", done)
+	}
+
+	send(`{"sessionUpdate":"compaction_update","compactionId":"c2","status":"failed","error":"too small","summary":null}`)
+	failed := waitEvent(t, a, "compaction", nil)
+	if failed["status"] != "error" || failed["error"] != "too small" || failed["summary"] != "" {
+		t.Fatalf("failed = %#v", failed)
+	}
+
+	send(`{"sessionUpdate":"compaction_update","compactionId":"c3","status":"cancelled"}`)
+	if got := waitEvent(t, a, "compaction", nil); got["status"] != "cancelled" {
+		t.Fatalf("cancelled = %#v", got)
+	}
+
+	if err := a.handleUpdate(json.RawMessage(`{"sessionId":"s1","update":{"sessionUpdate":"compaction_update","status":"completed"}}`)); err == nil {
+		t.Fatal("compaction_update without compactionId must fail")
+	}
+}

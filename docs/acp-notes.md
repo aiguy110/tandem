@@ -97,6 +97,8 @@ directly on the `update` object — they are *not* nested under a `toolCall`/`pl
 | `plan` | Plan | `entries: PlanEntry[]` |
 | `plan_update` / `plan_removed` | (1.2.x) | incremental plan changes |
 | `usage_update` | UsageUpdate | `used`, `size`, `cost?` |
+| `compaction_update` | CompactionUpdate (unstable) | `compactionId`, `status`, `summary?`, `error?`, `_meta.contextCompaction?` |
+| `compaction_summary_chunk` | CompactionSummaryChunk (unstable) | `compactionId`, `content` |
 | `current_mode_update`, `available_commands_update`, `config_option_update`, `session_info_update` | — | ignored for now |
 
 - **ContentBlock (text):** `{ type: "text", text }` (other types: image, audio,
@@ -111,6 +113,18 @@ directly on the `update` object — they are *not* nested under a `toolCall`/`pl
 |---|---|
 | ToolCallStatus `in_progress / completed / failed / pending` | `running / done / error / pending` |
 | PlanEntryStatus `completed` | plan entry `done` (others pass through) |
+| `compaction_update` | `compaction` upsert; status `in_progress / completed / failed / cancelled` → `running / done / error / cancelled`; `summary` blocks flattened to text |
+| `compaction_summary_chunk` | `compaction_summary_chunk` (text appended to that compaction's summary) |
+
+### Context compaction
+
+Tandem advertises `clientCapabilities.session.compaction: {}`. Bridges that
+support it (claude-agent-acp ≥0.79, codex-acp) then report compaction through
+`compaction_update` instead of a synthetic "Compact conversation" `tool_call`
+(`kind: "think"`, `_meta.claudeCode.toolName: "compact"`), which is their
+fallback for clients without the capability and never carries the summary.
+`summary`, `error`, and `_meta` are patches: absent leaves the value unchanged,
+`null` clears it.
 
 ## Permissions
 

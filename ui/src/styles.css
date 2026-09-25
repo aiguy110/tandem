@@ -631,6 +631,7 @@ body.dock-resizing .app { transition: none; }
 .chip.running { color: var(--working); background: var(--working-soft); }
 .chip.done { color: var(--ok); background: var(--ok-soft); }
 .chip.error { color: var(--err); background: var(--err-soft); }
+.compaction-details { color: var(--text-dim); }
 .chip.cancelled { color: var(--text-faint); background: var(--surface-3); }
 
 .task-list.card {

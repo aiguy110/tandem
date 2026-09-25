@@ -853,7 +853,7 @@ func (c *messageAudioCache) watch(s *session.Session) {
 
 func messageBlockBoundary(kind string) bool {
 	switch kind {
-	case "thought_chunk", "tool_call", "tool_call_update", "plan", "terminal_output", "permission_request", "error", "user_message":
+	case "thought_chunk", "tool_call", "tool_call_update", "compaction", "compaction_summary_chunk", "plan", "terminal_output", "permission_request", "error", "user_message":
 		return true
 	default:
 		return false

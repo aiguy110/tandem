@@ -9,6 +9,7 @@ import (
 	"github.com/aiguy110/tandem/internal/progress"
 	"io"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -278,6 +279,10 @@ func (a *Adapter) clientCapabilities() map[string]any {
 	if a.cfg.Terminals != nil {
 		caps["terminal"] = true
 	}
+	// Opt in to ACP's (unstable) first-class compaction lifecycle. Without it,
+	// bridges fall back to a synthetic "Compact conversation" tool call that
+	// cannot carry the retained summary.
+	caps["session"] = map[string]any{"compaction": map[string]any{}}
 	return caps
 }
 
@@ -1296,12 +1301,103 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			}
 		}
 		a.pushUpdate(note.SessionID, ev)
+	case "compaction_update":
+		ev, err := compactionEvent(u)
+		if err != nil {
+			return err
+		}
+		slog.Info("acp compaction update", "session", a.cfg.SessionID, "compaction", ev["id"], "status", ev["status"])
+		a.pushUpdate(note.SessionID, ev)
+	case "compaction_summary_chunk":
+		id, err := requiredString(u, "compactionId")
+		if err != nil {
+			return err
+		}
+		text, err := textContent(u["content"])
+		if err != nil {
+			return fmt.Errorf("acp: malformed compaction_summary_chunk update: %w", err)
+		}
+		a.pushUpdate(note.SessionID, map[string]any{"kind": "compaction_summary_chunk", "id": id, "text": text})
 	case "user_message_chunk", "plan_removed", "session_info_update":
 		// Known optional updates have no normalized Tandem event yet.
 	default:
 		a.diagnostic(&OptionalUpdateError{Variant: header.Variant})
 	}
 	return nil
+}
+
+// compactionEvent normalizes an ACP compaction_update upsert. The ACP fields
+// have patch semantics (absent = unchanged, null = cleared), so summary and
+// error are only present on the event when the update carried them, with null
+// normalized to "". _meta is a replace-patch; Tandem keeps just the
+// provider-neutral contextCompaction facts from it.
+func compactionEvent(u map[string]json.RawMessage) (map[string]any, error) {
+	id, err := requiredString(u, "compactionId")
+	if err != nil {
+		return nil, err
+	}
+	status, err := requiredString(u, "status")
+	if err != nil {
+		return nil, err
+	}
+	ev := map[string]any{"kind": "compaction", "id": id, "status": compactionStatus(status)}
+	if raw, ok := u["summary"]; ok {
+		var blocks []json.RawMessage
+		if string(raw) != "null" && json.Unmarshal(raw, &blocks) != nil {
+			return nil, errors.New("acp: malformed compaction_update summary")
+		}
+		var summary strings.Builder
+		for _, block := range blocks {
+			text, err := textContent(block)
+			if err != nil {
+				return nil, fmt.Errorf("acp: malformed compaction_update summary: %w", err)
+			}
+			summary.WriteString(text)
+		}
+		ev["summary"] = summary.String()
+	}
+	if raw, ok := u["error"]; ok {
+		ev["error"] = rawString(raw)
+	}
+	var meta struct {
+		ContextCompaction *struct {
+			Trigger    string   `json:"trigger"`
+			PreTokens  *float64 `json:"preTokens"`
+			PostTokens *float64 `json:"postTokens"`
+			DurationMs *float64 `json:"durationMs"`
+		} `json:"contextCompaction"`
+	}
+	if raw, ok := u["_meta"]; ok && json.Unmarshal(raw, &meta) == nil && meta.ContextCompaction != nil {
+		cc := meta.ContextCompaction
+		if cc.Trigger != "" {
+			ev["trigger"] = cc.Trigger
+		}
+		if cc.PreTokens != nil {
+			ev["preTokens"] = *cc.PreTokens
+		}
+		if cc.PostTokens != nil {
+			ev["postTokens"] = *cc.PostTokens
+		}
+		if cc.DurationMs != nil {
+			ev["durationMs"] = *cc.DurationMs
+		}
+	}
+	return ev, nil
+}
+
+// compactionStatus maps ACP's compaction lifecycle onto Tandem's tool status
+// vocabulary. The ACP enum is open; an unrecognized status stays in progress.
+func compactionStatus(status string) string {
+	switch status {
+	case "completed":
+		return "done"
+	case "failed":
+		return "error"
+	case "cancelled":
+		return "cancelled"
+	default:
+		return "running"
+	}
 }
 
 func finalToolFile(status, candidate string) string {

@@ -104,6 +104,28 @@ describe('TranscriptPane voice rendering', () => {
     await waitFor(() => expect(view.getByText('Image unavailable: shot.png')).toBeTruthy());
   });
 
+  it('patches one compaction card in place and shows its retained summary', () => {
+    const withCompaction = agent();
+    withCompaction.events = [
+      { seq: 1, event: { kind: 'compaction', id: 'c1', status: 'running' } },
+      { seq: 2, event: { kind: 'compaction_summary_chunk', id: 'c1', text: 'Partial' } },
+      { seq: 3, event: { kind: 'compaction', id: 'c1', status: 'done', summary: 'Fixed the **share** menu.', trigger: 'manual', preTokens: 180000, postTokens: 12000 } },
+    ];
+    withCompaction.lastSeq = 3;
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withCompaction }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelectorAll('.compaction-card')).toHaveLength(1);
+    expect(view.container.querySelector('.compaction-card .title')?.textContent).toBe('Compacted conversation · 180k → 12k tokens');
+    fireEvent.click(view.container.querySelector('.compaction-card .card-head')!);
+    expect(view.getByText('Retained summary')).toBeTruthy();
+    expect(view.container.querySelector('.compaction-card strong')?.textContent).toBe('share');
+    expect(view.queryByText(/Partial/)).toBeNull();
+  });
+
   it('shows complete command and output when an execute tool call is expanded', () => {
     const withTool = agent();
     const command = 'cd /a/very/long/path && npm run a-command-with-a-long-name -- --verbose';
