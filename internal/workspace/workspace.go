@@ -164,6 +164,14 @@ func (m *Manager) provisionWorktree(ctx context.Context, ws Workspace, sessionNa
 	branch := normalizeLocalBranch(ws.Branch)
 	if branch == "" {
 		branch = defaultAgentBranch(integration.Ref, sessionName)
+		// A repository with its own `tandem` branch (an ACP fork's branch, say)
+		// cannot hold refs under `tandem/`: git stores refs as paths, so a ref
+		// cannot be both a file and a directory. Flatten the name instead.
+		if blocker := m.branchPathBlocker(ctx, repo, branch); blocker != "" {
+			flat := strings.ReplaceAll(branch, "/", "-")
+			slog.Info("workspace: default agent branch namespace blocked; flattening", "repo", repo, "branch", branch, "blocking_ref", blocker, "fallback", flat)
+			branch = flat
+		}
 	}
 	if _, err := m.git.Run(ctx, repo, "check-ref-format", "--branch", branch); err != nil {
 		return ProvisionResult{}, &Error{"invalid_branch", "invalid branch name: " + branch}
@@ -214,6 +222,19 @@ func (m *Manager) provisionWorktree(ctx context.Context, ws Workspace, sessionNa
 	}
 	resolved := Workspace{Kind: KindWorktree, Repo: repo, Branch: branch, BranchMode: mode, Source: &Source{Ref: source.Ref, Commit: source.Commit}, Integration: integration, BaseRef: source.Commit}
 	return ProvisionResult{CWD: cwd, Workspace: resolved, CreatedBranch: created}, nil
+}
+
+// branchPathBlocker returns an existing local branch that makes creating
+// branch impossible because one is a path prefix of the other, or "" if none.
+func (m *Manager) branchPathBlocker(ctx context.Context, repo, branch string) string {
+	parts := strings.Split(branch, "/")
+	for i := 1; i < len(parts); i++ {
+		if prefix := strings.Join(parts[:i], "/"); m.branchExists(ctx, repo, prefix) {
+			return prefix
+		}
+	}
+	out, _ := m.git.Run(ctx, repo, "for-each-ref", "--count=1", "--format=%(refname:short)", "refs/heads/"+branch+"/")
+	return strings.TrimSpace(out)
 }
 
 func (m *Manager) branchExists(ctx context.Context, repo, branch string) bool {

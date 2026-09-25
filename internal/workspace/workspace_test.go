@@ -391,6 +391,22 @@ func TestRollbackAndAutoBranchCollision(t *testing.T) {
 	}
 }
 
+func TestAutoBranchAvoidsExistingTandemBranchNamespace(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	m := workspace.New(workspace.Config{WorktreesDir: filepath.Join(f.home, "worktrees")})
+	// An ACP fork carries its commits on a branch literally named `tandem`,
+	// which makes every `tandem/...` ref impossible to create.
+	git(t, f.repo, "switch", "-q", "-c", "tandem")
+	res, err := m.Provision(ctx, workspace.Workspace{Kind: workspace.KindWorktree, Repo: f.repo}, "einstein-501")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Workspace.Branch != "tandem-tandem-einstein-501" {
+		t.Fatalf("branch=%s", res.Workspace.Branch)
+	}
+}
+
 func TestRepositoryDiscoveryIsBoundedAndReportsCollisions(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
