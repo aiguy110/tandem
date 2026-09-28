@@ -102,7 +102,7 @@ type PaletteRow =
 // matching repo is a header followed by the profiles already used in it.
 //   Enter on a profile  → spawn with that profile + focus jumps
 //   Enter on a repo     → open the form to launch with a new profile
-//   Tab → open the Host pick box for arrow-key navigation
+//   Tab → cycle focus between the Host pick box and the fuzzy dir input
 //   ⌘/Ctrl+Enter        → customize the selected profile (or new profile on a repo)
 //   right-click / long-press a profile → Customize / Forget
 // Spawning changes what exists on a host, which its access policy reserves
@@ -219,6 +219,7 @@ export function SpawnPalette() {
   const [busy, setBusy] = useState(false);
 
   const hostSelectRef = useRef<HTMLSelectElement>(null);
+  const queryRef = useRef<HTMLInputElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
 
   // A rail-initiated hand-off should be created where its source actually
@@ -655,8 +656,12 @@ export function SpawnPalette() {
     if (e.key === 'Tab' && hosts.length > 1) {
       e.preventDefault();
       const select = hostSelectRef.current;
-      select?.focus();
-      select?.showPicker?.();
+      if (document.activeElement === select) {
+        queryRef.current?.focus();
+      } else {
+        select?.focus();
+        select?.showPicker?.();
+      }
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -705,6 +710,7 @@ export function SpawnPalette() {
               </label>
             )}
             <input
+              ref={queryRef}
               className="q"
               autoFocus
               placeholder="Spawn in a directory…  (fuzzy; Enter = worktree + focus)"
@@ -996,7 +1002,7 @@ export function SpawnPalette() {
           <div className="foot">
             <span><span className="kbd">↵</span> spawn</span>
             <span><span className="kbd">⌘↵</span> customize</span>
-            {hosts.length > 1 && <span><span className="kbd">⇥</span> pick host</span>}
+            {hosts.length > 1 && <span><span className="kbd">⇥</span> host ↔ dir</span>}
             <span><span className="kbd">↑↓</span> select</span>
             <span><span className="kbd">Esc</span> close</span>
             {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}

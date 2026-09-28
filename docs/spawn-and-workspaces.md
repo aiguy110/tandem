@@ -124,7 +124,8 @@ Two keyboard surfaces, one for speed and one for discoverability:
    bookmarks. Each row shows branch, clean/dirty, and whether an agent already occupies
    that dir.
    - `Enter` on a dir → spawn with defaults; **focus jumps to the new agent**.
-   - `⇥` → open the Host picker for arrow-key navigation (when more than one host).
+   - `⇥` → cycle keyboard focus between the Host picker (opened, arrow-key
+     navigable) and the fuzzy dir input (when more than one host).
    - `⌘Enter` → reveal advanced fields, including a fuzzy Git-ref picker and explicit
      new-branch / continue-branch / existing-checkout workspace modes.
 2. **Command palette** (`⌘K`) — everything: all commands, jump-to-agent-by-name, spawn,
