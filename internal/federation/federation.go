@@ -1,6 +1,9 @@
-// Package federation implements Tandem's routed federation tree protocol. A
-// node dials one configured parent and may accept children; parents never
-// need to initiate network connections back into a node.
+// Package federation implements Tandem's routed federation tree protocol.
+// Hosts form a rooted tree: each has at most one parent and any number of
+// children. Either end of a link may open its connection -- a child dials its
+// parent (--parent), or a parent dials and adopts a child it can reach but
+// that cannot reach it, such as a Tandem in a container. Once connected, both
+// kinds of link speak the same protocol.
 package federation
 
 import (
@@ -59,6 +62,16 @@ const (
 	StatusPath    = "/internal/federation/registration"
 	HeartbeatPath = "/internal/federation/heartbeat"
 	TunnelPath    = "/internal/federation/tunnel"
+	// AdoptPath is served by a child: a parent dials it to adopt the child.
+	AdoptPath = "/internal/federation/adopt"
+)
+
+// Headers an adopting parent sends with its dial. The credential itself
+// travels in the ordinary Authorization header.
+const (
+	joinTokenHeader  = "X-Tandem-Join-Token"
+	parentIDHeader   = "X-Tandem-Federation-Parent"
+	parentNameHeader = "X-Tandem-Federation-Name"
 )
 
 // Host is the parent-safe view of a registered agent host. Snapshot is the
@@ -141,9 +154,9 @@ type Options struct {
 	HTTPClient    *http.Client
 	PollInterval  time.Duration
 	// ProxyURL routes this daemon's outbound dials to its parent through a
-	// proxy, e.g. "socks5://127.0.0.1:1080". It affects the child side only:
-	// a parent never dials out, and the loopback transport never leaves the
-	// process. SOCKS sits below TLS, so an https/wss parent still terminates
+	// proxy, e.g. "socks5://127.0.0.1:1080". Dials to adopted children use
+	// their own ChildLink.ProxyURL, and the loopback transport never leaves
+	// the process. SOCKS sits below TLS, so an https/wss parent still terminates
 	// its own TLS end to end.
 	ProxyURL string
 	// BuildVersion is this daemon's release, reported to the peer alongside
@@ -157,6 +170,25 @@ type Options struct {
 	// commands, so each child's subscriptions and events stay separate. Nil
 	// disables upstream control on this daemon.
 	NewLocal func() (Local, error)
+	// Children are hosts this daemon dials and adopts; see RunChildLinks.
+	Children []ChildLink
+	// JoinToken, when set, lets a parent that presents it adopt this daemon
+	// without an operator accepting the request here.
+	JoinToken string
+}
+
+// ChildLink is a child this daemon dials rather than waiting for the child to
+// dial it: the way to reach a host that cannot reach its parent.
+type ChildLink struct {
+	URL string
+	// Name labels the child in the UI; the child's own report is the fallback.
+	Name string
+	// JoinToken is the child's join token. Without it the child's operator
+	// must accept the adoption there.
+	JoinToken string
+	// ProxyURL routes dials to this child through a proxy, as for a parent.
+	ProxyURL string
+	dialer   *websocket.Dialer
 }
 
 type Service struct {
@@ -198,6 +230,24 @@ type Service struct {
 	children map[string]*childLink
 	// localSnapshot is this daemon's own agent list, as offered to children.
 	localSnapshot json.RawMessage
+
+	childLinks []ChildLink
+	joinToken  string
+	// adoptMu serializes adopted parent sessions: a parent that reconnects
+	// replaces its old session only once that session has fully wound down.
+	adoptMu sync.Mutex
+	// pendingAdoptions are adoption requests awaiting this operator's answer,
+	// keyed by adoptionKey. rejectedAdoptions are refused until restart.
+	pendingAdoptions  map[string]pendingAdoption
+	rejectedAdoptions map[string]bool
+}
+
+// pendingAdoption is a parent asking to adopt this daemon without a join token.
+type pendingAdoption struct {
+	credential string
+	parentID   string
+	name       string
+	remote     string
 }
 
 // childLink serves one child's upstream commands through its own loopback,
@@ -282,6 +332,10 @@ type tunnelMessage struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	// Rules (on "hello") is the sender's own access policy.
 	Rules Policy `json:"rules,omitempty"`
+	// Name (on "hello") is the child's display name. A child that dials its
+	// parent reports it when registering instead, so only an adopting parent
+	// relies on this.
+	Name string `json:"name,omitempty"`
 }
 type tunnel struct {
 	conn    *websocket.Conn
@@ -355,13 +409,32 @@ func New(opts Options) (*Service, error) {
 		opts.HTTPClient = &http.Client{Timeout: 20 * time.Second}
 	}
 	parent := strings.TrimRight(strings.TrimSpace(opts.ParentURL), "/")
-	if parent != "" {
-		u, err := url.Parse(parent)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("federation: invalid parent URL %q", opts.ParentURL)
-		}
+	if parent != "" && !validLinkURL(parent) {
+		return nil, fmt.Errorf("federation: invalid parent URL %q", opts.ParentURL)
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, parentURL: parent, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}, policy: opts.Policy, newLocal: opts.NewLocal, rules: map[string]Policy{}, children: map[string]*childLink{}}
+	childLinks := make([]ChildLink, 0, len(opts.Children))
+	seen := map[string]bool{}
+	for _, child := range opts.Children {
+		child.URL = strings.TrimRight(strings.TrimSpace(child.URL), "/")
+		if !validLinkURL(child.URL) {
+			return nil, fmt.Errorf("federation: invalid child URL %q", child.URL)
+		}
+		if seen[child.URL] {
+			return nil, fmt.Errorf("federation: child URL %q is listed twice", child.URL)
+		}
+		seen[child.URL] = true
+		childDialer := *websocket.DefaultDialer
+		if proxyURL := strings.TrimSpace(child.ProxyURL); proxyURL != "" {
+			dial, _, err := proxyDialers(proxyURL)
+			if err != nil {
+				return nil, err
+			}
+			childDialer.NetDialContext, childDialer.Proxy = dial, nil
+		}
+		child.dialer = &childDialer
+		childLinks = append(childLinks, child)
+	}
+	service := &Service{childLinks: childLinks, joinToken: strings.TrimSpace(opts.JoinToken), pendingAdoptions: map[string]pendingAdoption{}, rejectedAdoptions: map[string]bool{}, store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, parentURL: parent, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}, policy: opts.Policy, newLocal: opts.NewLocal, rules: map[string]Policy{}, children: map[string]*childLink{}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
@@ -674,8 +747,11 @@ func (s *Service) callUpstream(ctx context.Context, target Host, origin string, 
 // parent accepted, or else a durable generated one (a root has no parent to
 // accept an ID, but its children still need to tell it apart).
 func (s *Service) selfID() string {
-	if s.parentURL != "" {
-		if m, err := s.store.FederationParent(); err == nil && m != nil && m.HostID != "" && strings.TrimRight(m.URL, "/") == s.parentURL {
+	if m, err := s.store.FederationParent(); err == nil && m != nil && m.HostID != "" {
+		if s.parentURL != "" && !m.Adopted && strings.TrimRight(m.URL, "/") == s.parentURL {
+			return m.HostID
+		}
+		if s.parentURL == "" && m.Adopted {
 			return m.HostID
 		}
 	}
@@ -755,6 +831,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.heartbeat(w, r)
 	case TunnelPath:
 		s.serveTunnel(w, r)
+	case AdoptPath:
+		s.serveAdoption(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -895,21 +973,36 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	var hello tunnelMessage
-	if err = conn.ReadJSON(&hello); err != nil || hello.T != "hello" || hello.HostID == "" {
+	hello, ok := readHello(conn)
+	if !ok {
 		return
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
-	conn.SetPingHandler(func(data string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
-		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
-	})
 	peer, err := s.store.FederationChild(hello.HostID)
 	if err != nil || !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
 		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: unauthorizedTunnelError})
 		return
 	}
+	s.serveChild(conn, hello, peer)
+}
+
+// readHello reads the message a child opens every link with.
+func readHello(conn *websocket.Conn) (tunnelMessage, bool) {
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	var hello tunnelMessage
+	if err := conn.ReadJSON(&hello); err != nil || hello.T != "hello" || hello.HostID == "" {
+		return hello, false
+	}
+	return hello, true
+}
+
+// serveChild runs this daemon's end of a link to an authenticated child,
+// whichever of the two dialed, until the connection ends.
+func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *store.FederationChild) {
+	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+	conn.SetPingHandler(func(data string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
+	})
 	if self, _ := s.store.FederationParent(); self != nil {
 		for _, ancestor := range hello.Ancestors {
 			if ancestor == self.HostID {
@@ -1543,6 +1636,9 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		s.removeProtocolNotification(strings.TrimPrefix(id, protocolNotificationPrefix))
 		return "", true, nil
 	}
+	if strings.HasPrefix(id, adoptionNotificationPrefix) {
+		return "", true, s.handleAdoptionAction(strings.TrimPrefix(id, adoptionNotificationPrefix), action)
+	}
 	const prefix = "federation-registration-"
 	if !strings.HasPrefix(id, prefix) {
 		return "", false, nil
@@ -1882,23 +1978,24 @@ func (s *Service) registrationWithParent(ctx context.Context, id, previousID, pr
 }
 
 func (s *Service) runTunnel(ctx context.Context, hostID, credential string) error {
-	u, err := url.Parse(s.parentURL)
+	target, err := linkWebSocketURL(s.parentURL, TunnelPath)
 	if err != nil {
 		return err
 	}
-	if u.Scheme == "https" {
-		u.Scheme = "wss"
-	} else {
-		u.Scheme = "ws"
-	}
-	u.Path = TunnelPath
 	head := http.Header{}
 	head.Set("Authorization", "Bearer "+credential)
-	conn, _, err := s.dialer.DialContext(ctx, u.String(), head)
+	conn, _, err := s.dialer.DialContext(ctx, target, head)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	return s.serveParent(ctx, conn, hostID)
+}
+
+// serveParent runs this daemon's end of the link to its parent, whichever of
+// the two dialed, until the connection or ctx ends.
+func (s *Service) serveParent(ctx context.Context, conn *websocket.Conn, hostID string) error {
+	var err error
 	if resetter, ok := s.local.(connectionResetter); ok {
 		defer resetter.Reset()
 	}
@@ -1916,7 +2013,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}()
 	defer close(stopClose)
 	t := &tunnel{conn: conn}
-	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: []string{hostID}, Capabilities: []string{upstreamCapability}, Rules: s.policy}); err != nil {
+	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, Name: s.name, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: []string{hostID}, Capabilities: []string{upstreamCapability}, Rules: s.policy}); err != nil {
 		return err
 	}
 	s.mu.Lock()

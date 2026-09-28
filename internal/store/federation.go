@@ -5,13 +5,15 @@ import (
 	"errors"
 )
 
-// FederationParent is this daemon's durable enrollment with an upstream
-// Tandem. There can be at most one: chained federation is deliberately not
-// supported.
+// FederationParent is this daemon's durable enrollment with its parent. There
+// is at most one. URL is the parent this daemon dials; it is empty when
+// Adopted, because an adopting parent dials this daemon instead and proves
+// itself with Credential.
 type FederationParent struct {
 	URL        string
 	HostID     string
 	Credential string
+	Adopted    bool
 	UpdatedAt  int64
 }
 
@@ -35,7 +37,7 @@ type FederationChild struct {
 
 func (s *Store) FederationParent() (*FederationParent, error) {
 	var m FederationParent
-	err := s.db.QueryRow(`SELECT url, hostId, credential, updatedAt FROM federation_master WHERE singleton = 1`).Scan(&m.URL, &m.HostID, &m.Credential, &m.UpdatedAt)
+	err := s.db.QueryRow(`SELECT url, hostId, credential, adopted != 0, updatedAt FROM federation_master WHERE singleton = 1`).Scan(&m.URL, &m.HostID, &m.Credential, &m.Adopted, &m.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -43,14 +45,14 @@ func (s *Store) FederationParent() (*FederationParent, error) {
 }
 
 func (s *Store) SaveFederationParent(m FederationParent) error {
-	if m.URL == "" || m.HostID == "" || m.Credential == "" {
+	if (m.URL == "") != m.Adopted || m.HostID == "" || m.Credential == "" {
 		return errors.New("invalid federation parent")
 	}
 	if m.UpdatedAt == 0 {
 		m.UpdatedAt = s.now().UnixMilli()
 	}
-	_, err := s.db.Exec(`INSERT INTO federation_master (singleton, url, hostId, credential, updatedAt) VALUES (1, ?, ?, ?, ?)
-ON CONFLICT(singleton) DO UPDATE SET url=excluded.url, hostId=excluded.hostId, credential=excluded.credential, updatedAt=excluded.updatedAt`, m.URL, m.HostID, m.Credential, m.UpdatedAt)
+	_, err := s.db.Exec(`INSERT INTO federation_master (singleton, url, hostId, credential, adopted, updatedAt) VALUES (1, ?, ?, ?, ?, ?)
+ON CONFLICT(singleton) DO UPDATE SET url=excluded.url, hostId=excluded.hostId, credential=excluded.credential, adopted=excluded.adopted, updatedAt=excluded.updatedAt`, m.URL, m.HostID, m.Credential, m.Adopted, m.UpdatedAt)
 	return err
 }
 
@@ -123,5 +125,37 @@ func (s *Store) SaveFederationIdentity(hostID string) error {
 	}
 	_, err := s.db.Exec(`INSERT INTO federation_identity (singleton, hostId) VALUES (1, ?)
 ON CONFLICT(singleton) DO UPDATE SET hostId=excluded.hostId`, hostID)
+	return err
+}
+
+// FederationAdoption is a child this daemon dials and adopts, keyed by the
+// URL it dials. Credential is generated here before the first dial and is
+// what the child comes to trust; HostID is the ID the child reported, empty
+// until it first connects.
+type FederationAdoption struct {
+	URL        string
+	Credential string
+	HostID     string
+	UpdatedAt  int64
+}
+
+func (s *Store) FederationAdoption(url string) (*FederationAdoption, error) {
+	var a FederationAdoption
+	err := s.db.QueryRow(`SELECT url, credential, hostId, updatedAt FROM federation_adoptions WHERE url = ?`, url).Scan(&a.URL, &a.Credential, &a.HostID, &a.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &a, err
+}
+
+func (s *Store) SaveFederationAdoption(a FederationAdoption) error {
+	if a.URL == "" || a.Credential == "" {
+		return errors.New("invalid federation adoption")
+	}
+	if a.UpdatedAt == 0 {
+		a.UpdatedAt = s.now().UnixMilli()
+	}
+	_, err := s.db.Exec(`INSERT INTO federation_adoptions (url, credential, hostId, updatedAt) VALUES (?, ?, ?, ?)
+ON CONFLICT(url) DO UPDATE SET credential=excluded.credential, hostId=excluded.hostId, updatedAt=excluded.updatedAt`, a.URL, a.Credential, a.HostID, a.UpdatedAt)
 	return err
 }

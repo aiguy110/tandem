@@ -121,10 +121,12 @@ type Config struct {
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	UIDir          string `json:"uiDir,omitempty"`
-	// ParentProxy optionally routes this daemon's outbound federation dials
-	// (when started with --parent) through a proxy, e.g.
-	// "socks5://127.0.0.1:1080". It never affects inbound serving or any
-	// non-federation traffic.
+	// ParentURL is the parent this daemon dials, from
+	// settings.federation.parent.url; --parent overrides it.
+	ParentURL string `json:"parentUrl,omitempty"`
+	// ParentProxy optionally routes this daemon's outbound dials to its
+	// parent through a proxy, e.g. "socks5://127.0.0.1:1080". It never affects
+	// inbound serving or any non-federation traffic.
 	ParentProxy    string                  `json:"parentProxy,omitempty"`
 	ProjectRoots   []string                `json:"projectRoots"`
 	DirScanDepth   int                     `json:"dirScanDepth"`
@@ -143,6 +145,27 @@ type Config struct {
 	// FederationAccess is the host-to-host access policy for commands this
 	// daemon executes for other federated hosts; see docs/federation.md.
 	FederationAccess []FederationAccessRule `json:"federationAccess,omitempty"`
+	// FederationChildren are hosts this daemon dials and adopts as children.
+	FederationChildren []FederationChildSettings `json:"federationChildren,omitempty"`
+	// FederationJoinToken lets a parent that presents it adopt this daemon
+	// without an operator accepting the request here.
+	FederationJoinToken string `json:"federationJoinToken,omitempty"`
+}
+
+// FederationParentSettings is the parent this daemon dials.
+type FederationParentSettings struct {
+	URL   string `yaml:"url,omitempty"`
+	Proxy string `yaml:"proxy,omitempty"`
+}
+
+// FederationChildSettings is a child this daemon dials and adopts. JoinToken
+// must match the child's own join token for the child to accept the adoption
+// without an operator approving it there.
+type FederationChildSettings struct {
+	URL       string `yaml:"url" json:"url"`
+	Name      string `yaml:"name,omitempty" json:"name,omitempty"`
+	JoinToken string `yaml:"joinToken,omitempty" json:"joinToken,omitempty"`
+	Proxy     string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
 }
 
 // FederationAccessRule grants Level ("none", "view", "operate" or "admin") to
@@ -154,7 +177,10 @@ type FederationAccessRule struct {
 
 // FederationSettings is the `settings.federation` block of config.yml.
 type FederationSettings struct {
-	Access []FederationAccessRule `yaml:"access,omitempty"`
+	Parent    FederationParentSettings  `yaml:"parent,omitempty"`
+	Children  []FederationChildSettings `yaml:"children,omitempty"`
+	JoinToken string                    `yaml:"joinToken,omitempty"`
+	Access    []FederationAccessRule    `yaml:"access,omitempty"`
 }
 
 // LanguageModelConfig is the daemon-side OpenAI-compatible Chat Completions
@@ -588,7 +614,8 @@ func LoadWithOptions(o Options) (Config, error) {
 		DBPath: filepath.Join(home, "tandem.db"), TokenPath: filepath.Join(home, "token"),
 		WorktreesDir: filepath.Join(home, "worktrees"), HomeBaseDir: homeBase, TandemRoot: o.TandemRoot, AssetsDir: filepath.Join(home, "assets"),
 		Host: bind, Port: port, UIDir: env["TANDEM_UI_DIR"],
-		ParentProxy:  strings.TrimSpace(value(env, "TANDEM_PARENT_PROXY", env["TANDEM_MASTER_PROXY"])),
+		ParentURL:    strings.TrimSpace(settings.Federation.Parent.URL),
+		ParentProxy:  strings.TrimSpace(value(env, "TANDEM_PARENT_PROXY", value(env, "TANDEM_MASTER_PROXY", settings.Federation.Parent.Proxy))),
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
@@ -598,6 +625,8 @@ func LoadWithOptions(o Options) (Config, error) {
 		LanguageModel:        resolveLanguageModel(env, settings.LanguageModel, settings.Voice),
 		Voice:                resolveVoice(env, settings.Voice),
 		FederationAccess:     settings.Federation.Access,
+		FederationChildren:   settings.Federation.Children,
+		FederationJoinToken:  strings.TrimSpace(value(env, "TANDEM_JOIN_TOKEN", settings.Federation.JoinToken)),
 	}, nil
 }
 
@@ -1047,6 +1076,17 @@ func EnsureToken(path string) (string, error) {
 func Redacted(c Config) Config {
 	out := c
 	out.ParentProxy = redactURLCredentials(c.ParentProxy)
+	if out.FederationJoinToken != "" {
+		out.FederationJoinToken = "[REDACTED]"
+	}
+	out.FederationChildren = make([]FederationChildSettings, len(c.FederationChildren))
+	for i, child := range c.FederationChildren {
+		if child.JoinToken != "" {
+			child.JoinToken = "[REDACTED]"
+		}
+		child.Proxy = redactURLCredentials(child.Proxy)
+		out.FederationChildren[i] = child
+	}
 	if out.Browser.SteelAPIKey != "" {
 		out.Browser.SteelAPIKey = "[REDACTED]"
 	}

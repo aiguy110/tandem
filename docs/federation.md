@@ -1,11 +1,37 @@
 # Parent and child deployments
 
-One Tandem UI can control agents running on several hosts. Start the ordinary,
-UI-facing instance as the **parent**, then point each additional instance at it:
+One Tandem UI can control agents running on several hosts. Tandem instances ("hosts")
+form a tree: each has at most one **parent** and any number of **children**. A parent
+controls its children and everything below them; hosts above a given host are its
+**ancestors**, and "upstream"/"downstream" mean toward or away from the root.
 
-```sh
-tandem --parent https://tandem.example.net
-```
+A **link** joins a child to its parent. Either end may open it:
+
+- **The child dials its parent** -- the usual case. Start the UI-facing instance
+  normally, then point each additional instance at it:
+
+  ```sh
+  tandem --parent https://tandem.example.net
+  ```
+
+  or, equivalently, in the child's `config.yml`:
+
+  ```yaml
+  settings:
+    federation:
+      parent:
+        url: https://tandem.example.net
+        proxy: socks5://127.0.0.1:1080   # optional; see below
+  ```
+
+  `--parent` wins over the setting. (`--master` and `TANDEM_MASTER_PROXY` are older
+  spellings of `--parent` and `TANDEM_PARENT_PROXY` and still work.)
+
+- **The parent dials the child** ("adoption") -- for a child the parent can reach but
+  that cannot reach it, such as a Tandem inside a container. See
+  [Adopting a child](#adopting-a-child).
+
+Once a link is up it behaves the same whichever end dialed.
 
 The URL is the parent's normal HTTP origin. `https://` uses an encrypted WebSocket;
 `http://` is supported for trusted private networks, but registration credentials,
@@ -25,17 +51,64 @@ TANDEM_PARENT_PROXY=socks5://127.0.0.1:1080 tandem --parent https://tandem.examp
 Credentials are accepted as URL userinfo (`socks5://user:pass@host:1080`) and are
 redacted by `tandem debug config`. Both halves of the transport honor the setting: the
 registration/status calls and the durable WebSocket tunnel. Nothing else changes --
-inbound serving, agent processes, and the browser subsystem dial as they always did,
-and a parent never dials out at all.
+inbound serving, agent processes, and the browser subsystem dial as they always did.
+Dials to adopted children use each child entry's own `proxy` instead.
 
 Host names in the parent URL are resolved by the proxy rather than locally, so a name
 that only resolves on the far side of the tunnel still works. SOCKS5 sits below TLS, so
 an `https://` parent still terminates its own TLS end to end and the proxy sees only
 ciphertext.
 
+## Adopting a child
+
+List the children a host should dial under `settings.federation.children` in its
+`config.yml`:
+
+```yaml
+settings:
+  federation:
+    children:
+      - url: http://127.0.0.1:17717    # the child's HTTP origin
+        name: devbox                   # optional label; default is the child's hostname
+        joinToken: 3f0c...             # optional; must match the child's join token
+        proxy: socks5://127.0.0.1:1080 # optional
+```
+
+The child needs no configuration beyond being reachable. On the child, this daemon is
+about to hand admin access to whoever dialed it, so the **child** decides whether to
+accept:
+
+- **Join token.** Start the child with `TANDEM_JOIN_TOKEN=<secret>` (or
+  `settings.federation.joinToken`) and give the parent the same value. A parent that
+  presents it is adopted straight away.
+- **Approval.** Without a matching token, the child shows an **Adopt this host?**
+  notification with Accept and Reject. The parent keeps retrying until someone answers.
+
+Either way the parent generates a credential for that child URL, and once the child has
+accepted it the credential alone is enough: the join token can then be dropped from the
+parent's config. A child keeps the host ID it already had, so being adopted does not
+rename it for its own children.
+
+A host still has only one parent. A host started with `--parent` refuses adoption, and a
+child already adopted by a connected parent refuses another parent's join token. (Its
+operator can still accept another parent's request, which replaces the first one.)
+
+The parent trusts the child because you configured that URL. When the link leaves the
+machine, use `https://` or a private network, as for any link.
+
+For a container, have the Tandem inside listen on all interfaces and publish its port
+on the host's loopback only, so nothing else can reach its UI:
+
+```sh
+docker run -p 127.0.0.1:17717:7717 -e TANDEM_BIND=0.0.0.0 -e TANDEM_JOIN_TOKEN=3f0c... ...
+```
+
+Adoption needs Tandem v0.19 or later on the child; an older child answers the parent's
+dial with 404 and the parent logs that.
+
 ## Registration and trust
 
-The child makes an outbound connection to the parent, so the parent does not need to
+A child that dials its parent makes an outbound connection, so the parent does not need to
 reach an inbound port on the child. A first-time connection creates a notification in
 the parent's UI with **Accept** and **Reject** actions. Acceptance establishes durable
 trust: Tandem generates and stores a credential at both ends and uses it to reconnect
@@ -52,8 +125,8 @@ deleting or changing that home therefore creates a new identity that requires ap
 
 Federation forms a rooted tree. Every instance may have at most one upstream parent and
 may accept many directly connected children, including when it is itself registered with
-an upstream. Each link is still initiated outbound by the child, so an intermediate
-instance does not need inbound reachability from its own parent.
+an upstream. A link the child dials needs no inbound reachability on the child, and an
+adopted link needs none on the parent.
 
 Trust is hop-by-hop: accepting a child delegates control of that child and the subtree it
 advertises. An upstream parent can therefore discover and manage descendant hosts without

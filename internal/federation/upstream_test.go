@@ -217,7 +217,7 @@ func TestChildControlsParentAndSiblingWithinPolicy(t *testing.T) {
 		var okRoot, okBeta bool
 		rootHost, okRoot = upstreamHost(f.alpha, "root")
 		betaHost, okBeta = upstreamHost(f.alpha, "beta")
-		return okRoot && okBeta && len(rootHost.Snapshot) != 0
+		return okRoot && okBeta && len(rootHost.Snapshot) != 0 && len(betaHost.Snapshot) != 0
 	})
 	if rootHost.Access != "operate" || betaHost.Access != "view" {
 		t.Fatalf("access root=%q beta=%q", rootHost.Access, betaHost.Access)

@@ -680,6 +680,13 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
         singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
         hostId     TEXT NOT NULL
       );`, "federation_identity table"},
+		{"ALTER TABLE federation_master ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0", "federation_master.adopted"},
+		{`CREATE TABLE IF NOT EXISTS federation_adoptions (
+        url        TEXT PRIMARY KEY,
+        credential TEXT NOT NULL,
+        hostId     TEXT NOT NULL DEFAULT '',
+        updatedAt  INTEGER NOT NULL
+      );`, "federation_adoptions table"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()

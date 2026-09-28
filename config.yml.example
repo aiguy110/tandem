@@ -167,6 +167,15 @@ harnesses: {}
 #     ttsVoice: alloy
 #     ttsFormat: mp3
 #   federation:
+#     parent:                # the parent THIS host dials (--parent overrides)
+#       url: https://tandem.example.net
+#       proxy: socks5://127.0.0.1:1080
+#     children:              # hosts THIS host dials and adopts as children
+#       - url: http://127.0.0.1:17717
+#         name: devbox
+#         joinToken: <the child's join token>
+#     joinToken: <secret>    # parents presenting this may adopt THIS host
+#                            # (TANDEM_JOIN_TOKEN overrides)
 #     access:                # who may control THIS host; first match wins
 #       - from: laptop-*       # host-ID glob, "*", or "ancestors"
 #         level: operate       # none | view | operate | admin

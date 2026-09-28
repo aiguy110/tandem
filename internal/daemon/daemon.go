@@ -45,7 +45,8 @@ import (
 )
 
 // RunOptions selects daemon runtime behavior without rewriting the user's
-// configuration file. ParentURL makes this daemon an agent-host child.
+// configuration file. ParentURL makes this daemon a child of that parent,
+// overriding settings.federation.parent.url.
 type RunOptions struct{ ParentURL string }
 
 // Run loads runtime configuration and serves until SIGINT or SIGTERM.
@@ -284,8 +285,18 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	// --parent overrides settings.federation.parent.url.
+	parentURL := strings.TrimSpace(runOpts.ParentURL)
+	if parentURL == "" {
+		parentURL = cfg.ParentURL
+	}
+	childLinks := make([]federation.ChildLink, 0, len(cfg.FederationChildren))
+	for _, child := range cfg.FederationChildren {
+		childLinks = append(childLinks, federation.ChildLink{URL: child.URL, Name: child.Name, JoinToken: child.JoinToken, ProxyURL: child.Proxy})
+	}
 	federationService, err := federation.New(federation.Options{
-		Store: db, Notifications: notificationCenter, ParentURL: runOpts.ParentURL, ProxyURL: cfg.ParentProxy,
+		Store: db, Notifications: notificationCenter, ParentURL: parentURL, ProxyURL: cfg.ParentProxy,
+		Children: childLinks, JoinToken: cfg.FederationJoinToken,
 		Name: federationName, Endpoint: origin, Local: loopback, BuildVersion: buildinfo.Version,
 		Policy: federationPolicy,
 		// Each child that controls this host upstream gets its own private
@@ -461,12 +472,15 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	// Scan project roots now, not when the spawn palette first asks, so it
 	// opens populated; the result is pushed to browsers that are connected.
 	handler.WarmDirs()
-	if runOpts.ParentURL != "" {
+	if parentURL != "" {
 		go func() {
 			if federationErr := federationService.RunParentLink(ctx); federationErr != nil && ctx.Err() == nil {
-				fmt.Fprintf(stdout, "tandem: federation child stopped: %v\n", federationErr)
+				fmt.Fprintf(stdout, "tandem: federation link to parent stopped: %v\n", federationErr)
 			}
 		}()
+	}
+	if len(childLinks) != 0 {
+		go federationService.RunChildLinks(ctx)
 	}
 
 	boot.phase("http_and_services_start")
