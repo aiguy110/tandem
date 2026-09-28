@@ -116,7 +116,8 @@ The command palette's **Fleet View** displays the complete hierarchy. Each node 
 name, connection state, Tandem build, and federation protocol version; directed arrows
 point from slaves to their masters.
 
-The master proxies the same live controls available for a local agent, including:
+The master proxies the same live controls available for a local agent, subject to the
+controlled host's access policy (see below), including:
 
 - prompts, queued prompts, interrupts, permissions, modes, and configuration;
 - transcript events, raw terminal and workspace-shell input/output;
@@ -135,6 +136,59 @@ token.
 The slave reconnects automatically after a network interruption. Its active agents keep
 running while disconnected and are presented to the master again after the connection
 and subscriptions recover.
+
+## Controlling hosts above and beside you
+
+Links are still opened by the slave, but commands can travel both ways over them. A
+slave can see and drive its master, the master's other slaves, and anything above the
+master, when those hosts allow it. Nothing extra has to be reachable: a sibling is reached
+through the master both share.
+
+Every host decides who may control it, in its own `config.yml`:
+
+```yaml
+settings:
+  federation:
+    access:
+      - from: laptop-*      # host ID glob, "*", or "ancestors"
+        level: operate
+      - from: ancestors     # lower the default for this host's masters
+        level: view
+```
+
+The first rule that matches wins. After the configured rules come two defaults:
+`ancestors: admin` and `*: none`. So by default nothing changes: masters control their
+subtrees as before, and a host is invisible to everything else. Levels include everything
+below them:
+
+| Level | Allows |
+|---|---|
+| `none` | nothing; the host is left out of the requester's host list |
+| `view` | agent lists, transcript/terminal/screencast subscriptions, history search, diffs, listings |
+| `operate` | prompts, interrupts, approvals, terminal, workspace-shell and browser input, renames, annotations |
+| `admin` | spawn, resume, close, settings, installs, notification actions, and any command not classified above |
+
+`from` matches the requesting host's ID as shown in Fleet View (`boremox-3f9a1c`). A
+Tandem without a master generates a durable ID of the same form for itself. `ancestors`
+matches this host's master, that master's master, and so on. Access rules are read at
+startup, so restart the daemon after changing them.
+
+The host that executes a command enforces its own policy. Each relay stamps who the
+command came from, and a master accepts a child's claim only for that child or a host in
+the subtree the child advertises. A relay can still impersonate hosts it relays for, so a
+rule can't safely give a host routed through some relay more than that relay itself would
+get. When a master sends a child its view of the fleet, it leaves out every host whose
+policy does not give that child at least `view`. Hosts reached through a master are never
+advertised further up, and they never forward their system notifications. Their
+notifications, and the actions on them, stay with that host's own operators.
+
+In the host list, the spawn palette, and Fleet View, a host shows the access you have to
+it. Spawning is offered only on hosts where you have `admin`. A host's own policy can also
+hide its agents from its master: if its master doesn't have `view`, the host sends an
+empty agent list upstream.
+
+Upstream control needs federation protocol 3 on both ends of each link. A host still on an
+older version keeps working in the original, downward-only way.
 
 ## Session history
 

@@ -166,3 +166,8 @@ harnesses: {}
 #     ttsModel: tts-1
 #     ttsVoice: alloy
 #     ttsFormat: mp3
+#   federation:
+#     access:                # who may control THIS host; first match wins
+#       - from: laptop-*       # host-ID glob, "*", or "ancestors"
+#         level: operate       # none | view | operate | admin
+#     # implicit tail: {from: ancestors, level: admin}, {from: "*", level: none}

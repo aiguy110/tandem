@@ -360,10 +360,13 @@ type clientMessage struct {
 	PositionMs        int64                      `json:"positionMs"`
 	NotificationID    string                     `json:"notificationId"`
 	HostID            string                     `json:"hostId"`
-	All               bool                       `json:"all"`
-	AssetID           string                     `json:"assetId"`
-	MIMEType          string                     `json:"mimeType"`
-	Version           string                     `json:"version"`
+	// FederationOrigin is set only by this daemon's own federation bridge on
+	// a command it relays; see federation.OriginField.
+	FederationOrigin string `json:"federationOrigin,omitempty"`
+	All              bool   `json:"all"`
+	AssetID          string `json:"assetId"`
+	MIMEType         string `json:"mimeType"`
+	Version          string `json:"version"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -1521,6 +1524,10 @@ func (c *connection) forwardFederation(m clientMessage) {
 	// The slave must execute locally; prevent its own wsserver from treating
 	// this already-routed request as another federation hop.
 	m.HostID, m.Spec.HostID = "", ""
+	// A relayed command keeps its original requester, so the host that
+	// executes it applies its access policy to that host, not to this relay.
+	origin := m.FederationOrigin
+	m.FederationOrigin = ""
 	payload, err := json.Marshal(m)
 	if err != nil {
 		c.commandError(m, err)
@@ -1531,7 +1538,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 		// A remote spawn may install the agent runtime before acknowledging.
 		callTimeout = 10 * time.Minute
 	}
-	callCtx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	callCtx, cancel := context.WithTimeout(federation.WithOrigin(context.Background(), origin), callTimeout)
 	defer cancel()
 	var request map[string]any
 	if err := json.Unmarshal(payload, &request); err != nil {
@@ -1735,7 +1742,9 @@ func (h *Handler) syncHostNotifications() {
 	}
 	connected := map[string]bool{}
 	for _, host := range h.opts.Federation.Hosts() {
-		if host.Status == "connected" {
+		// Hosts reached through this daemon's master keep their
+		// notifications (and the actions on them) to their own operators.
+		if host.Status == "connected" && !host.Upstream {
 			connected[host.ID] = true
 		}
 	}

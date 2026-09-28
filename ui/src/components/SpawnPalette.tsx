@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
-import type { BrowserSnapshot, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import type { BrowserSnapshot, FederationHost, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
 import { usePresence, useValuePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
@@ -105,6 +105,12 @@ type PaletteRow =
 //   Tab → type task → Enter → spawn AND dispatch
 //   ⌘/Ctrl+Enter        → customize the selected profile (or new profile on a repo)
 //   right-click / long-press a profile → Customize / Forget
+// Spawning changes what exists on a host, which its access policy reserves
+// for admin; hosts from older daemons report no access and allow it.
+function canSpawnOn(host: FederationHost): boolean {
+  return !host.access || host.access === 'admin';
+}
+
 export function SpawnPalette() {
   const dirs = useStore((s) => s.dirs);
   const hosts = useStore((s) => s.hosts);
@@ -696,8 +702,8 @@ export function SpawnPalette() {
                 Host
                 <select value={hostId} onChange={(e) => setHostId(e.target.value)}>
                   {hosts.map((host) => (
-                    <option key={host.id} value={host.id} disabled={!host.local && host.status !== 'connected' && host.status !== 'accepted'}>
-                      {host.name || host.id}{host.local ? ' (local)' : host.status && host.status !== 'connected' && host.status !== 'accepted' ? ` (${host.status})` : ''}
+                    <option key={host.id} value={host.id} disabled={!host.local && ((host.status !== 'connected' && host.status !== 'accepted') || !canSpawnOn(host))}>
+                      {host.name || host.id}{host.local ? ' (local)' : host.status && host.status !== 'connected' && host.status !== 'accepted' ? ` (${host.status})` : !canSpawnOn(host) ? ` (${host.access} access)` : ''}
                     </option>
                   ))}
                 </select>

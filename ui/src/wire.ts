@@ -168,6 +168,12 @@ export interface FederationHost {
   // Tandem old enough not to report either.
   protocolVersion?: number;
   buildVersion?: string;
+  // Reached through this Tandem's master (the master itself, its other
+  // branches, and anything above it) rather than one of its descendants.
+  upstream?: boolean;
+  // What this Tandem may do on the host under that host's access policy.
+  // Absent from daemons predating federation access control (full access).
+  access?: 'none' | 'view' | 'operate' | 'admin';
 }
 
 export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';

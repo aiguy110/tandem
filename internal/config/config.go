@@ -140,6 +140,21 @@ type Config struct {
 	Node                 NodeConfig          `json:"node"`
 	LanguageModel        LanguageModelConfig `json:"languageModel"`
 	Voice                VoiceConfig         `json:"voice"`
+	// FederationAccess is the host-to-host access policy for commands this
+	// daemon executes for other federated hosts; see docs/federation.md.
+	FederationAccess []FederationAccessRule `json:"federationAccess,omitempty"`
+}
+
+// FederationAccessRule grants Level ("none", "view", "operate" or "admin") to
+// the hosts matched by From: a host-ID glob, "*", or "ancestors".
+type FederationAccessRule struct {
+	From  string `yaml:"from" json:"from"`
+	Level string `yaml:"level" json:"level"`
+}
+
+// FederationSettings is the `settings.federation` block of config.yml.
+type FederationSettings struct {
+	Access []FederationAccessRule `yaml:"access,omitempty"`
 }
 
 // LanguageModelConfig is the daemon-side OpenAI-compatible Chat Completions
@@ -213,6 +228,7 @@ type Settings struct {
 	Node                 NodeSettings          `yaml:"node,omitempty"`
 	LanguageModel        LanguageModelSettings `yaml:"languageModel,omitempty"`
 	Voice                VoiceSettings         `yaml:"voice,omitempty"`
+	Federation           FederationSettings    `yaml:"federation,omitempty"`
 }
 
 // CurrentConfigVersion is written by the current setup wizard. The initial
@@ -581,6 +597,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		Node:                 node,
 		LanguageModel:        resolveLanguageModel(env, settings.LanguageModel, settings.Voice),
 		Voice:                resolveVoice(env, settings.Voice),
+		FederationAccess:     settings.Federation.Access,
 	}, nil
 }
 

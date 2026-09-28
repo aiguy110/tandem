@@ -35,7 +35,20 @@ import (
 // framing, changed credential handling, or an existing field whose meaning
 // changes. A peer reporting a different version still connects -- see
 // checkProtocol -- because most commands remain mutually intelligible.
-const ProtocolVersion = 2
+//
+// Version 3 added upstream control: a master offers each capable child a
+// "view" of the rest of the fleet and executes commands the child sends up,
+// both subject to the controlled host's access Policy.
+const ProtocolVersion = 3
+
+// upstreamCapability is advertised in a child's hello when it understands
+// "view" messages and routes commands upward. A master opens the per-child
+// loopback that serves them only for children that advertise it.
+const upstreamCapability = "upstream"
+
+// upHop is the route step meaning "this daemon's master". Real host IDs never
+// contain it (see ValidHostID), so a route cannot confuse the two.
+const upHop = "^"
 
 // maxFederationDepth is a defensive bound for delegated trust and prevents a
 // malformed peer from advertising an unbounded/cyclic topology.
@@ -69,21 +82,38 @@ type Host struct {
 	// connected; both are absent for a host predating version reporting.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
-	nextID          string
+	// Upstream marks a host reached through this daemon's master rather than
+	// one of its own descendants: the master itself, its other branches, and
+	// anything above it. Such hosts are never advertised further upstream.
+	Upstream bool `json:"upstream,omitempty"`
+	// Access is what this daemon may do on the host under that host's
+	// policy: "none", "view", "operate" or "admin".
+	Access string `json:"access,omitempty"`
+	// Rules is the host's own access policy, carried so each relay can
+	// decide which hosts (and snapshots) a requester may see.
+	Rules  Policy `json:"rules,omitempty"`
+	nextID string
 }
 
 // LocalHost returns this daemon's browser-safe federation identity. It is
 // intentionally separate from Hosts, whose contents are advertised upstream
 // as this daemon's descendants.
 func (s *Service) LocalHost() Host {
-	return Host{
+	h := Host{
 		ID:              "local",
 		Local:           true,
 		Name:            "This host",
 		Status:          "connected",
 		ProtocolVersion: ProtocolVersion,
 		BuildVersion:    s.buildVersion,
+		Access:          LevelAdmin.String(),
 	}
+	s.mu.Lock()
+	if s.upstreamView != nil {
+		h.ParentID = routedHostID([]string{upHop})
+	}
+	s.mu.Unlock()
+	return h
 }
 
 // Local supplies a slave's local operations. Commands and snapshots are
@@ -120,6 +150,13 @@ type Options struct {
 	// ProtocolVersion so a skew notification can name something a human can
 	// act on ("update builder to v0.5.0") rather than a bare number.
 	BuildVersion string
+	// Policy decides what other hosts may do here. Nil keeps the original
+	// contract: ancestors administer this host, nobody else reaches it.
+	Policy Policy
+	// NewLocal opens a private command bridge for one child's upstream
+	// commands, so each child's subscriptions and events stay separate. Nil
+	// disables upstream control on this daemon.
+	NewLocal func() (Local, error)
 }
 
 type Service struct {
@@ -133,6 +170,8 @@ type Service struct {
 	dialer        *websocket.Dialer
 	poll          time.Duration
 	buildVersion  string
+	policy        Policy
+	newLocal      func() (Local, error)
 
 	mu         sync.Mutex
 	snapshots  map[string]json.RawMessage
@@ -143,11 +182,46 @@ type Service struct {
 	upstream   *tunnel
 	subs       map[int]func(string, json.RawMessage)
 	nextSub    int
+	// identity caches selfID's answer for a daemon without a master.
+	identity string
+	// ancestors is this daemon's chain of masters, nearest first, as the
+	// master reported it in its welcome. It decides the "ancestors" subject.
+	ancestors []string
+	// upstreamView is the latest fleet view the master sent, in the master's
+	// own addressing. Nil means the master offers none (it is older, or has
+	// not sent one on the current tunnel).
+	upstreamView []Host
+	// rules holds each direct child's advertised policy, from its hello.
+	rules map[string]Policy
+	// children holds the per-child upstream-control bridge for each child
+	// that advertised upstreamCapability.
+	children map[string]*childLink
+	// localSnapshot is this daemon's own agent list, as offered to children.
+	localSnapshot json.RawMessage
+}
+
+// childLink serves one child's upstream commands through its own loopback,
+// so that child's subscriptions (and the events they produce) are its own.
+type childLink struct {
+	local  Local
+	tunnel *tunnel
+	cancel context.CancelFunc
+	// viewMu serializes building and sending this child's view, so a view
+	// computed earlier cannot overwrite a newer one on the wire.
+	viewMu sync.Mutex
+}
+
+func (l *childLink) close() {
+	l.cancel()
+	if closer, ok := l.local.(io.Closer); ok {
+		_ = closer.Close()
+	}
 }
 
 type command struct {
 	ID      string          `json:"id"`
 	Payload json.RawMessage `json:"payload"`
+	Origin  string          `json:"origin,omitempty"`
 }
 type result struct {
 	ID      string          `json:"id"`
@@ -200,10 +274,24 @@ type tunnelMessage struct {
 	// without ever registering again.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
+	// Origin is the host a "command" was issued by. The receiving daemon
+	// checks it against what the sender could plausibly relay for, then its
+	// policy decides whether to execute. Absent from older peers.
+	Origin string `json:"origin,omitempty"`
+	// Capabilities (on "hello") lists optional features the sender speaks.
+	Capabilities []string `json:"capabilities,omitempty"`
+	// Rules (on "hello") is the sender's own access policy.
+	Rules Policy `json:"rules,omitempty"`
 }
 type tunnel struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
+	// sent remembers the last state message of each kind, so an unchanged
+	// snapshot, topology or view is not re-sent. Besides saving bandwidth,
+	// this is what stops the master's view and the child's topology from
+	// echoing each other forever: each is re-sent on the other's arrival.
+	sentMu sync.Mutex
+	sent   map[string][]byte
 }
 
 // proxyDialers builds the outbound dial path for a slave that reaches its
@@ -244,6 +332,9 @@ func New(opts Options) (*Service, error) {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = time.Second
 	}
+	if err := opts.Policy.Validate(); err != nil {
+		return nil, err
+	}
 	dialer := *websocket.DefaultDialer
 	if proxyURL := strings.TrimSpace(opts.ProxyURL); proxyURL != "" {
 		dial, transport, err := proxyDialers(proxyURL)
@@ -270,7 +361,7 @@ func New(opts Options) (*Service, error) {
 			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
 		}
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}}
+	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}, policy: opts.Policy, newLocal: opts.NewLocal, rules: map[string]Policy{}, children: map[string]*childLink{}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
@@ -317,7 +408,10 @@ func (s *Service) IsSlave() bool {
 	return err == nil && m != nil
 }
 
+// Hosts lists every host this daemon can address: its descendants, then
+// (when its master offers a view) the hosts reached through that master.
 func (s *Service) Hosts() []Host {
+	self := s.selfID()
 	peers, err := s.store.FederationSlaves()
 	if err != nil {
 		return []Host{}
@@ -330,8 +424,79 @@ func (s *Service) Hosts() []Host {
 		if b := s.snapshots[p.ID]; len(b) != 0 {
 			h.Snapshot = append(json.RawMessage(nil), b...)
 		}
+		h.Rules = s.rules[p.ID]
 		out = append(out, h)
 		out = append(out, s.descendantsLocked(p.ID, h.ID, h.Route, 1, p.Status == "connected")...)
+	}
+	// This daemon is above every descendant, so each one's policy is read
+	// with this daemon as an ancestor.
+	for i := range out {
+		out[i].Access = out[i].Rules.LevelFor(self, true).String()
+	}
+	return append(out, s.upstreamHostsLocked()...)
+}
+
+// descendantHosts is Hosts without the hosts reached through the master:
+// what this daemon advertises upstream as its subtree.
+func (s *Service) descendantHosts() []Host {
+	all := s.Hosts()
+	out := all[:0]
+	for _, h := range all {
+		if !h.Upstream {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// upstreamHostsLocked translates the master's view into this daemon's
+// addressing: the master is route [^], and a host the master calls X is
+// [^, X's route...]. Hosts deeper than maxFederationDepth are dropped.
+func (s *Service) upstreamHostsLocked() []Host {
+	if s.upstreamView == nil {
+		return nil
+	}
+	masterID := routedHostID([]string{upHop})
+	idMap := map[string]string{"": masterID}
+	routes := map[string][]string{}
+	for _, h := range s.upstreamView {
+		route := []string{upHop}
+		if !h.Local {
+			route = append(route, h.Route...)
+		}
+		if len(route) > maxFederationDepth {
+			continue
+		}
+		routes[h.ID] = route
+		idMap[h.ID] = routedHostID(route)
+	}
+	connected := s.upstream != nil
+	out := make([]Host, 0, len(s.upstreamView))
+	for _, h := range s.upstreamView {
+		route, ok := routes[h.ID]
+		if !ok {
+			continue
+		}
+		next := h.ID
+		if h.Local {
+			next = ""
+		}
+		parent := ""
+		if h.Local {
+			if h.ParentID != "" {
+				parent = idMap[h.ParentID]
+			}
+		} else {
+			parent = idMap[h.ParentID]
+		}
+		entry := h
+		entry.ID, entry.ParentID, entry.Route, entry.Depth, entry.nextID = idMap[h.ID], parent, route, len(route), next
+		entry.Local, entry.Upstream = false, true
+		entry.Snapshot = append(json.RawMessage(nil), h.Snapshot...)
+		if !connected {
+			entry.Status = "offline"
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -397,6 +562,13 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	if target.ID == "" {
 		return nil, fmt.Errorf("federation: unknown host %q", hostID)
 	}
+	origin := OriginFrom(ctx)
+	if origin == "" {
+		origin = s.selfID()
+	}
+	if target.Upstream {
+		return s.callUpstream(ctx, target, origin, payload)
+	}
 	directID := target.Route[0]
 	if len(target.Route) > 1 {
 		var envelope map[string]json.RawMessage
@@ -424,11 +596,11 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 	s.waiters[id] = done
 	tunnel := s.tunnels[directID]
 	if tunnel == nil {
-		s.queues[directID] = append(s.queues[directID], command{ID: id, Payload: append(json.RawMessage(nil), payload...)})
+		s.queues[directID] = append(s.queues[directID], command{ID: id, Payload: append(json.RawMessage(nil), payload...), Origin: origin})
 	}
 	s.mu.Unlock()
 	if tunnel != nil {
-		if err := tunnel.send(tunnelMessage{T: "command", ID: id, Payload: append(json.RawMessage(nil), payload...)}); err != nil {
+		if err := tunnel.send(tunnelMessage{T: "command", ID: id, Payload: append(json.RawMessage(nil), payload...), Origin: origin}); err != nil {
 			s.mu.Lock()
 			delete(s.waiters, id)
 			s.mu.Unlock()
@@ -448,6 +620,127 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 		slog.Warn("federation command timed out", "host_id", hostID, "command_id", id, "error", ctx.Err())
 		return nil, ctx.Err()
 	}
+}
+
+// callUpstream sends a command to a host reached through this daemon's
+// master. The master's address for the target travels as the envelope's
+// hostId (absent for the master itself), exactly as a browser on the master
+// would address it; the master's own wsserver does any further routing.
+func (s *Service) callUpstream(ctx context.Context, target Host, origin string, payload json.RawMessage) (json.RawMessage, error) {
+	var next any
+	if target.nextID != "" {
+		next = target.nextID
+	}
+	payload, err := withEnvelopeField(payload, "hostId", next)
+	if err != nil {
+		return nil, fmt.Errorf("federation: invalid routed command: %w", err)
+	}
+	s.mu.Lock()
+	t := s.upstream
+	s.mu.Unlock()
+	if t == nil {
+		return nil, fmt.Errorf("federation: route to %q is offline: not connected to master", target.ID)
+	}
+	id, err := randomID()
+	if err != nil {
+		return nil, err
+	}
+	commandType, _ := envelopeRoute(payload)
+	done := make(chan result, 1)
+	s.mu.Lock()
+	s.waiters[id] = done
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.waiters, id); s.mu.Unlock() }()
+	slog.Info("sending federation command upstream", "host_id", target.ID, "host_name", target.Name, "type", commandType, "command_id", id, "origin", origin, "bytes", len(payload))
+	if err := t.send(tunnelMessage{T: "command", ID: id, Payload: payload, Origin: origin}); err != nil {
+		slog.Warn("federation upstream command write failed", "host_id", target.ID, "command_id", id, "error", err)
+		return nil, err
+	}
+	select {
+	case r := <-done:
+		if r.Error != "" {
+			slog.Warn("federation upstream command failed remotely", "host_id", target.ID, "type", commandType, "command_id", id, "error", r.Error)
+			return nil, errors.New(r.Error)
+		}
+		slog.Info("federation upstream command completed", "host_id", target.ID, "type", commandType, "command_id", id, "bytes", len(r.Payload))
+		return r.Payload, nil
+	case <-ctx.Done():
+		slog.Warn("federation upstream command timed out", "host_id", target.ID, "type", commandType, "command_id", id, "error", ctx.Err())
+		return nil, ctx.Err()
+	}
+}
+
+// selfID is the host ID this daemon names itself by to its peers: the ID its
+// master accepted, or else a durable generated one (a root has no master to
+// accept an ID, but its children still need to tell it apart).
+func (s *Service) selfID() string {
+	if s.masterURL != "" {
+		if m, err := s.store.FederationMaster(); err == nil && m != nil && m.HostID != "" && strings.TrimRight(m.URL, "/") == s.masterURL {
+			return m.HostID
+		}
+	}
+	s.mu.Lock()
+	cached := s.identity
+	s.mu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	id, err := s.store.FederationIdentity()
+	if err != nil {
+		slog.Warn("federation identity lookup failed", "error", err)
+		return ""
+	}
+	if id == "" {
+		if id, err = newHostID(s.name); err != nil {
+			return ""
+		}
+		if err := s.store.SaveFederationIdentity(id); err != nil {
+			slog.Warn("federation identity could not be saved", "error", err)
+		} else {
+			slog.Info("generated federation identity", "host_id", id)
+		}
+	}
+	s.mu.Lock()
+	s.identity = id
+	s.mu.Unlock()
+	return id
+}
+
+// isAncestor reports whether a command's origin, received over the upstream
+// link, is one of this daemon's masters. An unattributed command can only
+// come from an older master, which predates any other kind of sender.
+func (s *Service) isAncestor(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ancestor := range s.ancestors {
+		if ancestor == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// authorize applies this daemon's policy to a command it is about to execute
+// locally. Commands that name a further hostId are relays: the host that
+// finally executes them decides.
+func (s *Service) authorize(origin string, ancestor bool, payload json.RawMessage) error {
+	commandType, hostID := envelopeRoute(payload)
+	if hostID != "" {
+		return nil
+	}
+	have, need := s.policy.LevelFor(origin, ancestor), CommandLevel(commandType)
+	if have >= need {
+		return nil
+	}
+	slog.Warn("federation command denied by access policy", "origin", origin, "ancestor", ancestor, "type", commandType, "have", have.String(), "need", need.String())
+	who := origin
+	if who == "" {
+		who = "the requesting host"
+	}
+	return fmt.Errorf("federation: %s may not %s on this host (needs %s access, has %s)", who, commandType, need, have)
 }
 
 // ServeHTTP mounts the small, separately authenticated federation protocol.
@@ -631,6 +924,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	s.tunnels[hello.HostID] = t
 	queued := s.queues[hello.HostID]
 	delete(s.queues, hello.HostID)
+	s.rules[hello.HostID] = hello.Rules
 	s.mu.Unlock()
 	if old != nil {
 		_ = old.conn.Close()
@@ -639,14 +933,18 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	peer.LastSeenAt = time.Now().UnixMilli()
 	peer.ProtocolVersion, peer.BuildVersion = hello.ProtocolVersion, hello.BuildVersion
 	_ = s.store.UpsertFederationSlave(*peer)
-	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion)
+	upstreamCapable := hasCapability(hello.Capabilities, upstreamCapability)
+	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion, "upstream_capable", upstreamCapable, "access_rules", len(hello.Rules))
 	// A host predating the welcome message ignores unknown tunnel types, so
 	// this is safe to send unconditionally.
-	_ = t.send(tunnelMessage{T: "welcome", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion})
+	_ = t.send(s.welcome())
 	s.checkProtocol(*peer)
+	if upstreamCapable {
+		s.startChildLink(hello.HostID, t)
+	}
 	s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for _, cmd := range queued {
-		if t.send(tunnelMessage{T: "command", ID: cmd.ID, Payload: cmd.Payload}) != nil {
+		if t.send(tunnelMessage{T: "command", ID: cmd.ID, Payload: cmd.Payload, Origin: cmd.Origin}) != nil {
 			break
 		}
 	}
@@ -656,6 +954,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 			delete(s.tunnels, hello.HostID)
 		}
 		s.mu.Unlock()
+		s.stopChildLink(hello.HostID, t)
 		s.removeProtocolNotification(hello.HostID)
 		p, _ := s.store.FederationSlave(hello.HostID)
 		if p != nil && p.Status == "connected" {
@@ -673,6 +972,8 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		switch msg.T {
 		case "response":
 			s.deliver(result{ID: msg.ID, Payload: msg.Payload, Error: msg.Error})
+		case "command":
+			go s.executeFromChild(hello.HostID, t, msg)
 		case "snapshot":
 			s.mu.Lock()
 			s.snapshots[hello.HostID] = append(json.RawMessage(nil), msg.Snapshot...)
@@ -756,6 +1057,379 @@ func (s *Service) publish(hostID string, payload json.RawMessage) {
 	}
 	if envelope.T == "federation_hosts_changed" || envelope.T == "agents" {
 		s.sendTopologyUpstream()
+		s.refreshChildViews()
+	}
+}
+
+// publishLocal delivers an envelope to this daemon's own subscribers only.
+// It is for state learned from the master, which must neither be cached as a
+// descendant's snapshot nor trigger re-advertisement upstream.
+func (s *Service) publishLocal(hostID string, payload json.RawMessage) {
+	s.mu.Lock()
+	callbacks := make([]func(string, json.RawMessage), 0, len(s.subs))
+	for _, fn := range s.subs {
+		callbacks = append(callbacks, fn)
+	}
+	s.mu.Unlock()
+	for _, fn := range callbacks {
+		fn(hostID, append(json.RawMessage(nil), payload...))
+	}
+}
+
+// setAncestors records the master's report of the hosts above this one. A
+// changed chain is passed on to this daemon's own children (it is their
+// chain too) and re-evaluates what the master may see here.
+func (s *Service) setAncestors(chain []string) {
+	s.mu.Lock()
+	changed := len(chain) != len(s.ancestors)
+	for i := 0; !changed && i < len(chain); i++ {
+		changed = chain[i] != s.ancestors[i]
+	}
+	if !changed {
+		s.mu.Unlock()
+		return
+	}
+	s.ancestors = append([]string(nil), chain...)
+	upstream := s.upstream
+	children := make([]*tunnel, 0, len(s.tunnels))
+	for _, t := range s.tunnels {
+		children = append(children, t)
+	}
+	s.mu.Unlock()
+	slog.Info("federation ancestors updated", "ancestors", chain)
+	welcome := s.welcome()
+	for _, t := range children {
+		_ = t.send(welcome)
+	}
+	if upstream != nil && s.local != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if snapshot, err := s.local.Snapshot(ctx); err == nil && len(snapshot) > 0 {
+				_ = upstream.sendState("snapshot", tunnelMessage{T: "snapshot", Snapshot: s.upstreamSnapshot(snapshot)})
+			}
+		}()
+	}
+}
+
+// setUpstreamView installs the master's latest view of the rest of the
+// fleet and tells this daemon's browsers (and children) when it changed.
+func (s *Service) setUpstreamView(hosts []Host) {
+	var next []Host
+	if len(hosts) != 0 {
+		next = cloneHosts(hosts)
+	}
+	s.mu.Lock()
+	before, _ := json.Marshal(s.upstreamView)
+	after, _ := json.Marshal(next)
+	if bytes.Equal(before, after) {
+		s.mu.Unlock()
+		return
+	}
+	s.upstreamView = next
+	s.mu.Unlock()
+	slog.Info("federation upstream view updated", "hosts", len(next))
+	masterID := routedHostID([]string{upHop})
+	s.publishLocal(masterID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	s.publishLocal(masterID, json.RawMessage(`{"t":"agents"}`))
+	s.refreshChildViews()
+}
+
+// upstreamIDLocked maps the master's address for a host (empty for the
+// master itself) to this daemon's address for it, or "" if unknown.
+func (s *Service) upstreamIDLocked(masterRelative string) string {
+	for _, h := range s.upstreamHostsLocked() {
+		if h.nextID == masterRelative {
+			return h.ID
+		}
+	}
+	return ""
+}
+
+func (s *Service) isUpstreamHostID(hostID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.upstreamHostsLocked() {
+		if h.ID == hostID {
+			return true
+		}
+	}
+	return false
+}
+
+// relayUpstreamEvent publishes an event the master forwarded for one of the
+// hosts reached through it, under this daemon's address for that host.
+func (s *Service) relayUpstreamEvent(masterRelative string, payload json.RawMessage) {
+	var meta struct {
+		T string `json:"t"`
+	}
+	_ = json.Unmarshal(payload, &meta)
+	if meta.T == "system_notifications" {
+		return
+	}
+	s.mu.Lock()
+	hostID := s.upstreamIDLocked(masterRelative)
+	s.mu.Unlock()
+	if hostID == "" {
+		slog.Debug("dropping upstream event for unknown host", "master_host_id", masterRelative, "type", meta.T)
+		return
+	}
+	s.publishLocal(hostID, payload)
+}
+
+// startChildLink opens the private bridge that serves one child's upstream
+// commands and sends it its first view of the fleet.
+func (s *Service) startChildLink(childID string, t *tunnel) {
+	if s.newLocal == nil {
+		return
+	}
+	local, err := s.newLocal()
+	if err != nil {
+		slog.Warn("federation child link could not open a local bridge", "host_id", childID, "error", err)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	link := &childLink{local: local, tunnel: t, cancel: cancel}
+	s.mu.Lock()
+	old := s.children[childID]
+	s.children[childID] = link
+	s.mu.Unlock()
+	if old != nil {
+		old.close()
+	}
+	slog.Info("federation child link opened", "host_id", childID, "access", s.policy.LevelFor(childID, false).String())
+	if source, ok := local.(EventSource); ok {
+		go s.pumpChildEvents(ctx, childID, link, source.Events())
+	}
+	go func() {
+		snapshotCtx, cancelSnapshot := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelSnapshot()
+		if snapshot, err := local.Snapshot(snapshotCtx); err == nil && len(snapshot) > 0 {
+			s.setLocalSnapshot(snapshot)
+		} else if err != nil && ctx.Err() == nil {
+			slog.Warn("federation child link could not read local agents", "host_id", childID, "error", err)
+		}
+		s.sendView(childID)
+	}()
+}
+
+func (s *Service) stopChildLink(childID string, t *tunnel) {
+	s.mu.Lock()
+	link := s.children[childID]
+	if link != nil && link.tunnel == t {
+		delete(s.children, childID)
+	} else {
+		link = nil
+	}
+	s.mu.Unlock()
+	if link != nil {
+		link.close()
+		slog.Info("federation child link closed", "host_id", childID)
+	}
+}
+
+func (s *Service) setLocalSnapshot(raw json.RawMessage) {
+	snapshot := localOnlySnapshot(raw)
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(snapshot, &envelope) == nil {
+		// A correlated reply's corrId would make every refresh look new.
+		delete(envelope, "corrId")
+		if b, err := json.Marshal(envelope); err == nil {
+			snapshot = b
+		}
+	}
+	s.mu.Lock()
+	s.localSnapshot = snapshot
+	s.mu.Unlock()
+}
+
+// pumpChildEvents forwards what the child's bridge hears -- the events of
+// the subscriptions that child made -- down its tunnel. State-change
+// broadcasts become a fresh view instead, and nothing from a host the child
+// may not view is passed on.
+func (s *Service) pumpChildEvents(ctx context.Context, childID string, link *childLink, events <-chan json.RawMessage) {
+	visible := map[string]bool{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-events:
+			var meta struct {
+				T      string `json:"t"`
+				HostID string `json:"hostId"`
+			}
+			_ = json.Unmarshal(event, &meta)
+			switch meta.T {
+			case "agents":
+				if meta.HostID == "" {
+					s.setLocalSnapshot(event)
+				}
+				visible = map[string]bool{}
+				s.sendView(childID)
+				continue
+			case "hosts", "federation_hosts_changed":
+				visible = map[string]bool{}
+				s.sendView(childID)
+				continue
+			case "system_notifications":
+				// A host's notifications carry actions (including approving
+				// federation registrations) for its own operators only.
+				continue
+			}
+			allowed, known := visible[meta.HostID]
+			if !known {
+				allowed = s.childMayView(childID, meta.HostID)
+				visible[meta.HostID] = allowed
+			}
+			if !allowed {
+				continue
+			}
+			if err := link.tunnel.send(tunnelMessage{T: "event", HostID: meta.HostID, Payload: event}); err != nil {
+				slog.Warn("federation child event write failed", "host_id", childID, "type", meta.T, "error", err)
+				return
+			}
+		}
+	}
+}
+
+// childMayView reports whether the direct child may see state from hostID
+// (this daemon's address; "" is this daemon itself). A child never gets its
+// own subtree's state echoed back.
+func (s *Service) childMayView(childID, hostID string) bool {
+	if hostID == "" {
+		return s.policy.LevelFor(childID, false) >= LevelView
+	}
+	for _, h := range s.Hosts() {
+		if h.ID != hostID {
+			continue
+		}
+		if !h.Upstream && len(h.Route) != 0 && h.Route[0] == childID {
+			return false
+		}
+		return h.Rules.LevelFor(childID, false) >= LevelView
+	}
+	return false
+}
+
+func (s *Service) refreshChildViews() {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.children))
+	for id := range s.children {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.sendView(id)
+	}
+}
+
+// sendView sends a child the hosts it may see through this daemon, unless
+// the view is unchanged since the last one sent on that tunnel.
+func (s *Service) sendView(childID string) {
+	s.mu.Lock()
+	link := s.children[childID]
+	s.mu.Unlock()
+	if link == nil {
+		return
+	}
+	link.viewMu.Lock()
+	defer link.viewMu.Unlock()
+	hosts := s.viewFor(childID)
+	if err := link.tunnel.sendState("view", tunnelMessage{T: "view", Hosts: hosts}); err != nil {
+		slog.Warn("federation view write failed", "host_id", childID, "error", err)
+	}
+}
+
+// viewFor is the part of the fleet a direct child may see through this
+// daemon, in this daemon's addressing: this daemon (as the Local entry),
+// its other branches, and whatever it sees above itself -- each included only
+// when that host's own policy grants the child view. The child's own subtree
+// is omitted; the child already reaches it directly.
+func (s *Service) viewFor(childID string) []Host {
+	out := []Host{}
+	for _, h := range s.Hosts() {
+		if !h.Upstream && len(h.Route) != 0 && h.Route[0] == childID {
+			continue
+		}
+		level := h.Rules.LevelFor(childID, false)
+		if level < LevelView {
+			continue
+		}
+		h.Access = level.String()
+		out = append(out, h)
+	}
+	level := s.policy.LevelFor(childID, false)
+	if level < LevelView && len(out) == 0 {
+		return out
+	}
+	self := Host{ID: "local", Local: true, NodeID: s.selfID(), Name: s.name, Endpoint: s.endpoint, Status: "connected", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Access: level.String(), Rules: s.policy}
+	s.mu.Lock()
+	if s.upstreamView != nil {
+		self.ParentID = routedHostID([]string{upHop})
+	}
+	if level >= LevelView {
+		self.Snapshot = append(json.RawMessage(nil), s.localSnapshot...)
+	}
+	s.mu.Unlock()
+	return append([]Host{self}, out...)
+}
+
+// childOrigin decides whom a child's command is from. A child may relay for
+// itself and for hosts in the subtree it advertises -- it controls those
+// anyway -- but any other claim is treated as the child's own request.
+func (s *Service) childOrigin(childID, claimed string) string {
+	if claimed == "" || claimed == childID {
+		return childID
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.topologies[childID] {
+		if h.NodeID == claimed {
+			return claimed
+		}
+	}
+	slog.Warn("federation child claimed an origin outside its subtree", "host_id", childID, "claimed_origin", claimed)
+	return childID
+}
+
+// executeFromChild runs, or relays onward, a command a child sent upstream.
+func (s *Service) executeFromChild(childID string, t *tunnel, msg tunnelMessage) {
+	origin := s.childOrigin(childID, msg.Origin)
+	commandType, next := envelopeRoute(msg.Payload)
+	s.mu.Lock()
+	link := s.children[childID]
+	s.mu.Unlock()
+	reply := tunnelMessage{T: "response", ID: msg.ID}
+	switch {
+	case link == nil || link.tunnel != t:
+		reply.Error = "federation: this host does not accept commands from its agent hosts"
+	default:
+		if err := s.authorize(origin, false, msg.Payload); err != nil {
+			reply.Error = err.Error()
+			break
+		}
+		payload := msg.Payload
+		if next != "" {
+			var err error
+			if payload, err = withEnvelopeField(payload, OriginField, origin); err != nil {
+				reply.Error = err.Error()
+				break
+			}
+		}
+		slog.Info("executing federation command from agent host", "host_id", childID, "origin", origin, "type", commandType, "relay_to", next, "command_id", msg.ID)
+		// The requester applies its own deadline; this only bounds a
+		// command whose reply never comes (spawns may install runtimes).
+		ctx, cancel := context.WithTimeout(context.Background(), 11*time.Minute)
+		data, err := link.local.Execute(ctx, payload)
+		cancel()
+		reply.Payload = data
+		if err != nil {
+			slog.Warn("federation command from agent host failed", "host_id", childID, "origin", origin, "type", commandType, "command_id", msg.ID, "error", err)
+			reply.Error = err.Error()
+		}
+	}
+	if err := t.send(reply); err != nil {
+		slog.Warn("federation response write to agent host failed", "host_id", childID, "command_id", msg.ID, "error", err)
 	}
 }
 
@@ -764,8 +1438,31 @@ func (s *Service) sendTopologyUpstream() {
 	t := s.upstream
 	s.mu.Unlock()
 	if t != nil {
-		_ = t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()})
+		_ = t.sendState("topology", tunnelMessage{T: "topology", Hosts: s.descendantHosts()})
 	}
+}
+
+// welcome is what a master tells a connecting child: its versions and the
+// chain of hosts above that child, nearest first, which the child's policy
+// treats as its ancestors.
+func (s *Service) welcome() tunnelMessage {
+	chain := []string{}
+	if self := s.selfID(); self != "" {
+		chain = append(chain, self)
+	}
+	s.mu.Lock()
+	chain = append(chain, s.ancestors...)
+	s.mu.Unlock()
+	return tunnelMessage{T: "welcome", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: chain, Capabilities: []string{upstreamCapability}}
+}
+
+func hasCapability(capabilities []string, want string) bool {
+	for _, c := range capabilities {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }
 
 // A cycle would eventually re-advertise this daemon's upstream identity as a
@@ -791,6 +1488,33 @@ func (t *tunnel) send(message tunnelMessage) error {
 	err := t.conn.WriteJSON(message)
 	_ = t.conn.SetWriteDeadline(time.Time{})
 	return err
+}
+
+// sendState sends a state message unless it is byte-identical to the last
+// one of the same kind on this tunnel.
+func (t *tunnel) sendState(kind string, message tunnelMessage) error {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	t.sentMu.Lock()
+	defer t.sentMu.Unlock()
+	if bytes.Equal(t.sent[kind], data) {
+		return nil
+	}
+	t.writeMu.Lock()
+	_ = t.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	err = t.conn.WriteMessage(websocket.TextMessage, data)
+	_ = t.conn.SetWriteDeadline(time.Time{})
+	t.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if t.sent == nil {
+		t.sent = map[string][]byte{}
+	}
+	t.sent[kind] = data
+	return nil
 }
 
 func (t *tunnel) ping() error {
@@ -1192,7 +1916,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}()
 	defer close(stopClose)
 	t := &tunnel{conn: conn}
-	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: []string{hostID}}); err != nil {
+	if err = t.send(tunnelMessage{T: "hello", HostID: hostID, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Ancestors: []string{hostID}, Capabilities: []string{upstreamCapability}, Rules: s.policy}); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -1203,17 +1927,23 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		if s.upstream == t {
 			s.upstream = nil
 		}
+		hadView := s.upstreamView != nil
+		s.upstreamView = nil
 		s.mu.Unlock()
+		if hadView {
+			slog.Info("federation upstream view withdrawn", "host_id", hostID)
+			s.publishLocal(routedHostID([]string{upHop}), json.RawMessage(`{"t":"federation_hosts_changed"}`))
+			s.publishLocal(routedHostID([]string{upHop}), json.RawMessage(`{"t":"agents"}`))
+		}
 	}()
 	if s.local != nil {
 		if snapshot, e := s.local.Snapshot(ctx); e == nil && len(snapshot) > 0 {
-			snapshot = localOnlySnapshot(snapshot)
-			if err = t.send(tunnelMessage{T: "snapshot", Snapshot: snapshot}); err != nil {
+			if err = t.sendState("snapshot", tunnelMessage{T: "snapshot", Snapshot: s.upstreamSnapshot(snapshot)}); err != nil {
 				return err
 			}
 		}
 	}
-	if err = t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+	if err = t.sendState("topology", tunnelMessage{T: "topology", Hosts: s.descendantHosts()}); err != nil {
 		return err
 	}
 	var events <-chan json.RawMessage
@@ -1262,21 +1992,26 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 						// A loopback's agents event is an aggregate view. Send only
 						// this daemon's local portion as its snapshot; descendants
 						// travel in the accompanying topology.
-						if err := t.send(tunnelMessage{T: "snapshot", Snapshot: localOnlySnapshot(event)}); err != nil {
+						if err := t.sendState("snapshot", tunnelMessage{T: "snapshot", Snapshot: s.upstreamSnapshot(event)}); err != nil {
 							reportWriteError(err)
 							return
 						}
-						if err := t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+						if err := t.sendState("topology", tunnelMessage{T: "topology", Hosts: s.descendantHosts()}); err != nil {
 							reportWriteError(err)
 							return
 						}
 						continue
 					}
 					if meta.T == "federation_hosts_changed" {
-						if err := t.send(tunnelMessage{T: "topology", Hosts: s.Hosts()}); err != nil {
+						if err := t.sendState("topology", tunnelMessage{T: "topology", Hosts: s.descendantHosts()}); err != nil {
 							reportWriteError(err)
 							return
 						}
+					}
+					if meta.HostID != "" && s.isUpstreamHostID(meta.HostID) {
+						// Hosts reached through the master are the master's to
+						// report; echoing their events back up would loop.
+						continue
 					}
 					if err := t.send(tunnelMessage{T: "event", HostID: meta.HostID, Payload: event}); err != nil {
 						reportWriteError(err)
@@ -1293,6 +2028,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		}
 		if msg.T == "welcome" {
 			s.noteMasterProtocol(msg.ProtocolVersion, msg.BuildVersion)
+			s.setAncestors(msg.Ancestors)
 			continue
 		}
 		// The master authenticates after the upgrade, so a refused credential
@@ -1300,16 +2036,33 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		if msg.T == "error" && msg.Error == unauthorizedTunnelError {
 			return errCredentialRejected
 		}
+		switch msg.T {
+		case "view":
+			s.setUpstreamView(msg.Hosts)
+			continue
+		case "response":
+			s.deliver(result{ID: msg.ID, Payload: msg.Payload, Error: msg.Error})
+			continue
+		case "event":
+			s.relayUpstreamEvent(msg.HostID, msg.Payload)
+			continue
+		}
 		if msg.T != "command" {
 			continue
 		}
 		go func(msg tunnelMessage) {
 			var data json.RawMessage
 			var execErr error
+			payload := msg.Payload
 			if s.local == nil {
 				execErr = errors.New("federation slave has no command handler")
-			} else {
-				data, execErr = s.local.Execute(attemptCtx, msg.Payload)
+			} else if execErr = s.authorize(msg.Origin, s.isAncestor(msg.Origin), payload); execErr == nil {
+				if _, next := envelopeRoute(payload); next != "" && msg.Origin != "" {
+					payload, execErr = withEnvelopeField(payload, OriginField, msg.Origin)
+				}
+				if execErr == nil {
+					data, execErr = s.local.Execute(attemptCtx, payload)
+				}
 			}
 			reply := tunnelMessage{T: "response", ID: msg.ID, Payload: data}
 			if execErr != nil {
@@ -1325,6 +2078,21 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 		default:
 		}
 	}
+}
+
+// upstreamSnapshot is the agent list this daemon offers its master: its own
+// agents only, and none at all when its policy denies the master view.
+func (s *Service) upstreamSnapshot(raw json.RawMessage) json.RawMessage {
+	s.mu.Lock()
+	master := ""
+	if len(s.ancestors) != 0 {
+		master = s.ancestors[0]
+	}
+	s.mu.Unlock()
+	if s.policy.LevelFor(master, true) < LevelView {
+		return json.RawMessage(`{"t":"agents","agents":[]}`)
+	}
+	return localOnlySnapshot(raw)
 }
 
 // A middle daemon's browser snapshot contains its own remotely visible

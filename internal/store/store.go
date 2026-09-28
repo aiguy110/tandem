@@ -673,6 +673,10 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
 		// tables has nothing to alter until they exist.
 		{"ALTER TABLE federation_slaves ADD COLUMN protocolVersion INTEGER NOT NULL DEFAULT 0", "federation_slaves.protocolVersion"},
 		{"ALTER TABLE federation_slaves ADD COLUMN buildVersion TEXT NOT NULL DEFAULT ''", "federation_slaves.buildVersion"},
+		{`CREATE TABLE IF NOT EXISTS federation_identity (
+        singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
+        hostId     TEXT NOT NULL
+      );`, "federation_identity table"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()

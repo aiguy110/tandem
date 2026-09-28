@@ -104,3 +104,24 @@ func (s *Store) DeleteFederationSlave(id string) error {
 	_, err := s.db.Exec(`DELETE FROM federation_slaves WHERE id = ?`, id)
 	return err
 }
+
+// FederationIdentity is the host ID a daemon without a master uses to name
+// itself to the hosts below it. A daemon with a master uses the ID that
+// master accepted instead; "" means none has been generated yet.
+func (s *Store) FederationIdentity() (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT hostId FROM federation_identity WHERE singleton = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+func (s *Store) SaveFederationIdentity(hostID string) error {
+	if hostID == "" {
+		return errors.New("invalid federation identity")
+	}
+	_, err := s.db.Exec(`INSERT INTO federation_identity (singleton, hostId) VALUES (1, ?)
+ON CONFLICT(singleton) DO UPDATE SET hostId=excluded.hostId`, hostID)
+	return err
+}

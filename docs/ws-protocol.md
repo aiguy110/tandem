@@ -76,6 +76,12 @@ tab survives an upgrade). Subsequent ordinary agent commands use that ID and are
 one hop at a time. Live transcript, terminal, approval, lifecycle, and browser-channel
 traffic is proxied without exposing ACP or CDP details to the UI.
 
+A host reached through this daemon's master (the master itself, its other branches, and
+anything above it) carries `upstream: true`; the local host's `parentId` then names the
+master. Each host may carry `access` (`none`/`view`/`operate`/`admin`) — what this daemon
+may do there under that host's policy. A command the target's policy denies returns an
+ordinary error `ack`.
+
 Slave registration is a daemon-to-daemon protocol, not browser bearer-token
 authentication. First contact remains pending until the master accepts its system
 notification; later connections authenticate with the durable registration credential.

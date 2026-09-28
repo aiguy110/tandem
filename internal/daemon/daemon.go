@@ -280,7 +280,18 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if hostnameErr != nil || strings.TrimSpace(federationName) == "" {
 		federationName = displayHost
 	}
-	federationService, err := federation.New(federation.Options{Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, ProxyURL: cfg.MasterProxy, Name: federationName, Endpoint: origin, Local: loopback, BuildVersion: buildinfo.Version})
+	federationPolicy, err := federationPolicy(cfg.FederationAccess)
+	if err != nil {
+		return err
+	}
+	federationService, err := federation.New(federation.Options{
+		Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, ProxyURL: cfg.MasterProxy,
+		Name: federationName, Endpoint: origin, Local: loopback, BuildVersion: buildinfo.Version,
+		Policy: federationPolicy,
+		// Each child that controls this host upstream gets its own private
+		// browser socket, so its subscriptions and events stay its own.
+		NewLocal: func() (federation.Local, error) { return federation.NewLoopbackLocal(origin, token) },
+	})
 	if err != nil {
 		return err
 	}
@@ -1161,4 +1172,20 @@ func takeoverResolvedStatus(active bool, current session.Status) session.Status 
 		return session.Error
 	}
 	return session.Idle
+}
+
+// federationPolicy converts config.yml's settings.federation.access rules.
+func federationPolicy(rules []config.FederationAccessRule) (federation.Policy, error) {
+	policy := make(federation.Policy, 0, len(rules))
+	for i, rule := range rules {
+		level, err := federation.ParseLevel(rule.Level)
+		if err != nil {
+			return nil, fmt.Errorf("settings.federation.access rule %d: %w", i+1, err)
+		}
+		policy = append(policy, federation.AccessRule{From: strings.TrimSpace(rule.From), Level: level})
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("settings.federation.access: %w", err)
+	}
+	return policy, nil
 }

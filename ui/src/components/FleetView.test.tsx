@@ -15,6 +15,23 @@ describe('projectFleet', () => {
     expect(topology.edges).toEqual([{ slaveId: 'worker', masterId: LOCAL_HOST_ID }]);
   });
 
+  it('draws a visible master above the local host, with its other children', () => {
+    const topology = projectFleet([
+      { id: LOCAL_HOST_ID, name: 'Laptop', local: true, parentId: 'up' },
+      { id: 'up', name: 'Root', upstream: true, access: 'operate' },
+      { id: 'sibling', name: 'Builder', upstream: true, parentId: 'up', access: 'view' },
+      { id: 'worker', name: 'Worker' },
+    ]);
+
+    expect(topology.edges).toEqual(expect.arrayContaining([
+      { slaveId: LOCAL_HOST_ID, masterId: 'up' },
+      { slaveId: 'sibling', masterId: 'up' },
+      { slaveId: 'worker', masterId: LOCAL_HOST_ID },
+    ]));
+    expect(topology.nodes.find((node) => node.host.id === 'up')?.depth).toBe(0);
+    expect(topology.nodes.find((node) => node.host.id === 'worker')?.depth).toBe(2);
+  });
+
   it('keeps every node fully inside the graph bounds', () => {
     const topology = projectFleet([
       { id: LOCAL_HOST_ID, name: 'Control', local: true },

@@ -44,6 +44,15 @@ func (l *routedTestLocal) Execute(ctx context.Context, payload json.RawMessage) 
 	if hostID == "" || l.child == nil {
 		return nil, &routeTestError{message: "intermediate did not receive a descendant route"}
 	}
+	// wsserver consumes the relay's origin the same way.
+	if raw := envelope[OriginField]; len(raw) != 0 {
+		var origin string
+		if err := json.Unmarshal(raw, &origin); err != nil {
+			return nil, err
+		}
+		delete(envelope, OriginField)
+		ctx = WithOrigin(ctx, origin)
+	}
 	clean, err := json.Marshal(envelope)
 	if err != nil {
 		return nil, err

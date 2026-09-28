@@ -43,10 +43,17 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
   const parentByID = new Map<string, string | undefined>();
   for (const host of byID.values()) {
     if (host.id === LOCAL_HOST_ID || host.local) {
+      // A Tandem that can see its master draws that master above itself.
+      parentByID.set(host.id, host.parentId && byID.has(host.parentId) ? host.parentId : undefined);
+      continue;
+    }
+    // The topmost host this Tandem sees through its master has no parent;
+    // only a parentless descendant is a legacy direct slave of this host.
+    const candidate = host.parentId ?? (host.upstream ? undefined : LOCAL_HOST_ID);
+    if (!candidate) {
       parentByID.set(host.id, undefined);
       continue;
     }
-    const candidate = host.parentId ?? LOCAL_HOST_ID;
     // An unknown/cyclic parent must not render a misleading or infinite graph.
     parentByID.set(host.id, candidate !== host.id && byID.has(candidate) ? candidate : undefined);
   }
@@ -107,6 +114,11 @@ function version(host: FederationHost): string {
 
 function statusLabel(host: FederationHost): string {
   return host.status ?? (host.local ? 'connected' : 'unknown');
+}
+
+// Restricted access is worth saying; full (admin) access is the norm.
+function accessLabel(host: FederationHost): string {
+  return host.access && host.access !== 'admin' ? ` · ${host.access} access` : '';
 }
 
 export function FleetView() {
@@ -249,7 +261,7 @@ export function FleetView() {
                     <circle cx="15" cy="17" r="4" />
                     <text className="fleet-name" x="26" y="21">{node.host.name ?? node.host.id}</text>
                     <text className="fleet-version" x="12" y="42">{version(node.host)}</text>
-                    <text className="fleet-status" x="12" y="57">{statusLabel(node.host)}</text>
+                    <text className="fleet-status" x="12" y="57">{statusLabel(node.host)}{accessLabel(node.host)}</text>
                   </g>
                 </g>
               ))}
