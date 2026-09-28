@@ -962,7 +962,6 @@ body.dock-resizing .app { transition: none; }
 .modal-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
 .modal { width: min(640px, 92vw); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow); overflow: hidden; }
 .modal input.q { width: 100%; padding: 14px 16px; background: transparent; border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: var(--fs-md); outline: none; }
-.modal input.task { width: 100%; padding: 10px 16px; background: var(--surface-2); border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: var(--fs-sm); outline: none; }
 .modal .rows { max-height: 46vh; overflow-y: auto; }
 .modal .row { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; }
 .modal .row.sel { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
