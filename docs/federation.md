@@ -1,62 +1,62 @@
-# Master and slave deployments
+# Parent and child deployments
 
 One Tandem UI can control agents running on several hosts. Start the ordinary,
-UI-facing instance as the **master**, then point each additional instance at it:
+UI-facing instance as the **parent**, then point each additional instance at it:
 
 ```sh
-tandem --master https://tandem.example.net
+tandem --parent https://tandem.example.net
 ```
 
-The URL is the master's normal HTTP origin. `https://` uses an encrypted WebSocket;
+The URL is the parent's normal HTTP origin. `https://` uses an encrypted WebSocket;
 `http://` is supported for trusted private networks, but registration credentials,
 agent traffic, terminal contents, and browser frames are then unencrypted. Prefer TLS
 or a private authenticated network such as Tailscale whenever traffic leaves one host.
 
-## Reaching a master through a proxy
+## Reaching a parent through a proxy
 
-When a slave cannot dial its master directly -- a NAT'd or firewalled network, or a
-master reachable only inside an SSH tunnel -- set `TANDEM_MASTER_PROXY` to a SOCKS5
-URL on the slave:
+When a child cannot dial its parent directly -- a NAT'd or firewalled network, or a
+parent reachable only inside an SSH tunnel -- set `TANDEM_PARENT_PROXY` to a SOCKS5
+URL on the child:
 
 ```sh
-TANDEM_MASTER_PROXY=socks5://127.0.0.1:1080 tandem --master https://tandem.example.net
+TANDEM_PARENT_PROXY=socks5://127.0.0.1:1080 tandem --parent https://tandem.example.net
 ```
 
 Credentials are accepted as URL userinfo (`socks5://user:pass@host:1080`) and are
 redacted by `tandem debug config`. Both halves of the transport honor the setting: the
 registration/status calls and the durable WebSocket tunnel. Nothing else changes --
 inbound serving, agent processes, and the browser subsystem dial as they always did,
-and a master never dials out at all.
+and a parent never dials out at all.
 
-Host names in the master URL are resolved by the proxy rather than locally, so a name
+Host names in the parent URL are resolved by the proxy rather than locally, so a name
 that only resolves on the far side of the tunnel still works. SOCKS5 sits below TLS, so
-an `https://` master still terminates its own TLS end to end and the proxy sees only
+an `https://` parent still terminates its own TLS end to end and the proxy sees only
 ciphertext.
 
 ## Registration and trust
 
-The slave makes an outbound connection to the master, so the master does not need to
-reach an inbound port on the slave. A first-time connection creates a notification in
-the master's UI with **Accept** and **Reject** actions. Acceptance establishes durable
+The child makes an outbound connection to the parent, so the parent does not need to
+reach an inbound port on the child. A first-time connection creates a notification in
+the parent's UI with **Accept** and **Reject** actions. Acceptance establishes durable
 trust: Tandem generates and stores a credential at both ends and uses it to reconnect
 automatically after either daemon restarts. Rejection does not establish trust.
 
-The slave's hostname is its initial display name, and also seeds its host ID — a slug of
+The child's hostname is its initial display name, and also seeds its host ID — a slug of
 that name plus a short random suffix (`boremox-3f9a1c`), limited to letters, digits, `-`,
 `_` and `.`. Host IDs are not secrets (the credential issued on acceptance is), so they
-are kept short and readable: the master namespaces a remote agent as
+are kept short and readable: the parent namespaces a remote agent as
 `fed~<hostId>~<agentId>`, and that string shows up in the UI.
 
 Host identities, credentials, and approval state live under each daemon's `TANDEM_HOME`;
 deleting or changing that home therefore creates a new identity that requires approval.
 
-Federation forms a rooted tree. Every instance may have at most one upstream master and
-may accept many directly connected slaves, including when it is itself registered with
-an upstream. Each link is still initiated outbound by the slave, so an intermediate
-instance does not need inbound reachability from its own master.
+Federation forms a rooted tree. Every instance may have at most one upstream parent and
+may accept many directly connected children, including when it is itself registered with
+an upstream. Each link is still initiated outbound by the child, so an intermediate
+instance does not need inbound reachability from its own parent.
 
-Trust is hop-by-hop: accepting a slave delegates control of that slave and the subtree it
-advertises. An upstream master can therefore discover and manage descendant hosts without
+Trust is hop-by-hop: accepting a child delegates control of that child and the subtree it
+advertises. An upstream parent can therefore discover and manage descendant hosts without
 holding their link credentials. Descendant addresses carry an opaque route, while the host
 catalog includes `parentId`, `route`, and `depth` metadata so clients can present the real
 topology. Tandem rejects cyclic or excessively deep advertised routes; the supported
@@ -67,14 +67,14 @@ maximum depth is eight links.
 A host that generates a new ID for itself — hosts registered before the short-ID format
 do this once, on the first start after updating — replaces its old record rather than
 adding a second one. Its registration names the ID it is replacing and presents that
-record's credential as proof the two IDs are the same host. The master then transfers
+record's credential as proof the two IDs are the same host. The parent then transfers
 trust to the new ID and deletes the old row, so the change costs no approval and leaves
-nothing behind. The proof is offered only to the master that issued the credential, and
+nothing behind. The proof is offered only to the parent that issued the credential, and
 an unproven claim is ignored: the request falls back to ordinary approval.
 
 A host that lost its stored identity altogether — a reinstall, a new `TANDEM_HOME` — has
 no credential left to prove anything with, so it arrives as a first-time registration.
-Because two machines may legitimately share a hostname, the master will not guess: when
+Because two machines may legitimately share a hostname, the parent will not guess: when
 a pending registration's name matches an existing record that is not currently connected,
 the approval notification names that record and offers **Accept and replace** alongside
 **Accept**. Replacing deletes the superseded record; plain acceptance keeps both.
@@ -87,8 +87,8 @@ running on that machine — it re-appears as a pending registration.
 
 Both peers report `protocolVersion` (the federation wire version, `federation.ProtocolVersion`)
 and `buildVersion` (the release) on every connection: in the registration request and
-response, in the tunnel `hello`/`welcome` messages, and in each heartbeat. The master
-stores the host's pair on its durable slave record and exposes it to the UI on each host
+response, in the tunnel `hello`/`welcome` messages, and in each heartbeat. The parent
+stores the host's pair on its durable child record and exposes it to the UI on each host
 entry; a host predating version reporting reports `0` and an empty build.
 
 **Bumping the version.** The tunnel carries opaque browser-protocol envelopes, which is
@@ -110,13 +110,13 @@ The spawn palette includes every reachable host, including descendants, in its h
 selector. Repository discovery, configured agents, launch variants, workspace
 provisioning, and the resulting process all belong to the selected host. Remote agents
 appear in the normal agent rail with a host label. Agent IDs are namespaced at the
-viewing master so equal local names on two hosts cannot collide.
+viewing parent so equal local names on two hosts cannot collide.
 
 The command palette's **Fleet View** displays the complete hierarchy. Each node shows its
 name, connection state, Tandem build, and federation protocol version; directed arrows
-point from slaves to their masters.
+point from children to their parents.
 
-The master proxies the same live controls available for a local agent, subject to the
+The parent proxies the same live controls available for a local agent, subject to the
 controlled host's access policy (see below), including:
 
 - prompts, queued prompts, interrupts, permissions, modes, and configuration;
@@ -125,24 +125,24 @@ controlled host's access policy (see below), including:
 - browser screencast frames, input, takeover notifications, and control ownership;
 - spoken transcript playback: the clip is rendered (and cached) by the host that owns
   the transcript, using that host's configured voice provider, and travels back over
-  the tunnel so the master can serve it from its ordinary audio route. A master with no
+  the tunnel so the parent can serve it from its ordinary audio route. A parent with no
   voice provider of its own can still play a remote agent's messages.
 
-The slave continues to serve its own local UI. Local users and the master are peer
-controllers of the slave's daemon-owned state, so updates and control changes are
+The child continues to serve its own local UI. Local users and the parent are peer
+controllers of the child's daemon-owned state, so updates and control changes are
 visible to both. Browser control remains serialized by the existing per-agent control
 token.
 
-The slave reconnects automatically after a network interruption. Its active agents keep
-running while disconnected and are presented to the master again after the connection
+The child reconnects automatically after a network interruption. Its active agents keep
+running while disconnected and are presented to the parent again after the connection
 and subscriptions recover.
 
 ## Controlling hosts above and beside you
 
-Links are still opened by the slave, but commands can travel both ways over them. A
-slave can see and drive its master, the master's other slaves, and anything above the
-master, when those hosts allow it. Nothing extra has to be reachable: a sibling is reached
-through the master both share.
+Links are still opened by the child, but commands can travel both ways over them. A
+child can see and drive its parent, the parent's other children, and anything above the
+parent, when those hosts allow it. Nothing extra has to be reachable: a sibling is reached
+through the parent both share.
 
 Every host decides who may control it, in its own `config.yml`:
 
@@ -152,12 +152,12 @@ settings:
     access:
       - from: laptop-*      # host ID glob, "*", or "ancestors"
         level: operate
-      - from: ancestors     # lower the default for this host's masters
+      - from: ancestors     # lower the default for this host's parents
         level: view
 ```
 
 The first rule that matches wins. After the configured rules come two defaults:
-`ancestors: admin` and `*: none`. So by default nothing changes: masters control their
+`ancestors: admin` and `*: none`. So by default nothing changes: parents control their
 subtrees as before, and a host is invisible to everything else. Levels include everything
 below them:
 
@@ -169,22 +169,22 @@ below them:
 | `admin` | spawn, resume, close, settings, installs, notification actions, and any command not classified above |
 
 `from` matches the requesting host's ID as shown in Fleet View (`boremox-3f9a1c`). A
-Tandem without a master generates a durable ID of the same form for itself. `ancestors`
-matches this host's master, that master's master, and so on. Access rules are read at
+Tandem without a parent generates a durable ID of the same form for itself. `ancestors`
+matches this host's parent, that parent's parent, and so on. Access rules are read at
 startup, so restart the daemon after changing them.
 
 The host that executes a command enforces its own policy. Each relay stamps who the
-command came from, and a master accepts a child's claim only for that child or a host in
+command came from, and a parent accepts a child's claim only for that child or a host in
 the subtree the child advertises. A relay can still impersonate hosts it relays for, so a
 rule can't safely give a host routed through some relay more than that relay itself would
-get. When a master sends a child its view of the fleet, it leaves out every host whose
-policy does not give that child at least `view`. Hosts reached through a master are never
+get. When a parent sends a child its view of the fleet, it leaves out every host whose
+policy does not give that child at least `view`. Hosts reached through a parent are never
 advertised further up, and they never forward their system notifications. Their
 notifications, and the actions on them, stay with that host's own operators.
 
 In the host list, the spawn palette, and Fleet View, a host shows the access you have to
 it. Spawning is offered only on hosts where you have `admin`. A host's own policy can also
-hide its agents from its master: if its master doesn't have `view`, the host sends an
+hide its agents from its parent: if its parent doesn't have `view`, the host sends an
 empty agent list upstream.
 
 Upstream control needs federation protocol 3 on both ends of each link. A host still on an
@@ -192,9 +192,9 @@ older version keeps working in the original, downward-only way.
 
 ## Session history
 
-The master's resume palette includes the local host and every connected slave. Session
+The parent's resume palette includes the local host and every connected child. Session
 listing and search run against each selected host's own persisted/imported history index;
 results carry a host identity so equal agent or session IDs cannot collide. Resuming a
 remote result happens on the host that owns its history and returns a namespaced live
-agent to the master's ordinary agent rail. A disconnected host remains visible but cannot
+agent to the parent's ordinary agent rail. A disconnected host remains visible but cannot
 be searched or resumed until it reconnects.

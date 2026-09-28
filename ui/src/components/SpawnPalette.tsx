@@ -224,7 +224,7 @@ export function SpawnPalette() {
   const launchRef = useRef<HTMLButtonElement>(null);
 
   // A rail-initiated hand-off should be created where its source actually
-  // lives. Remote summaries carry a master-qualified id plus this hostId;
+  // lives. Remote summaries carry a parent-qualified id plus this hostId;
   // choosing local here makes both the checkout and transcript unavailable.
   useEffect(() => {
     if (!spawnHandoffFrom) return;
@@ -237,8 +237,8 @@ export function SpawnPalette() {
   }, [spawnHostId]);
 
   // Host discovery is intentionally lazy: opening the palette continues to
-  // work against an older daemon, while choosing a connected slave asks the
-  // master for that host's own repositories and launch catalog.
+  // work against an older daemon, while choosing a connected child asks the
+  // parent for that host's own repositories and launch catalog.
   useEffect(() => {
     refreshHostDirs(hostId);
     refreshAgentCatalog(hostId);

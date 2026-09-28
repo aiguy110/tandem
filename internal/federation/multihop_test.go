@@ -80,20 +80,20 @@ func (l *leafTestLocal) Execute(_ context.Context, payload json.RawMessage) (jso
 	return json.RawMessage(`{"t":"ack","owner":"leaf"}`), nil
 }
 
-func runTestSlave(t *testing.T, service *Service) {
+func runTestChild(t *testing.T, service *Service) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- service.RunSlave(ctx) }()
+	go func() { done <- service.RunParentLink(ctx) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
 		case err := <-done:
 			if err != nil {
-				t.Errorf("slave stopped with error: %v", err)
+				t.Errorf("child stopped with error: %v", err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Error("slave did not stop")
+			t.Error("child did not stop")
 		}
 	})
 }
@@ -144,22 +144,22 @@ func TestThreeNodeFederationDiscoversAndRoutesToLeaf(t *testing.T) {
 	middleStore := openStore(t)
 	middleCenter := notifications.New()
 	middleRelay := &routedTestLocal{events: make(chan json.RawMessage, 1)}
-	middle, err := New(Options{Store: middleStore, Notifications: middleCenter, MasterURL: rootServer.URL, Name: "middle", Local: middleRelay, PollInterval: 10 * time.Millisecond, BuildVersion: "middle-version"})
+	middle, err := New(Options{Store: middleStore, Notifications: middleCenter, ParentURL: rootServer.URL, Name: "middle", Local: middleRelay, PollInterval: 10 * time.Millisecond, BuildVersion: "middle-version"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	middleServer := httptest.NewServer(middle)
 	t.Cleanup(middleServer.Close)
-	runTestSlave(t, middle)
+	runTestChild(t, middle)
 	middleID := acceptTestRegistration(t, root, rootCenter)
 	eventuallyTest(t, "middle tunnel", func() bool {
-		peer, _ := rootStore.FederationSlave(middleID)
+		peer, _ := rootStore.FederationChild(middleID)
 		return peer != nil && peer.Status == "connected"
 	})
 
 	leafStore := openStore(t)
 	leafLocal := &leafTestLocal{}
-	leaf, err := New(Options{Store: leafStore, MasterURL: middleServer.URL, Name: "leaf", Local: leafLocal, PollInterval: 10 * time.Millisecond, BuildVersion: "leaf-version"})
+	leaf, err := New(Options{Store: leafStore, ParentURL: middleServer.URL, Name: "leaf", Local: leafLocal, PollInterval: 10 * time.Millisecond, BuildVersion: "leaf-version"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestThreeNodeFederationDiscoversAndRoutesToLeaf(t *testing.T) {
 	// that service owns the direct tunnel to leaf.  It does not call the leaf
 	// service object (which is the outbound side of that tunnel).
 	middleRelay.child = middle
-	runTestSlave(t, leaf)
+	runTestChild(t, leaf)
 	leafID := acceptTestRegistration(t, middle, middleCenter)
 	// In a real intermediate, wsserver turns the child's host-change event
 	// into an event on its private loopback socket.  The relay above models
@@ -208,7 +208,7 @@ func TestThreeNodeFederationDiscoversAndRoutesToLeaf(t *testing.T) {
 
 func TestTopologyCycleGuardRejectsOurUpstreamIdentityAndExcessDepth(t *testing.T) {
 	s := openStore(t)
-	if err := s.SaveFederationMaster(store.FederationMaster{URL: "http://upstream.example", HostID: "this-node", Credential: "credential"}); err != nil {
+	if err := s.SaveFederationParent(store.FederationParent{URL: "http://upstream.example", HostID: "this-node", Credential: "credential"}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := New(Options{Store: s})

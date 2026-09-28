@@ -6,16 +6,16 @@ import { FleetView, projectFleet } from './FleetView';
 afterEach(() => cleanup());
 
 describe('projectFleet', () => {
-  it('connects an unscoped legacy slave to the local master', () => {
+  it('connects an unscoped legacy child to the local parent', () => {
     const topology = projectFleet([
       { id: LOCAL_HOST_ID, name: 'Control', local: true },
       { id: 'worker', name: 'Worker' },
     ]);
 
-    expect(topology.edges).toEqual([{ slaveId: 'worker', masterId: LOCAL_HOST_ID }]);
+    expect(topology.edges).toEqual([{ childId: 'worker', parentId: LOCAL_HOST_ID }]);
   });
 
-  it('draws a visible master above the local host, with its other children', () => {
+  it('draws a visible parent above the local host, with its other children', () => {
     const topology = projectFleet([
       { id: LOCAL_HOST_ID, name: 'Laptop', local: true, parentId: 'up' },
       { id: 'up', name: 'Root', upstream: true, access: 'operate' },
@@ -24,9 +24,9 @@ describe('projectFleet', () => {
     ]);
 
     expect(topology.edges).toEqual(expect.arrayContaining([
-      { slaveId: LOCAL_HOST_ID, masterId: 'up' },
-      { slaveId: 'sibling', masterId: 'up' },
-      { slaveId: 'worker', masterId: LOCAL_HOST_ID },
+      { childId: LOCAL_HOST_ID, parentId: 'up' },
+      { childId: 'sibling', parentId: 'up' },
+      { childId: 'worker', parentId: LOCAL_HOST_ID },
     ]));
     expect(topology.nodes.find((node) => node.host.id === 'up')?.depth).toBe(0);
     expect(topology.nodes.find((node) => node.host.id === 'worker')?.depth).toBe(2);
@@ -48,7 +48,7 @@ describe('projectFleet', () => {
 });
 
 describe('FleetView', () => {
-  it('displays node versions and directs every rendered edge from slave to master', () => {
+  it('displays node versions and directs every rendered edge from child to parent', () => {
     useStore.setState({
       hosts: [
         { id: LOCAL_HOST_ID, name: 'Control', local: true, status: 'connected', buildVersion: 'v1.4.0', protocolVersion: 2 },
@@ -64,7 +64,7 @@ describe('FleetView', () => {
     expect(screen.getByText('GPU worker')).toBeTruthy();
     expect(screen.getByText('build v1.4.0 · protocol v2')).toBeTruthy();
     expect(screen.getByText('build v1.2.8 · protocol v1')).toBeTruthy();
-    expect(screen.getByText('Arrows point from slave to master')).toBeTruthy();
+    expect(screen.getByText('Arrows point from child to parent')).toBeTruthy();
 
     expect(view.container.querySelector('.fleet-stage')).toBeTruthy();
     const canvas = screen.getByLabelText('Fleet topology graph. Drag or use arrow keys to pan.');
@@ -80,12 +80,12 @@ describe('FleetView', () => {
     expect(view.container.querySelector('.fleet-graph')?.getAttribute('width')).toBeTruthy();
     expect(view.container.querySelectorAll('clipPath')).toHaveLength(3);
     expect(view.container.querySelectorAll('.fleet-node > g[clip-path]')).toHaveLength(3);
-    const relayEdge = view.container.querySelector<SVGPathElement>('[data-slave-id="relay"][data-master-id="local"]');
-    const gpuEdge = view.container.querySelector<SVGPathElement>('[data-slave-id="gpu"][data-master-id="relay"]');
-    expect(relayEdge?.getAttribute('marker-end')).toBe('url(#fleet-master-arrow)');
-    expect(gpuEdge?.getAttribute('marker-end')).toBe('url(#fleet-master-arrow)');
-    expect(relayEdge?.querySelector('title')?.textContent).toBe('Relay → Control (slave → master)');
-    expect(gpuEdge?.querySelector('title')?.textContent).toBe('GPU worker → Relay (slave → master)');
+    const relayEdge = view.container.querySelector<SVGPathElement>('[data-child-id="relay"][data-parent-id="local"]');
+    const gpuEdge = view.container.querySelector<SVGPathElement>('[data-child-id="gpu"][data-parent-id="relay"]');
+    expect(relayEdge?.getAttribute('marker-end')).toBe('url(#fleet-parent-arrow)');
+    expect(gpuEdge?.getAttribute('marker-end')).toBe('url(#fleet-parent-arrow)');
+    expect(relayEdge?.querySelector('title')?.textContent).toBe('Relay → Control (child → parent)');
+    expect(gpuEdge?.querySelector('title')?.textContent).toBe('GPU worker → Relay (child → parent)');
   });
 
   it('pulses a host requested by the dock Details action', () => {

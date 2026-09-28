@@ -340,7 +340,7 @@ func fileMode(t *testing.T, name string) os.FileMode {
 	return info.Mode()
 }
 
-// federatedAudioLocal stands in for a slave's browser-protocol bridge: it
+// federatedAudioLocal stands in for a child's browser-protocol bridge: it
 // answers render_message_audio the way that host's own wsserver would.
 type federatedAudioLocal struct {
 	err string
@@ -375,30 +375,30 @@ func (l federatedAudioLocal) Execute(_ context.Context, raw json.RawMessage) (js
 // exercises Call over a live tunnel rather than a stubbed transport.
 func connectFederatedHost(t *testing.T, local federation.Local) (*federation.Service, string) {
 	t.Helper()
-	masterStore, err := store.Open(filepath.Join(t.TempDir(), "master.db"))
+	parentStore, err := store.Open(filepath.Join(t.TempDir(), "parent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = masterStore.Close() })
+	t.Cleanup(func() { _ = parentStore.Close() })
 	center := notifications.New()
-	master, err := federation.New(federation.Options{Store: masterStore, Notifications: center})
+	parent, err := federation.New(federation.Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	t.Cleanup(server.Close)
-	slaveStore, err := store.Open(filepath.Join(t.TempDir(), "slave.db"))
+	childStore, err := store.Open(filepath.Join(t.TempDir(), "child.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = slaveStore.Close() })
-	slave, err := federation.New(federation.Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: local, PollInterval: 10 * time.Millisecond})
+	t.Cleanup(func() { _ = childStore.Close() })
+	child, err := federation.New(federation.Options{Store: childStore, ParentURL: server.URL, Name: "build-host", Local: local, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
 	var notification notifications.Notification
@@ -411,28 +411,28 @@ func connectFederatedHost(t *testing.T, local federation.Local) (*federation.Ser
 		time.Sleep(5 * time.Millisecond)
 	}
 	if notification.ID == "" {
-		t.Fatal("slave never requested registration")
+		t.Fatal("child never requested registration")
 	}
-	if _, _, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept"); err != nil {
+	if _, _, err := parent.HandleNotificationAction(context.Background(), notification.ID, "accept"); err != nil {
 		t.Fatal(err)
 	}
 	hostID := strings.TrimPrefix(notification.ID, "federation-registration-")
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if peer, _ := masterStore.FederationSlave(hostID); peer != nil && peer.Status == "connected" {
-			return master, hostID
+		if peer, _ := parentStore.FederationChild(hostID); peer != nil && peer.Status == "connected" {
+			return parent, hostID
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("slave never reached connected")
+	t.Fatal("child never reached connected")
 	return nil, ""
 }
 
 func TestRemoteMessageAudioRendersOnTheOwningHost(t *testing.T) {
-	master, hostID := connectFederatedHost(t, federatedAudioLocal{})
+	parent, hostID := connectFederatedHost(t, federatedAudioLocal{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	audio, err := remoteMessageAudio(ctx, master, hostID, "faraday-66", 12)
+	audio, err := remoteMessageAudio(ctx, parent, hostID, "faraday-66", 12)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestRemoteMessageAudioRendersOnTheOwningHost(t *testing.T) {
 	}
 }
 
-// federatedAssetLocal answers get_asset the way a slave's wsserver would.
+// federatedAssetLocal answers get_asset the way a child's wsserver would.
 type federatedAssetLocal struct{}
 
 func (federatedAssetLocal) Snapshot(context.Context) (json.RawMessage, error) {
@@ -470,7 +470,7 @@ func (federatedAssetLocal) Execute(_ context.Context, raw json.RawMessage) (json
 }
 
 func TestFederatedAssetStoreFetchesFromTheOwningHost(t *testing.T) {
-	master, hostID := connectFederatedHost(t, federatedAssetLocal{})
+	parent, hostID := connectFederatedHost(t, federatedAssetLocal{})
 	localStore, err := store.Open(filepath.Join(t.TempDir(), "assets.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -480,7 +480,7 @@ func TestFederatedAssetStoreFetchesFromTheOwningHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := federatedAssetStore{local: local, federation: master}
+	s := federatedAssetStore{local: local, federation: parent}
 
 	stored, err := s.Get("fed~"+hostID+"~faraday-66", "img-1")
 	if err != nil {
@@ -530,9 +530,9 @@ func (federatedUploadLocal) Execute(_ context.Context, raw json.RawMessage) (jso
 }
 
 func TestFederatedUploadsAreStoredOnTheOwningHost(t *testing.T) {
-	master, hostID := connectFederatedHost(t, federatedUploadLocal{})
+	parent, hostID := connectFederatedHost(t, federatedUploadLocal{})
 	remoteID := "fed~" + hostID + "~faraday-66"
-	uploads := federatedUploadStore{federation: master}
+	uploads := federatedUploadStore{federation: parent}
 	configured, err := uploads.HasConfiguredDirectory(remoteID)
 	if err != nil || !configured {
 		t.Fatalf("configured=%v err=%v", configured, err)
@@ -541,7 +541,7 @@ func TestFederatedUploadsAreStoredOnTheOwningHost(t *testing.T) {
 	if err != nil || path != ".tandem/uploads/photo.png-workspace" {
 		t.Fatalf("path=%q err=%v", path, err)
 	}
-	assetStore := federatedAssetStore{federation: master}
+	assetStore := federatedAssetStore{federation: parent}
 	stored, err := assetStore.Put(remoteID, []byte("image"), "image/png")
 	if err != nil {
 		t.Fatal(err)
@@ -552,10 +552,10 @@ func TestFederatedUploadsAreStoredOnTheOwningHost(t *testing.T) {
 }
 
 func TestRemoteMessageAudioSurfacesTheOwningHostsError(t *testing.T) {
-	master, hostID := connectFederatedHost(t, federatedAudioLocal{err: "voice rendering is not configured; run tandem setup"})
+	parent, hostID := connectFederatedHost(t, federatedAudioLocal{err: "voice rendering is not configured; run tandem setup"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := remoteMessageAudio(ctx, master, hostID, "faraday-66", 12)
+	_, err := remoteMessageAudio(ctx, parent, hostID, "faraday-66", 12)
 	if err == nil || err.Error() != "voice rendering is not configured; run tandem setup" {
 		t.Fatalf("err=%v", err)
 	}

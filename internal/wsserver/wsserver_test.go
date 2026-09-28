@@ -445,9 +445,9 @@ func TestSystemNotificationsSnapshotBroadcastAndAction(t *testing.T) {
 	}
 }
 
-// A host's own update prompt must reach the master's notification panel
+// A host's own update prompt must reach the parent's notification panel
 // labelled with its host, and acting on it must run on that host rather than
-// against the master's local update service.
+// against the parent's local update service.
 func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	db, backend, _, _, _ := setupWS(t, 0)
 	fed := &testFederation{hosts: []federation.Host{{ID: "host-one", Name: "builder", Status: "connected"}}}
@@ -506,7 +506,7 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	}
 
 	// The host follows a handled action with its own view of the fleet. That
-	// must not replace the master's host list, which would render the host
+	// must not replace the parent's host list, which would render the host
 	// itself offline while its tunnel is still live.
 	fed.mu.Lock()
 	subscriber := fed.subscriber
@@ -568,10 +568,10 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	spawnPayload := append(json.RawMessage(nil), fed.calls[len(fed.calls)-1]...)
 	fed.mu.Unlock()
 	if strings.Contains(string(spawnPayload), "host-one") {
-		t.Fatalf("slave payload retained federation route: %s", spawnPayload)
+		t.Fatalf("child payload retained federation route: %s", spawnPayload)
 	}
 	if !strings.Contains(string(spawnPayload), `"handoffFrom":"remote-agent"`) {
-		t.Fatalf("slave payload did not localize hand-off source: %s", spawnPayload)
+		t.Fatalf("child payload did not localize hand-off source: %s", spawnPayload)
 	}
 
 	send(t, c, map[string]any{"t": "close_agent", "agentId": remoteID, "force": true, "deleteWorktree": true, "corrId": "close"})

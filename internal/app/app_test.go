@@ -120,14 +120,14 @@ func TestBareCommandReportsConfigurationFailure(t *testing.T) {
 	}
 }
 
-func TestMasterFlagRequiresExactlyOneURL(t *testing.T) {
-	for _, args := range [][]string{{"--master"}, {"--master", ""}, {"--master", "http://one", "extra"}} {
+func TestParentFlagRequiresExactlyOneURL(t *testing.T) {
+	for _, args := range [][]string{{"--parent"}, {"--parent", ""}, {"--parent", "http://one", "extra"}, {"--master", ""}} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(args, &stdout, &stderr); code != 2 {
 			t.Fatalf("Run(%q) exit code = %d, want 2 (stderr %q)", args, code, stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "--master") {
-			t.Fatalf("Run(%q) stderr = %q, want --master usage", args, stderr.String())
+		if !strings.Contains(stderr.String(), args[0]) {
+			t.Fatalf("Run(%q) stderr = %q, want %s usage", args, stderr.String(), args[0])
 		}
 	}
 }

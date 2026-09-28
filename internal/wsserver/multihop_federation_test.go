@@ -147,14 +147,14 @@ func TestFederationRoutesDescendantHostCommandsAndEvents(t *testing.T) {
 	}
 }
 
-// A slave's repository scan can be slow; routing list_dirs must not stall the
-// browser's other commands, and the slave's later broadcast of the refreshed
+// A child's repository scan can be slow; routing list_dirs must not stall the
+// browser's other commands, and the child's later broadcast of the refreshed
 // scan must reach the browser attributed to that host.
 func TestFederationListDirsIsAsyncAndRelaysRefresh(t *testing.T) {
 	db, backend, _, _, _ := setupWS(t, 0)
-	const hostID = "slave-1"
+	const hostID = "child-1"
 	fed := &topologyFederation{
-		hosts:    []federation.Host{{ID: hostID, NodeID: hostID, Name: "slave", Status: "connected", Depth: 1, Route: []string{hostID}}},
+		hosts:    []federation.Host{{ID: hostID, NodeID: hostID, Name: "child", Status: "connected", Depth: 1, Route: []string{hostID}}},
 		dirsGate: make(chan struct{}),
 	}
 	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})

@@ -92,11 +92,11 @@ type Options struct {
 	AudioReady func(string) []store.MessageAudioClip
 	// RenderMessageAudio renders (or returns the cached) clip for one
 	// transcript message. It backs the render_message_audio command, which
-	// exists so a master can fetch a federated agent's audio over the tunnel;
+	// exists so a parent can fetch a federated agent's audio over the tunnel;
 	// browsers fetch local clips from the authenticated HTTP audio route.
 	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
 	// Asset returns one stored prompt/tool image. It backs the get_asset
-	// command, which exists so a master can fetch a federated agent's image
+	// command, which exists so a parent can fetch a federated agent's image
 	// over the tunnel; browsers fetch local assets from the HTTP asset route.
 	Asset func(sessionID, assetID string) (assets.Stored, error)
 	// SaveUpload and HasUploadDirectory back the federation-only upload
@@ -107,7 +107,7 @@ type Options struct {
 	PutAsset           func(sessionID string, data []byte, declaredMIME string) (assets.Stored, error)
 }
 
-// Federation is the master-side transport used for host-qualified browser
+// Federation is the parent-side transport used for host-qualified browser
 // protocol requests. The payload is intentionally an opaque browser envelope
 // so new commands (including history/resume and browser controls) do not need
 // a parallel federation RPC definition.
@@ -142,7 +142,7 @@ type Handler struct {
 	unsubscribe           func()
 	unsubscribeFederation func()
 	// remoteNotifications holds each connected host's own notification
-	// snapshot, keyed by host ID. A master merges these into the list its
+	// snapshot, keyed by host ID. A parent merges these into the list its
 	// browsers see so a host's update prompt is visible — and actionable —
 	// from mission control.
 	remoteNotifications map[string][]notifications.Notification
@@ -491,7 +491,7 @@ func (c *connection) close() {
 	})
 }
 
-// renderMessageAudio answers with one message's clip inline. Only a master
+// renderMessageAudio answers with one message's clip inline. Only a parent
 // reaching a federated agent uses this path — the tunnel carries protocol JSON
 // only, so the bytes ride along base64-encoded like raw_pty and browser_frame.
 func (c *connection) renderMessageAudio(m clientMessage) {
@@ -521,7 +521,7 @@ func (c *connection) renderMessageAudio(m clientMessage) {
 }
 
 // getAsset answers with one stored image inline. Like renderMessageAudio, only
-// a master reaching a federated agent uses this path.
+// a parent reaching a federated agent uses this path.
 func (c *connection) getAsset(m clientMessage) {
 	reply := func(extra map[string]any) {
 		envelope := map[string]any{"t": "asset", "sessionId": m.SessionID, "assetId": m.AssetID}
@@ -752,7 +752,7 @@ func (c *connection) handle(m clientMessage) {
 	}
 	if m.HostID != "" {
 		if asyncForwards[m.T] {
-			// Read-only listings may take a slave a while (a repository scan);
+			// Read-only listings may take a child a while (a repository scan);
 			// they must not stall this browser's other commands meanwhile.
 			go c.forwardFederation(m)
 			return
@@ -1135,7 +1135,7 @@ func (c *connection) handle(m clientMessage) {
 		// The spawn recorded a profile use; refresh every cached palette.
 		c.server.broadcastProfiles("spawn_agent")
 	case "list_system_notifications":
-		// Pick up any host that connected before this master cached its
+		// Pick up any host that connected before this parent cached its
 		// notifications; the reply below carries whatever is already known.
 		go c.server.syncHostNotifications()
 		c.sendSystemNotifications(m.CorrID)
@@ -1478,7 +1478,7 @@ func (c *connection) handle(m clientMessage) {
 }
 
 // forwardFederation carries a host-qualified browser request over the
-// persistent slave tunnel. The slave's loopback bridge returns the ordinary
+// persistent child tunnel. The child's loopback bridge returns the ordinary
 // browser response unchanged, which preserves commands added after this code.
 // asyncForwards are read-only listings routed to a remote host concurrently
 // with the connection's other commands. Their replies are correlated or
@@ -1515,13 +1515,13 @@ func (c *connection) forwardFederation(m clientMessage) {
 		remoteID = remoteSessionID(hostID, m.SessionID)
 	}
 	if m.T == "subscribe" && remoteID != "" {
-		// The slave sends the replay snapshot before its correlated subscribe
+		// The child sends the replay snapshot before its correlated subscribe
 		// acknowledgement, so install the filter before making the call.
 		c.mu.Lock()
 		c.remoteSubs[remoteID] = struct{}{}
 		c.mu.Unlock()
 	}
-	// The slave must execute locally; prevent its own wsserver from treating
+	// The child must execute locally; prevent its own wsserver from treating
 	// this already-routed request as another federation hop.
 	m.HostID, m.Spec.HostID = "", ""
 	// A relayed command keeps its original requester, so the host that
@@ -1577,7 +1577,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 		slog.Warn("remote browser command returned error", append(routeLogArgs, "error", remoteErr)...)
 	}
 	normalizeSessionEnvelope(envelope)
-	// Master corrIds are authoritative. A stale or malicious slave response
+	// Parent corrIds are authoritative. A stale or malicious child response
 	// must not satisfy a different browser request.
 	if m.CorrID != nil {
 		envelope["corrId"] = json.RawMessage(append([]byte(nil), m.CorrID...))
@@ -1653,7 +1653,7 @@ func SplitRemoteSessionID(id string) (hostID, sessionID string, ok bool) {
 }
 
 // sessionSummaries combines local sessions with the current snapshots received
-// from slave tunnels. Remote IDs are namespaced, avoiding collisions between
+// from child tunnels. Remote IDs are namespaced, avoiding collisions between
 // otherwise ordinary local agent names on different hosts.
 func (h *Handler) sessionSummaries() []any {
 	local := h.opts.Registry.Summaries(context.Background())
@@ -1695,7 +1695,7 @@ func (c *connection) sendSystemNotifications(corrID json.RawMessage) {
 // systemNotifications merges this daemon's own notifications with those
 // relayed from connected agent hosts. A remote item keeps the host's title and
 // message but carries a host-namespaced ID, so acting on it routes back over
-// the tunnel to the daemon that raised it rather than hitting the master's own
+// the tunnel to the daemon that raised it rather than hitting the parent's own
 // update service.
 func (h *Handler) systemNotifications() []notifications.Notification {
 	items := []notifications.Notification{}
@@ -1735,14 +1735,14 @@ func (h *Handler) setRemoteNotifications(hostID string, items []notifications.No
 // are actually connected: a disconnected host's notifications are dropped, and
 // a newly connected one is asked for its current list. The initial fetch
 // matters because a host only pushes its notifications when they change, so an
-// update it noticed before this master's tunnel existed would be invisible.
+// update it noticed before this parent's tunnel existed would be invisible.
 func (h *Handler) syncHostNotifications() {
 	if h.opts.Federation == nil {
 		return
 	}
 	connected := map[string]bool{}
 	for _, host := range h.opts.Federation.Hosts() {
-		// Hosts reached through this daemon's master keep their
+		// Hosts reached through this daemon's parent keep their
 		// notifications (and the actions on them) to their own operators.
 		if host.Status == "connected" && !host.Upstream {
 			connected[host.ID] = true

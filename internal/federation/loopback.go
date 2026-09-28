@@ -13,7 +13,7 @@ import (
 )
 
 // LoopbackLocal bridges the federation tunnel into one private, authenticated
-// local browser WebSocket. It never reveals the browser token to the master.
+// local browser WebSocket. It never reveals the browser token to the parent.
 // Correlation IDs are replaced while in flight, so concurrent remote browser
 // clients cannot consume one another's replies; all uncorrelated envelopes
 // remain a live EventSource (including PTY and browser frames).
@@ -153,7 +153,7 @@ func (l *LoopbackLocal) read(conn *websocket.Conn) {
 		if e.T == "spawn_progress" {
 			// Interim spawn phases share the command's corrId but are not its
 			// reply; answering with one would drop the real ack. The call
-			// protocol has no streaming, so these stay on the slave.
+			// protocol has no streaming, so these stay on the child.
 			continue
 		}
 		l.mu.Lock()
@@ -210,7 +210,7 @@ func (l *LoopbackLocal) Close() error {
 
 // Reset drops the private browser-protocol connection without permanently
 // closing the bridge. This releases every local subscription when an upstream
-// tunnel ends; the next command reconnects and establishes only the master's
+// tunnel ends; the next command reconnects and establishes only the parent's
 // current subscriptions.
 func (l *LoopbackLocal) Reset() {
 	l.mu.Lock()

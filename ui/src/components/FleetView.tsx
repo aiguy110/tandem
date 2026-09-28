@@ -19,8 +19,8 @@ export interface FleetNode {
 }
 
 export interface FleetEdge {
-  slaveId: string;
-  masterId: string;
+  childId: string;
+  parentId: string;
 }
 
 export interface FleetTopology {
@@ -30,7 +30,7 @@ export interface FleetTopology {
   height: number;
 }
 
-// Hosts from a pre-topology daemon describe direct slaves only. Treating those
+// Hosts from a pre-topology daemon describe direct children only. Treating those
 // as local children retains a useful, correct one-hop Fleet View while newer
 // daemons provide parentId for all descendants.
 export function projectFleet(hosts: FederationHost[]): FleetTopology {
@@ -43,12 +43,12 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
   const parentByID = new Map<string, string | undefined>();
   for (const host of byID.values()) {
     if (host.id === LOCAL_HOST_ID || host.local) {
-      // A Tandem that can see its master draws that master above itself.
+      // A Tandem that can see its parent draws that parent above itself.
       parentByID.set(host.id, host.parentId && byID.has(host.parentId) ? host.parentId : undefined);
       continue;
     }
-    // The topmost host this Tandem sees through its master has no parent;
-    // only a parentless descendant is a legacy direct slave of this host.
+    // The topmost host this Tandem sees through its parent has no parent;
+    // only a parentless descendant is a legacy direct child of this host.
     const candidate = host.parentId ?? (host.upstream ? undefined : LOCAL_HOST_ID);
     if (!candidate) {
       parentByID.set(host.id, undefined);
@@ -96,7 +96,7 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
       y: PADDING_Y + NODE_HEIGHT / 2 + position.depth * (NODE_HEIGHT + ROW_GAP),
     };
   });
-  const edges = nodes.flatMap((node) => node.parentId ? [{ slaveId: node.host.id, masterId: node.parentId }] : []);
+  const edges = nodes.flatMap((node) => node.parentId ? [{ childId: node.host.id, parentId: node.parentId }] : []);
   const maxDepth = Math.max(0, ...nodes.map((node) => node.depth));
   return {
     nodes,
@@ -210,7 +210,7 @@ export function FleetView() {
           </div>
           <button type="button" className="fleet-close" onClick={() => setModal('none')} aria-label="Close Fleet View">×</button>
         </div>
-        <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from slave to master</div>
+        <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from child to parent</div>
         <div
           className={`fleet-canvas${panning ? ' panning' : ''}`}
           ref={canvasRef}
@@ -223,9 +223,9 @@ export function FleetView() {
           onPointerCancel={endPan}
         >
           <div className="fleet-stage" style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}>
-            <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from slaves to masters">
+            <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from children to parents">
             <defs>
-              <marker id="fleet-master-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <marker id="fleet-parent-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead" />
               </marker>
               {fleet.nodes.map((node, index) => (
@@ -234,20 +234,20 @@ export function FleetView() {
             </defs>
             <g className="fleet-edges">
               {fleet.edges.map((edge) => {
-                const slave = nodeByID.get(edge.slaveId)!;
-                const master = nodeByID.get(edge.masterId)!;
-                const fromY = slave.y - NODE_HEIGHT / 2;
-                const toY = master.y + NODE_HEIGHT / 2;
+                const child = nodeByID.get(edge.childId)!;
+                const parent = nodeByID.get(edge.parentId)!;
+                const fromY = child.y - NODE_HEIGHT / 2;
+                const toY = parent.y + NODE_HEIGHT / 2;
                 return (
                   <path
                     className="fleet-edge"
-                    data-slave-id={edge.slaveId}
-                    data-master-id={edge.masterId}
-                    key={`${edge.slaveId}->${edge.masterId}`}
-                    d={`M ${slave.x} ${fromY} C ${slave.x} ${(fromY + toY) / 2}, ${master.x} ${(fromY + toY) / 2}, ${master.x} ${toY}`}
-                    markerEnd="url(#fleet-master-arrow)"
+                    data-child-id={edge.childId}
+                    data-parent-id={edge.parentId}
+                    key={`${edge.childId}->${edge.parentId}`}
+                    d={`M ${child.x} ${fromY} C ${child.x} ${(fromY + toY) / 2}, ${parent.x} ${(fromY + toY) / 2}, ${parent.x} ${toY}`}
+                    markerEnd="url(#fleet-parent-arrow)"
                   >
-                    <title>{`${slave.host.name ?? slave.host.id} → ${master.host.name ?? master.host.id} (slave → master)`}</title>
+                    <title>{`${child.host.name ?? child.host.id} → ${parent.host.name ?? parent.host.id} (child → parent)`}</title>
                   </path>
                 );
               })}

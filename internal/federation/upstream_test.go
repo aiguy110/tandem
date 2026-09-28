@@ -120,19 +120,19 @@ func startUpstreamFleet(t *testing.T, rootPolicy, alphaPolicy, betaPolicy Policy
 	f.rootID = f.root.selfID()
 
 	f.alphaLocal = newRoutingLocal("alpha", `{"t":"agents","agents":[{"id":"alpha-agent"}]}`, func() *Service { return f.alpha })
-	f.alpha, err = New(Options{Store: openStore(t), MasterURL: server.URL, Name: "alpha", Local: f.alphaLocal, PollInterval: 10 * time.Millisecond, Policy: alphaPolicy})
+	f.alpha, err = New(Options{Store: openStore(t), ParentURL: server.URL, Name: "alpha", Local: f.alphaLocal, PollInterval: 10 * time.Millisecond, Policy: alphaPolicy})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runTestSlave(t, f.alpha)
+	runTestChild(t, f.alpha)
 	f.alphaID = acceptTestRegistration(t, f.root, f.rootCenter)
 
 	f.betaLocal = newRoutingLocal("beta", `{"t":"agents","agents":[{"id":"beta-agent"}]}`, func() *Service { return f.beta })
-	f.beta, err = New(Options{Store: openStore(t), MasterURL: server.URL, Name: "beta", Local: f.betaLocal, PollInterval: 10 * time.Millisecond, Policy: betaPolicy})
+	f.beta, err = New(Options{Store: openStore(t), ParentURL: server.URL, Name: "beta", Local: f.betaLocal, PollInterval: 10 * time.Millisecond, Policy: betaPolicy})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runTestSlave(t, f.beta)
+	runTestChild(t, f.beta)
 	eventuallyTest(t, "beta registration", func() bool {
 		for _, n := range f.rootCenter.List() {
 			if strings.HasPrefix(n.ID, "federation-registration-beta") {
@@ -196,7 +196,7 @@ func TestChildSeesNothingUpstreamByDefault(t *testing.T) {
 			}
 		}
 		if s.LocalHost().ParentID != "" {
-			t.Fatal("local host has a visible master under the default policy")
+			t.Fatal("local host has a visible parent under the default policy")
 		}
 	}
 	// Downward control is unchanged.
@@ -206,7 +206,7 @@ func TestChildSeesNothingUpstreamByDefault(t *testing.T) {
 	}
 }
 
-func TestChildControlsMasterAndSiblingWithinPolicy(t *testing.T) {
+func TestChildControlsParentAndSiblingWithinPolicy(t *testing.T) {
 	f := startUpstreamFleet(t,
 		Policy{{From: "alpha-*", Level: LevelOperate}},
 		nil,
@@ -270,7 +270,7 @@ func TestChildControlsMasterAndSiblingWithinPolicy(t *testing.T) {
 	}
 }
 
-func TestMasterEventsReachChildUnderItsAddress(t *testing.T) {
+func TestParentEventsReachChildUnderItsAddress(t *testing.T) {
 	f := startUpstreamFleet(t, Policy{{From: "alpha-*", Level: LevelView}}, nil, nil)
 	var rootHost Host
 	eventuallyTest(t, "alpha's view of root", func() bool {

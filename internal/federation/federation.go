@@ -1,5 +1,5 @@
 // Package federation implements Tandem's routed federation tree protocol. A
-// node dials one configured master and may accept children; masters never
+// node dials one configured parent and may accept children; parents never
 // need to initiate network connections back into a node.
 package federation
 
@@ -36,17 +36,17 @@ import (
 // changes. A peer reporting a different version still connects -- see
 // checkProtocol -- because most commands remain mutually intelligible.
 //
-// Version 3 added upstream control: a master offers each capable child a
+// Version 3 added upstream control: a parent offers each capable child a
 // "view" of the rest of the fleet and executes commands the child sends up,
 // both subject to the controlled host's access Policy.
 const ProtocolVersion = 3
 
 // upstreamCapability is advertised in a child's hello when it understands
-// "view" messages and routes commands upward. A master opens the per-child
+// "view" messages and routes commands upward. A parent opens the per-child
 // loopback that serves them only for children that advertise it.
 const upstreamCapability = "upstream"
 
-// upHop is the route step meaning "this daemon's master". Real host IDs never
+// upHop is the route step meaning "this daemon's parent". Real host IDs never
 // contain it (see ValidHostID), so a route cannot confuse the two.
 const upHop = "^"
 
@@ -61,12 +61,12 @@ const (
 	TunnelPath    = "/internal/federation/tunnel"
 )
 
-// Host is the master-safe view of a registered agent host. Snapshot is the
+// Host is the parent-safe view of a registered agent host. Snapshot is the
 // host's latest opaque catalog/state envelope and excludes its credential.
 type Host struct {
 	ID    string `json:"id"`
 	Local bool   `json:"local,omitempty"`
-	// NodeID is the identity assigned by the node's direct master. ID is the
+	// NodeID is the identity assigned by the node's direct parent. ID is the
 	// route-scoped address used to reach it from this daemon; they differ only
 	// for descendants.
 	NodeID   string          `json:"nodeId,omitempty"`
@@ -82,8 +82,8 @@ type Host struct {
 	// connected; both are absent for a host predating version reporting.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
-	// Upstream marks a host reached through this daemon's master rather than
-	// one of its own descendants: the master itself, its other branches, and
+	// Upstream marks a host reached through this daemon's parent rather than
+	// one of its own descendants: the parent itself, its other branches, and
 	// anything above it. Such hosts are never advertised further upstream.
 	Upstream bool `json:"upstream,omitempty"`
 	// Access is what this daemon may do on the host under that host's
@@ -116,7 +116,7 @@ func (s *Service) LocalHost() Host {
 	return h
 }
 
-// Local supplies a slave's local operations. Commands and snapshots are
+// Local supplies a child's local operations. Commands and snapshots are
 // opaque JSON intentionally: this keeps the federation transport in lockstep
 // with the browser protocol without duplicating every agent/browser command.
 type Local interface {
@@ -134,16 +134,16 @@ type connectionResetter interface{ Reset() }
 type Options struct {
 	Store         *store.Store
 	Notifications *notifications.Center
-	MasterURL     string
+	ParentURL     string
 	Name          string
 	Endpoint      string
 	Local         Local
 	HTTPClient    *http.Client
 	PollInterval  time.Duration
-	// ProxyURL routes this daemon's outbound dials to its master through a
-	// proxy, e.g. "socks5://127.0.0.1:1080". It affects the slave side only:
-	// a master never dials out, and the loopback transport never leaves the
-	// process. SOCKS sits below TLS, so an https/wss master still terminates
+	// ProxyURL routes this daemon's outbound dials to its parent through a
+	// proxy, e.g. "socks5://127.0.0.1:1080". It affects the child side only:
+	// a parent never dials out, and the loopback transport never leaves the
+	// process. SOCKS sits below TLS, so an https/wss parent still terminates
 	// its own TLS end to end.
 	ProxyURL string
 	// BuildVersion is this daemon's release, reported to the peer alongside
@@ -162,7 +162,7 @@ type Options struct {
 type Service struct {
 	store         *store.Store
 	notifications *notifications.Center
-	masterURL     string
+	parentURL     string
 	name          string
 	endpoint      string
 	local         Local
@@ -182,13 +182,13 @@ type Service struct {
 	upstream   *tunnel
 	subs       map[int]func(string, json.RawMessage)
 	nextSub    int
-	// identity caches selfID's answer for a daemon without a master.
+	// identity caches selfID's answer for a daemon without a parent.
 	identity string
-	// ancestors is this daemon's chain of masters, nearest first, as the
-	// master reported it in its welcome. It decides the "ancestors" subject.
+	// ancestors is this daemon's chain of parents, nearest first, as the
+	// parent reported it in its welcome. It decides the "ancestors" subject.
 	ancestors []string
-	// upstreamView is the latest fleet view the master sent, in the master's
-	// own addressing. Nil means the master offers none (it is older, or has
+	// upstreamView is the latest fleet view the parent sent, in the parent's
+	// own addressing. Nil means the parent offers none (it is older, or has
 	// not sent one on the current tunnel).
 	upstreamView []Host
 	// rules holds each direct child's advertised policy, from its hello.
@@ -244,7 +244,7 @@ type registerResponse struct {
 	Status     string `json:"status"`
 	Credential string `json:"credential,omitempty"`
 	Error      string `json:"error,omitempty"`
-	// The master's own versions, so a host can report skew locally too.
+	// The parent's own versions, so a host can report skew locally too.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
 	BuildVersion    string `json:"buildVersion,omitempty"`
 }
@@ -269,7 +269,7 @@ type tunnelMessage struct {
 	Hosts    []Host          `json:"hosts,omitempty"`
 	// Ancestors is a best-effort loop guard. Older peers ignore it.
 	Ancestors []string `json:"ancestors,omitempty"`
-	// Carried on "hello" (host to master) and "welcome" (master to host). The
+	// Carried on "hello" (host to parent) and "welcome" (parent to host). The
 	// hello is the authoritative report: a long-registered host reconnects
 	// without ever registering again.
 	ProtocolVersion int    `json:"protocolVersion,omitempty"`
@@ -288,17 +288,17 @@ type tunnel struct {
 	writeMu sync.Mutex
 	// sent remembers the last state message of each kind, so an unchanged
 	// snapshot, topology or view is not re-sent. Besides saving bandwidth,
-	// this is what stops the master's view and the child's topology from
+	// this is what stops the parent's view and the child's topology from
 	// echoing each other forever: each is re-sent on the other's arrival.
 	sentMu sync.Mutex
 	sent   map[string][]byte
 }
 
-// proxyDialers builds the outbound dial path for a slave that reaches its
-// master through a proxy. gorilla's own Dialer.Proxy speaks HTTP CONNECT only,
+// proxyDialers builds the outbound dial path for a child that reaches its
+// parent through a proxy. gorilla's own Dialer.Proxy speaks HTTP CONNECT only,
 // so the websocket tunnel needs an explicit net dialer; net/http understands
 // socks5 proxy URLs directly. Hostnames are handed to the proxy unresolved
-// (socks5h semantics), so a master name that only resolves on the far side --
+// (socks5h semantics), so a parent name that only resolves on the far side --
 // the common case behind an ssh -D tunnel -- still connects.
 func proxyDialers(raw string) (func(context.Context, string, string) (net.Conn, error), *http.Transport, error) {
 	u, err := url.Parse(raw)
@@ -354,18 +354,18 @@ func New(opts Options) (*Service, error) {
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	master := strings.TrimRight(strings.TrimSpace(opts.MasterURL), "/")
-	if master != "" {
-		u, err := url.Parse(master)
+	parent := strings.TrimRight(strings.TrimSpace(opts.ParentURL), "/")
+	if parent != "" {
+		u, err := url.Parse(parent)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("federation: invalid master URL %q", opts.MasterURL)
+			return nil, fmt.Errorf("federation: invalid parent URL %q", opts.ParentURL)
 		}
 	}
-	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, masterURL: master, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}, policy: opts.Policy, newLocal: opts.NewLocal, rules: map[string]Policy{}, children: map[string]*childLink{}}
+	service := &Service{store: opts.Store, notifications: opts.Notifications, buildVersion: opts.BuildVersion, parentURL: parent, name: opts.Name, endpoint: opts.Endpoint, local: opts.Local, client: opts.HTTPClient, dialer: &dialer, poll: opts.PollInterval, snapshots: map[string]json.RawMessage{}, topologies: map[string][]Host{}, queues: map[string][]command{}, waiters: map[string]chan result{}, tunnels: map[string]*tunnel{}, subs: map[int]func(string, json.RawMessage){}, policy: opts.Policy, newLocal: opts.NewLocal, rules: map[string]Policy{}, children: map[string]*childLink{}}
 	// A prior process may have stopped without updating its connected peers.
 	// Until a new authenticated tunnel arrives, those durable records are
 	// offline rather than connected.
-	peers, err := opts.Store.FederationSlaves()
+	peers, err := opts.Store.FederationChildren()
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +375,7 @@ func New(opts Options) (*Service, error) {
 		}
 		if peer.Status == "connected" {
 			peer.Status = "offline"
-			if err := opts.Store.UpsertFederationSlave(peer); err != nil {
+			if err := opts.Store.UpsertFederationChild(peer); err != nil {
 				return nil, err
 			}
 		}
@@ -383,11 +383,11 @@ func New(opts Options) (*Service, error) {
 	return service, nil
 }
 
-// trusted reports whether an approved slave record may authenticate with its
-// stored credential. Approval survives disconnects: the master demotes a
+// trusted reports whether an approved child record may authenticate with its
+// stored credential. Approval survives disconnects: the parent demotes a
 // dropped tunnel to "offline", so requiring "accepted" here would make every
 // reconnection after the first one fail as unauthorized.
-func trusted(peer *store.FederationSlave) bool {
+func trusted(peer *store.FederationChild) bool {
 	if peer == nil {
 		return false
 	}
@@ -398,21 +398,21 @@ func trusted(peer *store.FederationSlave) bool {
 	return false
 }
 
-// IsSlave reports whether this daemon has an upstream. It may still accept
+// HasParent reports whether this daemon has an upstream. It may still accept
 // children: federation is a rooted tree, not a one-hop relationship.
-func (s *Service) IsSlave() bool {
-	if s.masterURL != "" {
+func (s *Service) HasParent() bool {
+	if s.parentURL != "" {
 		return true
 	}
-	m, err := s.store.FederationMaster()
+	m, err := s.store.FederationParent()
 	return err == nil && m != nil
 }
 
 // Hosts lists every host this daemon can address: its descendants, then
-// (when its master offers a view) the hosts reached through that master.
+// (when its parent offers a view) the hosts reached through that parent.
 func (s *Service) Hosts() []Host {
 	self := s.selfID()
-	peers, err := s.store.FederationSlaves()
+	peers, err := s.store.FederationChildren()
 	if err != nil {
 		return []Host{}
 	}
@@ -436,7 +436,7 @@ func (s *Service) Hosts() []Host {
 	return append(out, s.upstreamHostsLocked()...)
 }
 
-// descendantHosts is Hosts without the hosts reached through the master:
+// descendantHosts is Hosts without the hosts reached through the parent:
 // what this daemon advertises upstream as its subtree.
 func (s *Service) descendantHosts() []Host {
 	all := s.Hosts()
@@ -449,15 +449,15 @@ func (s *Service) descendantHosts() []Host {
 	return out
 }
 
-// upstreamHostsLocked translates the master's view into this daemon's
-// addressing: the master is route [^], and a host the master calls X is
+// upstreamHostsLocked translates the parent's view into this daemon's
+// addressing: the parent is route [^], and a host the parent calls X is
 // [^, X's route...]. Hosts deeper than maxFederationDepth are dropped.
 func (s *Service) upstreamHostsLocked() []Host {
 	if s.upstreamView == nil {
 		return nil
 	}
-	masterID := routedHostID([]string{upHop})
-	idMap := map[string]string{"": masterID}
+	parentID := routedHostID([]string{upHop})
+	idMap := map[string]string{"": parentID}
 	routes := map[string][]string{}
 	for _, h := range s.upstreamView {
 		route := []string{upHop}
@@ -579,7 +579,7 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 		envelope["hostId"] = next
 		payload, _ = json.Marshal(envelope)
 	}
-	peer, err := s.store.FederationSlave(directID)
+	peer, err := s.store.FederationChild(directID)
 	if err != nil {
 		return nil, err
 	}
@@ -623,9 +623,9 @@ func (s *Service) Call(ctx context.Context, hostID string, payload json.RawMessa
 }
 
 // callUpstream sends a command to a host reached through this daemon's
-// master. The master's address for the target travels as the envelope's
-// hostId (absent for the master itself), exactly as a browser on the master
-// would address it; the master's own wsserver does any further routing.
+// parent. The parent's address for the target travels as the envelope's
+// hostId (absent for the parent itself), exactly as a browser on the parent
+// would address it; the parent's own wsserver does any further routing.
 func (s *Service) callUpstream(ctx context.Context, target Host, origin string, payload json.RawMessage) (json.RawMessage, error) {
 	var next any
 	if target.nextID != "" {
@@ -639,7 +639,7 @@ func (s *Service) callUpstream(ctx context.Context, target Host, origin string, 
 	t := s.upstream
 	s.mu.Unlock()
 	if t == nil {
-		return nil, fmt.Errorf("federation: route to %q is offline: not connected to master", target.ID)
+		return nil, fmt.Errorf("federation: route to %q is offline: not connected to parent", target.ID)
 	}
 	id, err := randomID()
 	if err != nil {
@@ -671,11 +671,11 @@ func (s *Service) callUpstream(ctx context.Context, target Host, origin string, 
 }
 
 // selfID is the host ID this daemon names itself by to its peers: the ID its
-// master accepted, or else a durable generated one (a root has no master to
+// parent accepted, or else a durable generated one (a root has no parent to
 // accept an ID, but its children still need to tell it apart).
 func (s *Service) selfID() string {
-	if s.masterURL != "" {
-		if m, err := s.store.FederationMaster(); err == nil && m != nil && m.HostID != "" && strings.TrimRight(m.URL, "/") == s.masterURL {
+	if s.parentURL != "" {
+		if m, err := s.store.FederationParent(); err == nil && m != nil && m.HostID != "" && strings.TrimRight(m.URL, "/") == s.parentURL {
 			return m.HostID
 		}
 	}
@@ -707,8 +707,8 @@ func (s *Service) selfID() string {
 }
 
 // isAncestor reports whether a command's origin, received over the upstream
-// link, is one of this daemon's masters. An unattributed command can only
-// come from an older master, which predates any other kind of sender.
+// link, is one of this daemon's parents. An unattributed command can only
+// come from an older parent, which predates any other kind of sender.
 func (s *Service) isAncestor(origin string) bool {
 	if origin == "" {
 		return true
@@ -774,7 +774,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, registerResponse{Error: "hostId must be at most 64 characters of letters, digits, '-', '_' or '.'"})
 		return
 	}
-	peer, err := s.store.FederationSlave(req.HostID)
+	peer, err := s.store.FederationChild(req.HostID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -796,8 +796,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UnixMilli()
-	pending := store.FederationSlave{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now, ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion}
-	if err := s.store.UpsertFederationSlave(pending); err != nil {
+	pending := store.FederationChild{ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Status: "pending", RequestedAt: now, ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion}
+	if err := s.store.UpsertFederationChild(pending); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -811,7 +811,7 @@ func (s *Service) registrationStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.URL.Query().Get("hostId")
-	peer, err := s.store.FederationSlave(id)
+	peer, err := s.store.FederationChild(id)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -825,7 +825,7 @@ func (s *Service) registrationStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Credential = peer.Credential
 	}
 	if peer.Status == "rejected" {
-		resp.Error = "registration was rejected by the master"
+		resp.Error = "registration was rejected by the parent"
 	}
 	writeJSON(w, 200, resp)
 }
@@ -840,7 +840,7 @@ func (s *Service) heartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hostId is required", 400)
 		return
 	}
-	peer, err := s.store.FederationSlave(hb.HostID)
+	peer, err := s.store.FederationChild(hb.HostID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -855,7 +855,7 @@ func (s *Service) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if hb.ProtocolVersion != 0 || hb.BuildVersion != "" {
 		peer.ProtocolVersion, peer.BuildVersion = hb.ProtocolVersion, hb.BuildVersion
 	}
-	if err := s.store.UpsertFederationSlave(*peer); err != nil {
+	if err := s.store.UpsertFederationChild(*peer); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -878,7 +878,7 @@ func (s *Service) heartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, heartbeatResponse{Commands: commands})
 }
 
-// Subscribe receives live slave envelopes. wsserver owns routing and agent-ID
+// Subscribe receives live child envelopes. wsserver owns routing and agent-ID
 // rewriting; federation deliberately remains independent of UI protocol.
 func (s *Service) Subscribe(fn func(hostID string, payload json.RawMessage)) func() {
 	s.mu.Lock()
@@ -905,12 +905,12 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
 	})
-	peer, err := s.store.FederationSlave(hello.HostID)
+	peer, err := s.store.FederationChild(hello.HostID)
 	if err != nil || !trusted(peer) || !secretMatches(federationToken(r), peer.Credential) {
 		_ = conn.WriteJSON(tunnelMessage{T: "error", Error: unauthorizedTunnelError})
 		return
 	}
-	if self, _ := s.store.FederationMaster(); self != nil {
+	if self, _ := s.store.FederationParent(); self != nil {
 		for _, ancestor := range hello.Ancestors {
 			if ancestor == self.HostID {
 				_ = conn.WriteJSON(tunnelMessage{T: "error", Error: "federation cycle detected"})
@@ -932,7 +932,7 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	peer.Status = "connected"
 	peer.LastSeenAt = time.Now().UnixMilli()
 	peer.ProtocolVersion, peer.BuildVersion = hello.ProtocolVersion, hello.BuildVersion
-	_ = s.store.UpsertFederationSlave(*peer)
+	_ = s.store.UpsertFederationChild(*peer)
 	upstreamCapable := hasCapability(hello.Capabilities, upstreamCapability)
 	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion, "upstream_capable", upstreamCapable, "access_rules", len(hello.Rules))
 	// A host predating the welcome message ignores unknown tunnel types, so
@@ -956,10 +956,10 @@ func (s *Service) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		s.stopChildLink(hello.HostID, t)
 		s.removeProtocolNotification(hello.HostID)
-		p, _ := s.store.FederationSlave(hello.HostID)
+		p, _ := s.store.FederationChild(hello.HostID)
 		if p != nil && p.Status == "connected" {
 			p.Status = "offline"
-			_ = s.store.UpsertFederationSlave(*p)
+			_ = s.store.UpsertFederationChild(*p)
 			s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 		}
 		slog.Warn("federation host disconnected", "host_id", hello.HostID)
@@ -1010,7 +1010,7 @@ func (s *Service) relayHostID(via, childID string) string {
 	if childID == "" || childID == via {
 		return via
 	}
-	peers, err := s.store.FederationSlaves()
+	peers, err := s.store.FederationChildren()
 	if err != nil {
 		return via
 	}
@@ -1062,7 +1062,7 @@ func (s *Service) publish(hostID string, payload json.RawMessage) {
 }
 
 // publishLocal delivers an envelope to this daemon's own subscribers only.
-// It is for state learned from the master, which must neither be cached as a
+// It is for state learned from the parent, which must neither be cached as a
 // descendant's snapshot nor trigger re-advertisement upstream.
 func (s *Service) publishLocal(hostID string, payload json.RawMessage) {
 	s.mu.Lock()
@@ -1076,9 +1076,9 @@ func (s *Service) publishLocal(hostID string, payload json.RawMessage) {
 	}
 }
 
-// setAncestors records the master's report of the hosts above this one. A
+// setAncestors records the parent's report of the hosts above this one. A
 // changed chain is passed on to this daemon's own children (it is their
-// chain too) and re-evaluates what the master may see here.
+// chain too) and re-evaluates what the parent may see here.
 func (s *Service) setAncestors(chain []string) {
 	s.mu.Lock()
 	changed := len(chain) != len(s.ancestors)
@@ -1112,7 +1112,7 @@ func (s *Service) setAncestors(chain []string) {
 	}
 }
 
-// setUpstreamView installs the master's latest view of the rest of the
+// setUpstreamView installs the parent's latest view of the rest of the
 // fleet and tells this daemon's browsers (and children) when it changed.
 func (s *Service) setUpstreamView(hosts []Host) {
 	var next []Host
@@ -1129,17 +1129,17 @@ func (s *Service) setUpstreamView(hosts []Host) {
 	s.upstreamView = next
 	s.mu.Unlock()
 	slog.Info("federation upstream view updated", "hosts", len(next))
-	masterID := routedHostID([]string{upHop})
-	s.publishLocal(masterID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
-	s.publishLocal(masterID, json.RawMessage(`{"t":"agents"}`))
+	parentID := routedHostID([]string{upHop})
+	s.publishLocal(parentID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	s.publishLocal(parentID, json.RawMessage(`{"t":"agents"}`))
 	s.refreshChildViews()
 }
 
-// upstreamIDLocked maps the master's address for a host (empty for the
-// master itself) to this daemon's address for it, or "" if unknown.
-func (s *Service) upstreamIDLocked(masterRelative string) string {
+// upstreamIDLocked maps the parent's address for a host (empty for the
+// parent itself) to this daemon's address for it, or "" if unknown.
+func (s *Service) upstreamIDLocked(parentRelative string) string {
 	for _, h := range s.upstreamHostsLocked() {
-		if h.nextID == masterRelative {
+		if h.nextID == parentRelative {
 			return h.ID
 		}
 	}
@@ -1157,9 +1157,9 @@ func (s *Service) isUpstreamHostID(hostID string) bool {
 	return false
 }
 
-// relayUpstreamEvent publishes an event the master forwarded for one of the
+// relayUpstreamEvent publishes an event the parent forwarded for one of the
 // hosts reached through it, under this daemon's address for that host.
-func (s *Service) relayUpstreamEvent(masterRelative string, payload json.RawMessage) {
+func (s *Service) relayUpstreamEvent(parentRelative string, payload json.RawMessage) {
 	var meta struct {
 		T string `json:"t"`
 	}
@@ -1168,10 +1168,10 @@ func (s *Service) relayUpstreamEvent(masterRelative string, payload json.RawMess
 		return
 	}
 	s.mu.Lock()
-	hostID := s.upstreamIDLocked(masterRelative)
+	hostID := s.upstreamIDLocked(parentRelative)
 	s.mu.Unlock()
 	if hostID == "" {
-		slog.Debug("dropping upstream event for unknown host", "master_host_id", masterRelative, "type", meta.T)
+		slog.Debug("dropping upstream event for unknown host", "parent_host_id", parentRelative, "type", meta.T)
 		return
 	}
 	s.publishLocal(hostID, payload)
@@ -1442,7 +1442,7 @@ func (s *Service) sendTopologyUpstream() {
 	}
 }
 
-// welcome is what a master tells a connecting child: its versions and the
+// welcome is what a parent tells a connecting child: its versions and the
 // chain of hosts above that child, nearest first, which the child's policy
 // treats as its ancestors.
 func (s *Service) welcome() tunnelMessage {
@@ -1466,11 +1466,11 @@ func hasCapability(capabilities []string, want string) bool {
 }
 
 // A cycle would eventually re-advertise this daemon's upstream identity as a
-// descendant. IDs are scoped to their direct master, so this is deliberately
+// descendant. IDs are scoped to their direct parent, so this is deliberately
 // a conservative guard paired with maxFederationDepth rather than a claim of
 // global node identity.
 func (s *Service) topologyCycles(hosts []Host) bool {
-	self, _ := s.store.FederationMaster()
+	self, _ := s.store.FederationParent()
 	if self == nil || self.HostID == "" {
 		return false
 	}
@@ -1523,16 +1523,16 @@ func (t *tunnel) ping() error {
 	return t.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
 }
 
-// HandleNotificationAction accepts a master UI notification action. It
+// HandleNotificationAction accepts a parent UI notification action. It
 // returns handled=false for unrelated notification IDs so daemon code can
 // chain this with updater actions.
 func (s *Service) HandleNotificationAction(_ context.Context, id, action string) (sessionID string, handled bool, err error) {
-	if id == masterProtocolNotificationID {
+	if id == parentProtocolNotificationID {
 		if action != "dismiss" {
 			return "", true, fmt.Errorf("unknown federation protocol action %q", action)
 		}
 		if s.notifications != nil {
-			s.notifications.Remove(masterProtocolNotificationID)
+			s.notifications.Remove(parentProtocolNotificationID)
 		}
 		return "", true, nil
 	}
@@ -1548,7 +1548,7 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		return "", false, nil
 	}
 	hostID := strings.TrimPrefix(id, prefix)
-	peer, err := s.store.FederationSlave(hostID)
+	peer, err := s.store.FederationChild(hostID)
 	if err != nil {
 		return "", true, err
 	}
@@ -1564,7 +1564,7 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		peer.Credential = credential
 		peer.Status = "accepted"
 		peer.AcceptedAt = time.Now().UnixMilli()
-		if e = s.store.UpsertFederationSlave(*peer); e != nil {
+		if e = s.store.UpsertFederationChild(*peer); e != nil {
 			return "", true, e
 		}
 		if action == "accept_replace" {
@@ -1576,7 +1576,7 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 		return "", true, nil
 	case "reject":
 		peer.Status = "rejected"
-		if e := s.store.UpsertFederationSlave(*peer); e != nil {
+		if e := s.store.UpsertFederationChild(*peer); e != nil {
 			return "", true, e
 		}
 		s.removeNotification(hostID)
@@ -1596,11 +1596,11 @@ func (s *Service) HandleNotificationAction(_ context.Context, id, action string)
 // The old record's credential, presented the same way every other
 // authenticated federation call presents it, is what proves the two IDs are
 // one host; an unproven request falls through to ordinary approval.
-func (s *Service) rotateIdentity(req registerRequest, credential string) (*store.FederationSlave, error) {
+func (s *Service) rotateIdentity(req registerRequest, credential string) (*store.FederationChild, error) {
 	if req.PreviousHostID == "" || req.PreviousHostID == req.HostID {
 		return nil, nil
 	}
-	previous, err := s.store.FederationSlave(req.PreviousHostID)
+	previous, err := s.store.FederationChild(req.PreviousHostID)
 	if err != nil {
 		return nil, err
 	}
@@ -1612,12 +1612,12 @@ func (s *Service) rotateIdentity(req registerRequest, credential string) (*store
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	rotated := store.FederationSlave{
+	rotated := store.FederationChild{
 		ID: req.HostID, Name: req.Name, Endpoint: req.Endpoint, Credential: issued,
 		Status: "accepted", RequestedAt: now, AcceptedAt: now,
 		ProtocolVersion: req.ProtocolVersion, BuildVersion: req.BuildVersion,
 	}
-	if err := s.store.UpsertFederationSlave(rotated); err != nil {
+	if err := s.store.UpsertFederationChild(rotated); err != nil {
 		return nil, err
 	}
 	s.forget(previous.ID)
@@ -1625,19 +1625,19 @@ func (s *Service) rotateIdentity(req registerRequest, credential string) (*store
 }
 
 // supersededBy reports the records that look like earlier identities of the
-// host just accepted: same reported name, not currently connected. The master
+// host just accepted: same reported name, not currently connected. The parent
 // cannot prove this on its own -- two machines may legitimately share a
 // hostname -- so it is only ever offered to the operator as a choice, never
 // applied automatically.
-func (s *Service) supersededBy(accepted store.FederationSlave) []store.FederationSlave {
+func (s *Service) supersededBy(accepted store.FederationChild) []store.FederationChild {
 	if strings.TrimSpace(accepted.Name) == "" {
 		return nil
 	}
-	peers, err := s.store.FederationSlaves()
+	peers, err := s.store.FederationChildren()
 	if err != nil {
 		return nil
 	}
-	var out []store.FederationSlave
+	var out []store.FederationChild
 	for _, p := range peers {
 		if p.ID == accepted.ID || p.Status == "connected" || !strings.EqualFold(p.Name, accepted.Name) {
 			continue
@@ -1648,10 +1648,10 @@ func (s *Service) supersededBy(accepted store.FederationSlave) []store.Federatio
 }
 
 // forget drops a host record and every piece of live state keyed to it. A
-// slave still holding the deleted credential is refused at the tunnel and
+// child still holding the deleted credential is refused at the tunnel and
 // registers again, so forgetting a host cannot strand it.
 func (s *Service) forget(hostID string) {
-	_ = s.store.DeleteFederationSlave(hostID)
+	_ = s.store.DeleteFederationChild(hostID)
 	s.removeNotification(hostID)
 	s.removeProtocolNotification(hostID)
 	s.mu.Lock()
@@ -1666,7 +1666,7 @@ func (s *Service) forget(hostID string) {
 	s.publish(hostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
 }
 
-func (s *Service) notifyPending(peer store.FederationSlave) {
+func (s *Service) notifyPending(peer store.FederationChild) {
 	if s.notifications == nil {
 		return
 	}
@@ -1698,16 +1698,16 @@ func (s *Service) notifyPending(peer store.FederationSlave) {
 }
 
 const protocolNotificationPrefix = "federation-protocol-"
-const masterProtocolNotificationID = "federation-master-protocol"
+const parentProtocolNotificationID = "federation-parent-protocol"
 
-// noteMasterProtocol is the slave-side half of skew reporting, so an operator
-// looking at the host's own UI sees the same fact the master's UI shows.
-func (s *Service) noteMasterProtocol(version int, build string) {
+// noteParentProtocol is the child-side half of skew reporting, so an operator
+// looking at the host's own UI sees the same fact the parent's UI shows.
+func (s *Service) noteParentProtocol(version int, build string) {
 	if s.notifications == nil {
 		return
 	}
 	if version == ProtocolVersion {
-		s.notifications.Remove(masterProtocolNotificationID)
+		s.notifications.Remove(parentProtocolNotificationID)
 		return
 	}
 	remote := fmt.Sprintf("protocol %d", version)
@@ -1717,14 +1717,14 @@ func (s *Service) noteMasterProtocol(version int, build string) {
 	if build != "" {
 		remote += " (" + build + ")"
 	}
-	action := "Update this host's Tandem to match its master."
+	action := "Update this host's Tandem to match its parent."
 	if version < ProtocolVersion {
-		action = "Update the master's Tandem to match this host."
+		action = "Update the parent's Tandem to match this host."
 	}
 	s.notifications.Upsert(notifications.Notification{
-		ID: masterProtocolNotificationID, Severity: "attention",
-		Title:   "This host's master is a different Tandem version",
-		Message: fmt.Sprintf("The master speaks %s; this Tandem speaks protocol %d. %s", remote, ProtocolVersion, action),
+		ID: parentProtocolNotificationID, Severity: "attention",
+		Title:   "This host's parent is a different Tandem version",
+		Message: fmt.Sprintf("The parent speaks %s; this Tandem speaks protocol %d. %s", remote, ProtocolVersion, action),
 		Actions: []notifications.Action{{ID: "dismiss", Label: "Dismiss"}},
 	})
 }
@@ -1733,7 +1733,7 @@ func (s *Service) noteMasterProtocol(version int, build string) {
 // letting it appear as commands that mysteriously do nothing. It deliberately
 // does not refuse the connection: the tunnel carries opaque browser envelopes,
 // so a peer one version off still handles every command both sides share.
-func (s *Service) checkProtocol(peer store.FederationSlave) {
+func (s *Service) checkProtocol(peer store.FederationChild) {
 	if s.notifications == nil {
 		return
 	}
@@ -1779,24 +1779,24 @@ func (s *Service) removeNotification(id string) {
 	}
 }
 
-// RunSlave reconnects forever until ctx ends. It registers once, durably
+// RunParentLink reconnects forever until ctx ends. It registers once, durably
 // saves the issued credential, then keeps one persistent outbound tunnel.
-func (s *Service) RunSlave(ctx context.Context) error {
-	if s.masterURL == "" {
+func (s *Service) RunParentLink(ctx context.Context) error {
+	if s.parentURL == "" {
 		return nil
 	}
-	master, err := s.store.FederationMaster()
+	parent, err := s.store.FederationParent()
 	if err != nil {
 		return err
 	}
 	hostID := ""
 	credential := ""
-	// The identity being replaced, sent only to the master that issued it, so
-	// that master can retire the record itself instead of keeping a row no
+	// The identity being replaced, sent only to the parent that issued it, so
+	// that parent can retire the record itself instead of keeping a row no
 	// host will ever reconnect to. See rotateIdentity.
 	previousID, previousCredential := "", ""
-	if master != nil && strings.TrimRight(master.URL, "/") == s.masterURL {
-		hostID, credential = master.HostID, master.Credential
+	if parent != nil && strings.TrimRight(parent.URL, "/") == s.parentURL {
+		hostID, credential = parent.HostID, parent.Credential
 	}
 	if legacyHostID(hostID) {
 		// Upgrading past the long random host IDs: take a readable one, and
@@ -1816,16 +1816,16 @@ func (s *Service) RunSlave(ctx context.Context) error {
 			return nil
 		}
 		if credential == "" {
-			status, e := s.registrationWithMaster(ctx, hostID, previousID, previousCredential)
+			status, e := s.registrationWithParent(ctx, hostID, previousID, previousCredential)
 			if e == nil {
-				// The proof is good for one registration. A master that
+				// The proof is good for one registration. A parent that
 				// answered at all has already decided what the new ID is:
 				// rotated, or pending the operator's approval.
 				previousID, previousCredential = "", ""
 			}
 			if e == nil && status.Credential != "" {
 				credential = status.Credential
-				if e = s.store.SaveFederationMaster(store.FederationMaster{URL: s.masterURL, HostID: hostID, Credential: credential}); e != nil {
+				if e = s.store.SaveFederationParent(store.FederationParent{URL: s.parentURL, HostID: hostID, Credential: credential}); e != nil {
 					return e
 				}
 			} else if e == nil && status.Status == "rejected" {
@@ -1841,7 +1841,7 @@ func (s *Service) RunSlave(ctx context.Context) error {
 			slog.Warn("federation upstream tunnel ended; reconnecting", "host_id", hostID, "error", tunnelErr)
 		}
 		if errors.Is(tunnelErr, errCredentialRejected) {
-			// The master no longer knows this credential -- its record was
+			// The parent no longer knows this credential -- its record was
 			// replaced or deleted. Retrying it forever would leave this host
 			// permanently unreachable, so ask for registration again under
 			// the same ID. The stale credential stays on disk until a new one
@@ -1855,21 +1855,21 @@ func (s *Service) RunSlave(ctx context.Context) error {
 	}
 }
 
-// errCredentialRejected reports that the master refused this host's stored
+// errCredentialRejected reports that the parent refused this host's stored
 // credential, as opposed to the ordinary transport failures the reconnect
 // loop retries through. unauthorizedTunnelError is how that refusal travels:
-// the master authenticates the tunnel after the websocket upgrade.
-var errCredentialRejected = errors.New("federation: master rejected the stored credential")
+// the parent authenticates the tunnel after the websocket upgrade.
+var errCredentialRejected = errors.New("federation: parent rejected the stored credential")
 
 const unauthorizedTunnelError = "unauthorized"
 
-func (s *Service) registrationWithMaster(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
+func (s *Service) registrationWithParent(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
 	var out registerResponse
 	if previousID != "" {
 		// A rotation has something to prove, and only the register call
 		// carries the proof: go straight to it even if a pending row for the
 		// new ID already exists from an earlier attempt.
-		return s.registerWithMaster(ctx, id, previousID, previousCredential)
+		return s.registerWithParent(ctx, id, previousID, previousCredential)
 	}
 	code, err := s.request(ctx, http.MethodGet, StatusPath+"?hostId="+url.QueryEscape(id), "", nil, &out)
 	if err == nil {
@@ -1878,11 +1878,11 @@ func (s *Service) registrationWithMaster(ctx context.Context, id, previousID, pr
 	if code != http.StatusNotFound {
 		return out, err
 	}
-	return s.registerWithMaster(ctx, id, previousID, previousCredential)
+	return s.registerWithParent(ctx, id, previousID, previousCredential)
 }
 
 func (s *Service) runTunnel(ctx context.Context, hostID, credential string) error {
-	u, err := url.Parse(s.masterURL)
+	u, err := url.Parse(s.parentURL)
 	if err != nil {
 		return err
 	}
@@ -2009,7 +2009,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 						}
 					}
 					if meta.HostID != "" && s.isUpstreamHostID(meta.HostID) {
-						// Hosts reached through the master are the master's to
+						// Hosts reached through the parent are the parent's to
 						// report; echoing their events back up would loop.
 						continue
 					}
@@ -2027,11 +2027,11 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 			return err
 		}
 		if msg.T == "welcome" {
-			s.noteMasterProtocol(msg.ProtocolVersion, msg.BuildVersion)
+			s.noteParentProtocol(msg.ProtocolVersion, msg.BuildVersion)
 			s.setAncestors(msg.Ancestors)
 			continue
 		}
-		// The master authenticates after the upgrade, so a refused credential
+		// The parent authenticates after the upgrade, so a refused credential
 		// arrives as an ordinary tunnel message rather than an HTTP status.
 		if msg.T == "error" && msg.Error == unauthorizedTunnelError {
 			return errCredentialRejected
@@ -2055,7 +2055,7 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 			var execErr error
 			payload := msg.Payload
 			if s.local == nil {
-				execErr = errors.New("federation slave has no command handler")
+				execErr = errors.New("federation child has no command handler")
 			} else if execErr = s.authorize(msg.Origin, s.isAncestor(msg.Origin), payload); execErr == nil {
 				if _, next := envelopeRoute(payload); next != "" && msg.Origin != "" {
 					payload, execErr = withEnvelopeField(payload, OriginField, msg.Origin)
@@ -2080,16 +2080,16 @@ func (s *Service) runTunnel(ctx context.Context, hostID, credential string) erro
 	}
 }
 
-// upstreamSnapshot is the agent list this daemon offers its master: its own
-// agents only, and none at all when its policy denies the master view.
+// upstreamSnapshot is the agent list this daemon offers its parent: its own
+// agents only, and none at all when its policy denies the parent view.
 func (s *Service) upstreamSnapshot(raw json.RawMessage) json.RawMessage {
 	s.mu.Lock()
-	master := ""
+	parent := ""
 	if len(s.ancestors) != 0 {
-		master = s.ancestors[0]
+		parent = s.ancestors[0]
 	}
 	s.mu.Unlock()
-	if s.policy.LevelFor(master, true) < LevelView {
+	if s.policy.LevelFor(parent, true) < LevelView {
 		return json.RawMessage(`{"t":"agents","agents":[]}`)
 	}
 	return localOnlySnapshot(raw)
@@ -2134,10 +2134,10 @@ func localOnlySnapshot(raw json.RawMessage) json.RawMessage {
 	return filtered
 }
 
-// registerWithMaster asks for approval under id. previousID/previousCredential
-// are sent only when this host is replacing an identity the same master
-// issued, which lets the master retire that record without a second approval.
-func (s *Service) registerWithMaster(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
+// registerWithParent asks for approval under id. previousID/previousCredential
+// are sent only when this host is replacing an identity the same parent
+// issued, which lets the parent retire that record without a second approval.
+func (s *Service) registerWithParent(ctx context.Context, id, previousID, previousCredential string) (registerResponse, error) {
 	var out registerResponse
 	code, err := s.request(ctx, http.MethodPost, RegisterPath, previousCredential, registerRequest{HostID: id, Name: s.name, Endpoint: s.endpoint, ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, PreviousHostID: previousID}, &out)
 	if err != nil {
@@ -2149,7 +2149,7 @@ func (s *Service) registerWithMaster(ctx context.Context, id, previousID, previo
 		}
 		return out, err
 	}
-	return out, fmt.Errorf("master registration: %s", out.Error)
+	return out, fmt.Errorf("parent registration: %s", out.Error)
 }
 func (s *Service) sendHeartbeat(ctx context.Context, id, credential string, snapshot json.RawMessage, results []result) ([]command, error) {
 	var out heartbeatResponse
@@ -2160,7 +2160,7 @@ func (s *Service) execute(ctx context.Context, commands []command) []result {
 	out := make([]result, 0, len(commands))
 	for _, cmd := range commands {
 		if s.local == nil {
-			out = append(out, result{ID: cmd.ID, Error: "federation slave has no command handler"})
+			out = append(out, result{ID: cmd.ID, Error: "federation child has no command handler"})
 			continue
 		}
 		data, err := s.local.Execute(ctx, cmd.Payload)
@@ -2181,7 +2181,7 @@ func (s *Service) request(ctx context.Context, method, path, credential string, 
 		}
 		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, s.masterURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, s.parentURL+path, body)
 	if err != nil {
 		return 0, err
 	}
@@ -2200,7 +2200,7 @@ func (s *Service) request(ctx context.Context, method, path, credential string, 
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, fmt.Errorf("master returned %s", resp.Status)
+		return resp.StatusCode, fmt.Errorf("parent returned %s", resp.Status)
 	}
 	return resp.StatusCode, nil
 }
@@ -2224,7 +2224,7 @@ func secretMatches(a, b string) bool {
 }
 
 // ValidHostID reports whether id is usable as a federation host ID. Host IDs
-// are embedded verbatim in the namespaced agent IDs the master hands the
+// are embedded verbatim in the namespaced agent IDs the parent hands the
 // browser, so they must stay short, printable, and free of the "~" separator
 // those IDs split on.
 func ValidHostID(id string) bool {
@@ -2243,7 +2243,7 @@ func ValidHostID(id string) bool {
 
 // newHostID builds a host ID a human can read in the UI: the host's own name,
 // slugged, plus enough randomness to keep two same-named hosts from colliding
-// on one master. The ID is not a secret -- the credential issued on
+// on one parent. The ID is not a secret -- the credential issued on
 // acceptance is -- so it does not need to be unguessable.
 func newHostID(name string) (string, error) {
 	b := make([]byte, 3)
@@ -2274,8 +2274,8 @@ func hostSlug(name string) string {
 }
 
 // legacyHostID matches the original 24-random-byte hex host IDs, which made
-// every federated agent ID in the UI unreadably long. A slave carrying one
-// re-registers under a short ID instead; see RunSlave.
+// every federated agent ID in the UI unreadably long. A child carrying one
+// re-registers under a short ID instead; see RunParentLink.
 func legacyHostID(id string) bool {
 	if len(id) != 48 {
 		return false

@@ -476,7 +476,7 @@ describe('spawn palette data', () => {
     // A daemon answering from its cache while it rescans.
     __testApplyServerMsg({ t: 'dirs', corrId: req.corrId, dirs: [repo('/r/a')], refreshing: true, hostId: 'worker-1' });
     expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('refreshing');
-    // The rescan's broadcast (relayed by the master with hostId).
+    // The rescan's broadcast (relayed by the parent with hostId).
     __testApplyServerMsg({ t: 'dirs', dirs: [repo('/r/a'), repo('/r/b')], hostId: 'worker-1' });
     expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('ready');
     expect(useStore.getState().dirsByHost['worker-1']).toHaveLength(2);

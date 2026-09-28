@@ -26,7 +26,7 @@ export function buildCommands(): Command[] {
     { id: 'agent.spawn', title: 'Spawn session…', subtitle: 'Open the dir-first quick-spawn palette', run: () => s().setModal('spawn') },
     { id: 'agent.resume', title: 'Resume session…', subtitle: 'Search past and active sessions, grouped by repo', run: () => s().setModal('resume') },
     { id: 'automation.open', title: 'Automation…', subtitle: 'View schedules and recent runs', run: () => s().setModal('automation') },
-    { id: 'fleet.open', title: 'Fleet View', subtitle: 'See Tandem nodes and their slave → master links', run: () => s().setModal('fleet') },
+    { id: 'fleet.open', title: 'Fleet View', subtitle: 'See Tandem nodes and their child → parent links', run: () => s().setModal('fleet') },
     { id: 'adapters.manage', title: 'Manage ACP adapters…', subtitle: 'Update or roll back managed ACP bridge versions', run: () => s().setModal('adapters') },
     {
       id: 'agent.spawn.sibling',

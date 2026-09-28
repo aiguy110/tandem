@@ -388,7 +388,7 @@ const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 
 // Rail moves the daemon has not yet reflected back. An `agents` message built
-// before the move landed (a concurrent broadcast, or a federation master still
+// before the move landed (a concurrent broadcast, or a federation parent still
 // holding the host's previous snapshot) would otherwise snap the card back
 // until the fresh order arrives, making it flip back and forth. Each move is
 // reapplied over incoming orders until one already satisfies it, or until it
@@ -453,7 +453,7 @@ const GIT_REFRESH_INTERVAL_MS = 15_000;
 export const LOCAL_HOST_ID = 'local';
 
 // Never put the synthesized local ID on the wire: an older daemon sees the
-// exact commands it has always seen. Federation-aware masters may explicitly
+// exact commands it has always seen. Federation-aware parents may explicitly
 // include their local host in the hosts list, so normalize that shape too.
 export function isLocalHost(hostId: string | undefined): boolean {
   return !hostId || hostId === LOCAL_HOST_ID;
@@ -487,7 +487,7 @@ function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog
 
 function rankSessions(sessions: Record<string, SessionView>, order: string[]): string[] {
   // `order` is the daemon-owned rail order (shared by every browser and
-  // federation master). Filter stale entries rather than re-sorting it.
+  // federation parent). Filter stale entries rather than re-sorting it.
   return order.filter((id) => !!sessions[id]);
 }
 
@@ -763,7 +763,7 @@ export const useStore = create<StoreState>((set, get) => {
         let next: HostProfiles | undefined;
         if (msg.recentByProject) {
           // A batch snapshot: a reply to refreshProfiles or a daemon broadcast
-          // after a spawn or profile edit (relayed with hostId by a master).
+          // after a spawn or profile edit (relayed with hostId by a parent).
           next = { profiles, recentByProject: msg.recentByProject };
         } else if (requestedAll !== undefined) {
           // An older daemon ignored `all`; the palette asks per repo instead.
@@ -1250,7 +1250,7 @@ export const useStore = create<StoreState>((set, get) => {
       const order = [...get().order];
       if (!moveInOrder(order, id, targetId, after)) return;
       // Apply optimistically; the daemon persists the move and broadcasts the
-      // authoritative order to every browser (and federation master).
+      // authoritative order to every browser (and federation parent).
       set({ order });
       const move: PendingReorder = { id, targetId, after, expiresAt: Infinity };
       pendingReorders.push(move);

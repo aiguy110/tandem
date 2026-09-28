@@ -68,14 +68,14 @@ Five separable pieces; keeping them decoupled is most of the battle.
 
 ## Multi-host federation
 
-An optional master/slave transport extends the daemon ownership boundary across hosts.
-A slave started with `tandem --master <url>` maintains an outbound authenticated link to
-one master. The master routes host-qualified spawn and agent-control messages across that
-link; the slave remains the source of truth for its processes, workspaces, event logs,
+An optional parent/child transport extends the daemon ownership boundary across hosts.
+A child started with `tandem --parent <url>` maintains an outbound authenticated link to
+one parent. The parent routes host-qualified spawn and agent-control messages across that
+link; the child remains the source of truth for its processes, workspaces, event logs,
 terminals, and browser broker. Browser frames and input use the same federation link, so
 remote browser control preserves the existing control-owner semantics.
 
-First contact requires an explicit Accept action in the master's daemon-level
+First contact requires an explicit Accept action in the parent's daemon-level
 notifications. Acceptance creates durable credentials for automatic reconnect. The
 topology is a rooted tree: a daemon has at most one upstream, may accept multiple children,
 and advertises their reachable subtrees upstream. Trust and credentials remain hop-local;

@@ -137,7 +137,7 @@ export interface SystemNotification {
   title: string;
   message?: string;
   actions?: SystemNotificationAction[];
-  // Set when a master relays a notification raised by one of its agent hosts.
+  // Set when a parent relays a notification raised by one of its agent hosts.
   hostId?: string;
   hostName?: string;
 }
@@ -156,7 +156,7 @@ export interface RepoInfo {
 export interface FederationHost {
   id: string;
   name?: string;
-  // The immediate upstream/master. A missing parent on a non-local host is
+  // The immediate upstream. A missing parent on a non-local host is
   // interpreted as the local Tandem instance for compatibility with the
   // original one-hop federation response.
   parentId?: string;
@@ -168,7 +168,7 @@ export interface FederationHost {
   // Tandem old enough not to report either.
   protocolVersion?: number;
   buildVersion?: string;
-  // Reached through this Tandem's master (the master itself, its other
+  // Reached through this Tandem's parent (the parent itself, its other
   // branches, and anything above it) rather than one of its descendants.
   upstream?: boolean;
   // What this Tandem may do on the host under that host's access policy.
@@ -224,7 +224,7 @@ export interface SessionSummary {
   // the Chat tab should offer the ACP/CLI switch for this agent.
   adapter: 'acp' | 'pty';
   canHandoff: boolean;
-  // Set by a federation-aware master for agents running on a registered host.
+  // Set by a federation-aware parent for agents running on a registered host.
   // Agent IDs remain the routing identity for all ordinary controls.
   hostId?: string;
   hostName?: string;
@@ -332,8 +332,8 @@ export interface SpawnSpec {
   // 'brief' keeps user messages and each turn's closing message, counting the
   // tool calls in between.
   handoffMode?: 'full' | 'brief';
-  // Omitted for this daemon. A master forwards a non-local target to its
-  // registered slave before creating the agent.
+  // Omitted for this daemon. A parent forwards a non-local target to its
+  // registered child before creating the agent.
   hostId?: string;
 }
 

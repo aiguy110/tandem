@@ -19,7 +19,7 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const usage = "usage: tandem [--master URL|setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|acp status|acp fork AGENT [flags]|acp upstream AGENT|update|version|debug config]"
+const usage = "usage: tandem [--parent URL|setup [--agent|--complete]|mcp add [--project] [--transport stdio|http] NAME COMMAND-or-URL [ARGS...]|acp status|acp fork AGENT [flags]|acp upstream AGENT|update|version|debug config]"
 
 var stdinIsTerminal = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -75,9 +75,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return runDaemon(stdout, stderr, "")
 	}
-	if len(args) == 2 && args[0] == "--master" {
+	// --master is the pre-0.19 spelling of --parent.
+	if len(args) == 2 && (args[0] == "--parent" || args[0] == "--master") {
 		if strings.TrimSpace(args[1]) == "" {
-			fmt.Fprintln(stderr, "tandem: --master requires a URL")
+			fmt.Fprintf(stderr, "tandem: %s requires a URL\n", args[0])
 			return 2
 		}
 		return runDaemon(stdout, stderr, args[1])
@@ -238,8 +239,8 @@ func setupHome() (string, error) {
 	return filepath.Join(home, ".tandem"), nil
 }
 
-func runDaemon(stdout, stderr io.Writer, masterURL string) int {
-	if err := daemon.RunWithOptions(stdout, daemon.RunOptions{MasterURL: masterURL}); err != nil {
+func runDaemon(stdout, stderr io.Writer, parentURL string) int {
+	if err := daemon.RunWithOptions(stdout, daemon.RunOptions{ParentURL: parentURL}); err != nil {
 		fmt.Fprintf(stderr, "run daemon: %v\n", err)
 		return 1
 	}

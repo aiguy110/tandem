@@ -45,8 +45,8 @@ import (
 )
 
 // RunOptions selects daemon runtime behavior without rewriting the user's
-// configuration file. MasterURL makes this daemon an agent-host slave.
-type RunOptions struct{ MasterURL string }
+// configuration file. ParentURL makes this daemon an agent-host child.
+type RunOptions struct{ ParentURL string }
 
 // Run loads runtime configuration and serves until SIGINT or SIGTERM.
 func Run(stdout io.Writer) error { return RunWithOptions(stdout, RunOptions{}) }
@@ -285,7 +285,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return err
 	}
 	federationService, err := federation.New(federation.Options{
-		Store: db, Notifications: notificationCenter, MasterURL: runOpts.MasterURL, ProxyURL: cfg.MasterProxy,
+		Store: db, Notifications: notificationCenter, ParentURL: runOpts.ParentURL, ProxyURL: cfg.ParentProxy,
 		Name: federationName, Endpoint: origin, Local: loopback, BuildVersion: buildinfo.Version,
 		Policy: federationPolicy,
 		// Each child that controls this host upstream gets its own private
@@ -461,10 +461,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	// Scan project roots now, not when the spawn palette first asks, so it
 	// opens populated; the result is pushed to browsers that are connected.
 	handler.WarmDirs()
-	if runOpts.MasterURL != "" {
+	if runOpts.ParentURL != "" {
 		go func() {
-			if federationErr := federationService.RunSlave(ctx); federationErr != nil && ctx.Err() == nil {
-				fmt.Fprintf(stdout, "tandem: federation slave stopped: %v\n", federationErr)
+			if federationErr := federationService.RunParentLink(ctx); federationErr != nil && ctx.Err() == nil {
+				fmt.Fprintf(stdout, "tandem: federation child stopped: %v\n", federationErr)
 			}
 		}()
 	}

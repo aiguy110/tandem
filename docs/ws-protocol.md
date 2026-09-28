@@ -70,20 +70,20 @@ The browser may receive a host catalog and may qualify repository, agent-catalog
 spawn-option, and spawn requests with a host identity. Omitting the host retains local,
 single-daemon behavior. The catalog is flattened for selection while `parentId`, `route`,
 and `depth` retain its rooted topology; descendant IDs are opaque route-scoped addresses.
-Remote agent summaries carry their leaf host identity and use a master-side namespaced
+Remote agent summaries carry their leaf host identity and use a parent-side namespaced
 agent ID (`fed~<hostId>~<sessionId>`; the older base64 form is still accepted so an open
 tab survives an upgrade). Subsequent ordinary agent commands use that ID and are routed
 one hop at a time. Live transcript, terminal, approval, lifecycle, and browser-channel
 traffic is proxied without exposing ACP or CDP details to the UI.
 
-A host reached through this daemon's master (the master itself, its other branches, and
+A host reached through this daemon's parent (the parent itself, its other branches, and
 anything above it) carries `upstream: true`; the local host's `parentId` then names the
-master. Each host may carry `access` (`none`/`view`/`operate`/`admin`) — what this daemon
+parent. Each host may carry `access` (`none`/`view`/`operate`/`admin`) — what this daemon
 may do there under that host's policy. A command the target's policy denies returns an
 ordinary error `ack`.
 
-Slave registration is a daemon-to-daemon protocol, not browser bearer-token
-authentication. First contact remains pending until the master accepts its system
+Child registration is a daemon-to-daemon protocol, not browser bearer-token
+authentication. First contact remains pending until the parent accepts its system
 notification; later connections authenticate with the durable registration credential.
 See [`federation.md`](federation.md). Host-scoped `list_sessions`, `search_sessions`, and
 `resume_session` execute against the selected host's own history index and annotate their
@@ -347,14 +347,14 @@ just finished rendering.
 Browsers fetch clip bytes from the authenticated HTTP audio route
 (`POST /api/agents/{id}/messages/{seq}/audio`), not over this socket. The
 `render_message_audio` command exists for federation: a federated agent's transcript
-lives on the host that owns it, so the master renders the clip there over the tunnel —
+lives on the host that owns it, so the parent renders the clip there over the tunnel —
 which carries protocol JSON only, so the bytes come back base64-encoded in
 `message_audio` like `raw_pty` and `browser_frame` — and then serves them from its own
 audio route under the namespaced agent ID. A UI needs no federation-specific audio code.
 
 `get_asset` follows the same pattern for prompt and tool images: when
 `GET /api/agents/{id}/assets/{assetId}` misses locally for a namespaced federated ID, the
-master fetches the image from the owning host over the tunnel and serves it from its own
+parent fetches the image from the owning host over the tunnel and serves it from its own
 asset route.
 
 The audio player's playback position is daemon-owned so it survives a session switch or

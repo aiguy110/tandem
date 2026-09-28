@@ -68,7 +68,7 @@ func (l *Level) UnmarshalJSON(b []byte) error {
 }
 
 // AncestorsSubject matches any host above this one in the federation tree:
-// its master, its master's master, and so on.
+// its parent, its parent's parent, and so on.
 const AncestorsSubject = "ancestors"
 
 // AccessRule grants Level to the hosts matched by From: a host-ID glob
@@ -82,7 +82,7 @@ type AccessRule struct {
 // executes for remote hosts. The first matching rule wins; after the
 // configured rules come the implicit defaults, ancestors: admin and *: none.
 // The defaults preserve the original federation contract -- an accepted
-// master controls its subtree -- while control from anywhere else is opt-in.
+// parent controls its subtree -- while control from anywhere else is opt-in.
 type Policy []AccessRule
 
 // Validate rejects rules that could never match or would be misread.
@@ -103,7 +103,7 @@ func (p Policy) Validate() error {
 
 // LevelFor evaluates the policy for a command or view requested by origin.
 // ancestor reports whether origin is above this host in the tree; an
-// unattributed request from the upstream link (an older master) counts as one.
+// unattributed request from the upstream link (an older parent) counts as one.
 func (p Policy) LevelFor(origin string, ancestor bool) Level {
 	for _, rule := range p {
 		if rule.matches(origin, ancestor) {

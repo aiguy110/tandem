@@ -95,7 +95,7 @@ type Registry struct {
 	counter   int
 	handoffs  map[string]*sync.Mutex
 	// ranks is the daemon-owned sessions-rail order of live sessions (lower
-	// first). Every browser, and every federation master viewing this host,
+	// first). Every browser, and every federation parent viewing this host,
 	// renders Summaries in this order.
 	ranks             map[string]int64
 	external          *externalCache

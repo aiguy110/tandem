@@ -40,9 +40,9 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
 	const collapsed = useStore((s) => s.sessionsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleSessionsRail);
   // Keep the familiar uninterrupted rail until federation has at least one
-  // accepted/known slave. Once it does, every group (including local) has a
+  // accepted/known child. Once it does, every group (including local) has a
   // labeled divider so the placement of remote controls is unambiguous.
-  // A host update can briefly replace the host list before the master has
+  // A host update can briefly replace the host list before the parent has
   // refreshed it. Keep grouping whenever a retained session belongs to a
   // remote host, rather than flattening those sessions into the local rail
   // during that gap. `groupedAgentRows` deliberately renders an unknown host
@@ -420,7 +420,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   );
 }
 
-// A remote host's rows survive its tunnel dropping (the master keeps the last
+// A remote host's rows survive its tunnel dropping (the parent keeps the last
 // snapshot), so each remote divider carries a link badge saying whether what
 // is listed under it is live or the last thing that host reported.
 function submoduleSyncSummary(submodule: NonNullable<ClosePreview['submodules']>[number]): string {

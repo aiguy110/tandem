@@ -18,7 +18,7 @@ import (
 
 // socksRecorder is a minimal no-auth SOCKS5 CONNECT server that records which
 // requests were relayed through it, so a test can prove the federation
-// transport dialed the proxy rather than the master directly.
+// transport dialed the proxy rather than the parent directly.
 type socksRecorder struct {
 	listener net.Listener
 	mu       sync.Mutex
@@ -149,21 +149,21 @@ func socksHandshake(client net.Conn) (net.Conn, error) {
 	return target, nil
 }
 
-// Both halves of the slave transport must honor ProxyURL: the REST
+// Both halves of the child transport must honor ProxyURL: the REST
 // registration calls go through net/http, while the durable tunnel is dialed
 // by gorilla, which ignores the HTTP client entirely.
-func TestSlaveDialsMasterThroughSocks5Proxy(t *testing.T) {
+func TestChildDialsParentThroughSocks5Proxy(t *testing.T) {
 	socks := startSocksRecorder(t)
-	masterStore := openStore(t)
+	parentStore := openStore(t)
 	center := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: center})
+	parent, err := New(Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
-	slave, err := New(Options{
-		Store: openStore(t), MasterURL: server.URL, Name: "build-host", Local: testLocal{},
+	child, err := New(Options{
+		Store: openStore(t), ParentURL: server.URL, Name: "build-host", Local: testLocal{},
 		PollInterval: 10 * time.Millisecond, ProxyURL: "socks5://" + socks.addr(),
 	})
 	if err != nil {
@@ -172,7 +172,7 @@ func TestSlaveDialsMasterThroughSocks5Proxy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 	var notification notifications.Notification
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -183,21 +183,21 @@ func TestSlaveDialsMasterThroughSocks5Proxy(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if notification.ID == "" {
-		t.Fatal("registration through the proxy never reached the master")
+		t.Fatal("registration through the proxy never reached the parent")
 	}
-	if _, handled, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept"); err != nil || !handled {
+	if _, handled, err := parent.HandleNotificationAction(context.Background(), notification.ID, "accept"); err != nil || !handled {
 		t.Fatalf("accept handled=%v err=%v", handled, err)
 	}
 	hostID := strings.TrimPrefix(notification.ID, "federation-registration-")
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if peer, _ := masterStore.FederationSlave(hostID); peer != nil && peer.Status == "connected" {
+		if peer, _ := parentStore.FederationChild(hostID); peer != nil && peer.Status == "connected" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if peer, _ := masterStore.FederationSlave(hostID); peer == nil || peer.Status != "connected" {
-		t.Fatalf("slave did not connect through the proxy: %#v", peer)
+	if peer, _ := parentStore.FederationChild(hostID); peer == nil || peer.Status != "connected" {
+		t.Fatalf("child did not connect through the proxy: %#v", peer)
 	}
 	var sawStatus, sawTunnel bool
 	for _, line := range socks.requests() {
@@ -222,7 +222,7 @@ func TestSlaveDialsMasterThroughSocks5Proxy(t *testing.T) {
 
 func TestNewRejectsUnusableProxyURL(t *testing.T) {
 	for _, raw := range []string{"::not a url::", "socks5://", "gopher://127.0.0.1:1080"} {
-		if _, err := New(Options{Store: openStore(t), MasterURL: "http://upstream.example", ProxyURL: raw}); err == nil {
+		if _, err := New(Options{Store: openStore(t), ParentURL: "http://upstream.example", ProxyURL: raw}); err == nil {
 			t.Errorf("ProxyURL %q was accepted", raw)
 		}
 	}

@@ -5,20 +5,20 @@ import (
 	"errors"
 )
 
-// FederationMaster is this daemon's durable enrollment with an upstream
+// FederationParent is this daemon's durable enrollment with an upstream
 // Tandem. There can be at most one: chained federation is deliberately not
 // supported.
-type FederationMaster struct {
+type FederationParent struct {
 	URL        string
 	HostID     string
 	Credential string
 	UpdatedAt  int64
 }
 
-// FederationSlave is a peer that was allowed by this daemon's operator to
+// FederationChild is a peer that was allowed by this daemon's operator to
 // offer its local agent host. Credential is a random bearer secret and must
 // never be included in browser protocol responses.
-type FederationSlave struct {
+type FederationChild struct {
 	ID          string
 	Name        string
 	Endpoint    string
@@ -33,8 +33,8 @@ type FederationSlave struct {
 	BuildVersion    string
 }
 
-func (s *Store) FederationMaster() (*FederationMaster, error) {
-	var m FederationMaster
+func (s *Store) FederationParent() (*FederationParent, error) {
+	var m FederationParent
 	err := s.db.QueryRow(`SELECT url, hostId, credential, updatedAt FROM federation_master WHERE singleton = 1`).Scan(&m.URL, &m.HostID, &m.Credential, &m.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -42,9 +42,9 @@ func (s *Store) FederationMaster() (*FederationMaster, error) {
 	return &m, err
 }
 
-func (s *Store) SaveFederationMaster(m FederationMaster) error {
+func (s *Store) SaveFederationParent(m FederationParent) error {
 	if m.URL == "" || m.HostID == "" || m.Credential == "" {
-		return errors.New("invalid federation master")
+		return errors.New("invalid federation parent")
 	}
 	if m.UpdatedAt == 0 {
 		m.UpdatedAt = s.now().UnixMilli()
@@ -54,14 +54,14 @@ ON CONFLICT(singleton) DO UPDATE SET url=excluded.url, hostId=excluded.hostId, c
 	return err
 }
 
-func (s *Store) ClearFederationMaster() error {
+func (s *Store) ClearFederationParent() error {
 	_, err := s.db.Exec(`DELETE FROM federation_master WHERE singleton = 1`)
 	return err
 }
 
-func (s *Store) UpsertFederationSlave(peer FederationSlave) error {
+func (s *Store) UpsertFederationChild(peer FederationChild) error {
 	if peer.ID == "" || peer.Status == "" {
-		return errors.New("invalid federation slave")
+		return errors.New("invalid federation child")
 	}
 	if peer.RequestedAt == 0 {
 		peer.RequestedAt = s.now().UnixMilli()
@@ -73,8 +73,8 @@ ON CONFLICT(id) DO UPDATE SET name=excluded.name, endpoint=excluded.endpoint, cr
 	return err
 }
 
-func (s *Store) FederationSlave(id string) (*FederationSlave, error) {
-	var peer FederationSlave
+func (s *Store) FederationChild(id string) (*FederationChild, error) {
+	var peer FederationChild
 	err := s.db.QueryRow(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0), protocolVersion, buildVersion FROM federation_slaves WHERE id = ?`, id).
 		Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt, &peer.ProtocolVersion, &peer.BuildVersion)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -83,15 +83,15 @@ func (s *Store) FederationSlave(id string) (*FederationSlave, error) {
 	return &peer, err
 }
 
-func (s *Store) FederationSlaves() ([]FederationSlave, error) {
+func (s *Store) FederationChildren() ([]FederationChild, error) {
 	rows, err := s.db.Query(`SELECT id, name, endpoint, credential, status, requestedAt, COALESCE(acceptedAt,0), COALESCE(lastSeenAt,0), protocolVersion, buildVersion FROM federation_slaves ORDER BY requestedAt ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var peers []FederationSlave
+	var peers []FederationChild
 	for rows.Next() {
-		var peer FederationSlave
+		var peer FederationChild
 		if err := rows.Scan(&peer.ID, &peer.Name, &peer.Endpoint, &peer.Credential, &peer.Status, &peer.RequestedAt, &peer.AcceptedAt, &peer.LastSeenAt, &peer.ProtocolVersion, &peer.BuildVersion); err != nil {
 			return nil, err
 		}
@@ -100,14 +100,14 @@ func (s *Store) FederationSlaves() ([]FederationSlave, error) {
 	return peers, rows.Err()
 }
 
-func (s *Store) DeleteFederationSlave(id string) error {
+func (s *Store) DeleteFederationChild(id string) error {
 	_, err := s.db.Exec(`DELETE FROM federation_slaves WHERE id = ?`, id)
 	return err
 }
 
-// FederationIdentity is the host ID a daemon without a master uses to name
-// itself to the hosts below it. A daemon with a master uses the ID that
-// master accepted instead; "" means none has been generated yet.
+// FederationIdentity is the host ID a daemon without a parent uses to name
+// itself to the hosts below it. A daemon with a parent uses the ID that
+// parent accepted instead; "" means none has been generated yet.
 func (s *Store) FederationIdentity() (string, error) {
 	var id string
 	err := s.db.QueryRow(`SELECT hostId FROM federation_identity WHERE singleton = 1`).Scan(&id)

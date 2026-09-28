@@ -22,7 +22,7 @@ const dirsScanTimeout = 2 * time.Minute
 
 // dirsCache holds the last repository scan. list_dirs answers from it at once
 // and revalidates in the background; every completed scan is broadcast, which
-// also reaches a federation master through the loopback event stream.
+// also reaches a federation parent through the loopback event stream.
 type dirsCache struct {
 	mu       sync.Mutex
 	dirs     []workspace.RepoInfo
@@ -137,7 +137,7 @@ func (h *Handler) allProfilesMessage() (map[string]any, error) {
 }
 
 // broadcastProfiles pushes the batch profile snapshot after a profile change,
-// so every client's cached palette (including a master's, via the loopback)
+// so every client's cached palette (including a parent's, via the loopback)
 // sees new recency without asking.
 func (h *Handler) broadcastProfiles(reason string) {
 	msg, err := h.allProfilesMessage()

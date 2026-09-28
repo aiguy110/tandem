@@ -44,23 +44,23 @@ func TestLocalHostReportsDaemonVersions(t *testing.T) {
 }
 
 func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
-	masterStore := openStore(t)
+	parentStore := openStore(t)
 	center := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: center})
+	parent, err := New(Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
-	slaveStore := openStore(t)
-	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	childStore := openStore(t)
+	child, err := New(Options{Store: childStore, ParentURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 	var notification notifications.Notification
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -74,37 +74,37 @@ func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
 	if notification.ID == "" {
 		t.Fatal("registration notification was not published")
 	}
-	sessionID, handled, err := master.HandleNotificationAction(context.Background(), notification.ID, "accept")
+	sessionID, handled, err := parent.HandleNotificationAction(context.Background(), notification.ID, "accept")
 	if err != nil || !handled || sessionID != "" {
 		t.Fatalf("accept agent=%q handled=%v err=%v", sessionID, handled, err)
 	}
 	hostID := strings.TrimPrefix(notification.ID, "federation-registration-")
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		peers, _ := masterStore.FederationSlaves()
+		peers, _ := parentStore.FederationChildren()
 		if len(peers) == 1 && peers[0].Status == "connected" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	peer, _ := masterStore.FederationSlave(hostID)
+	peer, _ := parentStore.FederationChild(hostID)
 	if peer == nil || peer.Status != "connected" || peer.Credential == "" {
 		t.Fatalf("peer=%#v", peer)
 	}
-	stored, _ := slaveStore.FederationMaster()
+	stored, _ := childStore.FederationParent()
 	if stored == nil || stored.Credential == "" || stored.HostID != hostID {
-		t.Fatalf("slave trust=%#v", stored)
+		t.Fatalf("child trust=%#v", stored)
 	}
 	callCtx, callCancel := context.WithTimeout(context.Background(), time.Second)
 	defer callCancel()
-	got, err := master.Call(callCtx, hostID, json.RawMessage(`{"t":"ping"}`))
+	got, err := parent.Call(callCtx, hostID, json.RawMessage(`{"t":"ping"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "{\"echo\":{\"t\":\"ping\"}}" {
 		t.Fatalf("reply=%s", got)
 	}
-	if hosts := master.Hosts(); len(hosts) != 1 || string(hosts[0].Snapshot) != "{\"catalog\":\"local\"}" {
+	if hosts := parent.Hosts(); len(hosts) != 1 || string(hosts[0].Snapshot) != "{\"catalog\":\"local\"}" {
 		t.Fatalf("hosts=%#v", hosts)
 	}
 	cancel()
@@ -113,9 +113,9 @@ func TestRegistrationApprovalDurableTrustAndCommandRelay(t *testing.T) {
 	}
 }
 
-func TestSlaveAcceptsChildRegistration(t *testing.T) {
+func TestIntermediateAcceptsChildRegistration(t *testing.T) {
 	s := openStore(t)
-	service, err := New(Options{Store: s, MasterURL: "http://upstream.example"})
+	service, err := New(Options{Store: s, ParentURL: "http://upstream.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,12 +127,12 @@ func TestSlaveAcceptsChildRegistration(t *testing.T) {
 	}
 }
 
-func TestMasterRestartRestoresPendingNoticeAndMarksStaleTunnelOffline(t *testing.T) {
+func TestParentRestartRestoresPendingNoticeAndMarksStaleTunnelOffline(t *testing.T) {
 	s := openStore(t)
-	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "pending-host", Name: "Pending", Status: "pending"}); err != nil {
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "pending-host", Name: "Pending", Status: "pending"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "stale-host", Name: "Stale", Status: "connected"}); err != nil {
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "stale-host", Name: "Stale", Status: "connected"}); err != nil {
 		t.Fatal(err)
 	}
 	center := notifications.New()
@@ -151,42 +151,42 @@ func TestMasterRestartRestoresPendingNoticeAndMarksStaleTunnelOffline(t *testing
 	}
 }
 
-// A slave that drops is recorded "offline", so reconnecting with its durable
+// A child that drops is recorded "offline", so reconnecting with its durable
 // credential must still authenticate and must not be demoted back to pending
 // approval. Requiring the one-shot "accepted" status here would make every
 // reconnection after the first fail as unauthorized.
-func TestOfflineSlaveReconnectsWithDurableCredential(t *testing.T) {
-	masterStore := openStore(t)
+func TestOfflineChildReconnectsWithDurableCredential(t *testing.T) {
+	parentStore := openStore(t)
 	center := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: center})
+	parent, err := New(Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
-	if err := masterStore.UpsertFederationSlave(store.FederationSlave{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+	if err := parentStore.UpsertFederationChild(store.FederationChild{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
 		t.Fatal(err)
 	}
-	slaveStore := openStore(t)
-	if err := slaveStore.SaveFederationMaster(store.FederationMaster{URL: server.URL, HostID: "host-1", Credential: "secret-credential"}); err != nil {
+	childStore := openStore(t)
+	if err := childStore.SaveFederationParent(store.FederationParent{URL: server.URL, HostID: "host-1", Credential: "secret-credential"}); err != nil {
 		t.Fatal(err)
 	}
-	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	child, err := New(Options{Store: childStore, ParentURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if peer, _ := masterStore.FederationSlave("host-1"); peer != nil && peer.Status == "connected" {
+		if peer, _ := parentStore.FederationChild("host-1"); peer != nil && peer.Status == "connected" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	peer, _ := masterStore.FederationSlave("host-1")
+	peer, _ := parentStore.FederationChild("host-1")
 	if peer == nil || peer.Status != "connected" {
 		t.Fatalf("offline host did not reconnect: %#v", peer)
 	}
@@ -209,7 +209,7 @@ func TestRegisterDoesNotDemoteTrustedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, status := range []string{"accepted", "connected", "offline"} {
-		if err := s.UpsertFederationSlave(store.FederationSlave{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: status}); err != nil {
+		if err := s.UpsertFederationChild(store.FederationChild{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: status}); err != nil {
 			t.Fatal(err)
 		}
 		r := httptest.NewRequest("POST", RegisterPath, strings.NewReader(`{"hostId":"host-1","name":"build-host"}`))
@@ -221,7 +221,7 @@ func TestRegisterDoesNotDemoteTrustedHost(t *testing.T) {
 		if strings.Contains(w.Body.String(), "secret-credential") {
 			t.Fatalf("status=%q: registration response leaked the credential", status)
 		}
-		peer, _ := s.FederationSlave("host-1")
+		peer, _ := s.FederationChild("host-1")
 		if peer == nil || peer.Status != status || peer.Credential != "secret-credential" {
 			t.Fatalf("status=%q: record was demoted to %#v", status, peer)
 		}
@@ -235,18 +235,18 @@ func TestRegisterDoesNotDemoteTrustedHost(t *testing.T) {
 // older side, so both peers now report their versions on every connection and
 // say so out loud when they disagree.
 func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
-	masterStore := openStore(t)
-	masterCenter := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: masterCenter, BuildVersion: "v9.9.9"})
+	parentStore := openStore(t)
+	parentCenter := notifications.New()
+	parent, err := New(Options{Store: parentStore, Notifications: parentCenter, BuildVersion: "v9.9.9"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
-	slaveStore := openStore(t)
-	slaveCenter := notifications.New()
-	slave, err := New(Options{
-		Store: slaveStore, Notifications: slaveCenter, MasterURL: server.URL, Name: "build-host",
+	childStore := openStore(t)
+	childCenter := notifications.New()
+	child, err := New(Options{
+		Store: childStore, Notifications: childCenter, ParentURL: server.URL, Name: "build-host",
 		Local: testLocal{}, PollInterval: 10 * time.Millisecond, BuildVersion: "v9.9.9",
 	})
 	if err != nil {
@@ -255,12 +255,12 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 
 	hostID := ""
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) && hostID == "" {
-		for _, item := range masterCenter.List() {
+		for _, item := range parentCenter.List() {
 			if strings.HasPrefix(item.ID, "federation-registration-") {
 				hostID = strings.TrimPrefix(item.ID, "federation-registration-")
 			}
@@ -270,13 +270,13 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	if hostID == "" {
 		t.Fatal("registration notification was not published")
 	}
-	if _, _, err = master.HandleNotificationAction(context.Background(), "federation-registration-"+hostID, "accept"); err != nil {
+	if _, _, err = parent.HandleNotificationAction(context.Background(), "federation-registration-"+hostID, "accept"); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(2 * time.Second)
-	var peer *store.FederationSlave
+	var peer *store.FederationChild
 	for time.Now().Before(deadline) {
-		peer, _ = masterStore.FederationSlave(hostID)
+		peer, _ = parentStore.FederationChild(hostID)
 		if peer != nil && peer.Status == "connected" && peer.ProtocolVersion != 0 {
 			break
 		}
@@ -285,12 +285,12 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	if peer == nil || peer.ProtocolVersion != ProtocolVersion || peer.BuildVersion != "v9.9.9" {
 		t.Fatalf("recorded host versions = %#v", peer)
 	}
-	hosts := master.Hosts()
+	hosts := parent.Hosts()
 	if len(hosts) != 1 || hosts[0].ProtocolVersion != ProtocolVersion || hosts[0].BuildVersion != "v9.9.9" {
 		t.Fatalf("hosts = %#v", hosts)
 	}
 	// Matching versions must stay silent on both sides.
-	for _, item := range append(masterCenter.List(), slaveCenter.List()...) {
+	for _, item := range append(parentCenter.List(), childCenter.List()...) {
 		if strings.Contains(item.ID, "protocol") {
 			t.Fatalf("unexpected skew notice for matched versions: %#v", item)
 		}
@@ -305,9 +305,9 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	skewed := *peer
 	skewed.ProtocolVersion = ProtocolVersion + 1
 	skewed.BuildVersion = "v10.0.0"
-	master.checkProtocol(skewed)
+	parent.checkProtocol(skewed)
 	notice := notifications.Notification{}
-	for _, item := range masterCenter.List() {
+	for _, item := range parentCenter.List() {
 		if item.ID == protocolNotificationPrefix+hostID {
 			notice = item
 		}
@@ -315,25 +315,25 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	if !strings.Contains(notice.Title, "build-host") || !strings.Contains(notice.Message, "v10.0.0") {
 		t.Fatalf("skew notice = %#v", notice)
 	}
-	if _, handled, err := master.HandleNotificationAction(context.Background(), notice.ID, "dismiss"); err != nil || !handled {
+	if _, handled, err := parent.HandleNotificationAction(context.Background(), notice.ID, "dismiss"); err != nil || !handled {
 		t.Fatalf("dismiss handled=%v err=%v", handled, err)
 	}
-	for _, item := range masterCenter.List() {
+	for _, item := range parentCenter.List() {
 		if item.ID == notice.ID {
 			t.Fatal("dismissed skew notice is still listed")
 		}
 	}
 
-	// The host's own UI reports the same fact about its master.
-	slave.noteMasterProtocol(ProtocolVersion+1, "v10.0.0")
-	if items := slaveCenter.List(); len(items) != 1 || items[0].ID != masterProtocolNotificationID {
-		t.Fatalf("slave-side notices = %#v", slaveCenter.List())
+	// The host's own UI reports the same fact about its parent.
+	child.noteParentProtocol(ProtocolVersion+1, "v10.0.0")
+	if items := childCenter.List(); len(items) != 1 || items[0].ID != parentProtocolNotificationID {
+		t.Fatalf("child-side notices = %#v", childCenter.List())
 	}
-	if _, handled, err := slave.HandleNotificationAction(context.Background(), masterProtocolNotificationID, "dismiss"); err != nil || !handled {
-		t.Fatalf("slave dismiss handled=%v err=%v", handled, err)
+	if _, handled, err := child.HandleNotificationAction(context.Background(), parentProtocolNotificationID, "dismiss"); err != nil || !handled {
+		t.Fatalf("child dismiss handled=%v err=%v", handled, err)
 	}
-	if items := slaveCenter.List(); len(items) != 0 {
-		t.Fatalf("slave notices after dismiss = %#v", items)
+	if items := childCenter.List(); len(items) != 0 {
+		t.Fatalf("child notices after dismiss = %#v", items)
 	}
 }
 
@@ -368,36 +368,36 @@ func TestHostIDsAreShortAndReadable(t *testing.T) {
 // A host that changes its own ID -- the short-ID migration is the first case
 // -- used to leave behind a record nothing could ever reconnect to, and cost a
 // second approval. Presenting the old record's credential proves the two IDs
-// are one host, so the master retires the old row by itself.
+// are one host, so the parent retires the old row by itself.
 func TestHostRotatesIdentityWithoutSecondApproval(t *testing.T) {
-	masterStore := openStore(t)
+	parentStore := openStore(t)
 	center := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: center})
+	parent, err := New(Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
 	legacy := strings.Repeat("ab", 24)
-	if err := masterStore.UpsertFederationSlave(store.FederationSlave{ID: legacy, Name: "build-host", Endpoint: "http://127.0.0.1:7717", Credential: "secret-credential", Status: "offline"}); err != nil {
+	if err := parentStore.UpsertFederationChild(store.FederationChild{ID: legacy, Name: "build-host", Endpoint: "http://127.0.0.1:7717", Credential: "secret-credential", Status: "offline"}); err != nil {
 		t.Fatal(err)
 	}
-	slaveStore := openStore(t)
-	if err := slaveStore.SaveFederationMaster(store.FederationMaster{URL: server.URL, HostID: legacy, Credential: "secret-credential"}); err != nil {
+	childStore := openStore(t)
+	if err := childStore.SaveFederationParent(store.FederationParent{URL: server.URL, HostID: legacy, Credential: "secret-credential"}); err != nil {
 		t.Fatal(err)
 	}
-	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	child, err := New(Options{Store: childStore, ParentURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
-	var peers []store.FederationSlave
+	go func() { done <- child.RunParentLink(ctx) }()
+	var peers []store.FederationChild
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		peers, _ = masterStore.FederationSlaves()
+		peers, _ = parentStore.FederationChildren()
 		if len(peers) == 1 && peers[0].Status == "connected" {
 			break
 		}
@@ -415,9 +415,9 @@ func TestHostRotatesIdentityWithoutSecondApproval(t *testing.T) {
 	if notices := center.List(); len(notices) != 0 {
 		t.Fatalf("rotation asked for approval again: %#v", notices)
 	}
-	stored, _ := slaveStore.FederationMaster()
+	stored, _ := childStore.FederationParent()
 	if stored == nil || stored.HostID != peers[0].ID || stored.Credential != peers[0].Credential {
-		t.Fatalf("slave trust = %#v", stored)
+		t.Fatalf("child trust = %#v", stored)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -426,7 +426,7 @@ func TestHostRotatesIdentityWithoutSecondApproval(t *testing.T) {
 }
 
 // An unproven rotation -- a host that lost its stored identity entirely, so it
-// has no credential to present -- is a judgement call the master cannot make
+// has no credential to present -- is a judgement call the parent cannot make
 // for itself, since two machines may share a hostname. It offers the operator
 // the choice instead of guessing or leaving an orphan behind forever.
 func TestPendingRegistrationOffersToReplaceASupersededRecord(t *testing.T) {
@@ -436,7 +436,7 @@ func TestPendingRegistrationOffersToReplaceASupersededRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest("POST", RegisterPath, strings.NewReader(`{"hostId":"build-host-bbbbbb","name":"build-host"}`))
@@ -462,7 +462,7 @@ func TestPendingRegistrationOffersToReplaceASupersededRecord(t *testing.T) {
 	if _, handled, err := service.HandleNotificationAction(context.Background(), notices[0].ID, "accept_replace"); err != nil || !handled {
 		t.Fatalf("accept_replace handled=%v err=%v", handled, err)
 	}
-	peers, _ := s.FederationSlaves()
+	peers, _ := s.FederationChildren()
 	if len(peers) != 1 || peers[0].ID != "build-host-bbbbbb" || peers[0].Status != "accepted" {
 		t.Fatalf("peers after replace = %#v", peers)
 	}
@@ -472,7 +472,7 @@ func TestPendingRegistrationOffersToReplaceASupersededRecord(t *testing.T) {
 }
 
 // Plain "accept" keeps both records: two machines really can share a hostname,
-// and the master must not delete a host the operator never asked it to.
+// and the parent must not delete a host the operator never asked it to.
 func TestAcceptKeepsASameNamedRecord(t *testing.T) {
 	s := openStore(t)
 	center := notifications.New()
@@ -480,16 +480,16 @@ func TestAcceptKeepsASameNamedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "build-host-aaaaaa", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFederationSlave(store.FederationSlave{ID: "build-host-bbbbbb", Name: "build-host", Status: "pending"}); err != nil {
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "build-host-bbbbbb", Name: "build-host", Status: "pending"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, handled, err := service.HandleNotificationAction(context.Background(), "federation-registration-build-host-bbbbbb", "accept"); err != nil || !handled {
 		t.Fatalf("accept handled=%v err=%v", handled, err)
 	}
-	peers, _ := s.FederationSlaves()
+	peers, _ := s.FederationChildren()
 	if len(peers) != 2 {
 		t.Fatalf("accept removed a record: %#v", peers)
 	}
@@ -497,47 +497,47 @@ func TestAcceptKeepsASameNamedRecord(t *testing.T) {
 
 // Forgetting a host must not strand the daemon running on it: its credential
 // stops working, so it asks for registration again rather than retrying a
-// credential the master will never honor.
+// credential the parent will never honor.
 func TestForgottenHostRegistersAgain(t *testing.T) {
-	masterStore := openStore(t)
+	parentStore := openStore(t)
 	center := notifications.New()
-	master, err := New(Options{Store: masterStore, Notifications: center})
+	parent, err := New(Options{Store: parentStore, Notifications: center})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(master)
+	server := httptest.NewServer(parent)
 	defer server.Close()
-	if err := masterStore.UpsertFederationSlave(store.FederationSlave{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
+	if err := parentStore.UpsertFederationChild(store.FederationChild{ID: "host-1", Name: "build-host", Credential: "secret-credential", Status: "offline"}); err != nil {
 		t.Fatal(err)
 	}
-	slaveStore := openStore(t)
-	if err := slaveStore.SaveFederationMaster(store.FederationMaster{URL: server.URL, HostID: "host-1", Credential: "secret-credential"}); err != nil {
+	childStore := openStore(t)
+	if err := childStore.SaveFederationParent(store.FederationParent{URL: server.URL, HostID: "host-1", Credential: "secret-credential"}); err != nil {
 		t.Fatal(err)
 	}
-	slave, err := New(Options{Store: slaveStore, MasterURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
+	child, err := New(Options{Store: childStore, ParentURL: server.URL, Name: "build-host", Local: testLocal{}, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- slave.RunSlave(ctx) }()
+	go func() { done <- child.RunParentLink(ctx) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if peer, _ := masterStore.FederationSlave("host-1"); peer != nil && peer.Status == "connected" {
+		if peer, _ := parentStore.FederationChild("host-1"); peer != nil && peer.Status == "connected" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	master.forget("host-1")
+	parent.forget("host-1")
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if peer, _ := masterStore.FederationSlave("host-1"); peer != nil && peer.Status == "pending" {
+		if peer, _ := parentStore.FederationChild("host-1"); peer != nil && peer.Status == "pending" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	peer, _ := masterStore.FederationSlave("host-1")
+	peer, _ := parentStore.FederationChild("host-1")
 	if peer == nil || peer.Status != "pending" {
 		t.Fatalf("forgotten host did not register again: %#v", peer)
 	}

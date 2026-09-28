@@ -650,6 +650,9 @@ CREATE INDEX IF NOT EXISTS annotations_session ON annotations(sessionId);`, "ann
         positionMs INTEGER NOT NULL,
         updatedAt  INTEGER NOT NULL
       );`, "audio_position table"},
+		// The federation table names predate the parent/child terminology. They
+		// stay as they are so an older binary run against this database still
+		// finds its link credentials.
 		{`CREATE TABLE IF NOT EXISTS federation_master (
         singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),
         url         TEXT NOT NULL,
