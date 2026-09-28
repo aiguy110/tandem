@@ -124,7 +124,7 @@ Two keyboard surfaces, one for speed and one for discoverability:
    bookmarks. Each row shows branch, clean/dirty, and whether an agent already occupies
    that dir.
    - `Enter` on a dir → spawn with defaults; **focus jumps to the new agent**.
-   - `⇥` then type a task → spawn **and dispatch** in one shot (focus jumps to it too).
+   - `⇥` → open the Host picker for arrow-key navigation (when more than one host).
    - `⌘Enter` → reveal advanced fields, including a fuzzy Git-ref picker and explicit
      new-branch / continue-branch / existing-checkout workspace modes.
 2. **Command palette** (`⌘K`) — everything: all commands, jump-to-agent-by-name, spawn,
@@ -138,7 +138,6 @@ worktree) instantly, for fanning work out across one codebase.
 
 ```
 [spawn]  che ↵                          → agent in ~/Projects/checkout (new worktree), focused
-[spawn]  che ⇥ fix the rounding bug ↵   → spawned AND dispatched in one shot
 [spawn]  che ⌘↵                         → advanced: adapter · model · branch · base · name
 ```
 

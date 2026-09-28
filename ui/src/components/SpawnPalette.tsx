@@ -102,7 +102,7 @@ type PaletteRow =
 // matching repo is a header followed by the profiles already used in it.
 //   Enter on a profile  → spawn with that profile + focus jumps
 //   Enter on a repo     → open the form to launch with a new profile
-//   Tab → type task → Enter → spawn AND dispatch
+//   Tab → open the Host pick box for arrow-key navigation
 //   ⌘/Ctrl+Enter        → customize the selected profile (or new profile on a repo)
 //   right-click / long-press a profile → Customize / Forget
 // Spawning changes what exists on a host, which its access policy reserves
@@ -168,8 +168,6 @@ export function SpawnPalette() {
   // null = not moved by the user since the query changed; the first profile row
   // (the repo's latest profile) is then selected so Enter quick-spawns it.
   const [sel, setSel] = useState<number | null>(null);
-  const [taskMode, setTaskMode] = useState(false);
-  const [task, setTask] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [adapter, setAdapter] = useState<'acp' | 'pty'>('acp');
   const [agent, setAgent] = useState<string>('agent:claude');
@@ -220,7 +218,7 @@ export function SpawnPalette() {
   const [error, setError] = useState<{ code: string; msg: string; dir: RepoInfo } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const taskRef = useRef<HTMLInputElement>(null);
+  const hostSelectRef = useRef<HTMLSelectElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
 
   // A rail-initiated hand-off should be created where its source actually
@@ -521,10 +519,6 @@ export function SpawnPalette() {
     }).finally(() => { if (!cancelled) setGitRefsBusy(false); });
     return () => { cancelled = true; };
   }, [advanced, selectedDir?.path, listGitRefs, gitRefsRefresh, hostId]);
-  useEffect(() => {
-    if (taskMode) taskRef.current?.focus();
-  }, [taskMode]);
-
   // The profile the daemon will record for the current form (mirroring its
   // resolution rules), and the auto-name a new profile would get.
   const currentHarness = selectedHarness?.harness ?? '';
@@ -603,7 +597,6 @@ export function SpawnPalette() {
             } : undefined,
           },
       name: quick ? undefined : name || undefined,
-      task: task.trim() || undefined,
       sessionConfig: spawnAdapter === 'acp' ? {
         modeId: resolvedDefaults.permission || undefined,
         configOptions: {
@@ -659,9 +652,11 @@ export function SpawnPalette() {
       return;
     }
     if (advanced) return;
-    if (e.key === 'Tab' && !taskMode) {
+    if (e.key === 'Tab' && hosts.length > 1) {
       e.preventDefault();
-      setTaskMode(true);
+      const select = hostSelectRef.current;
+      select?.focus();
+      select?.showPicker?.();
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -700,7 +695,7 @@ export function SpawnPalette() {
             {hosts.length > 1 && (
               <label className="spawn-host">
                 Host
-                <select value={hostId} onChange={(e) => setHostId(e.target.value)}>
+                <select ref={hostSelectRef} value={hostId} onChange={(e) => setHostId(e.target.value)}>
                   {hosts.map((host) => (
                     <option key={host.id} value={host.id} disabled={!host.local && ((host.status !== 'connected' && host.status !== 'accepted') || !canSpawnOn(host))}>
                       {host.name || host.id}{host.local ? ' (local)' : host.status && host.status !== 'connected' && host.status !== 'accepted' ? ` (${host.status})` : !canSpawnOn(host) ? ` (${host.access} access)` : ''}
@@ -716,15 +711,6 @@ export function SpawnPalette() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            {taskMode && (
-              <input
-                ref={taskRef}
-                className="task"
-                placeholder="Task to dispatch on spawn (Enter to spawn + dispatch)…"
-                value={task}
-                onChange={(e) => setTask(e.target.value)}
-              />
-            )}
             <div className="rows" ref={rowsRef}>
               {filtered.length === 0 && <div className="empty">{emptyMessage}</div>}
               {filtered.length > 0 && dirsNotice && <div className="spawn-scan-note">{dirsNotice}</div>}
@@ -1010,7 +996,7 @@ export function SpawnPalette() {
           <div className="foot">
             <span><span className="kbd">↵</span> spawn</span>
             <span><span className="kbd">⌘↵</span> customize</span>
-            <span><span className="kbd">⇥</span> add task</span>
+            {hosts.length > 1 && <span><span className="kbd">⇥</span> pick host</span>}
             <span><span className="kbd">↑↓</span> select</span>
             <span><span className="kbd">Esc</span> close</span>
             {busy && <span style={{ marginLeft: 'auto' }}>spawning…</span>}
