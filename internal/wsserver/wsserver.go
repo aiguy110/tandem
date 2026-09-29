@@ -343,6 +343,7 @@ type clientMessage struct {
 	MaxHits           int                        `json:"maxHitsPerSession"`
 	Reindex           bool                       `json:"reindex"`
 	InterruptFirst    bool                       `json:"interrupt"`
+	Edit              bool                       `json:"edit"`
 	Action            string                     `json:"action"`
 	Event             browser.BrowserInputEvent  `json:"event"`
 	Name              string                     `json:"name"`
@@ -884,6 +885,28 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.server.broadcastAgents()
+		c.commandAck(m, sess.ID)
+	case "fork_session":
+		backend, ok := c.server.opts.Registry.(interface {
+			Fork(context.Context, registry.ForkRequest) (*session.Session, error)
+		})
+		if !ok {
+			c.commandError(m, errors.New("session fork is unsupported"))
+			return
+		}
+		slog.Info("fork requested", "session_id", m.SessionID, "seq", m.Seq, "edit", m.Edit)
+		sess, err := backend.Fork(context.Background(), registry.ForkRequest{SourceID: m.SessionID, AtSeq: m.Seq, Edit: m.Edit, Blocks: m.Blocks})
+		if sess != nil {
+			c.server.broadcastAgents()
+		}
+		if err != nil {
+			if sess != nil {
+				c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "error": err.Error()}, m.CorrID))
+				return
+			}
+			c.commandError(m, err)
+			return
+		}
 		c.commandAck(m, sess.ID)
 	case "enter_terminal":
 		backend, ok := c.server.opts.Registry.(interface {
@@ -1534,7 +1557,7 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	callTimeout := 30 * time.Second
-	if m.T == "spawn_agent" {
+	if m.T == "spawn_agent" || m.T == "fork_session" {
 		// A remote spawn may install the agent runtime before acknowledging.
 		callTimeout = 10 * time.Minute
 	}

@@ -155,7 +155,10 @@ function handle(msg) {
     return;
   }
   if (msg.method === 'session/fork') {
-    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: `fork_${crypto.randomUUID()}` } });
+    // Echo the requested fork point in the id so tests can assert it; "replay"
+    // makes a later session/load of the fork emit a replay burst to suppress.
+    const point = msg.params?._meta?.jetbrains?.air?.fork?.messageId ?? 'latest';
+    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: `fork_replay_${point}_${crypto.randomUUID()}` } });
     return;
   }
   if (msg.method === 'session/close') {

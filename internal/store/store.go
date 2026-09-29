@@ -1275,6 +1275,43 @@ func (s *Store) AppendEvent(sessionID, kind, payload string, ts int64) (int64, e
 	return seq, nil
 }
 
+// SeedEvents writes a new session's initial history in one transaction,
+// keeping each event's original timestamp. Sequences are assigned after any
+// existing events; the caller-supplied Seq values are ignored. It returns the
+// assigned sequences in input order.
+func (s *Store) SeedEvents(sessionID string, events []StoredEvent) ([]int64, error) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var seq int64
+	if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events WHERE sessionId = ?", sessionID).Scan(&seq); err != nil {
+		return nil, err
+	}
+	now := s.now().UnixMilli()
+	seqs := make([]int64, 0, len(events))
+	for _, event := range events {
+		if !json.Valid([]byte(event.Payload)) {
+			return nil, errors.New("event payload is not valid JSON")
+		}
+		seq++
+		if _, err := tx.Exec("INSERT INTO events (sessionId, seq, kind, payload, ts) VALUES (?, ?, ?, ?, ?)", sessionID, seq, event.Kind, event.Payload, event.TS); err != nil {
+			return nil, err
+		}
+		if err := indexTandemEvent(tx, sessionID, seq, event.Kind, event.Payload, event.TS, now); err != nil {
+			return nil, err
+		}
+		seqs = append(seqs, seq)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return seqs, nil
+}
+
 // RangeEvents returns events strictly newer than afterSeq in sequence order.
 func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, error) {
 	rows, err := s.db.Query("SELECT seq, kind, payload, ts FROM events WHERE sessionId = ? AND seq > ? ORDER BY seq", sessionID, afterSeq)

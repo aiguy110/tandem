@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { createUnifiedPatch } from '../diff/textDiff';
@@ -448,6 +449,7 @@ function CommentPopover({ draft, autoFocus, onChange, onCancel, onAdd }: {
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined)) as SessionView | undefined;
   const respond = useStore((s) => s.respond);
+  const forkSession = useStore((s) => s.forkSession);
   const annotations = useStore((s) => (agent ? s.annotations[agent.id] : undefined)) ?? [];
   const addAnnotation = useStore((s) => s.addAnnotation);
   const updateAnnotation = useStore((s) => s.updateAnnotation);
@@ -742,6 +744,9 @@ export function TranscriptPane() {
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
                 onJumpToQuote={jumpToQuote}
                 onJumpToLinkedBlock={jumpToLinkedBlock}
+                onFork={it.kind === 'user' && agent.adapter === 'acp' && agent.asideSupport === true
+                  ? (edit) => forkSession(agent.id, { seq: it.seq, edit })
+                  : undefined}
                 sessionId={agent.id}
                 canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
                 cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
@@ -971,6 +976,7 @@ function Row({
   onRespond,
   onJumpToQuote,
   onJumpToLinkedBlock,
+  onFork,
 }: {
   item: Item;
   entering: boolean;
@@ -983,8 +989,14 @@ function Row({
   onRespond: (optionId: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
+  // Offered on user messages when the agent can fork: with no argument it
+  // forks after this message's turn; with blocks it forks before the message
+  // and sends them in its place.
+  onFork?: (edit?: PromptBlock[]) => Promise<AckResult>;
 }) {
   const sourceRef = useRef<HTMLElement>(null);
+  const [userMenu, setUserMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editingUser, setEditingUser] = useState(false);
   // Latched at mount so re-renders while the row streams cannot restart (or cut
   // short) the entrance animation, then dropped once it has played -- leaving it
   // on would collide with the update-flash animation on the same element.
@@ -1033,13 +1045,37 @@ function Row({
 
   switch (item.kind) {
     case 'user':
+      if (editingUser && onFork) {
+        return <UserMessageEditor blocks={item.blocks} onSubmit={(blocks) => onFork(blocks)} onCancel={() => setEditingUser(false)} />;
+      }
       return (
-        <div ref={sourceRef as React.RefObject<HTMLDivElement>} className={`ev user${enterClass}${userFlash ? ` ${userFlash}` : ''}`} data-seq={item.seq} data-role="user" data-key={item.key} onClick={onSourceClick}>
+        <div
+          ref={sourceRef as React.RefObject<HTMLDivElement>}
+          className={`ev user${enterClass}${userFlash ? ` ${userFlash}` : ''}`}
+          data-seq={item.seq}
+          data-role="user"
+          data-key={item.key}
+          onClick={onSourceClick}
+          onContextMenu={onFork ? (event) => {
+            // Leave the native menu for copying a text selection.
+            if (window.getSelection()?.toString()) return;
+            event.preventDefault();
+            setUserMenu({ x: Math.min(event.clientX, window.innerWidth - 200), y: Math.min(event.clientY, window.innerHeight - 100) });
+          } : undefined}
+        >
           {item.blocks.map((block, i) => {
             if (block.type === 'text') return <UserMarkdown key={i} text={block.text} commands={commands} />;
             if (block.type === 'image') return <TranscriptImage key={`${block.assetId}-${i}`} block={block} />;
             return <QuoteChip key={i} block={block} targetId={citationTargetId(item.seq, i)} onJump={onJumpToQuote} />;
           })}
+          {userMenu && onFork && (
+            <UserMessageMenu
+              position={userMenu}
+              onClose={() => setUserMenu(null)}
+              onEdit={() => { setUserMenu(null); setEditingUser(true); }}
+              onFork={onFork}
+            />
+          )}
         </div>
       );
     case 'message':
@@ -1697,6 +1733,118 @@ function renderUserMarkdown(text: string, commands: SlashCommand[]): string {
     }));
   }
   return template.innerHTML;
+}
+
+// The daemon prefixes a session's first prompt with Tandem guidance; editing
+// shows only what the user typed (the daemon re-adds the framing).
+const SESSION_PREAMBLE = /^## Tandem session\n\n[\s\S]*?\n\n## User task\n\n/;
+
+function editableText(blocks: PromptBlock[]): string {
+  return blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : '')).join('\n\n').replace(SESSION_PREAMBLE, '');
+}
+
+// Replace a message's text while keeping its images and quote citations.
+function withEditedText(blocks: PromptBlock[], text: string): PromptBlock[] {
+  const out: PromptBlock[] = [];
+  let placed = false;
+  for (const block of blocks) {
+    if (block.type !== 'text') out.push(block);
+    else if (!placed) {
+      placed = true;
+      if (text) out.push({ type: 'text', text });
+    }
+  }
+  if (!placed && text) out.push({ type: 'text', text });
+  return out;
+}
+
+function UserMessageMenu({ position, onClose, onEdit, onFork }: {
+  position: { x: number; y: number };
+  onClose: () => void;
+  onEdit: () => void;
+  onFork: () => Promise<AckResult>;
+}) {
+  const [forking, setForking] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('pointerdown', onClose);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onClose);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      className="session-context-menu"
+      style={{ left: position.x, top: position.y }}
+      role="menu"
+      aria-label="Message actions"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button type="button" role="menuitem" title="Rewrite this message in a new session forked from just before it" onClick={onEdit}>
+        Edit…
+      </button>
+      <button type="button" role="menuitem" disabled={forking} title="New session with the conversation through this message's turn" onClick={() => {
+        setForking(true);
+        setError('');
+        void onFork().then((result) => {
+          if (result.error) setError(result.error);
+          else onClose();
+        }).finally(() => setForking(false));
+      }}>
+        {forking ? 'Forking…' : 'Fork from here'}
+      </button>
+      {error && <div className="session-rename-error">{error}</div>}
+    </div>,
+    document.body,
+  );
+}
+
+function UserMessageEditor({ blocks, onSubmit, onCancel }: {
+  blocks: PromptBlock[];
+  onSubmit: (blocks: PromptBlock[]) => Promise<AckResult>;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(() => editableText(blocks));
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const edited = withEditedText(blocks, text.trim() ? text : '');
+  const submit = () => {
+    if (sending || edited.length === 0) return;
+    setSending(true);
+    setError('');
+    void onSubmit(edited).then((result) => {
+      if (result.error) setError(result.error);
+      else onCancel();
+    }).finally(() => setSending(false));
+  };
+  return (
+    <div className="ev user user-edit">
+      <textarea
+        autoFocus
+        value={text}
+        rows={Math.min(12, Math.max(3, text.split('\n').length))}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onCancel();
+          else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) submit();
+        }}
+      />
+      <div className="user-edit-foot">
+        <span>Sends in a new forked session. Files are not rewound.</span>
+        <button type="button" className="btn ghost" onClick={onCancel} disabled={sending}>Cancel</button>
+        <button type="button" className="btn primary" onClick={submit} disabled={sending || edited.length === 0}>
+          {sending ? 'Forking…' : 'Send'}
+        </button>
+      </div>
+      {error && <div className="session-rename-error">{error}</div>}
+    </div>
+  );
 }
 
 function UserMarkdown({ text, commands }: { text: string; commands: SlashCommand[] }) {

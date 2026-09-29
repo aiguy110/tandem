@@ -152,6 +152,23 @@ never sent back through the parent's ACP session, so the question and answer do 
 future parent turns. Claude ACP 0.70.0 and Codex ACP 1.8.0 advertise the capability; Pi ACP
 0.0.31 does not, so the UI hides `/btw` there.
 
+## Session forks at a message (`fork_session`)
+
+Tandem's Fork / Edit actions also use `session/fork`, but in a **new** adapter process: it calls
+`session/fork` for the source's external session id, then `session/load`s the fork with replay
+suppressed (the daemon seeds the fork's event log from the source's own log instead). To cut
+history, the request carries the AIR fork-point extension that Claude ACP ≥0.84 and Codex ACP
+≥2.0 honor:
+
+```json
+{ "_meta": { "jetbrains": { "air": { "fork": { "version": 1, "messageId": "<agent messageId>" } } } } }
+```
+
+The fork keeps everything through that agent message (Claude: SDK `forkSession` `upToMessageId`;
+Codex: `thread/fork` `lastTurnId` of the containing turn). Both bridges resolve it from disk, so
+the source session need not be live. Tandem persists each chunk's ACP `messageId` on
+`message_chunk`/`thought_chunk` events for this. Forks never touch the workspace filesystem.
+
 ## stopReason values
 
 `end_turn | max_tokens | max_turn_requests | refusal | cancelled`.

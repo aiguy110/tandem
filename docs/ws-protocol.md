@@ -158,6 +158,19 @@ WorkspaceManager errors are conventionally prefixed `"<code>: <detail>"` so a cl
 `ref_not_found`, `invalid_branch`, `branch_exists`, `branch_missing`, and
 `branch_checked_out`.
 
+### `fork_session` (conversation forks and message edits)
+
+`{ t:'fork_session', sessionId, seq?, edit?, blocks? }` starts a new ACP agent on a copy of
+`sessionId`'s conversation and acks with the new `sessionId`. Without `seq` it forks the whole
+conversation; `seq` names a `user_message` and forks through that message's turn; `edit:true`
+forks from just before that message and sends `blocks` as its replacement. Forks copy
+conversation context only: the new agent joins the source's workspace as it is now, and no
+file changes are rewound. The daemon copies the source's transcript event prefix (remapping
+quote `refSeq`s) and asks the harness to `session/fork` at the last agent `messageId` before the
+cut (see `docs/acp-notes.md`). A fork cut inside history recorded before message ids were
+persisted is rejected. If an edit's replacement prompt is rejected after the fork started, the
+ack carries both the new `sessionId` and `error`.
+
 ### `list_dirs` (Phase 2: spawn-palette repo discovery)
 
 ```ts
@@ -261,6 +274,7 @@ type ClientMsg =
   | { t: 'list_sessions' }                                              // resumable-session catalog
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number }
   | { t: 'resume_session'; externalSessionId: string; source: 'tandem'|'acp'|'history'; agent: string; cwd?: string }
+  | { t: 'fork_session'; sessionId: string; seq?: number; edit?: boolean; blocks?: PromptBlock[] }
   | { t: 'enter_terminal'; sessionId: string; interrupt?: boolean }
   | { t: 'leave_terminal'; sessionId: string }
   | { t: 'shell_open'; sessionId: string; cols: number; rows: number }

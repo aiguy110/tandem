@@ -985,6 +985,14 @@ func firstPrompt(handoffText, task string) string {
 }
 
 func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapter.Spec, resume string, captureReplay ...bool) (*session.Session, error) {
+	capture := len(captureReplay) > 0 && captureReplay[0]
+	return r.startWith(ctx, rec, spec, agentadapter.StartRequest{ResumeSessionID: resume, CaptureReplay: capture})
+}
+
+// startWith launches rec's adapter. req supplies only the launch mode
+// (resume, replay capture, fork); identity, workspace, spec, and log are
+// filled in from rec and spec.
+func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agentadapter.Spec, req agentadapter.StartRequest) (*session.Session, error) {
 	log, err := eventlog.New(rec.ID, r.store, r.ring)
 	if err != nil {
 		return nil, err
@@ -1001,8 +1009,8 @@ func (r *Registry) start(ctx context.Context, rec store.Session, spec agentadapt
 			}
 		}
 	}
-	capture := len(captureReplay) > 0 && captureReplay[0]
-	a, err := r.factory.Start(ctx, agentadapter.StartRequest{SessionID: rec.ID, CWD: rec.CWD, ResumeSessionID: resume, CaptureReplay: capture, Spec: spec, Log: log})
+	req.SessionID, req.CWD, req.Spec, req.Log = rec.ID, rec.CWD, spec, log
+	a, err := r.factory.Start(ctx, req)
 	if err != nil {
 		return nil, err
 	}

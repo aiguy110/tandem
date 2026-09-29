@@ -85,16 +85,26 @@ type AdapterConfig struct {
 	Cwd             string
 	ResumeSessionID string
 	CaptureReplay   bool
-	MCPServers      []MCPServer
-	Assets          AssetStore
-	WorkspaceFS     *workspacefs.FS
-	Terminals       *terminalhost.Host
-	Logger          *log.Logger
+	// Fork starts the adapter on a session/fork of an existing session; the
+	// fork's replayed history is suppressed (the daemon copies its own log).
+	Fork        *ForkPoint
+	MCPServers  []MCPServer
+	Assets      AssetStore
+	WorkspaceFS *workspacefs.FS
+	Terminals   *terminalhost.Host
+	Logger      *log.Logger
 	// ParentToolCallIDPath is a dotted path into a session/update's `_meta`
 	// whose value is the parent tool call's id (see config.ACPMeta). When set,
 	// updates carrying it are annotated with a normalized `parentId`. Empty
 	// disables the lookup — the common case for agents without subagent meta.
 	ParentToolCallIDPath string
+}
+
+// ForkPoint names the external session to fork and, optionally, the agent
+// message the fork's history ends with. An empty MessageID forks it whole.
+type ForkPoint struct {
+	SessionID string
+	MessageID string
 }
 
 type Capabilities struct {
@@ -251,7 +261,10 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 	a.emit(map[string]any{"kind": "aside_capabilities", "fork": init.AgentCapabilities.SessionCapabilities.Fork != nil})
 	a.emit(map[string]any{"kind": "steering_capabilities", "supported": init.Meta.Steering.Supported})
 
-	if cfg.ResumeSessionID != "" && init.AgentCapabilities.LoadSession {
+	if cfg.Fork != nil {
+		progress.Report(ctx, "Forking agent session…")
+		err = a.startFork(ctx, *cfg.Fork, init.AgentCapabilities.LoadSession)
+	} else if cfg.ResumeSessionID != "" && init.AgentCapabilities.LoadSession {
 		a.mu.Lock()
 		a.replaying = !cfg.CaptureReplay
 		a.mu.Unlock()
@@ -301,6 +314,45 @@ func (a *Adapter) newSession(ctx context.Context) error {
 	a.mu.Lock()
 	a.sessionID, a.state = raw.SessionID, SessionState{Modes: cloneRaw(raw.Modes), ConfigOptions: normalizeConfigOptions(raw.ConfigOptions)}
 	a.mu.Unlock()
+	return nil
+}
+
+// startFork creates the adapter's session as an ACP session/fork of another
+// session, cut after point.MessageID when one is given. The fork point uses
+// the `_meta.jetbrains.air.fork` extension understood by the Claude and Codex
+// bridges; a bridge that ignores it forks the whole conversation, so callers
+// only rely on it for bridges known to honor it. The fork is then loaded so
+// the bridge adopts it as a live session, with its replay suppressed.
+func (a *Adapter) startFork(ctx context.Context, point ForkPoint, loadSession bool) error {
+	if !a.Capabilities().ForkSession {
+		return errors.New("this agent does not support forking sessions")
+	}
+	if !loadSession {
+		return errors.New("this agent cannot load a forked session")
+	}
+	params := map[string]any{"sessionId": point.SessionID, "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers}
+	if point.MessageID != "" {
+		params["_meta"] = map[string]any{"jetbrains": map[string]any{"air": map[string]any{"fork": map[string]any{"version": 1, "messageId": point.MessageID}}}}
+	}
+	slog.Info("acp session/fork", "session", a.cfg.SessionID, "source_session", point.SessionID, "message_id", point.MessageID)
+	var fork struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := a.tr.Call(ctx, "session/fork", params, &fork); err != nil {
+		return fmt.Errorf("acp session/fork: %w", err)
+	}
+	if fork.SessionID == "" {
+		return errors.New("acp session/fork: response is missing sessionId")
+	}
+	a.mu.Lock()
+	a.replaying = true
+	a.mu.Unlock()
+	err := a.load(ctx, fork.SessionID)
+	a.endReplay()
+	if err != nil {
+		return err
+	}
+	slog.Info("acp forked session loaded", "session", a.cfg.SessionID, "source_session", point.SessionID, "fork_session", fork.SessionID)
 	return nil
 }
 
@@ -1131,6 +1183,11 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 			kind = "thought_chunk"
 		}
 		ev := map[string]any{"kind": kind, "text": text}
+		// The ACP message id is the handle a later session/fork uses to cut
+		// the conversation after this message (see Registry.Fork).
+		if messageID := rawString(u["messageId"]); messageID != "" {
+			ev["messageId"] = messageID
+		}
 		attachParentID(ev, parentID)
 		a.pushUpdate(note.SessionID, ev)
 	case "tool_call":

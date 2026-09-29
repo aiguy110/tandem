@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
 import type { SessionView } from '../../store';
@@ -974,5 +974,67 @@ describe('TranscriptPane steering', () => {
     expect(steer.querySelector('svg')).not.toBeNull();
     expect(Array.from(actions.children)).toContain(steer);
     expect(Array.from(actions.children)).toContain(queue);
+  });
+});
+
+describe('TranscriptPane message forking', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  function forkable(asideSupport: boolean | null) {
+    const view = agent();
+    view.asideSupport = asideSupport;
+    view.events = [
+      { seq: 1, event: { kind: 'user_message', blocks: [{ type: 'text', text: '## Tandem session\n\nguidance\n\n## User task\n\nfix the bug' }] } },
+      { seq: 2, event: { kind: 'message_chunk', text: 'Done.' } },
+    ];
+    return view;
+  }
+
+  it('edits a user message into a forked session', async () => {
+    const forkSession = vi.fn().mockResolvedValue({ sessionId: 'session-1-fork' });
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': forkable(true) }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      forkSession,
+    }, true);
+    const view = render(<TranscriptPane />);
+
+    fireEvent.contextMenu(view.container.querySelector('.ev.user')!);
+    fireEvent.click(view.getByRole('menuitem', { name: 'Edit…' }));
+    const textarea = view.container.querySelector('.user-edit textarea') as HTMLTextAreaElement;
+    // The daemon's first-turn framing is not part of what the user typed.
+    expect(textarea.value).toBe('fix the bug');
+    fireEvent.change(textarea, { target: { value: 'fix the other bug' } });
+    fireEvent.click(within(view.container.querySelector('.user-edit') as HTMLElement).getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(forkSession).toHaveBeenCalledWith('session-1', { seq: 1, edit: [{ type: 'text', text: 'fix the other bug' }] }));
+  });
+
+  it('forks after a user message turn', async () => {
+    const forkSession = vi.fn().mockResolvedValue({ sessionId: 'session-1-fork' });
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': forkable(true) }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      forkSession,
+    }, true);
+    const view = render(<TranscriptPane />);
+
+    fireEvent.contextMenu(view.container.querySelector('.ev.user')!);
+    fireEvent.click(view.getByRole('menuitem', { name: 'Fork from here' }));
+
+    await waitFor(() => expect(forkSession).toHaveBeenCalledWith('session-1', { seq: 1, edit: undefined }));
+  });
+
+  it('offers no message menu when the agent cannot fork', () => {
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': forkable(false) }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+
+    fireEvent.contextMenu(view.container.querySelector('.ev.user')!);
+    expect(view.queryByRole('menu')).toBeNull();
   });
 });

@@ -108,7 +108,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		env[mcpBridgeLogEnv] = filepath.Join(f.Config.Home, "logs", "mcp-bridge.log")
 		slog.Info("wrote MCP servers file for agent bridge", "session", req.SessionID, "agent", req.Spec.Agent, "servers", len(mcpServers), "path", serversFile)
 	}
-	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{SessionID: req.SessionID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(env), Stderr: os.Stderr}})
+	a, err := acpadapter.StartAdapter(ctx, acpadapter.AdapterConfig{SessionID: req.SessionID, Cwd: req.CWD, ResumeSessionID: req.ResumeSessionID, CaptureReplay: req.CaptureReplay, Fork: acpFork(req.Fork), MCPServers: mcpServers, Assets: f.Assets, WorkspaceFS: fs, Terminals: host, ParentToolCallIDPath: launch.ACP.ParentToolCallIDPath, Transport: acp.Config{Command: launch.ACP.Cmd, Args: launch.ACP.Args, Dir: req.CWD, Env: envList(env), Stderr: os.Stderr}})
 	if err != nil {
 		removeMCPServersFile(serversFile)
 		host.Close(context.Background())
@@ -324,3 +324,10 @@ func (a *ptyAdapter) RespondPermission(string, string) error {
 	return errors.New("PTY adapter does not support permissions")
 }
 func (a *ptyAdapter) Close(ctx context.Context) error { return a.Dispose(ctx) }
+
+func acpFork(point *agentadapter.ForkPoint) *acpadapter.ForkPoint {
+	if point == nil {
+		return nil
+	}
+	return &acpadapter.ForkPoint{SessionID: point.SessionID, MessageID: point.MessageID}
+}

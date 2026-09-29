@@ -950,3 +950,34 @@ func TestCompactionUpdatesNormalizeLifecycleAndSummary(t *testing.T) {
 		t.Fatal("compaction_update without compactionId must fail")
 	}
 }
+
+func TestStartForkPassesForkPointAndSuppressesReplay(t *testing.T) {
+	a := startMock(t, func(cfg *AdapterConfig) {
+		cfg.Fork = &ForkPoint{SessionID: "sess_source", MessageID: "msg_42"}
+	})
+	if !strings.HasPrefix(a.ExternalSessionID(), "fork_replay_msg_42_") {
+		t.Fatalf("forked session = %q, want a fork cut at msg_42", a.ExternalSessionID())
+	}
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case ev := <-a.Events():
+			if ev.Kind == "message_chunk" && bytes.Contains(ev.Payload, []byte("replayed-chunk")) {
+				t.Fatalf("fork replay leaked into the log: %s", ev.Payload)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+func TestMessageChunksCarryACPMessageID(t *testing.T) {
+	a := newUpdateAdapter(nil)
+	update := `{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","messageId":"msg_7","content":{"type":"text","text":"hi"}}}`
+	if err := a.handleUpdate(json.RawMessage(update)); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitEvent(t, a, "message_chunk", nil); got["messageId"] != "msg_7" {
+		t.Fatalf("messageId = %v, want msg_7", got["messageId"])
+	}
+}

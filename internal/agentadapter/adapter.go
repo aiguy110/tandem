@@ -147,9 +147,21 @@ type ProfileSpec struct {
 type StartRequest struct {
 	SessionID, CWD, ResumeSessionID string
 	CaptureReplay                   bool
-	Spec                            Spec
-	Log                             *eventlog.Log
+	// Fork, when set, starts the adapter on a new ACP session/fork of an
+	// existing external session instead of creating or loading one.
+	Fork *ForkPoint
+	Spec Spec
+	Log  *eventlog.Log
 }
+
+// ForkPoint names the external session to fork and, optionally, the agent
+// message the fork's history ends with. An empty MessageID forks the whole
+// conversation.
+type ForkPoint struct {
+	SessionID string
+	MessageID string
+}
+
 type Factory interface {
 	Start(context.Context, StartRequest) (Adapter, error)
 }

@@ -34,6 +34,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const closeAgent = useStore((s) => s.closeAgent);
   const renameAgent = useStore((s) => s.renameAgent);
   const handOffAgent = useStore((s) => s.handOffAgent);
+  const forkSession = useStore((s) => s.forkSession);
   const restartHarness = useStore((s) => s.restartHarness);
 	const openSpawnAtHost = useStore((s) => s.openSpawnAtHost);
 	const openFleetAtHost = useStore((s) => s.openFleetAtHost);
@@ -270,6 +271,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   onRename={(name) => renameAgent(id, name)}
                   onDelete={() => void requestDelete(id)}
                   onHandOff={() => handOffAgent(id)}
+                  onFork={() => forkSession(id)}
                   onRestartHarness={() => restartHarness(id)}
                   dragging={id === draggedId}
                   dropPosition={dropTarget?.id === id ? (dropTarget.after ? 'after' : 'before') : null}
@@ -553,6 +555,7 @@ function Row({
   onRename,
   onDelete,
   onHandOff,
+  onFork,
   onRestartHarness,
   dragging,
   dropPosition,
@@ -570,6 +573,7 @@ function Row({
   onRename: (name: string) => Promise<{ error?: string }>;
   onDelete: () => void;
   onHandOff: () => void;
+  onFork: () => Promise<{ error?: string }>;
   onRestartHarness: () => Promise<{ error?: string }>;
   dragging: boolean;
   dropPosition: 'before' | 'after' | null;
@@ -582,8 +586,9 @@ function Row({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(agent.name);
   const [renameError, setRenameError] = useState('');
-  const [restartError, setRestartError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [restartingHarness, setRestartingHarness] = useState(false);
+  const [forking, setForking] = useState(false);
   const [mouseHovered, setMouseHovered] = useState(false);
   const [pendingContextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingDetails, setDetails] = useState<{ x: number; y: number } | null>(null);
@@ -855,11 +860,23 @@ function Row({
           <button type="button" role="menuitem" onClick={() => { onHandOff(); setContextMenu(null); }}>
             Hand off…
           </button>
+          {agent.adapter === 'acp' && agent.asideSupport !== false && (
+            <button type="button" role="menuitem" disabled={forking} title="New session with this conversation, sharing the same workspace" onClick={() => {
+              setForking(true);
+              setActionError('');
+              void onFork().then((result) => {
+                if (result.error) setActionError(result.error);
+                else setContextMenu(null);
+              }).finally(() => setForking(false));
+            }}>
+              {forking ? 'Forking…' : 'Fork'}
+            </button>
+          )}
           <button type="button" role="menuitem" disabled={restartingHarness} onClick={() => {
             setRestartingHarness(true);
-            setRestartError('');
+            setActionError('');
             void onRestartHarness().then((result) => {
-              if (result.error) setRestartError(result.error);
+              if (result.error) setActionError(result.error);
               else setContextMenu(null);
             }).finally(() => setRestartingHarness(false));
           }}>
@@ -874,7 +891,7 @@ function Row({
         </div>
       )}
       {details && <AgentDetails agent={agent} position={details} closing={detailsClosing} onClose={() => setDetails(null)} onMove={setDetails} />}
-      {restartError && <div className="session-rename-error">{restartError}</div>}
+      {actionError && <div className="session-rename-error">{actionError}</div>}
     </div>
   );
 }

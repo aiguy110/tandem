@@ -378,6 +378,7 @@ interface StoreState {
   browserControl: (sessionId: string, action: 'grab' | 'release') => void;
   restartBrowser: (sessionId: string, snapshotId?: string) => Promise<AckResult>;
   restartHarness: (sessionId: string) => Promise<AckResult>;
+  forkSession: (sessionId: string, at?: { seq: number; edit?: PromptBlock[] }) => Promise<AckResult>;
   browserInput: (sessionId: string, event: BrowserInputWire) => void;
   toggleWheel: (sessionId: string) => void;
 }
@@ -1742,6 +1743,26 @@ export const useStore = create<StoreState>((set, get) => {
           resolve(result);
         });
         client.send({ t: 'restart_harness', sessionId, corrId });
+      }),
+    forkSession: (sessionId, at) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          // An edit whose replacement prompt was rejected still created the
+          // fork, so focus whatever session the ack names.
+          if (result.sessionId && result.sessionId !== sessionId) {
+            get().refreshAgents();
+            set({ focusedId: result.sessionId, pane: 'chat' });
+          }
+          resolve(result);
+        });
+        client.send({
+          t: 'fork_session',
+          sessionId,
+          ...(at ? { seq: at.seq } : {}),
+          ...(at?.edit ? { edit: true, blocks: at.edit } : {}),
+          corrId,
+        });
       }),
     browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, event }),
     toggleWheel: (sessionId) => {
