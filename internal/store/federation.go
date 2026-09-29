@@ -159,3 +159,56 @@ func (s *Store) SaveFederationAdoption(a FederationAdoption) error {
 ON CONFLICT(url) DO UPDATE SET credential=excluded.credential, hostId=excluded.hostId, updatedAt=excluded.updatedAt`, a.URL, a.Credential, a.HostID, a.UpdatedAt)
 	return err
 }
+
+// FederationAdoptedHostIDs lists the child host IDs this daemon dials (adopts)
+// rather than being dialed by.
+func (s *Store) FederationAdoptedHostIDs() (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT hostId FROM federation_adoptions WHERE hostId != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids[id] = true
+	}
+	return ids, rows.Err()
+}
+
+// FederationHostNames are operator-chosen display names for hosts, keyed by
+// the host ID this daemon addresses them by ("local" for itself). They are a
+// per-daemon view preference and are never advertised to other hosts.
+func (s *Store) FederationHostNames() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT hostId, name FROM federation_host_names`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := map[string]string{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		names[id] = name
+	}
+	return names, rows.Err()
+}
+
+// SetFederationHostName saves a host's display name; "" clears it.
+func (s *Store) SetFederationHostName(hostID, name string) error {
+	if hostID == "" {
+		return errors.New("invalid host ID")
+	}
+	if name == "" {
+		_, err := s.db.Exec(`DELETE FROM federation_host_names WHERE hostId = ?`, hostID)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO federation_host_names (hostId, name, updatedAt) VALUES (?, ?, ?)
+ON CONFLICT(hostId) DO UPDATE SET name=excluded.name, updatedAt=excluded.updatedAt`, hostID, name, s.now().UnixMilli())
+	return err
+}

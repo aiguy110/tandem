@@ -687,6 +687,11 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
         hostId     TEXT NOT NULL DEFAULT '',
         updatedAt  INTEGER NOT NULL
       );`, "federation_adoptions table"},
+		{`CREATE TABLE IF NOT EXISTS federation_host_names (
+        hostId    TEXT PRIMARY KEY,
+        name      TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );`, "federation_host_names table"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()

@@ -549,3 +549,22 @@ func TestForgottenHostRegistersAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHostNamesAreStoredAndCleared(t *testing.T) {
+	s, err := New(Options{Store: openStore(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHostName("local", "  workstation  "); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.HostNames()["local"]; got != "workstation" {
+		t.Fatalf("name = %q", got)
+	}
+	if err := s.SetHostName("local", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.HostNames()["local"]; ok {
+		t.Fatal("cleared name still present")
+	}
+}

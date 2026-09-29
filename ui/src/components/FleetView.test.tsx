@@ -64,7 +64,8 @@ describe('FleetView', () => {
     expect(screen.getByText('GPU worker')).toBeTruthy();
     expect(screen.getByText('build v1.4.0 · protocol v2')).toBeTruthy();
     expect(screen.getByText('build v1.2.8 · protocol v1')).toBeTruthy();
-    expect(screen.getByText('Arrows point from child to parent')).toBeTruthy();
+    expect(screen.getByText('Child → parent')).toBeTruthy();
+    expect(screen.getByText('TCP source → destination')).toBeTruthy();
 
     expect(view.container.querySelector('.fleet-stage')).toBeTruthy();
     const canvas = screen.getByLabelText('Fleet topology graph. Drag or use arrow keys to pan.');
@@ -86,6 +87,49 @@ describe('FleetView', () => {
     expect(gpuEdge?.getAttribute('marker-end')).toBe('url(#fleet-parent-arrow)');
     expect(relayEdge?.querySelector('title')?.textContent).toBe('Relay → Control (child → parent)');
     expect(gpuEdge?.querySelector('title')?.textContent).toBe('GPU worker → Relay (child → parent)');
+  });
+
+  it('draws a TCP arrow from whichever end dialed the link', () => {
+    useStore.setState({
+      hosts: [
+        { id: LOCAL_HOST_ID, name: 'Control', local: true, status: 'connected' },
+        { id: 'laptop', name: 'Laptop', parentId: LOCAL_HOST_ID, status: 'connected', dialer: 'child' },
+        { id: 'box', name: 'Container', parentId: LOCAL_HOST_ID, status: 'connected', dialer: 'parent' },
+        { id: 'legacy', name: 'Legacy', parentId: LOCAL_HOST_ID, status: 'connected' },
+      ],
+      setModal: vi.fn(),
+      refreshHosts: vi.fn(),
+    });
+
+    const view = render(<FleetView />);
+    const dialed = view.container.querySelector('.fleet-edge-tcp[data-tcp-src="laptop"][data-tcp-dst="local"]');
+    const adopted = view.container.querySelector('.fleet-edge-tcp[data-tcp-src="local"][data-tcp-dst="box"]');
+    expect(dialed?.getAttribute('marker-end')).toBe('url(#fleet-tcp-arrow)');
+    expect(adopted?.querySelector('title')?.textContent).toBe('Control → Container (TCP source → destination)');
+    expect(view.container.querySelectorAll('.fleet-graph .fleet-edge-tcp')).toHaveLength(2);
+    expect(view.container.querySelectorAll('.fleet-graph .fleet-edge-parent')).toHaveLength(3);
+  });
+
+  it('renames a host inline', async () => {
+    const renameHost = vi.fn().mockResolvedValue({});
+    useStore.setState({
+      hosts: [
+        { id: LOCAL_HOST_ID, name: 'Control', local: true, status: 'connected' },
+        { id: 'worker', name: 'Worker', status: 'connected' },
+      ],
+      setModal: vi.fn(),
+      refreshHosts: vi.fn(),
+      renameHost,
+    });
+
+    render(<FleetView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Worker' }));
+    const input = screen.getByLabelText('Display name for Worker');
+    fireEvent.change(input, { target: { value: '  GPU box ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(renameHost).toHaveBeenCalledOnce();
+    expect(renameHost).toHaveBeenCalledWith('worker', 'GPU box');
+    expect(screen.queryByLabelText('Display name for Worker')).toBeNull();
   });
 
   it('pulses a host requested by the dock Details action', () => {

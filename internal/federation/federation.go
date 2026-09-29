@@ -102,10 +102,33 @@ type Host struct {
 	// Access is what this daemon may do on the host under that host's
 	// policy: "none", "view", "operate" or "admin".
 	Access string `json:"access,omitempty"`
+	// Dialer says which end of the link to ParentID opened the TCP
+	// connection: DialerChild or DialerParent (adoption). Empty when unknown,
+	// e.g. reported by a daemon predating it.
+	Dialer string `json:"dialer,omitempty"`
 	// Rules is the host's own access policy, carried so each relay can
 	// decide which hosts (and snapshots) a requester may see.
 	Rules  Policy `json:"rules,omitempty"`
 	nextID string
+}
+
+// Link dialers reported in Host.Dialer.
+const (
+	DialerChild  = "child"
+	DialerParent = "parent"
+)
+
+// parentDialer reports which end dials this daemon's link to its parent, or
+// "" without one.
+func (s *Service) parentDialer() string {
+	m, err := s.store.FederationParent()
+	if err != nil || m == nil {
+		return ""
+	}
+	if m.Adopted {
+		return DialerParent
+	}
+	return DialerChild
 }
 
 // LocalHost returns this daemon's browser-safe federation identity. It is
@@ -121,9 +144,11 @@ func (s *Service) LocalHost() Host {
 		BuildVersion:    s.buildVersion,
 		Access:          LevelAdmin.String(),
 	}
+	dialer := s.parentDialer()
 	s.mu.Lock()
 	if s.upstreamView != nil {
 		h.ParentID = routedHostID([]string{upHop})
+		h.Dialer = dialer
 	}
 	s.mu.Unlock()
 	return h
@@ -489,6 +514,10 @@ func (s *Service) Hosts() []Host {
 	if err != nil {
 		return []Host{}
 	}
+	adopted, err := s.store.FederationAdoptedHostIDs()
+	if err != nil {
+		slog.Warn("federation adopted host lookup failed", "error", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Host, 0, len(peers))
@@ -498,6 +527,10 @@ func (s *Service) Hosts() []Host {
 			h.Snapshot = append(json.RawMessage(nil), b...)
 		}
 		h.Rules = s.rules[p.ID]
+		h.Dialer = DialerChild
+		if adopted[p.ID] {
+			h.Dialer = DialerParent
+		}
 		out = append(out, h)
 		out = append(out, s.descendantsLocked(p.ID, h.ID, h.Route, 1, p.Status == "connected")...)
 	}
@@ -607,6 +640,30 @@ func (s *Service) descendantsLocked(via, parentID string, prefix []string, depth
 		out = append(out, h)
 	}
 	return out
+}
+
+// HostNames returns operator-chosen display names keyed by host ID.
+func (s *Service) HostNames() map[string]string {
+	names, err := s.store.FederationHostNames()
+	if err != nil {
+		slog.Warn("federation host names lookup failed", "error", err)
+		return nil
+	}
+	return names
+}
+
+// SetHostName sets (or, with "", clears) a host's display name as this
+// daemon shows it. The name stays local; it is not advertised to peers.
+func (s *Service) SetHostName(hostID, name string) error {
+	name = strings.TrimSpace(name)
+	if len(name) > 120 {
+		return errors.New("host name is too long")
+	}
+	if err := s.store.SetFederationHostName(hostID, name); err != nil {
+		return err
+	}
+	slog.Info("federation host display name changed", "host_id", hostID, "cleared", name == "")
+	return nil
 }
 
 func routedHostID(route []string) string {
@@ -1456,9 +1513,11 @@ func (s *Service) viewFor(childID string) []Host {
 		return out
 	}
 	self := Host{ID: "local", Local: true, NodeID: s.selfID(), Name: s.name, Endpoint: s.endpoint, Status: "connected", ProtocolVersion: ProtocolVersion, BuildVersion: s.buildVersion, Access: level.String(), Rules: s.policy}
+	dialer := s.parentDialer()
 	s.mu.Lock()
 	if s.upstreamView != nil {
 		self.ParentID = routedHostID([]string{upHop})
+		self.Dialer = dialer
 	}
 	if level >= LevelView {
 		self.Snapshot = append(json.RawMessage(nil), s.localSnapshot...)

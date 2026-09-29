@@ -1067,15 +1067,21 @@ body.dock-resizing .app { transition: none; }
 .fleet-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .fleet-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
 .fleet-close { padding: 0 4px; border: 0; background: transparent; color: var(--text-dim); font-size: calc(22px * var(--ui-scale)); line-height: 1; }
-.fleet-legend { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
-.fleet-arrow { color: var(--agent); font-size: calc(16px * var(--ui-scale)); line-height: 1; }
+.fleet-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 18px; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
+.fleet-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.fleet-legend-hint { margin-left: auto; color: var(--text-faint); }
+.fleet-error { padding: 6px 16px; color: var(--err); background: var(--err-soft); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
 .fleet-canvas { max-height: min(60vh, 560px); overflow: hidden; background: var(--bg); cursor: grab; touch-action: none; user-select: none; }
 .fleet-canvas.panning { cursor: grabbing; }
 .fleet-canvas:focus-visible { outline: 1px solid var(--agent); outline-offset: -1px; }
 .fleet-stage { display: flex; align-items: center; justify-content: center; width: max-content; min-width: 100%; min-height: 270px; will-change: transform; }
 .fleet-graph { display: block; flex: 0 0 auto; }
 .fleet-edge { fill: none; stroke: var(--border-strong); stroke-width: 2; }
+.fleet-edge-parent { stroke: var(--agent); }
+.fleet-edge-tcp { stroke: var(--warn); stroke-dasharray: 5 3; }
 .fleet-arrowhead { fill: var(--border-strong); }
+.fleet-arrowhead-parent { fill: var(--agent); }
+.fleet-arrowhead-tcp { fill: var(--warn); }
 .fleet-node rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
 .fleet-node-pulse rect { animation: fleet-node-pulse-kf 1.15s ease-out 2; }
 @keyframes fleet-node-pulse-kf {
@@ -1086,7 +1092,10 @@ body.dock-resizing .app { transition: none; }
 .fleet-node.fleet-connected circle, .fleet-node.fleet-accepted circle { fill: var(--ok); }
 .fleet-node.fleet-pending circle { fill: var(--warn); }
 .fleet-node.fleet-offline circle, .fleet-node.fleet-rejected circle { fill: var(--err); }
-.fleet-name { fill: var(--text); font: 600 12px var(--font-ui); }
+.fleet-name { fill: var(--text); font: 600 12px var(--font-ui); cursor: text; }
+.fleet-name-input { box-sizing: border-box; width: 100%; height: 20px; padding: 1px 5px; border: 1px solid var(--agent); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: 600 12px var(--font-ui); outline: none; }
+.fleet-edit { fill: var(--text-faint); font: 13px var(--font-ui); cursor: pointer; }
+.fleet-edit:hover, .fleet-edit:focus-visible { fill: var(--agent); outline: none; }
 .fleet-version { fill: var(--text-dim); font: 10px var(--font-mono); }
 .fleet-status { fill: var(--text-faint); font: 10px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; }
 .fleet-foot { justify-content: space-between; }

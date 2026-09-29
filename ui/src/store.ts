@@ -350,6 +350,7 @@ interface StoreState {
   listProfiles: (project?: string, hostId?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameProfile: (id: string, name: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   renameAgent: (sessionId: string, name: string) => Promise<AckResult>;
+  renameHost: (hostId: string, name: string) => Promise<AckResult>;
   deleteProfile: (id: string, project?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   // Drops a profile from one repo's recency list; the profile itself survives.
   forgetProfile: (id: string, project: string, hostId?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
@@ -1596,6 +1597,13 @@ export const useStore = create<StoreState>((set, get) => {
           resolve(result);
         });
         client.send({ t: 'rename_agent', sessionId, name, corrId });
+      }),
+    // The daemon broadcasts the renamed host list to every browser.
+    renameHost: (hostId, name) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'rename_host', hostId, name, corrId });
       }),
     deleteProfile: (id, project) =>
       new Promise<{ profiles: Profile[]; recent: string[] }>((resolve, reject) => {

@@ -121,6 +121,10 @@ type FederationEvents interface {
 type federationLocalHost interface {
 	LocalHost() federation.Host
 }
+type federationHostNames interface {
+	HostNames() map[string]string
+	SetHostName(hostID, name string) error
+}
 
 type AutomationStore interface {
 	AutomationJobs(string) ([]store.AutomationJob, error)
@@ -157,7 +161,29 @@ func (h *Handler) federationHosts() []federation.Host {
 	if local, ok := h.opts.Federation.(federationLocalHost); ok {
 		hosts = append([]federation.Host{local.LocalHost()}, hosts...)
 	}
+	if named, ok := h.opts.Federation.(federationHostNames); ok {
+		names := named.HostNames()
+		for i := range hosts {
+			if name := names[hosts[i].ID]; name != "" {
+				hosts[i].Name = name
+			}
+		}
+	}
 	return hosts
+}
+
+// broadcastHosts sends every browser this daemon's current host list.
+func (h *Handler) broadcastHosts() {
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	hosts := h.federationHosts()
+	for _, c := range connections {
+		c.send(map[string]any{"t": "hosts", "hosts": hosts})
+	}
 }
 
 func New(opts Options) *Handler {
@@ -222,15 +248,7 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 			slog.Debug("replacing relayed remote hosts list with local view", "host_id", hostID)
 		}
 		h.syncHostNotifications()
-		h.mu.Lock()
-		connections := make([]*connection, 0, len(h.connections))
-		for c := range h.connections {
-			connections = append(connections, c)
-		}
-		h.mu.Unlock()
-		for _, c := range connections {
-			c.send(map[string]any{"t": "hosts", "hosts": h.federationHosts()})
-		}
+		h.broadcastHosts()
 		return
 	}
 	if envelope["t"] == "agents" {
@@ -728,6 +746,22 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()}, m.CorrID))
+		return
+	}
+	// A display name belongs to this daemon's view, so it is never relayed
+	// to the named host even though the message carries its hostId.
+	if m.T == "rename_host" {
+		named, ok := c.server.opts.Federation.(federationHostNames)
+		if !ok {
+			c.commandError(m, errors.New("host renaming is unavailable"))
+			return
+		}
+		if err := named.SetHostName(m.HostID, m.Name); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.server.broadcastHosts()
+		c.commandAck(m, m.HostID)
 		return
 	}
 	if m.HostID == "" {

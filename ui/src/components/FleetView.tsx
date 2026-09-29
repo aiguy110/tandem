@@ -21,6 +21,8 @@ export interface FleetNode {
 export interface FleetEdge {
   childId: string;
   parentId: string;
+  // Which end opened the link's TCP connection, when the daemon reports it.
+  dialer?: 'child' | 'parent';
 }
 
 export interface FleetTopology {
@@ -96,7 +98,10 @@ export function projectFleet(hosts: FederationHost[]): FleetTopology {
       y: PADDING_Y + NODE_HEIGHT / 2 + position.depth * (NODE_HEIGHT + ROW_GAP),
     };
   });
-  const edges = nodes.flatMap((node) => node.parentId ? [{ childId: node.host.id, parentId: node.parentId }] : []);
+  const edges = nodes.flatMap((node): FleetEdge[] => {
+    if (!node.parentId) return [];
+    return [node.host.dialer ? { childId: node.host.id, parentId: node.parentId, dialer: node.host.dialer } : { childId: node.host.id, parentId: node.parentId }];
+  });
   const maxDepth = Math.max(0, ...nodes.map((node) => node.depth));
   return {
     nodes,
@@ -121,8 +126,21 @@ function accessLabel(host: FederationHost): string {
   return host.access && host.access !== 'admin' ? ` · ${host.access} access` : '';
 }
 
+// Parent and TCP arrows share a link, so each is drawn a little to one side.
+const EDGE_OFFSET = 5;
+
+function edgePath(fromX: number, fromY: number, toX: number, toY: number): string {
+  const midY = (fromY + toY) / 2;
+  return `M ${fromX} ${fromY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${toY}`;
+}
+
+function hostName(host: FederationHost): string {
+  return host.name ?? host.id;
+}
+
 export function FleetView() {
   const hosts = useStore((state) => state.hosts);
+  const renameHost = useStore((state) => state.renameHost);
   const setModal = useStore((state) => state.setModal);
   const refreshHosts = useStore((state) => state.refreshHosts);
   const focusHostId = useStore((state) => state.fleetFocusHostId);
@@ -134,6 +152,25 @@ export function FleetView() {
   const [panning, setPanning] = useState(false);
   const [pulseHostId, setPulseHostId] = useState<string | null>(focusHostId);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditingState] = useState<{ hostId: string; name: string } | null>(null);
+  // Enter unmounts the input, whose blur must not commit the same edit again.
+  const editingRef = useRef(editing);
+  const setEditing = (next: { hostId: string; name: string } | null) => {
+    editingRef.current = next;
+    setEditingState(next);
+  };
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const commitRename = async () => {
+    const pending = editingRef.current;
+    if (!pending) return;
+    const { hostId, name } = pending;
+    setEditing(null);
+    const current = hosts.find((host) => host.id === hostId);
+    if (current && name.trim() === (current.name ?? '')) return;
+    const result = await renameHost(hostId, name.trim());
+    setRenameError(result.error ? `Rename failed: ${result.error}` : null);
+  };
 
   // A host-level Details action opens this modal at its normal centered
   // position, then moves only far enough to reveal the requested node with a
@@ -210,7 +247,18 @@ export function FleetView() {
           </div>
           <button type="button" className="fleet-close" onClick={() => setModal('none')} aria-label="Close Fleet View">×</button>
         </div>
-        <div className="fleet-legend"><span className="fleet-arrow" aria-hidden="true">↑</span> Arrows point from child to parent</div>
+        <div className="fleet-legend">
+          <span className="fleet-legend-item">
+            <svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="18" y2="5" className="fleet-edge fleet-edge-parent" markerEnd="url(#fleet-parent-arrow)" /></svg>
+            Child → parent
+          </span>
+          <span className="fleet-legend-item">
+            <svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="18" y2="5" className="fleet-edge fleet-edge-tcp" markerEnd="url(#fleet-tcp-arrow)" /></svg>
+            TCP source → destination
+          </span>
+          <span className="fleet-legend-hint">✎ or double-click a name to rename a host</span>
+        </div>
+        {renameError && <div className="fleet-error" role="alert">{renameError}</div>}
         <div
           className={`fleet-canvas${panning ? ' panning' : ''}`}
           ref={canvasRef}
@@ -226,29 +274,48 @@ export function FleetView() {
             <svg className="fleet-graph" width={fleet.width} height={fleet.height} viewBox={`0 0 ${fleet.width} ${fleet.height}`} role="img" aria-label="Directed fleet topology; arrows point from children to parents">
             <defs>
               <marker id="fleet-parent-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead" />
+                <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead fleet-arrowhead-parent" />
+              </marker>
+              <marker id="fleet-tcp-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead fleet-arrowhead-tcp" />
               </marker>
               {fleet.nodes.map((node, index) => (
-                <clipPath id={`fleet-node-content-${index}`} key={node.host.id}><rect x="8" y="4" width={NODE_WIDTH - 16} height={NODE_HEIGHT - 8} /></clipPath>
+                <clipPath id={`fleet-node-content-${index}`} key={node.host.id}><rect x="8" y="4" width={NODE_WIDTH - 32} height={NODE_HEIGHT - 8} /></clipPath>
               ))}
             </defs>
             <g className="fleet-edges">
               {fleet.edges.map((edge) => {
                 const child = nodeByID.get(edge.childId)!;
                 const parent = nodeByID.get(edge.parentId)!;
-                const fromY = child.y - NODE_HEIGHT / 2;
-                const toY = parent.y + NODE_HEIGHT / 2;
+                const childY = child.y - NODE_HEIGHT / 2;
+                const parentY = parent.y + NODE_HEIGHT / 2;
+                const shift = edge.dialer ? EDGE_OFFSET : 0;
+                const [src, dst] = edge.dialer === 'parent' ? [parent, child] : [child, parent];
                 return (
-                  <path
-                    className="fleet-edge"
-                    data-child-id={edge.childId}
-                    data-parent-id={edge.parentId}
-                    key={`${edge.childId}->${edge.parentId}`}
-                    d={`M ${child.x} ${fromY} C ${child.x} ${(fromY + toY) / 2}, ${parent.x} ${(fromY + toY) / 2}, ${parent.x} ${toY}`}
-                    markerEnd="url(#fleet-parent-arrow)"
-                  >
-                    <title>{`${child.host.name ?? child.host.id} → ${parent.host.name ?? parent.host.id} (child → parent)`}</title>
-                  </path>
+                  <g key={`${edge.childId}->${edge.parentId}`}>
+                    <path
+                      className="fleet-edge fleet-edge-parent"
+                      data-child-id={edge.childId}
+                      data-parent-id={edge.parentId}
+                      d={edgePath(child.x - shift, childY, parent.x - shift, parentY)}
+                      markerEnd="url(#fleet-parent-arrow)"
+                    >
+                      <title>{`${hostName(child.host)} → ${hostName(parent.host)} (child → parent)`}</title>
+                    </path>
+                    {edge.dialer && (
+                      <path
+                        className="fleet-edge fleet-edge-tcp"
+                        data-tcp-src={src.host.id}
+                        data-tcp-dst={dst.host.id}
+                        d={edge.dialer === 'parent'
+                          ? edgePath(parent.x + shift, parentY, child.x + shift, childY)
+                          : edgePath(child.x + shift, childY, parent.x + shift, parentY)}
+                        markerEnd="url(#fleet-tcp-arrow)"
+                      >
+                        <title>{`${hostName(src.host)} → ${hostName(dst.host)} (TCP source → destination)`}</title>
+                      </path>
+                    )}
+                  </g>
                 );
               })}
             </g>
@@ -259,10 +326,55 @@ export function FleetView() {
                   <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx="8" />
                   <g clipPath={`url(#fleet-node-content-${index})`}>
                     <circle cx="15" cy="17" r="4" />
-                    <text className="fleet-name" x="26" y="21">{node.host.name ?? node.host.id}</text>
+                    {editing?.hostId === node.host.id ? (
+                      <foreignObject x="22" y="7" width={NODE_WIDTH - 34} height="20">
+                        <input
+                          className="fleet-name-input"
+                          aria-label={`Display name for ${hostName(node.host)}`}
+                          autoFocus
+                          value={editing.name}
+                          maxLength={120}
+                          placeholder="Reported name"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onChange={(event) => setEditing({ hostId: node.host.id, name: event.target.value })}
+                          onBlur={() => void commitRename()}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === 'Enter') void commitRename();
+                            if (event.key === 'Escape') setEditing(null);
+                          }}
+                        />
+                      </foreignObject>
+                    ) : (
+                      <text
+                        className="fleet-name"
+                        x="26"
+                        y="21"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onDoubleClick={() => setEditing({ hostId: node.host.id, name: node.host.name ?? '' })}
+                      >{hostName(node.host)}</text>
+                    )}
                     <text className="fleet-version" x="12" y="42">{version(node.host)}</text>
                     <text className="fleet-status" x="12" y="57">{statusLabel(node.host)}{accessLabel(node.host)}</text>
                   </g>
+                  {editing?.hostId !== node.host.id && (
+                    <text
+                      className="fleet-edit"
+                      x={NODE_WIDTH - 20}
+                      y="21"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Rename ${hostName(node.host)}`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={() => setEditing({ hostId: node.host.id, name: node.host.name ?? '' })}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEditing({ hostId: node.host.id, name: node.host.name ?? '' });
+                      }}
+                    >✎</text>
+                  )}
                 </g>
               ))}
             </g>

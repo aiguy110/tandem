@@ -174,6 +174,9 @@ export interface FederationHost {
   // What this Tandem may do on the host under that host's access policy.
   // Absent from daemons predating federation access control (full access).
   access?: 'none' | 'view' | 'operate' | 'admin';
+  // Which end of the link to parentId opened the TCP connection: the child
+  // (the usual --parent dial) or the parent (adoption). Absent when unknown.
+  dialer?: 'child' | 'parent';
 }
 
 export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';
@@ -496,6 +499,8 @@ export type ClientMsg =
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
   | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
+  // Sets this daemon's display name for a host; "" restores the reported name.
+  | { t: 'rename_host'; hostId: string; name: string; corrId?: string }
   | { t: 'reorder_session'; sessionId: string; targetSessionId: string; after: boolean; corrId?: string }
   | { t: 'delete_profile'; id: string; project?: string; corrId?: string }
   | { t: 'get_close_preview'; sessionId: string; corrId?: string }

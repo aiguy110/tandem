@@ -64,7 +64,7 @@ func TestParentAdoptsChildWithJoinTokenAndReconnectsWithoutIt(t *testing.T) {
 
 	eventuallyTest(t, "adopted child connected", func() bool { return connectedHost(parent) != nil })
 	host := connectedHost(parent)
-	if host.Name != "container" || host.Endpoint != server.URL || len(host.Snapshot) == 0 {
+	if host.Name != "container" || host.Endpoint != server.URL || len(host.Snapshot) == 0 || host.Dialer != DialerParent {
 		t.Fatalf("adopted host = %#v", host)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

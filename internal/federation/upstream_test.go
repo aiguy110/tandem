@@ -222,7 +222,7 @@ func TestChildControlsParentAndSiblingWithinPolicy(t *testing.T) {
 	if rootHost.Access != "operate" || betaHost.Access != "view" {
 		t.Fatalf("access root=%q beta=%q", rootHost.Access, betaHost.Access)
 	}
-	if rootHost.NodeID != f.rootID || betaHost.ParentID != rootHost.ID || f.alpha.LocalHost().ParentID != rootHost.ID {
+	if rootHost.NodeID != f.rootID || betaHost.ParentID != rootHost.ID || f.alpha.LocalHost().ParentID != rootHost.ID || f.alpha.LocalHost().Dialer != DialerChild || betaHost.Dialer != DialerChild {
 		t.Fatalf("topology: root=%#v beta=%#v local parent=%q", rootHost, betaHost, f.alpha.LocalHost().ParentID)
 	}
 	if !strings.Contains(string(rootHost.Snapshot), "root-agent") || !strings.Contains(string(betaHost.Snapshot), "beta-agent") {

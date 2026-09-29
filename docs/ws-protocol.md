@@ -80,7 +80,12 @@ A host reached through this daemon's parent (the parent itself, its other branch
 anything above it) carries `upstream: true`; the local host's `parentId` then names the
 parent. Each host may carry `access` (`none`/`view`/`operate`/`admin`) — what this daemon
 may do there under that host's policy. A command the target's policy denies returns an
-ordinary error `ack`.
+ordinary error `ack`. A host with a `parentId` may carry `dialer` (`child`/`parent`):
+which end of that link opened the TCP connection (`parent` means adoption).
+
+`{ t: 'rename_host', hostId, name }` sets this daemon's display name for a host (`local`
+for itself); `""` restores the reported name. The name is a local view preference, never
+relayed to the host or advertised to peers; every browser receives the updated `hosts`.
 
 Child registration is a daemon-to-daemon protocol, not browser bearer-token
 authentication. First contact remains pending until the parent accepts its system
