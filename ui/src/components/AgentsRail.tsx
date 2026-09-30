@@ -77,6 +77,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   // it was released at, so sliding it would mean snapping it back first.
   const rowNodes = useRef(new Map<string, HTMLDivElement>());
   const rowTops = useRef<Map<string, number> | null>(null);
+  const pendingRemoval = useRef<{ id: string; tops: Map<string, number> } | null>(null);
   const registerRow = (id: string) => (node: HTMLDivElement | null) => {
     if (node) rowNodes.current.set(id, node);
     else rowNodes.current.delete(id);
@@ -88,12 +89,26 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
     }
     rowTops.current = tops;
   };
+  const captureRemovalTops = (removedId: string) => {
+    pendingRemoval.current = {
+      id: removedId,
+      tops: new Map([...rowNodes.current].map(([id, node]) => [id, node.getBoundingClientRect().top])),
+    };
+  };
   // Layout, not paint: the rows have to be displaced before the browser has a
   // chance to show them in their new places. Runs after every render but only
-  // does anything when a drop asked for it.
+  // does anything when a drop or completed deletion asked for it.
   useLayoutEffect(() => {
-    const tops = rowTops.current;
+    let tops = rowTops.current;
     rowTops.current = null;
+    // Closing a session is asynchronous, so its snapshot cannot use the
+    // one-render handoff used by reorder. Retain it until the target row really
+    // disappears, then FLIP every surviving row into its new position.
+    const removal = pendingRemoval.current;
+    if (!tops && removal && !rowNodes.current.has(removal.id)) {
+      tops = removal.tops;
+      pendingRemoval.current = null;
+    }
     if (!tops) return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     for (const [id, node] of rowNodes.current) {
@@ -130,6 +145,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
       // A shared worktree always warrants the dialog: the user needs to be told
       // the checkout is staying behind, and who is still in it.
       if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged && !preview.cohabitants?.length) {
+        captureRemovalTops(id);
         const result = await closeAgent(id, false, true);
         if (result.error?.startsWith('submodules_block_worktree_removal')) {
           setDeleteWorktree(true);
@@ -143,7 +159,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           setDeleteWorktree(true);
           setDeinitSubmodules(false);
           setConfirmation({ id, preview, forceReason: result.error.replace(/^orphaned_worktree:\s*/, '') });
-        } else if (result.error) setCloseError(result.error);
+        } else if (result.error) {
+          pendingRemoval.current = null;
+          setCloseError(result.error);
+        }
         return;
       }
       setDeleteWorktree(preview.kind === 'worktree');
@@ -403,11 +422,15 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               <button
                 className="btn danger"
                 onClick={async () => {
+                  captureRemovalTops(confirmation.id);
                   const result = await closeAgent(confirmation.id, deleteWorktree, deleteWorktree, deinitSubmodules);
                   if (result.error?.startsWith('submodules_block_worktree_removal')) {
                     setDeinitSubmodules(true);
                     setCloseError('Submodule cleanup is required before this worktree can be removed.');
-                  } else if (result.error) setCloseError(result.error);
+                  } else if (result.error) {
+                    pendingRemoval.current = null;
+                    setCloseError(result.error);
+                  }
                   else setConfirmation(null);
                 }}
               >
@@ -589,7 +612,6 @@ function Row({
   const [actionError, setActionError] = useState('');
   const [restartingHarness, setRestartingHarness] = useState(false);
   const [forking, setForking] = useState(false);
-  const [mouseHovered, setMouseHovered] = useState(false);
   const [pendingContextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingDetails, setDetails] = useState<{ x: number; y: number } | null>(null);
   const { rendered: contextMenu, closing: menuClosing } = useValuePresence(pendingContextMenu);
@@ -634,9 +656,11 @@ function Row({
     setEditing(false);
     setRenameError('');
   };
-  // Hover is the trigger on desktop; touch devices have no hover, so keep
-  // showing actions on the active (selected) row there instead.
-  const showActions = mouseHovered || (active && usesSoftKeyboard());
+  // Touch devices have no hover, so keep actions visible on the selected row.
+  // Mouse hover itself is CSS-driven: when deletion moves a different row
+  // under a stationary pointer, :hover is recomputed without needing a new
+  // pointerenter event on that row's React component.
+  const showTouchActions = active && usesSoftKeyboard();
   const beginRename = () => {
     setName(agent.name);
     setRenameError('');
@@ -765,10 +789,6 @@ function Row({
         if (Date.now() < suppressContextMenuUntil.current) return;
         openContextMenu({ x: event.clientX, y: event.clientY });
       }}
-      onPointerEnter={(event) => {
-        if (event.pointerType === 'mouse') setMouseHovered(true);
-      }}
-      onPointerLeave={() => setMouseHovered(false)}
     >
       <span className={`dot ${agent.status}`} title={agent.status} />
       <div style={{ minWidth: 0 }}>
@@ -819,7 +839,7 @@ function Row({
           </span>
         </div>
       </div>
-      {showActions && <div className="session-actions">
+      <div className={`session-actions${showTouchActions ? ' touch-visible' : ''}`}>
         <button
           className="rename-btn"
           title="Rename session"
@@ -841,7 +861,7 @@ function Row({
         >
           🗑
         </button>
-      </div>}
+      </div>
       {contextMenu && (
         <div
           className={`session-context-menu${menuClosing ? ' closing' : ''}`}
