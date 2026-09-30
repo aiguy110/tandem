@@ -107,7 +107,8 @@ export type SessionEvent =
   | { kind: 'prompt_started'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'audio_preference'; enabled: boolean }
-  | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number };
+  | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number }
+  | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
 // SessionEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal
@@ -472,6 +473,7 @@ export type ClientMsg =
   | { t: 'aside'; sessionId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; sessionId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; sessionId: string; corrId?: string }
+  | { t: 'set_rate_limit_auto_continue'; sessionId: string; enabled: boolean; corrId?: string }
   | { t: 'add_annotation'; sessionId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }
   | { t: 'update_annotation'; sessionId: string; id: string; comment: string; corrId?: string }
   | { t: 'delete_annotation'; sessionId: string; id: string; corrId?: string }

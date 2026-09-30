@@ -35,6 +35,7 @@ type Item =
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
+  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
@@ -46,6 +47,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const pendingIds = new Set(pending.map((p) => p.reqId));
   const asides = new Map<string, Extract<Item, { kind: 'aside' }>>();
   const compactions = new Map<string, Extract<Item, { kind: 'compaction' }>>();
+  const rateLimits = new Map<string, Extract<Item, { kind: 'rate-limit' }>>();
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
@@ -158,6 +160,19 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       case 'error':
         items.push({ kind: 'error', key: `err${seq}`, message: ev.message });
         break;
+      case 'rate_limit': {
+        const existing = rateLimits.get(ev.id);
+        if (existing) {
+          existing.enabled = ev.enabled;
+          existing.state = ev.state;
+          existing.error = ev.error;
+        } else {
+          const item: Extract<Item, { kind: 'rate-limit' }> = { kind: 'rate-limit', key: `limit-${ev.id}`, id: ev.id, harness: ev.harness, resetAt: ev.resetAt, enabled: ev.enabled, state: ev.state, error: ev.error };
+          rateLimits.set(ev.id, item);
+          items.push(item);
+        }
+        break;
+      }
       case 'aside_started': {
         const item: Extract<Item, { kind: 'aside' }> = { kind: 'aside', key: `aside-${ev.asideId}`, id: ev.asideId, question: ev.question, answer: '', thought: '', complete: false };
         asides.set(ev.asideId, item);
@@ -449,6 +464,7 @@ function CommentPopover({ draft, autoFocus, onChange, onCancel, onAdd }: {
 export function TranscriptPane() {
   const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined)) as SessionView | undefined;
   const respond = useStore((s) => s.respond);
+  const setRateLimitAutoContinue = useStore((s) => s.setRateLimitAutoContinue);
   const forkSession = useStore((s) => s.forkSession);
   const annotations = useStore((s) => (agent ? s.annotations[agent.id] : undefined)) ?? [];
   const addAnnotation = useStore((s) => s.addAnnotation);
@@ -742,6 +758,7 @@ export function TranscriptPane() {
                 commands={agent.commands}
                 quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
                 onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
+                onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
                 onJumpToQuote={jumpToQuote}
                 onJumpToLinkedBlock={jumpToLinkedBlock}
                 onFork={it.kind === 'user' && agent.adapter === 'acp' && agent.asideSupport === true
@@ -974,6 +991,7 @@ function Row({
   renderingAudio,
   quoteLinks,
   onRespond,
+  onRateLimitToggle,
   onJumpToQuote,
   onJumpToLinkedBlock,
   onFork,
@@ -987,6 +1005,7 @@ function Row({
   renderingAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
+  onRateLimitToggle: (enabled: boolean) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
   // Offered on user messages when the agent can fork: with no argument it
@@ -1131,6 +1150,8 @@ function Row({
       );
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
+    case 'rate-limit':
+      return <RateLimitWidget item={item} onToggle={onRateLimitToggle} />;
     case 'aside':
       return (
         <section className="aside-card" aria-label="Context-isolated aside">
@@ -1143,6 +1164,33 @@ function Row({
         </section>
       );
   }
+}
+
+function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (item.state !== 'pending') return;
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [item.state]);
+  const remaining = Math.max(0, item.resetAt - now);
+  const minutes = Math.ceil(remaining / 60_000);
+  const resetLabel = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(item.resetAt));
+  return (
+    <section className={`rate-limit-card ${item.state}`} aria-label="Usage limit">
+      <div className="rate-limit-icon" aria-hidden="true">◷</div>
+      <div className="rate-limit-copy">
+        <strong>{item.state === 'sent' ? 'Continuation sent' : item.state === 'failed' ? 'Could not continue automatically' : 'Usage limit reached'}</strong>
+        <span>{item.state === 'pending' ? `Resets ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent “continue” to the agent.' : '')}</span>
+      </div>
+      {item.state === 'pending' && (
+        <label className="rate-limit-toggle">
+          <span>Auto-continue</span>
+          <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked)} />
+        </label>
+      )}
+    </section>
+  );
 }
 
 // Rows are pure presentation: no media element, no local playback state.

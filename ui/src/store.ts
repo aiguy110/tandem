@@ -359,6 +359,7 @@ interface StoreState {
   aside: (sessionId: string, question: string) => Promise<AckResult>;
   removeQueuedPrompt: (sessionId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (sessionId: string) => Promise<AckResult>;
+  setRateLimitAutoContinue: (sessionId: string, enabled: boolean) => Promise<AckResult>;
   interruptAndClearQueue: (sessionId: string) => Promise<AckResult>;
   addAnnotation: (sessionId: string, anchor: { seq: number; role: string; quote: string }, comment: string) => Promise<AckResult>;
   updateAnnotation: (sessionId: string, id: string, comment: string) => Promise<AckResult>;
@@ -1659,6 +1660,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'clear_prompt_queue', sessionId, corrId });
+      }),
+    setRateLimitAutoContinue: (sessionId, enabled) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'set_rate_limit_auto_continue', sessionId, enabled, corrId });
       }),
     interruptAndClearQueue: (sessionId) =>
       new Promise<AckResult>((resolve) => {

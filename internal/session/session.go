@@ -72,6 +72,10 @@ type Session struct {
 	usageMu     sync.Mutex
 	lastUsage   usageReport
 	usageSeeded bool
+
+	rateLimitMu    sync.Mutex
+	rateLimit      rateLimitState
+	rateLimitTimer *time.Timer
 }
 
 // usageReport is the daemon's view of a context-usage event: the numbers the
@@ -140,6 +144,7 @@ func NewWithStatus(id, name string, spec agentadapter.Spec, adapter agentadapter
 	}
 	s.adapterEpoch = 1
 	go s.pump(adapter, 1, nil)
+	s.restoreRateLimit()
 	return s, nil
 }
 
@@ -556,6 +561,7 @@ func (s *Session) runPromptQueue() {
 		if err != nil && !errors.Is(err, errAdapterReplaced) {
 			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": err.Error(), "promptId": prompt.ID})
 			s.emit(eventlog.Event{Kind: "error", Payload: payload})
+			s.detectRateLimit(err.Error())
 		}
 		prompt.done <- promptResult{stopReason: stopReason, err: err}
 		close(prompt.done)
@@ -900,6 +906,12 @@ func (s *Session) OnEvent(cb func(eventlog.LoggedEvent)) func() {
 }
 func (s *Session) Dispose(ctx context.Context) error {
 	s.disposeOnce.Do(func() {
+		s.rateLimitMu.Lock()
+		if s.rateLimitTimer != nil {
+			s.rateLimitTimer.Stop()
+			s.rateLimitTimer = nil
+		}
+		s.rateLimitMu.Unlock()
 		s.CloseUserShell()
 		s.ClearPromptQueue()
 		s.mu.Lock()
