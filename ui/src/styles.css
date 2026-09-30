@@ -1294,6 +1294,14 @@ body.dock-resizing .app { transition: none; }
    that appear after the transcript is already on screen get the enter
    animation, so switching agents does not replay the whole history. */
 .ev-enter { animation: ev-in var(--motion-in) var(--ease-out) both; }
+.rate-limit-card { display: flex; align-items: center; gap: 12px; margin: 8px 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warn, #e2a93b) 55%, var(--border)); border-radius: var(--r-md); background: color-mix(in srgb, var(--warn, #e2a93b) 8%, var(--surface)); }
+.rate-limit-icon { color: var(--warn, #e2a93b); font-size: 22px; }
+.rate-limit-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.rate-limit-copy span { color: var(--text-dim); font-size: var(--fs-sm); }
+.rate-limit-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; }
+.rate-limit-toggle input { width: 34px; height: 18px; accent-color: var(--agent); cursor: pointer; }
+.rate-limit-card.sent { border-color: color-mix(in srgb, var(--agent) 55%, var(--border)); background: var(--agent-soft); }
+.rate-limit-card.failed { border-color: var(--err); }
 .is-updated-a { animation: ev-updated .825s ease-out; }
 .is-updated-b { animation: ev-updated .825s ease-out; }
 

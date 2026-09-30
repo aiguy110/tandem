@@ -70,6 +70,24 @@ afterEach(() => {
   delete (navigator as unknown as Record<string, unknown>).mediaSession;
 });
 
+describe('TranscriptPane rate-limit widget', () => {
+  it('renders daemon state and sends toggle changes back to the daemon', () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: false, state: 'pending' } }];
+    const setRateLimitAutoContinue = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      setRateLimitAutoContinue,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getByText('Usage limit reached')).toBeTruthy();
+    fireEvent.click(view.getByRole('switch'));
+    expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
+  });
+});
+
 describe('TranscriptPane voice rendering', () => {
   it('shows daemon-reported clip duration before playback', async () => {
     const ready = agent();

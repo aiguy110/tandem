@@ -1080,6 +1080,16 @@ func (c *connection) handle(m clientMessage) {
 		}
 		count := sess.ClearPromptQueue()
 		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "cleared": count}, m.CorrID))
+	case "set_rate_limit_auto_continue":
+		sess, ok := c.requireSession(m)
+		if !ok {
+			return
+		}
+		if err := sess.SetRateLimitAutoContinue(m.Enabled); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, sess.ID)
 	case "interrupt_and_clear_queue":
 		sess, ok := c.requireSession(m)
 		if !ok {
