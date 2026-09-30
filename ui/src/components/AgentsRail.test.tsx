@@ -273,4 +273,39 @@ describe('SessionsRail drop animation', () => {
     expect(offsets).toEqual(['translateY(-40px)', 'translateY(-40px)']);
     for (const [frames] of animate.mock.calls) expect((frames as Keyframe[])[1].transform).toBe('translateY(0)');
   });
+
+  it('slides cards into a deleted row and keeps hover actions mounted', async () => {
+    const animate = vi.fn();
+    Object.defineProperty(Element.prototype, 'animate', { configurable: true, writable: true, value: animate });
+    const sessions = ['a', 'b', 'c'].map((suffix) => ({
+      ...session(), id: suffix, name: suffix, hostId: LOCAL_HOST_ID, hostName: 'This host',
+    }));
+    const closeAgent = vi.fn(async (id: string) => {
+      const state = useStore.getState();
+      const remaining = { ...state.sessions };
+      delete remaining[id];
+      useStore.setState({ sessions: remaining, order: state.order.filter((candidate) => candidate !== id) });
+      return {};
+    });
+    useStore.setState({
+      sessions: Object.fromEntries(sessions.map((s) => [s.id, s])),
+      order: ['a', 'b', 'c'],
+      hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }],
+      getClosePreview: vi.fn().mockResolvedValue({ kind: 'worktree' }),
+      closeAgent,
+    });
+    const view = render(<SessionsRail />);
+    layOutRows(view);
+
+    // Actions remain in the DOM and CSS owns their hover visibility. That lets
+    // :hover transfer to c when it animates under the stationary pointer.
+    expect(view.container.querySelectorAll('.session-actions')).toHaveLength(3);
+    fireEvent.click(view.container.querySelectorAll<HTMLButtonElement>('.delete-btn')[1]!);
+
+    await waitFor(() => expect(closeAgent).toHaveBeenCalledWith('b', false, true));
+    await waitFor(() => expect(view.container.querySelectorAll('.session-row')).toHaveLength(2));
+    expect(view.container.querySelectorAll('.session-actions')).toHaveLength(2);
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect((animate.mock.calls[0]![0] as Keyframe[])[0].transform).toBe('translateY(40px)');
+  });
 });
