@@ -1085,6 +1085,12 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 		}
 	}
 	t := &tunnel{conn: conn}
+	// The welcome carries the child's ancestor chain, which it needs to
+	// authorize this daemon's commands. Send it before the tunnel is
+	// registered so no concurrent Call can put a command ahead of it.
+	// A host predating the welcome message ignores unknown tunnel types, so
+	// this is safe to send unconditionally.
+	_ = t.send(s.welcome())
 	s.mu.Lock()
 	old := s.tunnels[hello.HostID]
 	s.tunnels[hello.HostID] = t
@@ -1101,9 +1107,6 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 	_ = s.store.UpsertFederationChild(*peer)
 	upstreamCapable := hasCapability(hello.Capabilities, upstreamCapability)
 	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion, "upstream_capable", upstreamCapable, "access_rules", len(hello.Rules))
-	// A host predating the welcome message ignores unknown tunnel types, so
-	// this is safe to send unconditionally.
-	_ = t.send(s.welcome())
 	s.checkProtocol(*peer)
 	if upstreamCapable {
 		s.startChildLink(hello.HostID, t)
