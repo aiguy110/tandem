@@ -96,3 +96,17 @@ func TestToolCallPostsToDaemonWithSessionAndToken(t *testing.T) {
 		t.Fatalf("unknown tool = %+v", byID[3])
 	}
 }
+
+func TestToolSchemasDescribeAgentReferences(t *testing.T) {
+	for _, tl := range toolDeclarations() {
+		tool := tl.(map[string]any)
+		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		to, ok := props["to"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if d := to["description"].(string); !strings.Contains(d, "@agent:bifrost/api-worker") {
+			t.Errorf("%s: to description = %q", tool["name"], d)
+		}
+	}
+}

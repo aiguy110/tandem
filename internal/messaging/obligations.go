@@ -89,7 +89,7 @@ func (s *Service) remindAgent(sess *session.Session, obs []store.AgentMsgObligat
 		b.WriteString("these requests from other agents:\n")
 	}
 	for _, ob := range obs {
-		fmt.Fprintf(&b, "- request %s from %s\n", ob.RequestID, describeAddr(Address{Host: ob.AskerHost, Agent: ob.AskerAgent, Name: ob.AskerName}))
+		fmt.Fprintf(&b, "- request %s from %s\n", ob.RequestID, s.Ref(Address{Host: ob.AskerHost, Agent: ob.AskerAgent, Name: ob.AskerName}))
 	}
 	b.WriteString("Call messages_reply(requestId, body) or messages_decline(requestId, reason) now. If you do not, Tandem will decline on your behalf.")
 	env := Envelope{
@@ -98,7 +98,7 @@ func (s *Service) remindAgent(sess *session.Session, obs []store.AgentMsgObligat
 		System: &SystemInfo{Event: EventReplyReminder},
 	}
 	log := slog.With("session_id", sess.ID, "requests", len(obs))
-	blocks := []agentadapter.PromptBlock{{Type: "text", Text: promptText(env)}}
+	blocks := []agentadapter.PromptBlock{{Type: "text", Text: s.promptText(env)}}
 	receipt, err := sess.EnqueuePromptWithEvent(context.Background(), blocks, func(d string) eventlog.Event {
 		return agentMessageEvent("in", env, d, "")
 	})
@@ -202,7 +202,7 @@ func (s *Service) expireRequests(ctx context.Context, now time.Time) {
 			}
 		}
 		peer := Address{Host: r.ToHost, Agent: r.ToAgent, Name: r.ToName}
-		body := fmt.Sprintf("No answer from %s to request %s within %s.", describeAddr(peer), r.RequestID, (time.Duration(r.TimeoutSec) * time.Second).String())
+		body := fmt.Sprintf("No answer from %s to request %s within %s.", s.Ref(peer), r.RequestID, (time.Duration(r.TimeoutSec) * time.Second).String())
 		s.deliverSystem(r.Session, EventTimeout, body, r.RequestID, r.ThreadID, peer)
 	}
 }

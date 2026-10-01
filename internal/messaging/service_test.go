@@ -31,7 +31,7 @@ func TestLocalAskReplyRoundTrip(t *testing.T) {
 	}
 	eventually(t, "bob to receive the ask", func() bool { return len(bobAd.promptTexts()) == 1 })
 	prompt := bobAd.promptTexts()[0]
-	for _, want := range []string{`kind="ask"`, `request-id="` + res.RequestID + `"`, "@alice (hostA~alice)", "what is 6x7?", "untrusted", "messages_reply"} {
+	for _, want := range []string{`kind="ask"`, `request-id="` + res.RequestID + `"`, `from="@agent:hostA/alice"`, `from-address="hostA~alice"`, "what is 6x7?", "untrusted", "messages_reply"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
@@ -673,7 +673,7 @@ func TestLinkRequestApprovalAndDenial(t *testing.T) {
 		approval = pending[0].ReqID
 		return true
 	})
-	if got := bob.PendingApprovals(); len(got) != 1 || !strings.Contains(got[0].Title, "@alice") || !strings.Contains(got[0].Title, "need to coordinate migrations") {
+	if got := bob.PendingApprovals(); len(got) != 1 || !strings.Contains(got[0].Title, "@agent:HOSTA/alice") || !strings.Contains(got[0].Title, "need to coordinate migrations") {
 		t.Fatalf("approvals = %+v", got)
 	}
 	// Until approved, messaging is still denied.
@@ -817,7 +817,7 @@ func TestDirectoryListingCardsAndNameResolution(t *testing.T) {
 
 	// A bare name shared by two agents is ambiguous and lists candidates.
 	_, err = a.svc.Send(ctx, "alice", "worker", "hi", "")
-	if rejectionCode(err) != ErrInvalid || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "hostA~shared1") || !strings.Contains(err.Error(), "hostB~shared2") {
+	if rejectionCode(err) != ErrInvalid || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "@agent:hostA/worker") || !strings.Contains(err.Error(), "@agent:HOSTB/worker") {
 		t.Fatalf("ambiguous: %v", err)
 	}
 	// name@host picks one; the host may be given by ID or display name.

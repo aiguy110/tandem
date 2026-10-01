@@ -61,7 +61,7 @@ type Options struct {
 	// LinkRequestWait is how long messages_request_link blocks for the human's
 	// decision before answering "pending" (default DefaultLinkRequestWait).
 	LinkRequestWait time.Duration
-	// OnSummaryChange is called (asynchronously) when waitingOn/openAsks of
+	// OnSummaryChange is called (asynchronously) when waitingOn/openAsks/unlisted of
 	// some agent changed, so browsers should be sent fresh summaries.
 	OnSummaryChange func()
 	// OnLinksChanged is called when a session's links, listing or card
@@ -100,9 +100,10 @@ type Service struct {
 	dirMu    sync.Mutex
 	dirCache map[string]dirCacheEntry
 
-	sumMu   sync.RWMutex
-	waiting map[string][]WaitingOn
-	asks    map[string]int
+	sumMu    sync.RWMutex
+	waiting  map[string][]WaitingOn
+	asks     map[string]int
+	unlisted map[string]bool
 
 	lastOutbox atomic.Int64
 	lastPrune  atomic.Int64
@@ -136,7 +137,7 @@ func New(o Options) (*Service, error) {
 	s := &Service{
 		opts: o, st: o.Store, kick: make(chan struct{}, 1),
 		sessLock: map[string]*sync.Mutex{}, watched: map[string]watchedSession{},
-		dirCache: map[string]dirCacheEntry{}, pull: newPullState(), linkWaits: map[string]map[*linkWaiter]struct{}{}, waiting: map[string][]WaitingOn{}, asks: map[string]int{},
+		dirCache: map[string]dirCacheEntry{}, pull: newPullState(), linkWaits: map[string]map[*linkWaiter]struct{}{}, waiting: map[string][]WaitingOn{}, asks: map[string]int{}, unlisted: map[string]bool{},
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	paused, err := s.st.AgentMsgMeta(metaPausedKey)
@@ -329,6 +330,15 @@ func (s *Service) SummaryState(sessionID string) ([]WaitingOn, int) {
 	return append([]WaitingOn(nil), s.waiting[sessionID]...), s.asks[sessionID]
 }
 
+// Unlisted reports whether an agent is hidden from the messaging directory
+// (the Inspector's listed toggle); such agents are not offered to browsers as
+// message targets.
+func (s *Service) Unlisted(sessionID string) bool {
+	s.sumMu.RLock()
+	defer s.sumMu.RUnlock()
+	return s.unlisted[sessionID]
+}
+
 // refreshSummary rebuilds the in-memory summary state from the store.
 func (s *Service) refreshSummary() error {
 	reqs, err := s.st.OpenAgentMsgRequests()
@@ -350,8 +360,18 @@ func (s *Service) refreshSummary() error {
 	for _, o := range obs {
 		asks[o.Session]++
 	}
+	settings, err := s.st.AllAgentMsgSettings()
+	if err != nil {
+		return fmt.Errorf("messaging: load directory settings: %w", err)
+	}
+	unlisted := map[string]bool{}
+	for id, cfg := range settings {
+		if !cfg.Listed {
+			unlisted[id] = true
+		}
+	}
 	s.sumMu.Lock()
-	s.waiting, s.asks = waiting, asks
+	s.waiting, s.asks, s.unlisted = waiting, asks, unlisted
 	s.sumMu.Unlock()
 	return nil
 }

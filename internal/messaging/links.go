@@ -114,6 +114,8 @@ func (s *Service) SetListed(sessionID string, listed bool) error {
 	slog.Info("agent directory listing set", "session_id", sessionID, "listed", listed)
 	s.invalidateDirectory()
 	s.linksChanged(sessionID)
+	// Summaries carry "unlisted" so browsers offer only listed agents.
+	s.summaryChanged()
 	return nil
 }
 
@@ -132,12 +134,12 @@ type linkOutcome struct {
 	env      Envelope
 }
 
-func (o linkOutcome) result() LinkRequestResult {
+func (s *Service) outcomeResult(o linkOutcome) LinkRequestResult {
 	status := "denied"
 	if o.approved {
 		status = "approved"
 	}
-	return LinkRequestResult{Status: status, Note: o.env.Body}
+	return LinkRequestResult{Status: status, Note: o.env.Body, Ref: s.Ref(o.env.From)}
 }
 
 // linkWaiter is one messages_request_link call blocked on a decision.
@@ -207,7 +209,7 @@ func (s *Service) RequestLinkWait(ctx context.Context, sessionID, to, reason str
 	select {
 	case o := <-w.ch:
 		log.Info("agent link request decided while blocked", "approved", o.approved)
-		return o.result(), nil
+		return s.outcomeResult(o), nil
 	case <-timer.C:
 	case <-s.ctx.Done():
 	case <-ctx.Done():
@@ -230,7 +232,7 @@ func (s *Service) RequestLinkWait(ctx context.Context, sessionID, to, reason str
 	s.removeLinkWaiter(w)
 	select {
 	case o := <-w.ch:
-		return o.result(), nil
+		return s.outcomeResult(o), nil
 	default:
 	}
 	log.Info("agent link request still pending after the wait", "wait", s.opts.LinkRequestWait.String())
@@ -275,7 +277,7 @@ func (s *Service) requestLink(ctx context.Context, sessionID, to, reason string,
 			}
 		}
 		s.kickPull(false)
-		return LinkRequestResult{Status: StatusPending}, nil
+		return LinkRequestResult{Status: StatusPending, Ref: s.Ref(dest)}, nil
 	}
 	if w != nil {
 		// Registered before the request is sent, so an immediate decision
@@ -297,7 +299,7 @@ func (s *Service) requestLink(ctx context.Context, sessionID, to, reason string,
 	// The decision may come back by push or, when the other host cannot reach
 	// this one, only by pull: start looking now.
 	s.kickPull(false)
-	return LinkRequestResult{Status: StatusPending}, nil
+	return LinkRequestResult{Status: StatusPending, Ref: s.Ref(dest)}, nil
 }
 
 func (s *Service) sendLinkRequest(ctx context.Context, from, to Address, reason string) LinkRequestResult {
@@ -426,7 +428,7 @@ func (s *Service) resumeLinkApprovals() {
 func (s *Service) awaitLinkApproval(sess *session.Session, row store.AgentMsgLinkRequest) {
 	log := slog.With("link_request_id", row.ID, "session_id", sess.ID, "from", row.PeerHost+"~"+row.PeerAgent)
 	peer := Address{Host: row.PeerHost, Agent: row.PeerAgent, Name: row.PeerName}
-	title := fmt.Sprintf("%s wants to message this agent: %s", describePeer(peer, s.hostLabel(row.PeerHost)), row.Reason)
+	title := fmt.Sprintf("%s wants to message this agent: %s", s.Ref(peer), row.Reason)
 	ctx, cancel := context.WithTimeout(s.ctx, linkRequestMaxAge)
 	defer cancel()
 	choice, err := sess.RequestPermission(ctx, "msglink-"+row.ID, title, []agentadapter.ApprovalOption{
@@ -484,11 +486,13 @@ func (s *Service) linkOutcomeEnvelope(from, to Address, approved bool, note stri
 	event, body := EventLinkDenied, note
 	if approved {
 		event = EventLinkApproved
-		body = fmt.Sprintf("%s approved your link request. You can now message it with messages_send or messages_ask.", describeAddr(from))
+		// The sender is named by the receiving host (the prompt's from
+		// reference), not here: host names are viewer-relative.
+		body = "Your link request was approved. You can now message this agent with messages_send or messages_ask."
 	} else if body == "" {
 		body = "The link request was denied."
 	} else {
-		body = fmt.Sprintf("%s did not grant your link request: %s", describeAddr(from), note)
+		body = "Your link request was not granted: " + note
 	}
 	return Envelope{
 		ID: newID("msg_"), ThreadID: newID("thr_"), Kind: KindSystem, From: from, To: to, Body: body,
@@ -512,31 +516,6 @@ func (s *Service) expireLinkRequests(now time.Time) {
 		}
 		slog.Info("agent link request expired", "link_request_id", row.ID, "session_id", row.Session, "peer", row.PeerHost+"~"+row.PeerAgent)
 		peer := Address{Host: row.PeerHost, Agent: row.PeerAgent, Name: row.PeerName}
-		s.deliverSystem(row.Session, EventLinkDenied, fmt.Sprintf("Your link request to %s got no answer within 24 hours.", describeAddr(peer)), "", "", peer)
+		s.deliverSystem(row.Session, EventLinkDenied, fmt.Sprintf("Your link request to %s got no answer within 24 hours.", s.Ref(peer)), "", "", peer)
 	}
-}
-
-// hostLabel is a host's display name when known, else its ID.
-func (s *Service) hostLabel(hostID string) string {
-	if hostID == s.selfID() {
-		return firstNonEmpty(s.opts.LocalName, hostID)
-	}
-	if h, ok := s.remoteHost(hostID); ok {
-		name := h.Name
-		if n, ok := s.opts.Federation.(federationHostNames); ok {
-			if custom := n.HostNames()[h.ID]; custom != "" {
-				name = custom
-			}
-		}
-		return firstNonEmpty(name, hostID)
-	}
-	return hostID
-}
-
-func describePeer(a Address, host string) string {
-	label := cleanLabel(a.Agent)
-	if a.Name != "" {
-		label = "@" + cleanLabel(a.Name)
-	}
-	return fmt.Sprintf("%s (%s)", label, cleanLabel(host))
 }

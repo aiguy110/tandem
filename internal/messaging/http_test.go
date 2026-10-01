@@ -44,7 +44,7 @@ func TestHTTPBridgeToolsEnforceAuthAndLinks(t *testing.T) {
 	}
 	h.link(h.addr("alice"), "bob")
 	code, out = postTool(t, h.svc, "tok", "ask", map[string]any{"sessionId": "alice", "to": "@bob", "body": "q?", "timeoutMinutes": 2})
-	if code != http.StatusOK || out["requestId"] == nil || out["status"] != "started" {
+	if code != http.StatusOK || out["requestId"] == nil || out["status"] != "started" || out["ref"] != "@agent:hostA/bob" {
 		t.Fatalf("ask = %d %v", code, out)
 	}
 	eventually(t, "bob prompt", func() bool { return len(bobAd.promptTexts()) == 1 })
@@ -53,7 +53,7 @@ func TestHTTPBridgeToolsEnforceAuthAndLinks(t *testing.T) {
 		t.Fatalf("reply = %d %v", code, out)
 	}
 	code, out = postTool(t, h.svc, "tok", "directory", map[string]any{"sessionId": "alice", "query": "bob"})
-	if agents, _ := out["agents"].([]any); code != http.StatusOK || len(agents) != 1 {
+	if agents, _ := out["agents"].([]any); code != http.StatusOK || len(agents) != 1 || agents[0].(map[string]any)["ref"] != "@agent:hostA/bob" {
 		t.Fatalf("directory = %d %v", code, out)
 	}
 	if code, _ = postTool(t, h.svc, "tok", "set_card", map[string]any{"sessionId": "alice", "card": "reviews PRs"}); code != http.StatusOK {

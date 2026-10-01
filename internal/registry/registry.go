@@ -168,6 +168,10 @@ type Summary struct {
 	// OpenAsks counts inbound asks it has not answered yet.
 	WaitingOn []messaging.WaitingOn `json:"waitingOn,omitempty"`
 	OpenAsks  int                   `json:"openAsks,omitempty"`
+	// Unlisted is true only when the agent is hidden from the messaging
+	// directory (set_agent_listed), so UIs offer only listed agents as
+	// message targets.
+	Unlisted bool `json:"unlisted,omitempty"`
 }
 
 // MessagingHooks is what the registry needs from agent messaging
@@ -177,6 +181,9 @@ type MessagingHooks interface {
 	// SummaryState returns a session's open outbound asks and its count of
 	// unanswered inbound asks.
 	SummaryState(sessionID string) ([]messaging.WaitingOn, int)
+	// Unlisted reports whether the agent is hidden from the messaging
+	// directory.
+	Unlisted(sessionID string) bool
 	// Watch is called for every session as it starts (including restores).
 	Watch(*session.Session)
 	// SessionClosed is called after a session is closed by a user, not when
@@ -572,6 +579,7 @@ func (r *Registry) summary(ctx context.Context, id, name string, spec agentadapt
 	summary := Summary{ID: id, Name: name, Agent: agent, Status: status, PendingApprovals: pendingApprovals, ControlMode: controlMode, Adapter: spec.Adapter, CanHandoff: canHandoff(spec)}
 	if m := r.messagingHooks(); m != nil {
 		summary.WaitingOn, summary.OpenAsks = m.SummaryState(id)
+		summary.Unlisted = m.Unlisted(id)
 	}
 	if p := spec.Profile; p != nil {
 		summary.Profile = &SummaryProfile{ID: p.ID, Model: p.Model, Effort: p.Effort, Permission: p.Permission, Snapshot: p.Snapshot}
@@ -1009,8 +1017,8 @@ const tandemSessionPreamble = "## Tandem session\n\n" +
 	"run through the `tandem-scripts` MCP; a human must approve new grants and schedules. For a user-requested " +
 	"repo-local skill, keep one canonical `skills/<name>/` directory with shared agent bridges. Start with " +
 	"`agent-docs/README.md` for concise guidance and links to deeper documentation. The `tandem-messages` MCP " +
-	"lets you message other agents over human-granted links: `messages_directory` discovers them and " +
-	"`messages_request_link` asks a human for access."
+	"lets you message other agents over human-granted links: `messages_directory` discovers them (refer to an " +
+	"agent as `@agent:host/name`, e.g. `@agent:bifrost/api-worker`) and `messages_request_link` asks a human for access."
 
 // firstPrompt prefixes the first real user turn with Tandem-specific guidance,
 // then combines a hand-off transcript with the task the user typed at spawn.

@@ -203,11 +203,11 @@ func tool(name, desc string, props map[string]any, required ...string) map[strin
 	return map[string]any{"name": name, "description": desc, "inputSchema": schema}
 }
 
-const toAddr = "Recipient: @name, name, name@<host-id-or-name>, or <host>~<agent>. An ambiguous name is an error listing the candidates."
+const toAddr = "Agent reference, e.g. @agent:bifrost/api-worker (from messages_directory)"
 
 func toolDeclarations() []any {
 	return []any{
-		tool(ToolDirectory, "List agents you can message, on this host and on federated hosts. Each entry shows whether you already hold a link (canMessage). Optionally filter with a query.",
+		tool(ToolDirectory, "List agents you can message, on this host and on federated hosts. Each entry has a ref (e.g. @agent:bifrost/api-worker): pass it as `to` to the other tools. It also shows whether you already hold a link (canMessage). Optionally filter with a query.",
 			map[string]any{"query": str("Case-insensitive text matched against name, purpose, repo, path and host.")}),
 		tool(ToolSend, "Send a one-way message to another agent over a human-granted link. Delivered into the agent's turn (or queued). Fails with no_link if you have no link; use messages_request_link.",
 			map[string]any{"to": str(toAddr), "body": str("Message text."), "threadId": str("Continue an existing thread (optional).")}, "to", "body"),

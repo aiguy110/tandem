@@ -6,9 +6,9 @@ import { createUnifiedPatch } from '../diff/textDiff';
 import type { AckResult, SessionView } from '../../store';
 import type { AgentAddress, AgentEnvelope, Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { storedToken } from '../../ws/client';
-import { addressHostLabel, addressLabel, findAgentByAddress } from '../../messaging';
+import { addressRef, agentHostLabel, agentRef, findAgentByAddress } from '../../messaging';
 import { renderMarkdown } from '../../markdown';
-import { fuzzyFilter } from '../../fuzzy';
+import { fuzzyFilter, fuzzyFilterFields } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
 import { PermissionRequestDetails } from '../PermissionRequest';
 import { usePresence, useUpdateFlash } from '../../transitions';
@@ -1230,8 +1230,11 @@ function Row({
 // the card for the same envelope.
 function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item, { kind: 'agent-message' }>; enterClass: string; onOpenPeer: (peer: AgentAddress, envelopeId: string) => void }) {
   const hosts = useStore((s) => s.hosts);
+  const sessions = useStore((s) => s.sessions);
   const { envelope, direction } = item;
   const peer = direction === 'in' ? envelope.from : envelope.to;
+  const peerSession = findAgentByAddress(sessions, hosts, peer);
+  const peerRef = peerSession ? agentRef(peerSession, hosts) : addressRef(hosts, peer);
   const kind = envelope.kind === 'system' && envelope.system?.event ? `system · ${envelope.system.event}` : envelope.kind;
   return (
     <section
@@ -1241,10 +1244,9 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
     >
       <header className="agent-msg-head">
         <span className="agent-msg-dir">{direction === 'in' ? '✉ from' : '→'}</span>
-        <button type="button" className="agent-msg-peer" title={`Open ${addressLabel(peer)}`} onClick={() => onOpenPeer(peer, envelope.id)}>
-          {addressLabel(peer)}
+        <button type="button" className="agent-msg-peer" title={`Open ${peerRef}`} onClick={() => onOpenPeer(peer, envelope.id)}>
+          {peerRef}
         </button>
-        <span className="agent-msg-host">· {addressHostLabel(hosts, peer)}</span>
         <span className="agent-msg-kind">{kind}</span>
         <span className={`agent-msg-status ${item.status}`}>{item.status}{item.error ? ` · ${item.error}` : ''}</span>
       </header>
@@ -1789,6 +1791,20 @@ export function findFileToken(text: string, caret: number): CompletionToken | nu
   return { start: i - 1, end: caret, query: text.slice(i, caret) };
 }
 
+// An agent mention is `@agent:<host>/<agent>`; the token is whatever has been
+// typed after `@agent:` so far. Its characters exclude ':' so it never
+// overlaps a file token.
+export function findAgentToken(text: string, caret: number): CompletionToken | null {
+  if (caret <= 0 || caret > text.length) return null;
+  let i = caret;
+  while (i > 0 && /[A-Za-z0-9._/-]/.test(text[i - 1])) i--;
+  const start = i - AGENT_MENTION_PREFIX.length;
+  if (start < 0 || text.slice(start, i) !== AGENT_MENTION_PREFIX || !isMentionBoundary(text, start)) return null;
+  return { start, end: caret, query: text.slice(i, caret) };
+}
+
+const AGENT_MENTION_PREFIX = '@agent:';
+
 function fileCompletionRequest(query: string): { dir: string; filter: string } | null {
   if (query.startsWith('/') || (query.startsWith('~') && query !== '~' && !query.startsWith('~/')) || (!query.startsWith('~/') && query !== '~' && (query.startsWith('../../') || query === '../..' || query.split('/').slice(1).some((segment) => segment === '..')))) return null;
   const slash = query.lastIndexOf('/');
@@ -1797,13 +1813,13 @@ function fileCompletionRequest(query: string): { dir: string; filter: string } |
     : { dir: query.slice(0, slash) || '.', filter: query.slice(slash + 1) };
 }
 
-type MentionSegment = string | { token: string; aside: boolean };
+type MentionSegment = string | { token: string; aside: boolean; agent: boolean };
 
-// Splits text into plain runs and the two kinds of composer tokens: known
-// slash commands and workspace file mentions.
+// Splits text into plain runs and the kinds of composer tokens: known slash
+// commands, agent mentions and workspace file mentions.
 function mentionSegments(text: string, names: Set<string>, asideSupport: boolean | null = false): MentionSegment[] {
   const parts: MentionSegment[] = [];
-  const pattern = /\/[A-Za-z0-9_-]+|@(?:"[^"\n]*"|[A-Za-z0-9_./~-]+)/g;
+  const pattern = /\/[A-Za-z0-9_-]+|@(?:agent:(?:[A-Za-z0-9._/-]*[A-Za-z0-9_/-])?|"[^"\n]*"|[A-Za-z0-9_./~-]+)/g;
   let previous = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const start = match.index;
@@ -1817,10 +1833,11 @@ function mentionSegments(text: string, names: Set<string>, asideSupport: boolean
       && text.slice(0, start).trim() === ''
       && /^\/btw$/i.test(token)
       && (start + token.length === text.length || /\s/.test(text[start + token.length]));
+    const isAgentMention = token.startsWith(AGENT_MENTION_PREFIX);
     const isFileMention = token[0] === '@';
     if (!isMentionBoundary(text, start) || (!isKnownCommand && !isAside && !isFileMention)) continue;
     if (start > previous) parts.push(text.slice(previous, start));
-    parts.push({ token, aside: isAside });
+    parts.push({ token, aside: isAside, agent: isAgentMention });
     previous = start + token.length;
   }
   if (previous < text.length) parts.push(text.slice(previous));
@@ -1838,7 +1855,7 @@ function SkillText({ text, commands, asideSupport = false }: { text: string; com
       return part;
     }
     offset += part.token.length;
-    return <span className={part.aside ? 'aside-mention' : 'skill-mention'} key={start}>{part.token}</span>;
+    return <span className={part.aside ? 'aside-mention' : part.agent ? 'mention-agent' : 'skill-mention'} key={start}>{part.token}</span>;
   });
   return <>{parts}</>;
 }
@@ -1862,7 +1879,7 @@ function renderUserMarkdown(text: string, commands: SlashCommand[]): string {
     node.replaceWith(...parts.map((part) => {
       if (typeof part === 'string') return part;
       const span = document.createElement('span');
-      span.className = 'skill-mention';
+      span.className = part.agent ? 'mention-agent' : 'skill-mention';
       span.textContent = part.token;
       return span;
     }));
@@ -2066,11 +2083,37 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const fileMatches = useMemo(() => (fileRequest && fileEntriesDir === fileRequest.dir
     ? fuzzyFilter(fileRequest.filter, fileEntries, (entry) => entry.path).slice(0, 8)
     : []), [fileEntries, fileEntriesDir, fileRequest]);
+  const agentToken = useMemo(() => findAgentToken(text, caret), [text, caret]);
+  // `@`, `@a`, `@ag`… also offers the agent: prefix, so agent mentions are
+  // discoverable from the file picker.
+  const agentHint = !!file && !agentToken && AGENT_MENTION_PREFIX.slice(1).startsWith(file.query);
+  // Read straight from the store (like the peer-card navigation) so the
+  // composer does not re-render on every other agent's events.
+  const agentCandidates = useMemo(() => {
+    if (!agentToken && !agentHint) return [];
+    const { sessions, hosts } = useStore.getState();
+    return Object.values(sessions)
+      .filter((candidate) => candidate.id !== sessionId && !candidate.unlisted)
+      .map((candidate) => ({ session: candidate, ref: agentRef(candidate, hosts), host: agentHostLabel(candidate, hosts) }));
+  }, [agentToken, agentHint, sessionId]);
+  const agentMatches = useMemo(() => (agentToken
+    ? fuzzyFilterFields(agentToken.query, agentCandidates, (c) => [
+      [c.session.name, 3],
+      [`${c.host}/${c.session.name}`, 3],
+      [c.host, 2],
+      [c.session.workspace.repo, 1],
+    ]).slice(0, 8)
+    : []), [agentToken, agentCandidates]);
   const completionMatches = slash
     ? commandMatches.map((command) => ({ kind: 'command' as const, command }))
-    : file
-      ? fileMatches.map((entry) => ({ kind: 'file' as const, entry }))
-      : [];
+    : agentToken
+      ? agentMatches.map((candidate) => ({ kind: 'agent' as const, candidate }))
+      : file
+        ? [
+          ...(agentHint && agentCandidates.length > 0 ? [{ kind: 'agent-hint' as const }] : []),
+          ...fileMatches.map((entry) => ({ kind: 'file' as const, entry })),
+        ]
+        : [];
   const showPopup = completionMatches.length > 0 && !dismissed;
 
   useEffect(() => {
@@ -2121,7 +2164,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     setSel(0);
     setDismissed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slash?.start, slash?.query, file?.start, file?.query]);
+  }, [slash?.start, slash?.query, file?.start, file?.query, agentToken?.start, agentToken?.query]);
 
   const updateCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart ?? 0);
 
@@ -2163,9 +2206,29 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     });
   };
 
+  // Replaces the current token with an agent reference, or with the bare
+  // `@agent:` prefix (keeping the popup open on the agent list).
+  const applyAgent = (insertion: string) => {
+    const token = agentToken ?? file;
+    if (!token) return;
+    const next = text.slice(0, token.start) + insertion + text.slice(token.end);
+    setDraft(sessionId, next);
+    const pos = token.start + insertion.length;
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const el = textRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
   const applyCompletion = (completion: typeof completionMatches[number] | undefined) => {
     if (!completion) return;
     if (completion.kind === 'command') applyCommand(completion.command);
+    else if (completion.kind === 'agent') applyAgent(`${completion.candidate.ref} `);
+    else if (completion.kind === 'agent-hint') applyAgent(AGENT_MENTION_PREFIX);
     else applyFile(completion.entry);
   };
 
@@ -2372,7 +2435,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
         <div className="slash-popup">
           {completionMatches.map((completion, i) => (
             <div
-              key={completion.kind === 'command' ? completion.command.name : completion.entry.path}
+              key={completion.kind === 'command' ? completion.command.name : completion.kind === 'agent' ? completion.candidate.session.id : completion.kind === 'agent-hint' ? 'agent:' : completion.entry.path}
               className={`slash-row${i === sel ? ' sel' : ''}`}
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => {
@@ -2384,6 +2447,13 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
                 <span className="name">/{completion.command.name}</span>
                 {completion.command.input && <span className="hint">{completion.command.input}</span>}
                 {completion.command.description && <span className="desc">{completion.command.description}</span>}
+              </> : completion.kind === 'agent' ? <>
+                <span className="name">@{completion.candidate.session.name || completion.candidate.session.id}</span>
+                <span className="hint">{completion.candidate.host}</span>
+                <span className="desc">{[completion.candidate.session.workspace.repo, completion.candidate.session.status].filter(Boolean).join(' · ')}</span>
+              </> : completion.kind === 'agent-hint' ? <>
+                <span className="name">agent:</span>
+                <span className="desc">mention another agent</span>
               </> : <>
                 <span className="name">@{completion.entry.path}{completion.entry.isDir ? '/' : ''}</span>
                 <span className="desc">{completion.entry.isDir ? 'folder' : 'file'}</span>

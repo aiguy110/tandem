@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,7 +320,8 @@ func newTestHost(t *testing.T, id string, o hostOpts) *testHost {
 func (h *testHost) newService(net *testNet) *Service {
 	opts := Options{
 		Store: h.db, Sessions: h.sessions, SelfID: h.id, LocalName: strings.ToUpper(h.id), Now: h.clock.Now, Token: "tok",
-		OnLinksChanged: func(id string) { h.mu.Lock(); h.linkChanges = append(h.linkChanges, id); h.mu.Unlock() },
+		OnSummaryChange: func() { atomic.AddInt32(&h.summaryChanges, 1) },
+		OnLinksChanged:  func(id string) { h.mu.Lock(); h.linkChanges = append(h.linkChanges, id); h.mu.Unlock() },
 	}
 	if net != nil {
 		opts.Federation = &testFed{net: net, self: h.id}

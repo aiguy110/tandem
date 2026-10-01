@@ -313,6 +313,8 @@ export interface SessionSummary {
   // it has not answered yet.
   waitingOn?: AgentWaitingOn[];
   openAsks?: number;
+  // Hidden from other agents' directories (and from @agent: completion).
+  unlisted?: boolean;
 }
 
 // A resumable coding-agent session for the Resume picker — either a session

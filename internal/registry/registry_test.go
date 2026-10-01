@@ -977,6 +977,7 @@ type stubMessaging struct {
 func (m *stubMessaging) SummaryState(id string) ([]messaging.WaitingOn, int) {
 	return []messaging.WaitingOn{{RequestID: "req_1", To: messaging.Address{Host: "h", Agent: "x"}}}, 2
 }
+func (m *stubMessaging) Unlisted(id string) bool  { return true }
 func (m *stubMessaging) Watch(s *session.Session) { m.watched = append(m.watched, s.ID) }
 func (m *stubMessaging) SessionClosed(id string)  { m.closed = append(m.closed, id) }
 
@@ -992,7 +993,7 @@ func TestMessagingHooksDecorateSummariesWatchAndCloseSessions(t *testing.T) {
 		t.Fatalf("watched = %v", hooks.watched)
 	}
 	got := r.Summaries(context.Background())
-	if len(got) != 1 || got[0].OpenAsks != 2 || len(got[0].WaitingOn) != 1 || got[0].WaitingOn[0].RequestID != "req_1" {
+	if len(got) != 1 || got[0].OpenAsks != 2 || len(got[0].WaitingOn) != 1 || got[0].WaitingOn[0].RequestID != "req_1" || !got[0].Unlisted {
 		t.Fatalf("summaries = %+v", got)
 	}
 	if r.CWD(s.ID) == "" {

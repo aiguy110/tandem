@@ -242,12 +242,29 @@ func TestSiblingsMessageThroughRealFederation(t *testing.T) {
 	if err := beta.svc.SetLink("bob", LinkInput{From: alpha.addr("alice")}); err != nil {
 		t.Fatal(err)
 	}
-	ask, err := alpha.svc.Ask(ctx, "alice", "bob", "across the relay?", 0)
+	// The directory's ref is what the agent passes as `to`: the host's display
+	// name (as alpha's host list shows it) or, equivalently, its node ID.
+	ref := entries[0].Ref
+	if !strings.HasPrefix(ref, RefPrefix) || !strings.HasSuffix(ref, "/bob") || ref != alpha.svc.Ref(beta.addr("bob")) {
+		t.Fatalf("directory ref = %q", ref)
+	}
+	aliceSess := alpha.sessions.Get("alice")
+	for _, to := range []string{ref, "@agent:" + beta.fed.SelfID() + "/bob", strings.ToUpper(ref), "bob", "bob@" + beta.fed.SelfID(), beta.addr("bob").String()} {
+		got, err := alpha.svc.resolve(ctx, aliceSess, to)
+		if err != nil || got.Host != beta.fed.SelfID() || got.Agent != "bob" {
+			t.Fatalf("resolve(%q) = %+v, %v", to, got, err)
+		}
+	}
+	ask, err := alpha.svc.Ask(ctx, "alice", ref, "across the relay?", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if ask.Ref != ref {
+		t.Fatalf("ask result ref = %q, want %q", ask.Ref, ref)
+	}
 	eventually(t, "bob to receive", func() bool { return len(betaAd.promptTexts()) == 1 })
-	if p := betaAd.promptTexts()[0]; !strings.Contains(p, alpha.addr("alice").String()) {
+	// The recipient renders the sender with ITS names for alpha's host.
+	if p := betaAd.promptTexts()[0]; !strings.Contains(p, `from="`+beta.svc.Ref(alpha.addr("alice"))+`"`) || !strings.Contains(p, `from-address="`+alpha.addr("alice").String()+`"`) {
 		t.Fatalf("prompt = %s", p)
 	}
 	// The reply needs no link on alpha: it answers an open request.

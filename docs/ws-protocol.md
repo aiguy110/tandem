@@ -441,7 +441,7 @@ Agents message each other over human-granted links (full contract:
 // Daemon → Browser
 { t: 'agent_links'; sessionId; links: Link[]; listed: boolean; card: string }
 { t: 'messaging_state'; paused: boolean; hostId?: string }  // hostId stamped by a relaying parent; absent = this daemon
-{ t: 'agent_directory'; entries: DirectoryEntry[] }
+{ t: 'agent_directory'; entries: DirectoryEntry[] }  // entry: { ref, address, hostName?, agent, repo, cwd, card, status, canMessage }
 { t: 'agent_message_result'; id: string; status: 'steered'|'queued'|'started'; error?: string; message?: string }
 { t: 'agent_link_request_result'; status: 'pending'; error?: string; message?: string }
 { t: 'agent_message_pull_result'; envelopes: Envelope[] }     // undelivered outbox envelopes addressed to the caller (max 100)
@@ -472,7 +472,16 @@ Session transcript events:
 
 An inbound `agent_message` is recorded instead of a `user_message` for the prompt or steer
 it causes. `SessionSummary` gains `waitingOn?: { requestId, to: Address, since, deadline }[]`
-and `openAsks?: number`; both are omitted when empty.
+and `openAsks?: number`; both are omitted when empty. It also gains `unlisted?: true`, present
+only when the agent is hidden from the messaging directory (`set_agent_listed` with
+`listed: false`); toggling it re-broadcasts agent summaries, so UIs can offer only
+directory-listed agents as `@agent:<host>/<agent>` references.
+
+A directory entry's `ref` is the canonical agent reference `@agent:<host>/<agent>` as the
+answering host names things. Host names are viewer-relative, so a browser composing a
+reference for an agent should format it itself from the host list it displays (see
+[agent-messaging.md](agent-messaging.md#address-and-agent-reference)); the daemon resolves
+it against the sending host's own names.
 
 ## End-to-end mapping of ACP
 

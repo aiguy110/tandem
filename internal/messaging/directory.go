@@ -37,6 +37,7 @@ func (s *Service) LocalDirectory(requester *Address, query string) []DirectoryEn
 		settings = nil
 	}
 	entries := []DirectoryEntry{}
+	names := s.hostNames()
 	for _, sess := range s.opts.Sessions.List() {
 		cfg, hasCfg := settings[sess.ID]
 		if hasCfg && !cfg.Listed {
@@ -50,8 +51,9 @@ func (s *Service) LocalDirectory(requester *Address, query string) []DirectoryEn
 		if card == "" {
 			card = name
 		}
+		addr := Address{Host: self, Agent: sess.ID, Name: name}
 		entry := DirectoryEntry{
-			Address: Address{Host: self, Agent: sess.ID, Name: name}, HostName: s.opts.LocalName,
+			Ref: refFor(names, addr), Address: addr, HostName: s.opts.LocalName,
 			Agent: sess.Spec.Agent, Repo: repoOf(sess), CWD: s.opts.Sessions.CWD(sess.ID), Card: card, Status: string(sess.Status()),
 		}
 		if requester != nil {
@@ -111,8 +113,12 @@ func (s *Service) Directory(ctx context.Context, sessionID, query string) ([]Dir
 	requester := s.addressOf(sess)
 	entries := s.LocalDirectory(&requester, "")
 	entries = append(entries, s.remoteDirectories(ctx, requester)...)
+	// References are viewer-relative: a remote host formatted its own, so
+	// every entry is re-rendered with the names this host uses.
+	names := s.hostNames()
 	out := entries[:0]
 	for _, e := range entries {
+		e.Ref = refFor(names, e.Address)
 		if matchesQuery(e, query) {
 			out = append(out, e)
 		}
@@ -206,11 +212,19 @@ func (s *Service) fetchDirectory(ctx context.Context, hostID, hostName string, r
 }
 
 // resolve turns an agent-supplied recipient string into an Address.
-// Accepted forms: "<host>~<agent>", "@name", "name", "name@<host-id-or-name>".
+//
+// The canonical form is "@agent:<host>/<agent>" (see Ref; the "@" is optional
+// and matching is case-insensitive): <host> is a reachable host's display name
+// or node ID, <agent> an agent's display name or session ID on that host. The
+// older "<host>~<agent>", "@name", "name" and "name@<host-id-or-name>" forms
+// are still accepted.
 func (s *Service) resolve(ctx context.Context, sess *session.Session, to string) (Address, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
 		return Address{}, &Rejection{Code: ErrInvalid, Message: "to is required"}
+	}
+	if hostSel, agentSel, ok := parseRef(to); ok {
+		return s.resolveRef(ctx, sess, to, hostSel, agentSel)
 	}
 	if addr, ok := ParseAddress(to); ok {
 		return addr, nil
@@ -218,7 +232,7 @@ func (s *Service) resolve(ctx context.Context, sess *session.Session, to string)
 	name, hostSel, _ := strings.Cut(strings.TrimPrefix(to, "@"), "@")
 	name, hostSel = strings.TrimSpace(name), strings.TrimSpace(hostSel)
 	if name == "" {
-		return Address{}, &Rejection{Code: ErrInvalid, Message: "to must be @name, name@host or <host>~<agent>"}
+		return Address{}, &Rejection{Code: ErrInvalid, Message: "to must be an agent reference like @agent:<host>/<agent> (see messages_directory)"}
 	}
 	entries, err := s.Directory(ctx, sess.ID, "")
 	if err != nil {
@@ -240,12 +254,48 @@ func (s *Service) resolve(ctx context.Context, sess *session.Session, to string)
 	case 1:
 		return matches[0].Address, nil
 	}
-	parts := make([]string, len(matches))
-	for i, m := range matches {
-		host := firstNonEmpty(m.HostName, m.Address.Host)
-		parts[i] = fmt.Sprintf("%s@%s (%s)", m.Address.Name, host, m.Address.String())
+	return Address{}, &Rejection{Code: ErrInvalid, Message: fmt.Sprintf("%q is ambiguous; use one of: %s", to, candidateRefs(s.hostNames(), matches))}
+}
+
+// resolveRef resolves "@agent:<host>/<agent>".
+func (s *Service) resolveRef(ctx context.Context, sess *session.Session, raw, hostSel, agentSel string) (Address, error) {
+	if hostSel == "" || agentSel == "" {
+		return Address{}, &Rejection{Code: ErrInvalid, Message: fmt.Sprintf("%q is not an agent reference; use @agent:<host>/<agent> from messages_directory", raw)}
 	}
-	return Address{}, &Rejection{Code: ErrInvalid, Message: fmt.Sprintf("%q is ambiguous; use one of: %s", to, strings.Join(parts, ", "))}
+	names := s.hostNames()
+	hostID, err := matchHost(names, hostSel)
+	if err != nil && s.opts.LocalName != "" && strings.EqualFold(hostSel, s.opts.LocalName) {
+		hostID, err = s.selfID(), nil
+	}
+	if err != nil {
+		return Address{}, err
+	}
+	entries, err := s.Directory(ctx, sess.ID, "")
+	if err != nil {
+		return Address{}, err
+	}
+	var byID, byName []DirectoryEntry
+	for _, e := range entries {
+		if e.Address.Host != hostID {
+			continue
+		}
+		if strings.EqualFold(e.Address.Agent, agentSel) {
+			byID = append(byID, e)
+		} else if strings.EqualFold(e.Address.Name, agentSel) {
+			byName = append(byName, e)
+		}
+	}
+	matches := byID
+	if len(matches) == 0 {
+		matches = byName
+	}
+	switch len(matches) {
+	case 0:
+		return Address{}, &Rejection{Code: ErrInvalid, Message: fmt.Sprintf("no listed agent %q on host %q; use messages_directory to find agents", agentSel, hostSel)}
+	case 1:
+		return matches[0].Address, nil
+	}
+	return Address{}, &Rejection{Code: ErrInvalid, Message: fmt.Sprintf("%q is ambiguous; use one of: %s", raw, candidateRefs(names, matches))}
 }
 
 // SetCard sets the one-line purpose shown for an agent in the directory.

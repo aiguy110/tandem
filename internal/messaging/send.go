@@ -16,6 +16,9 @@ import (
 
 // SendResult is what the agent-facing send/ask/reply/decline tools return.
 type SendResult struct {
+	// Ref is the recipient: for send/ask the agent addressed, for reply/decline
+	// the agent that asked.
+	Ref       string `json:"ref,omitempty"`
 	ID        string `json:"id"`
 	ThreadID  string `json:"threadId,omitempty"`
 	RequestID string `json:"requestId,omitempty"`
@@ -53,7 +56,7 @@ func (s *Service) Send(ctx context.Context, sessionID, to, body, threadID string
 	if err != nil {
 		return SendResult{}, err
 	}
-	return SendResult{ID: res.ID, ThreadID: threadID, Status: res.Status}, nil
+	return SendResult{Ref: s.Ref(dest), ID: res.ID, ThreadID: threadID, Status: res.Status}, nil
 }
 
 // Ask sends a question and returns immediately; the answer arrives later as
@@ -79,7 +82,7 @@ func (s *Service) Ask(ctx context.Context, sessionID, to, body string, timeoutMi
 	if err != nil {
 		return SendResult{}, err
 	}
-	return SendResult{ID: res.ID, ThreadID: env.ThreadID, RequestID: env.RequestID, Status: res.Status}, nil
+	return SendResult{Ref: s.Ref(dest), ID: res.ID, ThreadID: env.ThreadID, RequestID: env.RequestID, Status: res.Status}, nil
 }
 
 // Reply answers an inbound ask.
@@ -120,7 +123,7 @@ func (s *Service) answer(ctx context.Context, sessionID, requestID, kind, body s
 		return SendResult{}, err
 	}
 	s.closeObligation(requestID)
-	return SendResult{ID: res.ID, ThreadID: ob.ThreadID, RequestID: requestID, Status: res.Status}, nil
+	return SendResult{Ref: s.Ref(env.To), ID: res.ID, ThreadID: ob.ThreadID, RequestID: requestID, Status: res.Status}, nil
 }
 
 // closeObligation closes an inbound ask once it has been answered (or can no
@@ -453,6 +456,6 @@ func (s *Service) failOutbox(row store.AgentMsgOutbox, env Envelope, reason, cod
 	if env.Kind == KindSystem {
 		return
 	}
-	body := fmt.Sprintf("Your %s message %s to %s could not be delivered: %s.", env.Kind, env.ID, describeAddr(env.To), reason)
+	body := fmt.Sprintf("Your %s message %s to %s could not be delivered: %s.", env.Kind, env.ID, s.Ref(env.To), reason)
 	s.deliverSystem(row.FromSession, EventUndeliverable, body, env.RequestID, env.ThreadID, s.systemAddress())
 }

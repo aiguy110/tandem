@@ -184,6 +184,7 @@ export interface SessionView {
   // asks it has not answered yet (both daemon-owned, from the agent summary).
   waitingOn: AgentWaitingOn[];
   openAsks: number;
+  unlisted?: boolean;
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty sessions / until first reported.
   commands: SlashCommand[];
@@ -2007,7 +2008,7 @@ function shell(id: string): SessionView {
 
 function mergeSummary(prev: SessionView | undefined, s: SessionSummary): SessionView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff, waitingOn: s.waitingOn ?? [], openAsks: s.openAsks ?? 0 };
+  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff, waitingOn: s.waitingOn ?? [], openAsks: s.openAsks ?? 0, unlisted: s.unlisted };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

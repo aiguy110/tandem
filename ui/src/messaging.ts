@@ -9,7 +9,7 @@ const REMOTE_ID_PREFIX = 'fed~';
 const LEGACY_REMOTE_ID_PREFIX = 'federation~';
 
 // The minimal session shape these helpers need (satisfied by SessionView).
-type AgentRef = Pick<SessionSummary, 'id' | 'name' | 'hostId'>;
+type AgentRef = Pick<SessionSummary, 'id' | 'name' | 'hostId'> & { hostName?: string };
 
 function decodeBase64Url(value: string): string | null {
   try {
@@ -87,6 +87,33 @@ export function addressHostLabel(hosts: FederationHost[], address: AgentAddress)
 
 export function addressLabel(address: AgentAddress): string {
   return `@${address.name || address.agent}`;
+}
+
+// `@agent:<host>/<agent>` mentions. The backend applies the same rule: a
+// segment is the display name when it is a plain token, else the stable ID
+// (host node ID, host-local session ID) so the reference stays unambiguous.
+const REF_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function refSegment(name: string | undefined, fallback: string): string {
+  return name && REF_SEGMENT.test(name) ? name : fallback;
+}
+
+// The host name the UI shows for a rail agent (its node ID when unnamed).
+export function agentHostLabel(agent: AgentRef, hosts: FederationHost[]): string {
+  const route = sessionRoute(agent);
+  return findHost(hosts, route.hostId)?.name ?? agent.hostName ?? hostNodeId(hosts, route.hostId);
+}
+
+// The mention for a rail agent, e.g. `@agent:bifrost/slow-drag`.
+export function agentRef(agent: AgentRef, hosts: FederationHost[]): string {
+  const route = sessionRoute(agent);
+  const host = refSegment(findHost(hosts, route.hostId)?.name ?? agent.hostName, hostNodeId(hosts, route.hostId));
+  return `@agent:${host}/${refSegment(agent.name, route.sessionId)}`;
+}
+
+// The mention for an address whose agent may not be in the store.
+export function addressRef(hosts: FederationHost[], address: AgentAddress): string {
+  return `@agent:${refSegment(addressHostLabel(hosts, address), address.host)}/${refSegment(address.name, address.agent)}`;
 }
 
 // Elapsed time as a compact duration: "42s", "3m 12s", "1h 05m".

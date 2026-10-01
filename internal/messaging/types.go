@@ -4,7 +4,6 @@
 package messaging
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
@@ -105,15 +104,6 @@ func (a Address) String() string { return a.Host + "~" + a.Agent }
 
 // Same reports whether a and b name the same agent (ignoring Name).
 func (a Address) Same(b Address) bool { return a.Host == b.Host && a.Agent == b.Agent }
-
-// Label is the human form used in prompts: "@name (host~agent)".
-func (a Address) Label() string {
-	name := cleanLabel(a.Name)
-	if name == "" {
-		return cleanLabel(a.String())
-	}
-	return "@" + name + " (" + cleanLabel(a.String()) + ")"
-}
 
 // ParseAddress parses "<host>~<agent>".
 func ParseAddress(raw string) (Address, bool) {
@@ -224,6 +214,10 @@ type WaitingOn struct {
 
 // DirectoryEntry is one agent in the directory.
 type DirectoryEntry struct {
+	// Ref is the canonical agent reference "@agent:<host>/<agent>" as the
+	// host that built the list names things (Service.Ref); agents pass it as
+	// the `to` of the other messaging tools.
+	Ref     string  `json:"ref"`
 	Address Address `json:"address"`
 	// HostName is the display name of the host, when known.
 	HostName   string `json:"hostName,omitempty"`
@@ -242,7 +236,9 @@ type LinkRequestResult struct {
 	Status string `json:"status"`
 	// Note is a human-readable explanation to show the agent (the outcome
 	// notice for a decision, or why the call returned still pending).
-	Note  string `json:"note,omitempty"`
+	Note string `json:"note,omitempty"`
+	// Ref is the reference of the agent the request was about.
+	Ref   string `json:"ref,omitempty"`
 	Error string `json:"error,omitempty"`
 	// Message explains Error; not part of the wire contract.
 	Message string `json:"message,omitempty"`
@@ -275,11 +271,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-func describeAddr(a Address) string {
-	if a.Name != "" {
-		return fmt.Sprintf("@%s (%s)", a.Name, a.String())
-	}
-	return a.String()
 }

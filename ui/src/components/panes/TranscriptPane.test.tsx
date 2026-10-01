@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
 import type { AgentEnvelope } from '../../wire';
 import type { SessionView } from '../../store';
-import { findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
+import { findAgentToken, findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
 import { __resetForTests } from '../../audio/engine';
 import { AudioEngineRoot } from '../audio/AudioEngineRoot';
 
@@ -111,8 +111,7 @@ describe('TranscriptPane agent messages', () => {
     const { container } = render(<TranscriptPane />);
     const card = container.querySelector('[data-envelope-id="msg_1"]') as HTMLElement;
     expect(card.textContent).toContain('✉ from');
-    expect(card.textContent).toContain('@api-worker');
-    expect(card.textContent).toContain('Builder');
+    expect(card.textContent).toContain('@agent:Builder/api-worker');
     expect(card.textContent).toContain('ask');
     expect(card.textContent).toContain('steered');
     expect(card.querySelector('strong')?.textContent).toBe('port');
@@ -151,7 +150,7 @@ describe('TranscriptPane agent messages', () => {
 
     const { container, getByText } = render(<TranscriptPane />);
     expect(container.querySelector('.agent-msg-kind')?.textContent).toBe('system · timeout');
-    fireEvent.click(getByText('@api-worker'));
+    fireEvent.click(getByText('@agent:Builder/api-worker'));
     expect(focus).toHaveBeenCalledWith('fed~b~sess-b');
   });
 });
@@ -174,7 +173,7 @@ describe('TranscriptPane agent message navigation', () => {
     }, true);
 
     const { container, getByText } = render(<TranscriptPane />);
-    fireEvent.click(getByText('@api-worker'));
+    fireEvent.click(getByText('@agent:Builder/api-worker'));
     expect(useStore.getState().focusedId).toBe('fed~b~sess-b');
     expect(scrollIntoView).toHaveBeenCalled();
     expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).dataset.envelopeId).toBe('msg_9');
@@ -730,6 +729,86 @@ describe('TranscriptPane composer completions', () => {
     expect(view.container.querySelectorAll('.skill-mention')).toHaveLength(4);
     expect(Array.from(view.container.querySelectorAll('.skill-mention')).map((node) => node.textContent))
       .toEqual(['@"docs/State of Israel.md"', '/help', '@"docs/State of Israel.md"', '/help']);
+  });
+
+  it('highlights a whole @agent: reference as one mention', () => {
+    const withMention = agent();
+    withMention.events = [{ seq: 1, event: { kind: 'user_message', text: 'Ask @agent:bifrost/slow-drag. Thanks' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withMention }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'Ask @agent:bifrost/slow-drag. Read @src/a.ts' },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const highlight = view.container.querySelector('.prompt-text-highlight');
+    expect(Array.from(highlight?.querySelectorAll('.mention-agent') ?? []).map((n) => n.textContent)).toEqual(['@agent:bifrost/slow-drag']);
+    expect(Array.from(highlight?.querySelectorAll('.skill-mention') ?? []).map((n) => n.textContent)).toEqual(['@src/a.ts']);
+    expect(Array.from(view.container.querySelectorAll('.ev.user .mention-agent')).map((n) => n.textContent)).toEqual(['@agent:bifrost/slow-drag']);
+  });
+
+  it('recognizes @agent: tokens at a mention boundary', () => {
+    expect(findAgentToken('@agent:', 7)).toMatchObject({ start: 0, end: 7, query: '' });
+    expect(findAgentToken('ask @agent:bif/sl', 17)).toMatchObject({ start: 4, query: 'bif/sl' });
+    expect(findAgentToken('@agent:bif/sl more', 13)).toMatchObject({ start: 0, query: 'bif/sl' });
+    expect(findAgentToken('x@agent:bif', 11)).toBeNull();
+    expect(findAgentToken('@agent', 6)).toBeNull();
+    expect(findAgentToken('@agent:a b', 10)).toBeNull();
+    // The file token never claims an agent token.
+    expect(findFileToken('@agent:sl', 9)).toBeNull();
+  });
+
+  const agentComposerState = (draft: string) => {
+    const self = agent();
+    const remote = { ...agent(), id: 'fed~b~sess-b', name: 'slow-drag', hostId: 'b', status: 'working' as const };
+    const hidden = { ...agent(), id: 'fed~b~sess-c', name: 'slow-secret', hostId: 'b', unlisted: true };
+    useStore.setState({
+      ...initialState,
+      hosts: [{ id: 'local', local: true, status: 'connected', nodeId: 'node-a' }, { id: 'b', name: 'bifrost', status: 'connected', nodeId: 'node-b' }],
+      sessions: { 'session-1': self, [remote.id]: remote, [hidden.id]: hidden }, order: ['session-1', remote.id, hidden.id],
+      focusedId: 'session-1', annotations: { 'session-1': [] }, drafts: { 'session-1': draft },
+      listWorkspaceEntries: vi.fn().mockResolvedValue([]),
+    }, true);
+  };
+
+  it('completes @agent: mentions from listed agents on every host', () => {
+    agentComposerState('');
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@agent:sl', selectionStart: 9 } });
+
+    expect(view.getByText('@slow-drag')).toBeTruthy();
+    expect(view.queryByText('@slow-secret')).toBeNull();
+    expect(view.queryByText('@Mobile test')).toBeNull();
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(composer.value).toBe('@agent:bifrost/slow-drag ');
+  });
+
+  it('offers an agent: hint row for @ that switches to agent completion', () => {
+    agentComposerState('');
+    const view = render(<TranscriptPane />);
+    const composer = view.getByPlaceholderText(/Prompt Mobile test/i) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '@a', selectionStart: 2 } });
+
+    const hint = view.getByText('agent:');
+    expect(view.getByText('mention another agent')).toBeTruthy();
+    fireEvent.mouseDown(hint);
+    expect(composer.value).toBe('@agent:');
+    expect(view.getByText('@slow-drag')).toBeTruthy();
+    expect(view.queryByText('agent:')).toBeNull();
+
+    fireEvent.change(composer, { target: { value: '@src', selectionStart: 4 } });
+    expect(view.queryByText('agent:')).toBeNull();
+  });
+
+  it('omits the agent: hint when there are no other listed agents', () => {
+    useStore.setState({
+      ...initialState, sessions: { 'session-1': agent() }, order: ['session-1'], focusedId: 'session-1',
+      annotations: { 'session-1': [] }, listWorkspaceEntries: vi.fn().mockResolvedValue([]),
+    }, true);
+    const view = render(<TranscriptPane />);
+    fireEvent.change(view.getByPlaceholderText(/Prompt Mobile test/i), { target: { value: '@', selectionStart: 1 } });
+    expect(view.queryByText('agent:')).toBeNull();
   });
 
   it('lists and inserts workspace file mentions', async () => {

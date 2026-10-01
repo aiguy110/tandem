@@ -259,7 +259,7 @@ func (s *Service) present(ctx context.Context, sess *session.Session, env Envelo
 	if sess.ControlMode() != "transcript" {
 		return "", "", fmt.Errorf("agent %s is controlled from a terminal and cannot receive messages", sess.ID)
 	}
-	blocks := []agentadapter.PromptBlock{{Type: "text", Text: promptText(env)}}
+	blocks := []agentadapter.PromptBlock{{Type: "text", Text: s.promptText(env)}}
 	event := func(disposition string) eventlog.Event {
 		return agentMessageEvent(direction, env, disposition, "")
 	}
@@ -298,10 +298,12 @@ func statusEvent(id, status, errCode string) eventlog.Event {
 	return eventlog.Event{Kind: "agent_message_status", Payload: payload}
 }
 
-// promptText renders the text the agent receives for env.
-func promptText(env Envelope) string {
+// promptText renders the text the agent receives for env. The sender is shown
+// as this host's reference for it (from) plus the raw host~agent address
+// (from-address).
+func (s *Service) promptText(env Envelope) string {
 	var b strings.Builder
-	b.WriteString(`<tandem-message from="` + env.From.Label() + `" kind="` + cleanLabel(env.Kind) + `"`)
+	b.WriteString(`<tandem-message from="` + s.Ref(env.From) + `" from-address="` + cleanLabel(env.From.String()) + `" kind="` + cleanLabel(env.Kind) + `"`)
 	if env.RequestID != "" {
 		b.WriteString(` request-id="` + cleanLabel(env.RequestID) + `"`)
 	}
