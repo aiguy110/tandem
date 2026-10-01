@@ -114,16 +114,28 @@ func (s *Service) answer(ctx context.Context, sessionID, requestID, kind, body s
 	res, err := s.sendFrom(ctx, sess, env)
 	if err != nil {
 		var rej *Rejection
-		// The obligation stays open only when the sender can still retry
-		// (kill switch). Anything else — the asker timed out or is gone —
-		// will not change, so stop reminding about it.
-		if errors.As(err, &rej) && rej.Code != ErrMessagingPaused {
+		if errors.As(err, &rej) && answerRejectionFinal(rej.Code) {
 			s.closeObligation(requestID)
+		} else {
+			slog.Info("agent answer rejected; request stays open for a retry", "session_id", sess.ID, "request_id", requestID, "error", err)
 		}
 		return SendResult{}, err
 	}
 	s.closeObligation(requestID)
 	return SendResult{Ref: s.Ref(env.To), ID: res.ID, ThreadID: ob.ThreadID, RequestID: requestID, Status: res.Status}, nil
+}
+
+// answerRejectionFinal reports whether a rejected reply or decline means the
+// asker can never be answered (it timed out, is gone, or refuses), so the
+// obligation should close. A mistake in the answer itself (bad arguments), the
+// kill switch, or a local or transient failure leaves it open: the agent can
+// correct and retry, and the reminder and no_reply decline still apply.
+func answerRejectionFinal(code string) bool {
+	switch code {
+	case ErrInvalid, ErrMessagingPaused, ErrHostUnreachable, ErrRecipientUnavailable:
+		return false
+	}
+	return true
 }
 
 // closeObligation closes an inbound ask once it has been answered (or can no
@@ -160,7 +172,7 @@ func (s *Service) sendFrom(ctx context.Context, sess *session.Session, env Envel
 		return reject(ErrMessagingPaused, "agent messaging is paused on this host")
 	}
 	if strings.TrimSpace(env.Body) == "" {
-		return reject(ErrInvalid, "body is required")
+		return reject(ErrInvalid, "body is required: put the message text in the body argument")
 	}
 	if len(env.Body) > MaxBodyBytes {
 		return reject(ErrInvalid, fmt.Sprintf("body exceeds %d bytes", MaxBodyBytes))

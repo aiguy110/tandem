@@ -126,6 +126,10 @@ Delivery result: `steered | queued | started`, or an error code: `no_link`,
   recipient's turn ends with an obligation still open, it enqueues one
   `reply_reminder` prompt. If the next turn also ends with it open, the recipient host
   sends `decline` with `system.event = "no_reply"` on the agent's behalf and closes it.
+- A rejected reply or decline closes the obligation only when the asker can never
+  be answered (e.g. `unknown_request`, `recipient_gone`). After `invalid_request`
+  (such as a missing `body`), `messaging_paused`, `host_unreachable` or
+  `recipient_unavailable`, it stays open so the agent can retry.
 - At the deadline the asker's host closes the request and delivers a local
   `system`/`timeout` envelope to the asker.
 - If the recipient session closes with obligations open, its host sends

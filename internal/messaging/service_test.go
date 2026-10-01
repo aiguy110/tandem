@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -910,5 +911,42 @@ func TestSessionDeletionForgetsMessagingState(t *testing.T) {
 	}
 	if links, _ := h.db.AgentMsgLinks("bob"); len(links) != 0 {
 		t.Fatalf("links = %+v", links)
+	}
+}
+
+func TestMalformedReplyLeavesRequestOpenForRetry(t *testing.T) {
+	h := newTestHost(t, "hostA", hostOpts{})
+	_, aliceAd := h.addSession("alice", "alice")
+	_, bobAd := h.addSession("bob", "bob")
+	h.link(h.addr("alice"), "bob")
+	ctx := context.Background()
+	ask, err := h.svc.Ask(ctx, "alice", "bob", "ping?", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to receive the ask", func() bool { return len(bobAd.promptTexts()) == 1 })
+
+	// A reply with the text in the wrong argument arrives with no body.
+	_, err = h.svc.Reply(ctx, "bob", ask.RequestID, "")
+	var rej *Rejection
+	if !errors.As(err, &rej) || rej.Code != ErrInvalid {
+		t.Fatalf("empty reply err = %v, want %s", err, ErrInvalid)
+	}
+	if _, asks := h.svc.SummaryState("bob"); asks != 1 {
+		t.Fatalf("a malformed reply must not close the request, openAsks=%d", asks)
+	}
+	if _, err := h.svc.Reply(ctx, "bob", ask.RequestID, "pong"); err != nil {
+		t.Fatalf("corrected reply: %v", err)
+	}
+	eventually(t, "alice to receive the reply", func() bool {
+		for _, p := range aliceAd.promptTexts() {
+			if strings.Contains(p, `kind="reply"`) && strings.Contains(p, "pong") {
+				return true
+			}
+		}
+		return false
+	})
+	if _, asks := h.svc.SummaryState("bob"); asks != 0 {
+		t.Fatalf("answered request still open, openAsks=%d", asks)
 	}
 }
