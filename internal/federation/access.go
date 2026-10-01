@@ -17,6 +17,11 @@ const (
 	// LevelView reads state: agent lists, transcripts and screencasts
 	// (subscriptions), history search, diffs and listings.
 	LevelView
+	// LevelMessage lets agents on the other host message agents here
+	// (agent messaging, docs/agent-messaging.md): discover listed agents,
+	// deliver envelopes and request links. It includes view. Delivery is still
+	// default-deny per agent until a human grants a link.
+	LevelMessage
 	// LevelOperate drives agents that already exist: prompts, interrupts,
 	// approvals, terminal/shell and browser input, renames.
 	LevelOperate
@@ -30,6 +35,8 @@ func (l Level) String() string {
 	switch l {
 	case LevelView:
 		return "view"
+	case LevelMessage:
+		return "message"
 	case LevelOperate:
 		return "operate"
 	case LevelAdmin:
@@ -45,12 +52,14 @@ func ParseLevel(raw string) (Level, error) {
 		return LevelNone, nil
 	case "view":
 		return LevelView, nil
+	case "message":
+		return LevelMessage, nil
 	case "operate":
 		return LevelOperate, nil
 	case "admin":
 		return LevelAdmin, nil
 	}
-	return LevelNone, fmt.Errorf("unknown federation access level %q (want none, view, operate or admin)", raw)
+	return LevelNone, fmt.Errorf("unknown federation access level %q (want none, view, message, operate or admin)", raw)
 }
 
 func (l Level) MarshalJSON() ([]byte, error) { return json.Marshal(l.String()) }
@@ -157,6 +166,17 @@ var commandLevels = map[string]Level{
 	"has_upload_directory":      LevelView,
 	"get_close_preview":         LevelView,
 	"get_diff":                  LevelView,
+	"get_messaging_state":       LevelView,
+	"list_agent_links":          LevelView,
+
+	"agent_directory":       LevelMessage,
+	"agent_message_deliver": LevelMessage,
+	"agent_link_request":    LevelMessage,
+
+	"set_agent_link":       LevelOperate,
+	"delete_agent_link":    LevelOperate,
+	"set_agent_listed":     LevelOperate,
+	"set_messaging_paused": LevelOperate,
 
 	"refresh_history":           LevelOperate,
 	"enter_terminal":            LevelOperate,
@@ -195,6 +215,21 @@ var commandLevels = map[string]Level{
 	"update_annotation":         LevelOperate,
 	"delete_annotation":         LevelOperate,
 	"clear_annotations":         LevelOperate,
+}
+
+// accessDeniedMarker is part of the error text authorize produces. The
+// denial crosses the tunnel as a plain string, so a caller recognizes it by
+// this marker (see IsAccessDenied).
+const accessDeniedMarker = "may not "
+
+// IsAccessDenied reports whether err is a remote host's access-policy denial,
+// as opposed to a transport failure. A denial will not clear up by retrying.
+func IsAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.HasPrefix(msg, "federation: ") && strings.Contains(msg, accessDeniedMarker) && strings.Contains(msg, "(needs ")
 }
 
 // CommandLevel is the level a browser-protocol command type requires.

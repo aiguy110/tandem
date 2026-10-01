@@ -82,3 +82,46 @@ func TestLoopbackSpawnProgressDoesNotAnswerCommand(t *testing.T) {
 		t.Fatalf("reply = %s, want the spawn ack", reply)
 	}
 }
+
+// A command executed by the loopback (not relayed onward) still tells
+// wsserver who asked: the origin in the call's context is injected as the
+// private origin field, unless the payload already carries one.
+func TestLoopbackCarriesCommandOriginToBrowserProtocol(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	got := make(chan map[string]any, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			var m map[string]any
+			if err := conn.ReadJSON(&m); err != nil {
+				return
+			}
+			got <- m
+			_ = conn.WriteJSON(map[string]any{"t": "ack", "corrId": m["corrId"]})
+		}
+	}))
+	defer srv.Close()
+	l, err := NewLoopbackLocal(srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := l.Execute(WithOrigin(ctx, "host-a"), json.RawMessage(`{"t":"agent_message_deliver"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if m := <-got; m[OriginField] != "host-a" {
+		t.Fatalf("command = %#v, want origin host-a", m)
+	}
+	if _, err := l.Execute(ctx, json.RawMessage(`{"t":"list_agents"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if m := <-got; m[OriginField] != nil {
+		t.Fatalf("a command with no origin must not gain one: %#v", m)
+	}
+}

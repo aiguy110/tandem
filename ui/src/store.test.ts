@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testApplyServerMsg, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
 import type { SessionSummary, Annotation } from './wire';
 import { WsClient } from './ws/client';
+import { buildCommands } from './commands/registry';
 import {
   __getElementForTests as __getEngineElementForTests,
   __resetForTests as __resetEngineForTests,
@@ -520,5 +521,63 @@ describe('spawn palette data', () => {
     // Legacy markers are never persisted: the host may be upgraded.
     expect(JSON.parse(localStorage.getItem('tandem.spawnCache.v1') ?? '{}').profilesByHost?.['old-host']).toBeUndefined();
     sendSpy.mockRestore();
+  });
+});
+
+describe('agent messaging projections', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useStore.setState({ agentLinks: {}, messagingPausedByHost: {} });
+  });
+
+  it('carries waitingOn and openAsks from the agent summary', () => {
+    const waitingOn = [{ requestId: 'req_1', to: { host: 'n', agent: 'a', name: 'peer' }, since: '2026-01-01T00:00:00Z', deadline: '2026-01-01T00:30:00Z' }];
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ waitingOn, openAsks: 2 })] });
+    expect(useStore.getState().sessions['session-1']).toMatchObject({ waitingOn, openAsks: 2 });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary()] });
+    expect(useStore.getState().sessions['session-1']).toMatchObject({ waitingOn: [], openAsks: 0 });
+  });
+
+  it('stores agent_links per session and tracks messaging_state per host', () => {
+    __testApplyServerMsg({ t: 'agent_links', sessionId: 'fed~b~s1', hostId: 'b', links: [], listed: false, card: 'hello' });
+    expect(useStore.getState().agentLinks['fed~b~s1']).toEqual({ links: [], listed: false, card: 'hello' });
+
+    __testApplyServerMsg({ t: 'messaging_state', paused: true });
+    __testApplyServerMsg({ t: 'messaging_state', hostId: 'b', paused: false });
+    expect(useStore.getState().messagingPausedByHost).toEqual({ [LOCAL_HOST_ID]: true, b: false });
+  });
+
+  it('reads the kill-switch state of each newly readable host', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    __testApplyServerMsg({ t: 'hosts', hosts: [{ id: 'b', name: 'Builder', status: 'connected', access: 'view' }, { id: 'c', status: 'offline' }, { id: 'd', status: 'connected', access: 'none' }] });
+    const asked = sendSpy.mock.calls.map(([m]) => m).filter((m) => m.t === 'get_messaging_state');
+    expect(asked).toEqual([{ t: 'get_messaging_state', hostId: 'b' }]);
+  });
+
+  it('pauses messaging only on hosts with operate access and drives the palette entries', async () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    __testApplyServerMsg({ t: 'hosts', hosts: [
+      { id: 'op', status: 'connected', access: 'operate' },
+      { id: 'ro', status: 'connected', access: 'message' },
+      { id: 'down', status: 'offline', access: 'admin' },
+    ] });
+    sendSpy.mockClear();
+
+    const pause = buildCommands().find((c) => c.id === 'messaging.pause')!;
+    const resume = buildCommands().find((c) => c.id === 'messaging.resume')!;
+    expect(pause.enabled!()).toBe(true);
+    expect(resume.enabled!()).toBe(false);
+
+    pause.run();
+    const commands = sendSpy.mock.calls.map(([m]) => m).filter((m) => m.t === 'set_messaging_paused');
+    expect(commands).toEqual([
+      { t: 'set_messaging_paused', paused: true, corrId: expect.any(String) },
+      { t: 'set_messaging_paused', paused: true, hostId: 'op', corrId: expect.any(String) },
+    ]);
+    for (const m of commands) __testApplyServerMsg({ t: 'ack', corrId: m.corrId });
+    await Promise.resolve();
+    expect(useStore.getState().messagingPausedByHost).toEqual({ [LOCAL_HOST_ID]: true, op: true });
+    expect(pause.enabled!()).toBe(false);
+    expect(resume.enabled!()).toBe(true);
   });
 });

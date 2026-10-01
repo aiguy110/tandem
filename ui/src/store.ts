@@ -13,10 +13,15 @@ import { browserHub } from './terminal/browserHub';
 import { frontendVersion } from './version';
 import { loadAppearance, saveAppearance, type Appearance } from './appearance';
 import { loadSpawnCache, saveSpawnCache, type DirsStatus, type HostProfiles } from './spawnCache';
+import { controllableHosts, readableHosts, sessionRoute } from './messaging';
 import type {
   SessionStatus,
   SessionSummary,
+  AgentAddress,
   AgentCatalog,
+  AgentLink,
+  AgentLinkInput,
+  AgentWaitingOn,
   Annotation,
   Approval,
   AutomationJob,
@@ -175,6 +180,10 @@ export interface SessionView {
   // which never do) — the picker bar hides itself in that case.
   sessionConfig: { modes: SessionModeState | null; configOptions: SessionConfigOption[] } | null;
   usage: { used: number; size: number; cost?: { amount: number; currency: string } | null; updatedAt: number } | null;
+  // Agent messaging: open outbound asks this agent is waiting on, and inbound
+  // asks it has not answered yet (both daemon-owned, from the agent summary).
+  waitingOn: AgentWaitingOn[];
+  openAsks: number;
   // The agent's slash-command menu (ACP available_commands_update), for the
   // fuzzy-find popup in PromptBar. Empty for pty sessions / until first reported.
   commands: SlashCommand[];
@@ -209,6 +218,13 @@ export interface SessionView {
   // closed tab. null means nothing is stored: never played, or cleared by a
   // `seq: 0` write. See docs/ws-protocol.md for the wire contract.
   audioPosition: AudioPosition | null;
+}
+
+// One agent's inbound messaging links as last reported by its host.
+export interface AgentLinksState {
+  links: AgentLink[];
+  listed: boolean;
+  card: string;
 }
 
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'appearance';
@@ -294,6 +310,11 @@ interface StoreState {
   approvalsRailCollapsed: boolean;
   // Daemon-owned operational notifications, including self-update actions.
   systemNotifications: SystemNotification[];
+  // Agent messaging, both daemon-owned: inbound links per agent (keyed by rail
+  // session ID, hydrated by list_agent_links and agent_links broadcasts) and
+  // each host's kill-switch flag (keyed by host ID; absent = not yet known).
+  agentLinks: Record<string, AgentLinksState>;
+  messagingPausedByHost: Record<string, boolean>;
 
   // actions
   boot: () => void;
@@ -374,6 +395,16 @@ interface StoreState {
   getDiff: (sessionId: string) => Promise<WorkspaceDiff>;
   closeAgent: (sessionId: string, force?: boolean, deleteWorktree?: boolean, deinitSubmodules?: boolean) => Promise<AckResult>;
   send: (m: ClientMsg) => void;
+  // Agent messaging. Commands are routed to the host that owns the agent (a
+  // rail ID is parent-namespaced; the daemon wants the host-local ID plus
+  // hostId, with hostId omitted for the local daemon).
+  fetchAgentLinks: (sessionId: string) => void;
+  setAgentLink: (sessionId: string, link: AgentLinkInput) => Promise<AckResult>;
+  deleteAgentLink: (sessionId: string, from: AgentAddress) => Promise<AckResult>;
+  setAgentListed: (sessionId: string, listed: boolean) => Promise<AckResult>;
+  refreshMessagingState: (hostId?: string) => void;
+  // Pauses/resumes messaging on every host this Tandem has operate on.
+  setMessagingPaused: (paused: boolean) => Promise<AckResult>;
   nav: (dir: 1 | -1) => void;
   // Browser pane control (Phase 5).
   setBrowserSub: (sessionId: string | null) => void;
@@ -715,9 +746,18 @@ export const useStore = create<StoreState>((set, get) => {
           };
         });
         return;
-      case 'hosts':
-        set({ hosts: normalizedHosts(msg.hosts) });
+      case 'hosts': {
+        const previous = get().hosts;
+        const hosts = normalizedHosts(msg.hosts);
+        set({ hosts });
+        // Learn the kill-switch state of every host that has just become
+        // readable (first list, a reconnect, or an access change).
+        const wasReadable = new Set(readableHosts(previous).map((host) => host.id));
+        for (const host of readableHosts(hosts)) {
+          if (!wasReadable.has(host.id)) get().refreshMessagingState(host.id);
+        }
         return;
+      }
       case 'spawn_options': {
         const pending = msg.corrId ? pendingSpawnOptions.get(msg.corrId) : undefined;
         if (pending) {
@@ -918,7 +958,9 @@ export const useStore = create<StoreState>((set, get) => {
           if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
           const annotations = { ...st.annotations };
           delete annotations[msg.sessionId];
-          return { sessions, order, focusedId, pane, annotations };
+          const agentLinks = { ...st.agentLinks };
+          delete agentLinks[msg.sessionId];
+          return { sessions, order, focusedId, pane, annotations, agentLinks };
         });
         ptyHub.clear(msg.sessionId);
         shellHub.clear(msg.sessionId);
@@ -1107,6 +1149,16 @@ export const useStore = create<StoreState>((set, get) => {
       case 'annotations':
         set((st) => ({ annotations: { ...st.annotations, [msg.sessionId]: msg.annotations } }));
         return;
+      case 'agent_links':
+        set((st) => ({ agentLinks: { ...st.agentLinks, [msg.sessionId]: { links: msg.links ?? [], listed: msg.listed !== false, card: msg.card ?? '' } } }));
+        return;
+      case 'messaging_state': {
+        const hostId = msg.hostId ?? LOCAL_HOST_ID;
+        set((st) => (st.messagingPausedByHost[hostId] === !!msg.paused
+          ? st
+          : { messagingPausedByHost: { ...st.messagingPausedByHost, [hostId]: !!msg.paused } }));
+        return;
+      }
       case 'audio_position':
         // Cross-device sync only: the daemon never echoes this back to the
         // connection that sent set_audio_position, so this only ever reflects
@@ -1136,6 +1188,10 @@ export const useStore = create<StoreState>((set, get) => {
       client.send({ t: 'list_agent_catalog' });
       client.send({ t: 'list_hosts' });
       client.send({ t: 'list_system_notifications' });
+      // The kill-switch state is per host and may have changed while offline;
+      // remote hosts are re-read as their entries arrive with list_hosts.
+      get().refreshMessagingState(LOCAL_HOST_ID);
+      for (const host of readableHosts(get().hosts)) if (!isLocalHost(host.id)) get().refreshMessagingState(host.id);
       // Warm the spawn palette so pressing C opens it populated.
       get().refreshHostDirs(LOCAL_HOST_ID);
       get().refreshProfiles(LOCAL_HOST_ID);
@@ -1193,6 +1249,8 @@ export const useStore = create<StoreState>((set, get) => {
 	sessionsRailCollapsed: isNarrowViewport(),
     approvalsRailCollapsed: isNarrowViewport(),
     systemNotifications: [],
+    agentLinks: {},
+    messagingPausedByHost: {},
 
     boot: () => {
       const tok = resolveToken();
@@ -1733,6 +1791,51 @@ export const useStore = create<StoreState>((set, get) => {
         client.send({ t: 'close_agent', sessionId, force, deleteWorktree, deinitSubmodules, corrId });
       }),
     send: (m) => client.send(m),
+    fetchAgentLinks: (sessionId) => {
+      const route = routeFor(sessionId);
+      client.send({ t: 'list_agent_links', ...route });
+    },
+    setAgentLink: (sessionId, link) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'set_agent_link', ...routeFor(sessionId), link, corrId });
+      }),
+    deleteAgentLink: (sessionId, from) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'delete_agent_link', ...routeFor(sessionId), from, corrId });
+      }),
+    setAgentListed: (sessionId, listed) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          // The daemon broadcasts agent_links on success; re-read as well so a
+          // host that does not (or an unsubscribed relay) still converges.
+          if (!result.error) get().fetchAgentLinks(sessionId);
+          resolve(result);
+        });
+        client.send({ t: 'set_agent_listed', ...routeFor(sessionId), listed, corrId });
+      }),
+    refreshMessagingState: (hostId) => client.send(isLocalHost(hostId) ? { t: 'get_messaging_state' } : { t: 'get_messaging_state', hostId }),
+    setMessagingPaused: async (paused) => {
+      const targets = controllableHosts(get().hosts);
+      if (targets.length === 0) return { error: 'no host allows changing messaging state' };
+      const results = await Promise.all(targets.map((host) => new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, (result) => {
+          // The daemon follows an ack with a messaging_state broadcast; set it
+          // here too so the indicator does not wait on that event.
+          if (!result.error) set((st) => ({ messagingPausedByHost: { ...st.messagingPausedByHost, [host.id]: paused } }));
+          resolve(result);
+        });
+        client.send(isLocalHost(host.id)
+          ? { t: 'set_messaging_paused', paused, corrId }
+          : { t: 'set_messaging_paused', paused, hostId: host.id, corrId });
+      })));
+      return results.find((result) => result.error) ?? {};
+    },
     // Opt an agent's browser channel in/out (screencast focus rule). Re-subscribe
     // both the previously- and newly-viewing sessions so the daemon starts/stops the
     // screencast accordingly.
@@ -1854,6 +1957,13 @@ export function notificationsSummary(st: StoreState): { total: number; severity:
   return { total, severity: maxSeverity(severities) };
 }
 
+// Command routing for a rail agent: its owning host (omitted when local) and
+// host-local session ID, from the store's session when known.
+function routeFor(sessionId: string): { hostId?: string; sessionId: string } {
+  const agent = useStore.getState().sessions[sessionId];
+  return sessionRoute({ id: sessionId, hostId: agent?.hostId });
+}
+
 function shell(id: string): SessionView {
   return {
     id,
@@ -1874,6 +1984,8 @@ function shell(id: string): SessionView {
     takeovers: [],
     sessionConfig: null,
     usage: null,
+    waitingOn: [],
+    openAsks: 0,
     commands: [],
     imagePromptSupport: null,
     asideSupport: null,
@@ -1895,7 +2007,7 @@ function shell(id: string): SessionView {
 
 function mergeSummary(prev: SessionView | undefined, s: SessionSummary): SessionView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff };
+  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff, waitingOn: s.waitingOn ?? [], openAsks: s.openAsks ?? 0 };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

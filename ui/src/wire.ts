@@ -44,6 +44,68 @@ export interface ImageAssetRef {
   name?: string;
 }
 
+// Agent messaging (docs/agent-messaging.md). An address names an agent by its
+// host's stable federation node ID plus its host-local session ID, never by a
+// view-relative route ID; `name` is informational.
+export interface AgentAddress {
+  host: string;
+  agent: string;
+  name?: string;
+}
+export type AgentMessageKind = 'send' | 'ask' | 'reply' | 'decline' | 'system';
+export interface AgentEnvelope {
+  id: string;
+  threadId: string;
+  kind: AgentMessageKind;
+  requestId?: string;
+  from: AgentAddress;
+  to: AgentAddress;
+  body: string;
+  hop: number;
+  sentAt: string;
+  timeoutSec?: number;
+  system?: { event: string };
+}
+export type AgentLinkDelivery = 'steer' | 'queue';
+// A directed grant from -> to, stored on the recipient's host. `to` is the
+// recipient's host-local session ID.
+export interface AgentLink {
+  id: string;
+  from: AgentAddress;
+  to: string;
+  delivery: AgentLinkDelivery;
+  budgetPerHour: number;
+  maxHops: number;
+  paused: boolean;
+  source: 'user' | 'approval';
+  createdAt: string;
+  usedLastHour: number;
+}
+// What set_agent_link accepts; the daemon fills id/to/source/createdAt/usedLastHour.
+export interface AgentLinkInput {
+  from: AgentAddress;
+  delivery: AgentLinkDelivery;
+  budgetPerHour: number;
+  maxHops: number;
+  paused: boolean;
+}
+export interface AgentDirectoryEntry {
+  address: AgentAddress;
+  agent: string;
+  repo: string;
+  cwd: string;
+  card: string;
+  status: string;
+  canMessage: boolean;
+}
+// An open outbound ask the agent is waiting on (SessionSummary.waitingOn).
+export interface AgentWaitingOn {
+  requestId: string;
+  to: AgentAddress;
+  since: string;
+  deadline: string;
+}
+
 export type PromptBlock =
   | { type: 'text'; text: string }
   | ({ type: 'image' } & ImageAssetRef)
@@ -108,6 +170,11 @@ export type SessionEvent =
   | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'audio_preference'; enabled: boolean }
   | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number }
+  // A message to or from another agent, on both transcripts. Rendered as its
+  // own card (not a user prompt); agent_message_status later patches the card
+  // for the envelope with the same id (e.g. pending -> started).
+  | { kind: 'agent_message'; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
+  | { kind: 'agent_message_status'; id: string; status: string; error?: string }
   | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
@@ -172,9 +239,12 @@ export interface FederationHost {
   // Reached through this Tandem's parent (the parent itself, its other
   // branches, and anything above it) rather than one of its descendants.
   upstream?: boolean;
+  // Stable federation node identity (what agent-messaging addresses use);
+  // `id` is relative to this Tandem's view and can differ for descendants.
+  nodeId?: string;
   // What this Tandem may do on the host under that host's access policy.
   // Absent from daemons predating federation access control (full access).
-  access?: 'none' | 'view' | 'operate' | 'admin';
+  access?: 'none' | 'view' | 'message' | 'operate' | 'admin';
   // Which end of the link to parentId opened the TCP connection: the child
   // (the usual --parent dial) or the parent (adoption). Absent when unknown.
   dialer?: 'child' | 'parent';
@@ -239,6 +309,10 @@ export interface SessionSummary {
     permission?: string;
     snapshot?: string;
   };
+  // Agent messaging: asks this agent sent and is waiting on, and inbound asks
+  // it has not answered yet.
+  waitingOn?: AgentWaitingOn[];
+  openAsks?: number;
 }
 
 // A resumable coding-agent session for the Resume picker — either a session
@@ -535,7 +609,15 @@ export type ClientMsg =
   | { t: 'shell_open'; sessionId: string; cols: number; rows: number; corrId?: string }
   | { t: 'shell_input'; sessionId: string; bytesB64: string; corrId?: string }
   | { t: 'shell_resize'; sessionId: string; cols: number; rows: number; corrId?: string }
-  | { t: 'shell_close'; sessionId: string; corrId?: string };
+  | { t: 'shell_close'; sessionId: string; corrId?: string }
+  // Agent messaging (docs/agent-messaging.md). sessionId is the host-local
+  // recipient session; hostId routes to the host that owns it (omitted = local).
+  | { t: 'list_agent_links'; sessionId: string; hostId?: string; corrId?: string }
+  | { t: 'set_agent_link'; sessionId: string; link: AgentLinkInput; hostId?: string; corrId?: string }
+  | { t: 'delete_agent_link'; sessionId: string; from: AgentAddress; hostId?: string; corrId?: string }
+  | { t: 'set_agent_listed'; sessionId: string; listed: boolean; hostId?: string; corrId?: string }
+  | { t: 'get_messaging_state'; hostId?: string; corrId?: string }
+  | { t: 'set_messaging_paused'; paused: boolean; hostId?: string; corrId?: string };
 
 export interface BrowserInputWire {
   kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';
@@ -579,7 +661,10 @@ export type ServerMsg =
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; sessionId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; active: boolean; controlOwner: 'agent' | 'user' };
+  | { t: 'browser_state'; sessionId: string; active: boolean; controlOwner: 'agent' | 'user' }
+  // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
+  | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
+  | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };
 
 export interface ManagedAdapter {
   agent: string;

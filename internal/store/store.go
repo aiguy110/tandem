@@ -692,6 +692,7 @@ CREATE TABLE IF NOT EXISTS federation_slaves (
         name      TEXT NOT NULL,
         updatedAt INTEGER NOT NULL
       );`, "federation_host_names table"},
+		{agentMessagingSchema, "agent messaging tables"},
 	} {
 		if _, err := db.Exec(migration.sql); err != nil && !isDuplicateColumn(err) {
 			db.Close()
@@ -873,6 +874,9 @@ func (s *Store) DeleteSession(id string) error {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
+	}
+	if err := deleteAgentMessagingForSession(tx, id); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

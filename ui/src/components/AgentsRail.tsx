@@ -5,7 +5,8 @@ import { usesSoftKeyboard } from '../mobile';
 import { LOCAL_HOST_ID, isLocalHost, useStore, rankedOrder, agentBadge } from '../store';
 import type { NotifSeverity } from '../store';
 import type { PendingSpawn, SessionView } from '../store';
-import type { ClosePreview, FederationHost } from '../wire';
+import type { AgentWaitingOn, ClosePreview, FederationHost } from '../wire';
+import { addressLabel, formatElapsed } from '../messaging';
 
 // Badge color per severity, matching the Notifications panel (red > yellow > green).
 const SEVERITY_CLASS: Record<NotifSeverity, string> = {
@@ -827,7 +828,13 @@ function Row({
           {badge.count > 0 && badge.severity && (
             <span className={`count badge notification-badge ${SEVERITY_CLASS[badge.severity]}`}>{badge.count}</span>
           )}
+          {agent.openAsks > 0 && (
+            <span className="session-ask-badge" title={`${agent.openAsks} unanswered ${agent.openAsks === 1 ? 'ask' : 'asks'} from other agents`}>
+              ✉ {agent.openAsks}
+            </span>
+          )}
         </div>
+        {agent.waitingOn?.length > 0 && <WaitingOnLine waiting={agent.waitingOn} />}
         {renameError && <div className="session-rename-error">{renameError}</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
@@ -912,6 +919,23 @@ function Row({
       )}
       {details && <AgentDetails agent={agent} position={details} closing={detailsClosing} onClose={() => setDetails(null)} onMove={setDetails} />}
       {actionError && <div className="session-rename-error">{actionError}</div>}
+    </div>
+  );
+}
+
+// "waiting on @x" for an agent whose ask has not been answered yet, with the
+// time since the oldest open ask ticking once a second.
+function WaitingOnLine({ waiting }: { waiting: AgentWaitingOn[] }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const since = Math.min(...waiting.map((w) => Date.parse(w.since)).filter((t) => !Number.isNaN(t)), now);
+  const names = waiting.map((w) => addressLabel(w.to)).join(', ');
+  return (
+    <div className="session-waiting" title={`Waiting on ${names}`}>
+      ⏳ waiting on {names} · {formatElapsed(now - since)}
     </div>
   );
 }

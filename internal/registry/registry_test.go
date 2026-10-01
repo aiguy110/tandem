@@ -16,7 +16,9 @@ import (
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/messaging"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
+	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/workspace"
 )
@@ -959,5 +961,52 @@ func TestStartRestoreServesPlaceholdersAndRestoresConcurrently(t *testing.T) {
 	}
 	if n := len(r.Summaries(context.Background())); n != len(ids) {
 		t.Fatalf("summaries after restore = %d, want %d", n, len(ids))
+	}
+}
+
+type stubMessaging struct {
+	watched, closed []string
+}
+
+func (m *stubMessaging) SummaryState(id string) ([]messaging.WaitingOn, int) {
+	return []messaging.WaitingOn{{RequestID: "req_1", To: messaging.Address{Host: "h", Agent: "x"}}}, 2
+}
+func (m *stubMessaging) Watch(s *session.Session) { m.watched = append(m.watched, s.ID) }
+func (m *stubMessaging) SessionClosed(id string)  { m.closed = append(m.closed, id) }
+
+func TestMessagingHooksDecorateSummariesWatchAndCloseSessions(t *testing.T) {
+	r, _, _ := setup(t, &fakeFactory{})
+	hooks := &stubMessaging{}
+	r.SetMessaging(hooks)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.watched) != 1 || hooks.watched[0] != s.ID {
+		t.Fatalf("watched = %v", hooks.watched)
+	}
+	got := r.Summaries(context.Background())
+	if len(got) != 1 || got[0].OpenAsks != 2 || len(got[0].WaitingOn) != 1 || got[0].WaitingOn[0].RequestID != "req_1" {
+		t.Fatalf("summaries = %+v", got)
+	}
+	if r.CWD(s.ID) == "" {
+		t.Fatal("CWD is empty for a live session")
+	}
+	if ok, err := r.Close(context.Background(), s.ID, false, false, false); !ok || err != nil {
+		t.Fatalf("close = %v, %v", ok, err)
+	}
+	if len(hooks.closed) != 1 || hooks.closed[0] != s.ID {
+		t.Fatalf("closed = %v", hooks.closed)
+	}
+	// Daemon shutdown (DisposeAll) is not a close.
+	r2, _, _ := setup(t, &fakeFactory{})
+	hooks2 := &stubMessaging{}
+	r2.SetMessaging(hooks2)
+	if _, err := r2.Spawn(context.Background(), existing(t.TempDir())); err != nil {
+		t.Fatal(err)
+	}
+	_ = r2.DisposeAll(context.Background())
+	if len(hooks2.closed) != 0 {
+		t.Fatalf("DisposeAll reported closes: %v", hooks2.closed)
 	}
 }

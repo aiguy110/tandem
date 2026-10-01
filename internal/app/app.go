@@ -14,6 +14,7 @@ import (
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/controlmcp"
 	"github.com/aiguy110/tandem/internal/daemon"
+	"github.com/aiguy110/tandem/internal/messagesmcp"
 	"github.com/aiguy110/tandem/internal/setup"
 	"github.com/aiguy110/tandem/internal/updater"
 	"github.com/mattn/go-isatty"
@@ -34,6 +35,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-scripts: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	// mcp-messages is the internal stdio MCP subprocess behind agent messaging.
+	if len(args) == 1 && args[0] == "mcp-messages" {
+		err := messagesmcp.Run(context.Background(), os.Stdin, stdout, messagesmcp.Config{
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "run mcp-messages: %v\n", err)
 			return 1
 		}
 		return 0

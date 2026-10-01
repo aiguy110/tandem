@@ -420,6 +420,51 @@ with `_session/steering`; this bypasses the FIFO. Tandem requests the
 `promptRequired` idle behavior so a completion race never creates a detached
 turn, and leaves the draft available for an explicit send or queue in that case.
 
+### Agent messaging
+
+Agents message each other over human-granted links (full contract:
+[agent-messaging.md](agent-messaging.md)). All commands accept `hostId` for routing.
+
+```ts
+| { t: 'list_agent_links';    sessionId: string }                        // view    → agent_links
+| { t: 'set_agent_link';      sessionId: string; link: LinkInput }       // operate → ack, then agent_links to subscribers
+| { t: 'delete_agent_link';   sessionId: string; from: Address }        // operate → ack, then agent_links
+| { t: 'set_agent_listed';    sessionId: string; listed: boolean }      // operate → ack, then agent_links
+| { t: 'get_messaging_state' }                                           // view    → messaging_state
+| { t: 'set_messaging_paused'; paused: boolean }                         // operate → ack, then messaging_state to all
+| { t: 'agent_directory';     requester?: Address; query?: string }     // message → agent_directory
+| { t: 'agent_message_deliver'; envelope: Envelope }                     // message → agent_message_result
+| { t: 'agent_link_request';  from: Address; to: Address; reason: string } // message → agent_link_request_result
+
+// Daemon → Browser
+{ t: 'agent_links'; sessionId; links: Link[]; listed: boolean; card: string }
+{ t: 'messaging_state'; paused: boolean; hostId?: string }  // hostId stamped by a relaying parent; absent = this daemon
+{ t: 'agent_directory'; entries: DirectoryEntry[] }
+{ t: 'agent_message_result'; id: string; status: 'steered'|'queued'|'started'; error?: string; message?: string }
+{ t: 'agent_link_request_result'; status: 'pending'; error?: string; message?: string }
+```
+
+`LinkInput` is `{ from: Address, delivery: 'steer'|'queue', budgetPerHour, maxHops, paused }`
+(zero budget/hops mean the defaults, 60 and 20). `Link` adds `id`, `to`, `source`
+(`user`|`approval`), `createdAt` and `usedLastHour`. A rejected delivery has `error` set to
+one of `no_link`, `link_paused`, `hop_limit`, `budget_exceeded`, `messaging_paused`,
+`recipient_gone`, `recipient_unavailable`, `unknown_request`, `access_denied`,
+`host_unreachable` or `invalid_request`. Federation attaches the requesting host to relayed
+commands; `agent_message_deliver` and `agent_link_request` are refused with `access_denied`
+unless the sender's host is that origin (or this host, for a local command).
+
+Session transcript events:
+
+```ts
+{ kind: 'agent_message'; direction: 'in'|'out'; envelope: Envelope;
+  status: 'steered'|'queued'|'started'|'pending'|'rejected'; error?: string }
+{ kind: 'agent_message_status'; id: string; status: string; error?: string } // later change to an outbound message
+```
+
+An inbound `agent_message` is recorded instead of a `user_message` for the prompt or steer
+it causes. `SessionSummary` gains `waitingOn?: { requestId, to: Address, since, deadline }[]`
+and `openAsks?: number`; both are omitted when empty.
+
 ## End-to-end mapping of ACP
 
 - **`session/update`** → daemon emits `{ t: 'event', event: AgentEvent }` on the agent's

@@ -3,6 +3,7 @@
 
 import { useStore, allApprovals } from '../store';
 import type { PaneId } from '../store';
+import { controllableHosts } from '../messaging';
 
 export interface Command {
   id: string;
@@ -162,6 +163,21 @@ export function buildCommands(): Command[] {
           st.toggleWheel(st.focusedId);
         }
       },
+    },
+    {
+      id: 'messaging.pause',
+      title: 'Pause agent messaging',
+      subtitle: 'Kill switch: stop agents messaging each other on every host you can operate',
+      // Unknown state counts as not paused, so the switch is always reachable.
+      enabled: () => controllableHosts(s().hosts).some((host) => !s().messagingPausedByHost[host.id]),
+      run: () => void s().setMessagingPaused(true),
+    },
+    {
+      id: 'messaging.resume',
+      title: 'Resume agent messaging',
+      subtitle: 'Let agents message each other again on every host you can operate',
+      enabled: () => controllableHosts(s().hosts).some((host) => s().messagingPausedByHost[host.id]),
+      run: () => void s().setMessagingPaused(false),
     },
     { id: 'appearance.open', title: 'Appearance…', subtitle: 'Theme and app / terminal font sizes', run: () => s().setModal('appearance') },
     { id: 'theme.toggle', title: 'Toggle theme', subtitle: 'Switch light / dark', run: () => s().toggleTheme() },

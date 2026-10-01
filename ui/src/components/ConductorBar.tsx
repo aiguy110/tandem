@@ -14,6 +14,9 @@ function PaletteIcon() {
 
 export function ConductorBar({ version }: { version: string | null }) {
   const setModal = useStore((s) => s.setModal);
+  const hosts = useStore((s) => s.hosts);
+  const pausedByHost = useStore((s) => s.messagingPausedByHost);
+  const pausedHosts = hosts.filter((host) => pausedByHost[host.id]);
   const b = loadBindings();
 
   return (
@@ -28,6 +31,15 @@ export function ConductorBar({ version }: { version: string | null }) {
         <PaletteIcon />
         <span className="kbd">{prettyBinding(b['palette.open'])}</span>
       </button>
+      {pausedHosts.length > 0 && (
+        <span
+          className="bar-messaging-paused"
+          role="status"
+          title={`Agent messaging is paused on ${pausedHosts.map((host) => host.name ?? host.id).join(', ')}. Use “Resume agent messaging” in the command palette.`}
+        >
+          ⏸ messaging paused
+        </span>
+      )}
       <div className="spacer" />
       <button className="btn ghost" onClick={() => setModal('appearance')} title="Appearance: theme and font sizes">
         Aa

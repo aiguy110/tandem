@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/languagemodel"
+	"github.com/aiguy110/tandem/internal/messaging"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
@@ -306,6 +308,32 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	// Agent messaging reads the registry and federation, and the registry
+	// reports back to it (summaries, session close), so the two are joined
+	// here. wsHandler is set once the browser handler exists.
+	var wsHandler atomic.Pointer[wsserver.Handler]
+	messagingService, err := messaging.New(messaging.Options{
+		Store: db, Sessions: agents, Federation: federationService, LocalName: federationName, Token: token,
+		OnSummaryChange: func() {
+			if h := wsHandler.Load(); h != nil {
+				h.BroadcastAgents()
+			}
+		},
+		OnLinksChanged: func(sessionID string) {
+			if h := wsHandler.Load(); h != nil {
+				h.BroadcastAgentLinks(sessionID)
+			}
+		},
+		OnStateChanged: func() {
+			if h := wsHandler.Load(); h != nil {
+				h.BroadcastMessagingState()
+			}
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("configure agent messaging: %w", err)
+	}
+	agents.SetMessaging(messagingService)
 	httpHandler := httpserver.New(httpserver.Options{
 		// A federated agent's images live on the host that owns it; the
 		// federated store fetches them over the tunnel on a local miss.
@@ -369,6 +397,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			federationService.ServeHTTP(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, messaging.Path) {
+			messagingService.ServeHTTP(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/internal/automation/run", "/internal/automation/evaluate", "/internal/automation/preapprove":
 			automationService.ServeHTTP(w, r)
@@ -429,7 +461,8 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a
 	// restoring agent is listed from its durable row and lookups wait for it.
@@ -439,6 +472,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	// Link approvals pending at the last shutdown are re-raised against the
+	// restored sessions; timeouts and the outbox resume from the store.
+	messagingService.Start(ctx)
+	defer messagingService.Close()
 	takeoverReconcile.events = db.EventsOfKinds
 	takeoverReconcile.live = takeovers.Live
 	takeoverReconcile.abandon = takeovers.Abandon
@@ -898,9 +935,24 @@ func (c *messageAudioCache) watch(s *session.Session) {
 	c.prepare(s)
 }
 
+// isTurnStartEvent is a user_message, or a message from another agent (which
+// starts or steers a turn just as a user message does).
+func isTurnStartEvent(ev eventlog.Event) bool {
+	switch ev.Kind {
+	case "user_message":
+		return true
+	case "agent_message":
+		var p struct {
+			Direction string `json:"direction"`
+		}
+		return json.Unmarshal(ev.Payload, &p) == nil && p.Direction == "in"
+	}
+	return false
+}
+
 func messageBlockBoundary(kind string) bool {
 	switch kind {
-	case "thought_chunk", "tool_call", "tool_call_update", "compaction", "compaction_summary_chunk", "plan", "terminal_output", "permission_request", "error", "user_message":
+	case "thought_chunk", "tool_call", "tool_call_update", "compaction", "compaction_summary_chunk", "plan", "terminal_output", "permission_request", "error", "user_message", "agent_message":
 		return true
 	default:
 		return false
@@ -1033,7 +1085,7 @@ func turnMessageSeqs(s *session.Session, all bool, enabledAfterSeq int64) ([]int
 func completedMessageSeqs(history []eventlog.LoggedEvent, all bool, enabledAfterSeq int64, includeTrailing bool) []int64 {
 	start := 0
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Event.Kind == "user_message" {
+		if isTurnStartEvent(history[i].Event) {
 			start = i + 1
 			break
 		}

@@ -187,6 +187,27 @@ func collect(history []eventlog.LoggedEvent) []entry {
 		case "user_message":
 			closeTools()
 			appendText("user", userText(logged.Event.Payload))
+		case "agent_message":
+			// A message from another agent reads as input to this one.
+			var payload struct {
+				Direction string `json:"direction"`
+				Envelope  struct {
+					Body string `json:"body"`
+					From struct {
+						Name  string `json:"name"`
+						Agent string `json:"agent"`
+					} `json:"from"`
+				} `json:"envelope"`
+			}
+			if json.Unmarshal(logged.Event.Payload, &payload) != nil || payload.Direction != "in" {
+				continue
+			}
+			closeTools()
+			who := payload.Envelope.From.Name
+			if who == "" {
+				who = payload.Envelope.From.Agent
+			}
+			appendText("user", "[message from agent "+who+"] "+payload.Envelope.Body)
 		case "message_chunk":
 			closeTools()
 			var payload struct {

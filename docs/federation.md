@@ -238,8 +238,15 @@ below them:
 |---|---|
 | `none` | nothing; the host is left out of the requester's host list |
 | `view` | agent lists, transcript/terminal/screencast subscriptions, history search, diffs, listings |
-| `operate` | prompts, interrupts, approvals, terminal, workspace-shell and browser input, renames, annotations |
+| `message` | everything in `view`, plus agent messaging: `agent_directory`, `agent_message_deliver`, `agent_link_request` (see [agent-messaging.md](agent-messaging.md)) |
+| `operate` | everything in `message`, plus prompts, interrupts, approvals, terminal, workspace-shell and browser input, renames, annotations |
 | `admin` | spawn, resume, close, settings, installs, notification actions, and any command not classified above |
+
+`message` lets agents on the requesting host discover this host's listed agents and send
+them messages, but only over a link a human granted on this host; it grants no control
+over agents. It is opt-in for siblings, e.g. `- from: "*"` / `level: message`. A relayed
+envelope's `from.host` must equal the command's origin, so a host cannot send as another
+host.
 
 `from` matches the requesting host's ID as shown in Fleet View (`boremox-3f9a1c`). A
 Tandem without a parent generates a durable ID of the same form for itself. `ancestors`

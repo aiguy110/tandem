@@ -4,8 +4,9 @@ import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { createUnifiedPatch } from '../diff/textDiff';
 import type { AckResult, SessionView } from '../../store';
-import type { Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
+import type { AgentAddress, AgentEnvelope, Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { storedToken } from '../../ws/client';
+import { addressHostLabel, addressLabel, findAgentByAddress } from '../../messaging';
 import { renderMarkdown } from '../../markdown';
 import { fuzzyFilter } from '../../fuzzy';
 import { usesSoftKeyboard } from '../../mobile';
@@ -35,6 +36,7 @@ type Item =
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
+  | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
   | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
@@ -48,6 +50,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const asides = new Map<string, Extract<Item, { kind: 'aside' }>>();
   const compactions = new Map<string, Extract<Item, { kind: 'compaction' }>>();
   const rateLimits = new Map<string, Extract<Item, { kind: 'rate-limit' }>>();
+  const agentMessages = new Map<string, Extract<Item, { kind: 'agent-message' }>>();
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
@@ -59,6 +62,29 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           blocks: ev.blocks ?? (ev.text != null ? [{ type: 'text', text: ev.text }] : []),
         });
         break;
+      case 'agent_message': {
+        // A message from/to another agent: its own card, never a user prompt.
+        // The daemon may re-emit an envelope (a retried delivery); keep one
+        // card per envelope id, updated in place.
+        const existing = agentMessages.get(ev.envelope.id);
+        if (existing) {
+          existing.status = ev.status;
+          existing.error = ev.error;
+          break;
+        }
+        const item: Extract<Item, { kind: 'agent-message' }> = { kind: 'agent-message', key: `am${seq}`, id: ev.envelope.id, direction: ev.direction, envelope: ev.envelope, status: ev.status, error: ev.error };
+        agentMessages.set(ev.envelope.id, item);
+        items.push(item);
+        break;
+      }
+      case 'agent_message_status': {
+        const card = agentMessages.get(ev.id);
+        if (card) {
+          card.status = ev.status;
+          card.error = ev.error;
+        }
+        break;
+      }
       case 'message_chunk': {
         const last = items[items.length - 1];
         if (last && last.kind === 'message') last.text += ev.text;
@@ -612,6 +638,34 @@ export function TranscriptPane() {
     setAtBottom(nearBottom);
   };
 
+  // Clicking the peer on an agent-message card focuses that agent and scrolls
+  // its transcript to the card carrying the same envelope id. The target
+  // transcript may not be on screen yet, so the id waits here until the pane
+  // shows that agent's loaded history.
+  const pendingEnvelope = useRef<string | null>(null);
+  const [scrollTick, setScrollTick] = useState(0);
+  const focusAgent = useStore((s) => s.focus);
+  const openPeer = (peer: AgentAddress, envelopeId: string) => {
+    const state = useStore.getState();
+    const target = findAgentByAddress(state.sessions, state.hosts, peer);
+    if (!target) return;
+    pendingEnvelope.current = envelopeId;
+    if (target.id === agent?.id) setScrollTick((n) => n + 1);
+    else focusAgent(target.id);
+  };
+  useEffect(() => {
+    const id = pendingEnvelope.current;
+    if (!id || !agent?.historyLoaded) return;
+    const el = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('[data-envelope-id]') ?? []).find((node) => node.dataset.envelopeId === id);
+    pendingEnvelope.current = null;
+    if (!el) return;
+    stick.current = false;
+    setAtBottom(false);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    flash(el, 'annotation-flash', 2550);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.id, agent?.historyLoaded, transcriptItems, scrollTick]);
+
   const clearPendingSelection = () => {
     setSelAnchor(null);
   };
@@ -761,6 +815,7 @@ export function TranscriptPane() {
                 onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
                 onJumpToQuote={jumpToQuote}
                 onJumpToLinkedBlock={jumpToLinkedBlock}
+                onOpenPeer={openPeer}
                 onFork={it.kind === 'user' && agent.adapter === 'acp' && agent.asideSupport === true
                   ? (edit) => forkSession(agent.id, { seq: it.seq, edit })
                   : undefined}
@@ -994,6 +1049,7 @@ function Row({
   onRateLimitToggle,
   onJumpToQuote,
   onJumpToLinkedBlock,
+  onOpenPeer,
   onFork,
 }: {
   item: Item;
@@ -1008,6 +1064,7 @@ function Row({
   onRateLimitToggle: (enabled: boolean) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
+  onOpenPeer: (peer: AgentAddress, envelopeId: string) => void;
   // Offered on user messages when the agent can fork: with no argument it
   // forks after this message's turn; with blocks it forks before the message
   // and sends them in its place.
@@ -1150,6 +1207,8 @@ function Row({
       );
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
+    case 'agent-message':
+      return <AgentMessageCard item={item} enterClass={enterClass} onOpenPeer={onOpenPeer} />;
     case 'rate-limit':
       return <RateLimitWidget item={item} onToggle={onRateLimitToggle} />;
     case 'aside':
@@ -1164,6 +1223,34 @@ function Row({
         </section>
       );
   }
+}
+
+// A message to or from another agent (docs/agent-messaging.md). The peer name
+// opens that agent; data-envelope-id lets the peer's transcript be scrolled to
+// the card for the same envelope.
+function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item, { kind: 'agent-message' }>; enterClass: string; onOpenPeer: (peer: AgentAddress, envelopeId: string) => void }) {
+  const hosts = useStore((s) => s.hosts);
+  const { envelope, direction } = item;
+  const peer = direction === 'in' ? envelope.from : envelope.to;
+  const kind = envelope.kind === 'system' && envelope.system?.event ? `system · ${envelope.system.event}` : envelope.kind;
+  return (
+    <section
+      className={`agent-msg ${direction} kind-${envelope.kind}${item.error ? ' failed' : ''}${enterClass}`}
+      data-envelope-id={envelope.id}
+      aria-label={direction === 'in' ? 'Message from another agent' : 'Message to another agent'}
+    >
+      <header className="agent-msg-head">
+        <span className="agent-msg-dir">{direction === 'in' ? '✉ from' : '→'}</span>
+        <button type="button" className="agent-msg-peer" title={`Open ${addressLabel(peer)}`} onClick={() => onOpenPeer(peer, envelope.id)}>
+          {addressLabel(peer)}
+        </button>
+        <span className="agent-msg-host">· {addressHostLabel(hosts, peer)}</span>
+        <span className="agent-msg-kind">{kind}</span>
+        <span className={`agent-msg-status ${item.status}`}>{item.status}{item.error ? ` · ${item.error}` : ''}</span>
+      </header>
+      {envelope.body && <div className="agent-msg-body markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(envelope.body) }} onClick={handleCodeCopyClick} />}
+    </section>
+  );
 }
 
 function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {

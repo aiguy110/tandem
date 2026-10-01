@@ -26,6 +26,7 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/historyimport"
+	"github.com/aiguy110/tandem/internal/messaging"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
@@ -84,6 +85,9 @@ type Options struct {
 	AgentDistributions       func(context.Context) ([]runtimeinstall.AdapterStatus, error)
 	InstallAgentDistribution func(context.Context, string, string) error
 	Federation               Federation
+	// Messaging serves the agent-messaging commands; nil answers them with an
+	// error.
+	Messaging Messaging
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
@@ -386,6 +390,16 @@ type clientMessage struct {
 	AssetID          string `json:"assetId"`
 	MIMEType         string `json:"mimeType"`
 	Version          string `json:"version"`
+
+	// Agent messaging (docs/agent-messaging.md).
+	Envelope  *messaging.Envelope  `json:"envelope,omitempty"`
+	Link      *messaging.LinkInput `json:"link,omitempty"`
+	From      *messaging.Address   `json:"from,omitempty"`
+	To        *messaging.Address   `json:"to,omitempty"`
+	Requester *messaging.Address   `json:"requester,omitempty"`
+	Reason    string               `json:"reason,omitempty"`
+	Listed    *bool                `json:"listed,omitempty"`
+	Paused    *bool                `json:"paused,omitempty"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -1328,6 +1342,12 @@ func (c *connection) handle(m clientMessage) {
 		c.commandAck(m, m.SessionID)
 	case "set_audio_focus":
 		c.setAudioFocus(m)
+	case "list_agent_links", "set_agent_link", "delete_agent_link", "set_agent_listed", "get_messaging_state", "set_messaging_paused":
+		c.handleMessaging(m)
+	case "agent_directory", "agent_message_deliver", "agent_link_request":
+		// Delivery steers or queues into an agent and a link request raises an
+		// approval; neither should hold up this connection's other commands.
+		go c.handleMessaging(m)
 	case "render_message_audio":
 		c.renderMessageAudio(m)
 	case "get_asset":

@@ -138,6 +138,7 @@ func (s *Service) LocalHost() Host {
 	h := Host{
 		ID:              "local",
 		Local:           true,
+		NodeID:          s.selfID(),
 		Name:            "This host",
 		Status:          "connected",
 		ProtocolVersion: ProtocolVersion,
@@ -800,6 +801,10 @@ func (s *Service) callUpstream(ctx context.Context, target Host, origin string, 
 	}
 }
 
+// SelfID is the stable host ID this daemon is known by to its peers; agent
+// messaging addresses agents by it.
+func (s *Service) SelfID() string { return s.selfID() }
+
 // selfID is the host ID this daemon names itself by to its peers: the ID its
 // parent accepted, or else a durable generated one (a root has no parent to
 // accept an ID, but its children still need to tell it apart).
@@ -873,7 +878,7 @@ func (s *Service) authorize(origin string, ancestor bool, payload json.RawMessag
 	if who == "" {
 		who = "the requesting host"
 	}
-	return fmt.Errorf("federation: %s may not %s on this host (needs %s access, has %s)", who, commandType, need, have)
+	return fmt.Errorf("federation: %s "+accessDeniedMarker+"%s on this host (needs %s access, has %s)", who, commandType, need, have)
 }
 
 // ServeHTTP mounts the small, separately authenticated federation protocol.
@@ -1571,7 +1576,9 @@ func (s *Service) executeFromChild(childID string, t *tunnel, msg tunnelMessage)
 		slog.Info("executing federation command from agent host", "host_id", childID, "origin", origin, "type", commandType, "relay_to", next, "command_id", msg.ID)
 		// The requester applies its own deadline; this only bounds a
 		// command whose reply never comes (spawns may install runtimes).
-		ctx, cancel := context.WithTimeout(context.Background(), 11*time.Minute)
+		// The origin also rides in the context: a Local that executes the
+		// command itself (rather than relaying it) learns who asked from it.
+		ctx, cancel := context.WithTimeout(WithOrigin(context.Background(), origin), 11*time.Minute)
 		data, err := link.local.Execute(ctx, payload)
 		cancel()
 		reply.Payload = data
@@ -2217,7 +2224,7 @@ func (s *Service) serveParent(ctx context.Context, conn *websocket.Conn, hostID 
 					payload, execErr = withEnvelopeField(payload, OriginField, msg.Origin)
 				}
 				if execErr == nil {
-					data, execErr = s.local.Execute(attemptCtx, payload)
+					data, execErr = s.local.Execute(WithOrigin(attemptCtx, msg.Origin), payload)
 				}
 			}
 			reply := tunnelMessage{T: "response", ID: msg.ID, Payload: data}

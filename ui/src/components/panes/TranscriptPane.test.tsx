@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../store';
+import type { AgentEnvelope } from '../../wire';
 import type { SessionView } from '../../store';
 import { findFileToken, findSlashToken, TranscriptPane } from './TranscriptPane';
 import { __resetForTests } from '../../audio/engine';
@@ -36,6 +37,8 @@ function agent(): SessionView {
     takeovers: [],
     sessionConfig: null,
     usage: null,
+    waitingOn: [],
+    openAsks: 0,
     commands: [],
     imagePromptSupport: null,
     asideSupport: null,
@@ -85,6 +88,98 @@ describe('TranscriptPane rate-limit widget', () => {
     expect(view.getByText('Usage limit reached')).toBeTruthy();
     fireEvent.click(view.getByRole('switch'));
     expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
+  });
+});
+
+describe('TranscriptPane agent messages', () => {
+  const envelope = (overrides: Partial<AgentEnvelope> = {}): AgentEnvelope => ({
+    id: 'msg_1', threadId: 'thr_1', kind: 'ask', requestId: 'req_1',
+    from: { host: 'node-b', agent: 'sess-b', name: 'api-worker' },
+    to: { host: 'node-a', agent: 'session-1', name: 'Mobile test' },
+    body: 'Which **port** does the API use?', hop: 0, sentAt: '2026-01-01T00:00:00Z', ...overrides,
+  });
+
+  it('renders an inbound message as a card, not a user prompt', () => {
+    const view = agent();
+    view.events = [{ seq: 1, event: { kind: 'agent_message', direction: 'in', envelope: envelope(), status: 'steered' } }];
+    useStore.setState({
+      ...initialState,
+      hosts: [{ id: 'local', local: true, status: 'connected', nodeId: 'node-a' }, { id: 'b', name: 'Builder', status: 'connected', nodeId: 'node-b' }],
+      sessions: { 'session-1': view }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const { container } = render(<TranscriptPane />);
+    const card = container.querySelector('[data-envelope-id="msg_1"]') as HTMLElement;
+    expect(card.textContent).toContain('✉ from');
+    expect(card.textContent).toContain('@api-worker');
+    expect(card.textContent).toContain('Builder');
+    expect(card.textContent).toContain('ask');
+    expect(card.textContent).toContain('steered');
+    expect(card.querySelector('strong')?.textContent).toBe('port');
+    expect(container.querySelector('.ev.user')).toBeNull();
+  });
+
+  it('renders an outbound message and patches its status by envelope id', () => {
+    const view = agent();
+    view.events = [
+      { seq: 1, event: { kind: 'agent_message', direction: 'out', envelope: envelope({ kind: 'send', from: { host: 'node-a', agent: 'session-1' }, to: { host: 'node-b', agent: 'sess-b', name: 'api-worker' } }), status: 'pending' } },
+    ];
+    useStore.setState({ ...initialState, sessions: { 'session-1': view }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] } }, true);
+
+    const { container } = render(<TranscriptPane />);
+    const card = () => container.querySelector('[data-envelope-id="msg_1"]') as HTMLElement;
+    expect(card().textContent).toContain('→');
+    expect(card().querySelector('.agent-msg-status')?.textContent).toBe('pending');
+
+    const patched = { ...view, events: [...view.events, { seq: 2, event: { kind: 'agent_message_status', id: 'msg_1', status: 'rejected', error: 'no_link' } as const }] };
+    act(() => useStore.setState({ sessions: { 'session-1': patched } }));
+    expect(container.querySelectorAll('[data-envelope-id]').length).toBe(1);
+    expect(card().querySelector('.agent-msg-status')?.textContent).toBe('rejected · no_link');
+  });
+
+  it('shows the system event and opens the peer agent when its name is clicked', () => {
+    const view = agent();
+    view.events = [{ seq: 1, event: { kind: 'agent_message', direction: 'in', envelope: envelope({ kind: 'system', system: { event: 'timeout' }, body: '' }), status: 'started' } }];
+    const peer = { ...agent(), id: 'fed~b~sess-b', name: 'api-worker', hostId: 'b' };
+    const focus = vi.fn();
+    useStore.setState({
+      ...initialState,
+      hosts: [{ id: 'local', local: true, status: 'connected', nodeId: 'node-a' }, { id: 'b', name: 'Builder', status: 'connected', nodeId: 'node-b' }],
+      sessions: { 'session-1': view, [peer.id]: peer }, order: ['session-1', peer.id], focusedId: 'session-1', annotations: { 'session-1': [] },
+      focus,
+    }, true);
+
+    const { container, getByText } = render(<TranscriptPane />);
+    expect(container.querySelector('.agent-msg-kind')?.textContent).toBe('system · timeout');
+    fireEvent.click(getByText('@api-worker'));
+    expect(focus).toHaveBeenCalledWith('fed~b~sess-b');
+  });
+});
+
+describe('TranscriptPane agent message navigation', () => {
+  it('scrolls the peer transcript to the card with the same envelope id', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const sent = { ...agent(), events: [{ seq: 1, event: { kind: 'agent_message', direction: 'out', status: 'started', envelope: {
+      id: 'msg_9', threadId: 'thr_9', kind: 'send', from: { host: 'local', agent: 'session-1' }, to: { host: 'b', agent: 'sess-b', name: 'api-worker' }, body: 'hi', hop: 0, sentAt: '2026-01-01T00:00:00Z',
+    } } as const }] };
+    const received = { ...agent(), id: 'fed~b~sess-b', name: 'api-worker', hostId: 'b', events: [{ seq: 1, event: { kind: 'agent_message', direction: 'in', status: 'started', envelope: {
+      id: 'msg_9', threadId: 'thr_9', kind: 'send', from: { host: 'local', agent: 'session-1' }, to: { host: 'b', agent: 'sess-b' }, body: 'hi', hop: 0, sentAt: '2026-01-01T00:00:00Z',
+    } } as const }] };
+    useStore.setState({
+      ...initialState,
+      hosts: [{ id: 'local', local: true, status: 'connected' }, { id: 'b', name: 'Builder', status: 'connected' }],
+      sessions: { 'session-1': sent, [received.id]: received }, order: ['session-1', received.id], focusedId: 'session-1',
+      annotations: { 'session-1': [], [received.id]: [] },
+    }, true);
+
+    const { container, getByText } = render(<TranscriptPane />);
+    fireEvent.click(getByText('@api-worker'));
+    expect(useStore.getState().focusedId).toBe('fed~b~sess-b');
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).dataset.envelopeId).toBe('msg_9');
+    expect(container.querySelector('.agent-msg.in')).toBeTruthy();
+    delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
   });
 });
 

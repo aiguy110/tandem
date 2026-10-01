@@ -19,7 +19,7 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	}
 	w := MCPWiring{Broker: b, NodeRuntime: "/tools/node", PlaywrightCLI: cli, TandemExecutable: "/bin/tandem", ControlURL: "http://127.0.0.1:7717", Token: "secret", BrowserEnabled: true}
 	got := BuildMCPServers(w, "api/58", "/worktrees/api-58")
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("servers = %#v", got)
 	}
 	wantOutputDir := filepath.Join(os.TempDir(), "api-58")
@@ -37,18 +37,21 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	if got[2].Name != "tandem-scripts" || !reflect.DeepEqual(got[2].Args, []string{"mcp-scripts"}) || !reflect.DeepEqual(got[2].Env, wantScriptEnv) {
 		t.Fatalf("scripts declaration = %#v", got[2])
 	}
+	if got[3].Name != "tandem-messages" || !reflect.DeepEqual(got[3].Args, []string{"mcp-messages"}) || !reflect.DeepEqual(got[3].Env, wantEnv) {
+		t.Fatalf("messages declaration = %#v", got[3])
+	}
 }
 
 func TestBuildMCPServersSkipsMissingPlaywright(t *testing.T) {
 	got := BuildMCPServers(MCPWiring{NodeRuntime: "/tools/node", PlaywrightCLI: "/missing/cli.js", TandemExecutable: "/bin/tandem", BrowserEnabled: true}, "one", "/repo")
-	if len(got) != 2 || got[0].Name != "tandem-control" || got[1].Name != "tandem-scripts" {
+	if len(got) != 3 || got[0].Name != "tandem-control" || got[1].Name != "tandem-scripts" || got[2].Name != "tandem-messages" {
 		t.Fatalf("servers = %#v", got)
 	}
 }
 
-func TestBuildMCPServersIncludesScriptsWhenBrowserMCPDisabled(t *testing.T) {
+func TestBuildMCPServersIncludesScriptsAndMessagesWhenBrowserMCPDisabled(t *testing.T) {
 	got := BuildMCPServers(MCPWiring{TandemExecutable: "/bin/tandem"}, "one", "/repo")
-	if len(got) != 1 || got[0].Name != "tandem-scripts" {
+	if len(got) != 2 || got[0].Name != "tandem-scripts" || got[1].Name != "tandem-messages" {
 		t.Fatalf("servers = %#v", got)
 	}
 }

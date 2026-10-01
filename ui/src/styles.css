@@ -145,6 +145,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .brand b { color: var(--agent); }
 .brand .version { margin-left: 6px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 400; }
 .bar .spacer { flex: 1; }
+/* Shown while agent messaging is paused on any host (the kill switch). */
+.bar-messaging-paused { padding: 2px 8px; border: 1px solid var(--warn); border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px;
@@ -330,6 +332,9 @@ body.dock-resizing .app { transition: none; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 .session-row .name { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
 .session-host-badge { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500; }
+/* Agent messaging in the rail: an open outbound ask, and unanswered inbound asks. */
+.session-waiting { margin-top: 2px; color: var(--warn); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-ask-badge { padding: 0 5px; border-radius: 9px; background: var(--human-soft); color: var(--human); font-size: var(--fs-xs); font-weight: 600; }
 /* Host dividers are push-out sticky headers: each group is its own box, so a
    pinned divider is shoved off the top by the next group's divider rather than
    the two stacking up. They pin below the rail head, which is sticky at 0. */
@@ -460,6 +465,24 @@ body.dock-resizing .app { transition: none; }
 .aside-answer > :last-child { margin-bottom: 0; }
 .aside-thought, .aside-pending { color: var(--text-faint); font-size: var(--fs-sm); }
 .aside-error { margin-top: 8px; color: var(--err); font-size: var(--fs-sm); }
+/* Agent messaging: a message to/from another agent is its own card, visually
+   apart from the human's bubbles (docs/agent-messaging.md). */
+.agent-msg { max-width: 860px; padding: 9px 13px; border: 1px solid var(--border); border-left: 3px solid var(--human); border-radius: var(--r-sm); background: color-mix(in srgb, var(--human) 5%, var(--surface-2)); }
+.agent-msg.out { border-left-color: var(--agent); background: color-mix(in srgb, var(--agent) 5%, var(--surface-2)); }
+.agent-msg.failed { border-color: var(--err); }
+.agent-msg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
+.agent-msg-peer { padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.agent-msg-peer:hover { text-decoration: underline; }
+.agent-msg-host { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.agent-msg-kind, .agent-msg-status { padding: 0 6px; border-radius: 999px; background: var(--surface-3); font-size: var(--fs-xs); }
+.agent-msg-kind { margin-left: auto; text-transform: uppercase; letter-spacing: .04em; }
+.agent-msg-status.steered, .agent-msg-status.started, .agent-msg-status.queued { color: var(--ok); }
+.agent-msg-status.pending { color: var(--warn); }
+.agent-msg-status.rejected { background: var(--err-soft); color: var(--err); }
+.agent-msg.failed .agent-msg-status { background: var(--err-soft); color: var(--err); }
+.agent-msg-body { margin-top: 7px; color: var(--text); overflow-wrap: anywhere; }
+.agent-msg-body > :first-child { margin-top: 0; }
+.agent-msg-body > :last-child { margin-bottom: 0; }
 /* Floating "jump to newest" affordance, shown only when scrolled up off the tail. */
 .scroll-latest {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
@@ -966,6 +989,22 @@ body.dock-resizing .app { transition: none; }
 .insp-body .field { display: flex; flex-direction: column; gap: 2px; }
 .insp-body .field .k { font-size: var(--fs-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
 .insp-body .field .v { font-family: var(--font-mono); color: var(--text-dim); }
+
+/* Inspector > Links (agent messaging). */
+.insp-links { max-height: 240px; overflow: auto; padding: 8px 14px 14px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.insp-links-head { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 6px; }
+.insp-links-title { font-size: var(--fs-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
+.insp-links label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); }
+.insp-links input[type='number'] { width: 64px; }
+.insp-links select, .insp-links input[type='number'] { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font-size: var(--fs-sm); padding: 2px 4px; }
+.insp-card { color: var(--text-dim); font-style: italic; }
+.insp-link { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 5px 0; border-top: 1px solid var(--border); }
+.insp-link.paused .insp-link-from { color: var(--text-faint); }
+.insp-link-from { min-width: 9rem; font-weight: 600; }
+.insp-link-from small { font-family: var(--font-mono); font-weight: 400; color: var(--text-dim); }
+.insp-link-used { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-xs); }
+.insp-link-add { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+.insp-error { margin-top: 6px; color: var(--err); }
 
 /* ---- connection banner ---- */
 .conn-banner { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 50; padding: 6px 14px; border-radius: 999px; font-size: var(--fs-sm); box-shadow: var(--shadow); }

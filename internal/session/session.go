@@ -43,6 +43,7 @@ type Session struct {
 	approvalHandlers map[string]func(string) error
 	listeners        map[uint64]func(eventlog.LoggedEvent)
 	nextListener     uint64
+	turnEndListeners map[uint64]func(TurnEnd)
 	active           int
 	controlMode      string
 	adapterEpoch     uint64
@@ -112,6 +113,9 @@ type queuedPrompt struct {
 	ctx   context.Context
 	done  chan promptResult
 	aside bool
+	// event, when set, is the transcript event recorded when this prompt
+	// starts instead of the ordinary user_message (see EnqueuePromptWithEvent).
+	event *eventlog.Event
 }
 
 type promptResult struct {
@@ -447,6 +451,14 @@ func (s *Session) Prompt(ctx context.Context, blocks []agentadapter.PromptBlock)
 // Steer injects a user message into the active adapter turn without entering
 // the daemon prompt queue.
 func (s *Session) Steer(ctx context.Context, blocks []agentadapter.PromptBlock) error {
+	return s.SteerWithEvent(ctx, blocks, nil)
+}
+
+// SteerWithEvent is Steer, but records the event ev("steered") builds in the
+// transcript instead of the usual user_message when ev is non-nil. Agent
+// messaging uses it so a message from another agent is not presented as
+// something the user typed.
+func (s *Session) SteerWithEvent(ctx context.Context, blocks []agentadapter.PromptBlock, ev func(disposition string) eventlog.Event) error {
 	if s.ControlMode() != "transcript" {
 		return errors.New("agent session is controlled by the terminal")
 	}
@@ -469,6 +481,10 @@ func (s *Session) Steer(ctx context.Context, blocks []agentadapter.PromptBlock) 
 			text += block.Text
 		}
 	}
+	if ev != nil {
+		s.emit(ev("steered"))
+		return nil
+	}
 	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
 	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
 	return nil
@@ -477,6 +493,13 @@ func (s *Session) Steer(ctx context.Context, blocks []agentadapter.PromptBlock) 
 // EnqueuePrompt accepts a prompt immediately and executes accepted prompts in
 // FIFO order. ACP still sees exactly one session/prompt request at a time.
 func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (PromptReceipt, error) {
+	return s.EnqueuePromptWithEvent(ctx, blocks, nil)
+}
+
+// EnqueuePromptWithEvent is EnqueuePrompt, but records the event ev builds in
+// the transcript when the prompt starts instead of the usual user_message when
+// ev is non-nil. ev receives the prompt's disposition ("queued" or "started").
+func (s *Session) EnqueuePromptWithEvent(ctx context.Context, blocks []agentadapter.PromptBlock, ev func(disposition string) eventlog.Event) (PromptReceipt, error) {
 	if s.ControlMode() != "transcript" {
 		return PromptReceipt{}, errors.New("agent session is controlled by the terminal")
 	}
@@ -499,6 +522,10 @@ func (s *Session) EnqueuePrompt(ctx context.Context, blocks []agentadapter.Promp
 		s.promptCurrent = prompt
 	} else {
 		s.promptQueue = append(s.promptQueue, prompt)
+	}
+	if ev != nil {
+		event := ev(disposition)
+		prompt.event = &event
 	}
 	if disposition == "queued" {
 		s.emitPromptQueueEvent("prompt_queued", prompt.QueuedPrompt, position)
@@ -556,12 +583,15 @@ func (s *Session) runPromptQueue() {
 			stopReason, err = s.executeAside(prompt.ctx, prompt.ID, prompt.Blocks)
 		} else {
 			s.emitPromptQueueEvent("prompt_started", prompt.QueuedPrompt, 0)
-			stopReason, err = s.executePrompt(prompt.ctx, prompt.Blocks)
+			stopReason, err = s.executePrompt(prompt.ctx, prompt.Blocks, prompt.event)
 		}
 		if err != nil && !errors.Is(err, errAdapterReplaced) {
 			payload, _ := json.Marshal(map[string]any{"kind": "error", "message": err.Error(), "promptId": prompt.ID})
 			s.emit(eventlog.Event{Kind: "error", Payload: payload})
 			s.detectRateLimit(err.Error())
+		}
+		if !prompt.aside {
+			s.notifyTurnEnd(TurnEnd{PromptID: prompt.ID, StopReason: stopReason, Err: err})
 		}
 		prompt.done <- promptResult{stopReason: stopReason, err: err}
 		close(prompt.done)
@@ -597,7 +627,7 @@ func (s *Session) executeAside(ctx context.Context, id string, blocks []agentada
 	return stopReason, err
 }
 
-func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock) (string, error) {
+func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock, override *eventlog.Event) (string, error) {
 	s.mu.Lock()
 	s.active++
 	epoch := s.adapterEpoch
@@ -618,8 +648,12 @@ func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.Promp
 			text += b.Text
 		}
 	}
-	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
-	s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
+	if override != nil {
+		s.emit(*override)
+	} else {
+		payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": text, "blocks": blocks})
+		s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
+	}
 	slog.Info("agent prompt started", "session_id", s.ID, "adapter_epoch", epoch, "blocks", len(blocks))
 	stopReason, err := adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
 	s.mu.RLock()
@@ -712,8 +746,7 @@ func (s *Session) RespondPermission(reqID, optionID string) error {
 		if err := handler(optionID); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "working"})
-		s.emit(eventlog.Event{Kind: "status", Payload: payload})
+		s.emitStatusAfterApproval()
 		return nil
 	}
 	s.mu.Unlock()
@@ -773,7 +806,27 @@ func (s *Session) cancelExternalApproval(reqID string) {
 	delete(s.approvalHandlers, reqID)
 	delete(s.approvals, reqID)
 	s.mu.Unlock()
-	payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "working"})
+	s.emitStatusAfterApproval()
+}
+
+// emitStatusAfterApproval records the status a session returns to when a
+// daemon-owned approval resolves: still blocked while others are pending,
+// working while a turn runs, otherwise idle. (A daemon-owned approval can be
+// raised against an idle agent, for example an agent-messaging link request;
+// reporting "working" there would leave the session looking busy forever.)
+func (s *Session) emitStatusAfterApproval() {
+	status := "working"
+	s.mu.RLock()
+	pending := len(s.approvals)
+	active := s.active > 0
+	s.mu.RUnlock()
+	switch {
+	case pending > 0:
+		status = "blocked"
+	case !active:
+		status = "idle"
+	}
+	payload, _ := json.Marshal(map[string]any{"kind": "status", "status": status})
 	s.emit(eventlog.Event{Kind: "status", Payload: payload})
 }
 func (s *Session) Interrupt() error {
@@ -925,3 +978,40 @@ func (s *Session) Dispose(ctx context.Context) error {
 	return s.disposeErr
 }
 func (s *Session) Done() <-chan struct{} { return s.done }
+
+// TurnEnd describes one finished daemon-queue prompt turn.
+type TurnEnd struct {
+	// PromptID is the queue ID of the prompt whose turn ended (the ID in its
+	// PromptReceipt).
+	PromptID   string
+	StopReason string
+	Err        error
+}
+
+// OnTurnEnd registers cb to run after every prompt turn ends (not asides),
+// before the next queued prompt starts. cb runs on the prompt-queue goroutine,
+// so it may enqueue more prompts but must not block for long. The returned
+// function unregisters it.
+func (s *Session) OnTurnEnd(cb func(TurnEnd)) func() {
+	s.mu.Lock()
+	if s.turnEndListeners == nil {
+		s.turnEndListeners = map[uint64]func(TurnEnd){}
+	}
+	id := s.nextListener
+	s.nextListener++
+	s.turnEndListeners[id] = cb
+	s.mu.Unlock()
+	return func() { s.mu.Lock(); delete(s.turnEndListeners, id); s.mu.Unlock() }
+}
+
+func (s *Session) notifyTurnEnd(end TurnEnd) {
+	s.mu.RLock()
+	callbacks := make([]func(TurnEnd), 0, len(s.turnEndListeners))
+	for _, cb := range s.turnEndListeners {
+		callbacks = append(callbacks, cb)
+	}
+	s.mu.RUnlock()
+	for _, cb := range callbacks {
+		cb(end)
+	}
+}

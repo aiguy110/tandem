@@ -471,7 +471,9 @@ func TestDaemonOwnedPermissionUsesSharedApprovalQueue(t *testing.T) {
 	if got.err != nil || got.option != "allow" {
 		t.Fatalf("result=%+v", got)
 	}
-	if len(s.PendingApprovals()) != 0 || s.Status() != Working {
+	// No turn is running, so resolving the approval returns the session to
+	// idle rather than leaving it looking busy.
+	if len(s.PendingApprovals()) != 0 || s.Status() != Idle {
 		t.Fatalf("pending=%+v status=%s", s.PendingApprovals(), s.Status())
 	}
 }

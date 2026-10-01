@@ -77,6 +77,13 @@ func (l *LoopbackLocal) Execute(ctx context.Context, payload json.RawMessage) (j
 	l.mu.Unlock()
 	defer func() { l.mu.Lock(); delete(l.waiters, id); l.mu.Unlock() }()
 	message["corrId"], _ = json.Marshal(id)
+	// A command executed here (not relayed onward) still needs to know which
+	// host asked; wsserver reads it from the private origin field.
+	if origin := OriginFrom(ctx); origin != "" {
+		if _, set := message[OriginField]; !set {
+			message[OriginField], _ = json.Marshal(origin)
+		}
+	}
 	data, err := json.Marshal(message)
 	if err != nil {
 		slog.Warn("federation loopback command write failed", "command_id", id, "error", err)

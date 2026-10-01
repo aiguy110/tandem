@@ -23,6 +23,7 @@ import (
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
+	"github.com/aiguy110/tandem/internal/messaging"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -102,6 +103,10 @@ type Registry struct {
 	onSession         func(*session.Session)
 	onAudioPreference func(*session.Session, bool)
 	onAudioFocus      func(*session.Session, string, bool)
+	// messaging supplies agent-messaging summary fields and lifecycle hooks;
+	// see SetMessaging.
+	messagingMu sync.RWMutex
+	messaging   MessagingHooks
 	// restoring holds agents whose startup restore is still in flight, keyed
 	// by session ID. restored is closed once the whole restore pass ends.
 	restoring map[string]restoringAgent
@@ -159,6 +164,45 @@ type Summary struct {
 	Adapter    string          `json:"adapter"`
 	CanHandoff bool            `json:"canHandoff"`
 	Profile    *SummaryProfile `json:"profile,omitempty"`
+	// WaitingOn lists this agent's open outbound asks (agent messaging);
+	// OpenAsks counts inbound asks it has not answered yet.
+	WaitingOn []messaging.WaitingOn `json:"waitingOn,omitempty"`
+	OpenAsks  int                   `json:"openAsks,omitempty"`
+}
+
+// MessagingHooks is what the registry needs from agent messaging
+// (internal/messaging). It is installed after construction because the
+// messaging service itself reads the registry.
+type MessagingHooks interface {
+	// SummaryState returns a session's open outbound asks and its count of
+	// unanswered inbound asks.
+	SummaryState(sessionID string) ([]messaging.WaitingOn, int)
+	// Watch is called for every session as it starts (including restores).
+	Watch(*session.Session)
+	// SessionClosed is called after a session is closed by a user, not when
+	// the daemon merely shuts down.
+	SessionClosed(sessionID string)
+}
+
+// SetMessaging installs the agent-messaging hooks. Call it before restoring
+// agents so every session is watched.
+func (r *Registry) SetMessaging(m MessagingHooks) {
+	r.messagingMu.Lock()
+	r.messaging = m
+	r.messagingMu.Unlock()
+}
+
+func (r *Registry) messagingHooks() MessagingHooks {
+	r.messagingMu.RLock()
+	defer r.messagingMu.RUnlock()
+	return r.messaging
+}
+
+// CWD returns a live agent's working directory, or "".
+func (r *Registry) CWD(id string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cwds[id]
 }
 
 // WorkspaceEntry is one immediate file-system completion candidate. Paths are
@@ -526,6 +570,9 @@ func (r *Registry) summary(ctx context.Context, id, name string, spec agentadapt
 		agent = r.config.ACP.Default
 	}
 	summary := Summary{ID: id, Name: name, Agent: agent, Status: status, PendingApprovals: pendingApprovals, ControlMode: controlMode, Adapter: spec.Adapter, CanHandoff: canHandoff(spec)}
+	if m := r.messagingHooks(); m != nil {
+		summary.WaitingOn, summary.OpenAsks = m.SummaryState(id)
+	}
 	if p := spec.Profile; p != nil {
 		summary.Profile = &SummaryProfile{ID: p.ID, Model: p.Model, Effort: p.Effort, Permission: p.Permission, Snapshot: p.Snapshot}
 	}
@@ -961,7 +1008,9 @@ const tandemSessionPreamble = "## Tandem session\n\n" +
 	"You are in a Tandem-managed session. Repository automations are TypeScript in `.tandem/scripts/`, " +
 	"run through the `tandem-scripts` MCP; a human must approve new grants and schedules. For a user-requested " +
 	"repo-local skill, keep one canonical `skills/<name>/` directory with shared agent bridges. Start with " +
-	"`agent-docs/README.md` for concise guidance and links to deeper documentation."
+	"`agent-docs/README.md` for concise guidance and links to deeper documentation. The `tandem-messages` MCP " +
+	"lets you message other agents over human-granted links: `messages_directory` discovers them and " +
+	"`messages_request_link` asks a human for access."
 
 // firstPrompt prefixes the first real user turn with Tandem-specific guidance,
 // then combines a hand-off transcript with the task the user typed at spawn.
@@ -1042,6 +1091,9 @@ func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agenta
 	r.placeAtTop(rec.ID)
 	if r.onSession != nil {
 		r.onSession(s)
+	}
+	if m := r.messagingHooks(); m != nil {
+		m.Watch(s)
 	}
 	if sid := s.ExternalSessionID(); sid != "" {
 		_ = r.store.SetExternalSessionID(rec.ID, sid)
@@ -1344,7 +1396,7 @@ func hasUserMessage(db *store.Store, sessionID string) (bool, error) {
 		return false, err
 	}
 	for _, event := range history {
-		if event.Event.Kind == "user_message" {
+		if event.Event.Kind == "user_message" || event.Event.Kind == "agent_message" {
 			return true, nil
 		}
 	}
@@ -2219,6 +2271,9 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 		if err := r.store.CloseSession(id); err != nil {
 			return false, err
 		}
+		if m := r.messagingHooks(); m != nil {
+			m.SessionClosed(id)
+		}
 		return true, nil
 	}
 	// A worktree can host several agents (a hand-off continues in place), so it
@@ -2242,6 +2297,9 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 	}
 	if err := r.store.CloseSession(id); err != nil {
 		return false, err
+	}
+	if m := r.messagingHooks(); m != nil {
+		m.SessionClosed(id)
 	}
 	return true, nil
 }

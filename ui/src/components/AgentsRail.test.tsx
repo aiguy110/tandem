@@ -309,3 +309,35 @@ describe('SessionsRail drop animation', () => {
     expect((animate.mock.calls[0]![0] as Keyframe[])[0].transform).toBe('translateY(40px)');
   });
 });
+
+describe('SessionsRail agent messaging', () => {
+  it('shows a ticking waiting-on line and an open-asks badge', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00Z'));
+      const agent = {
+        ...session(),
+        waitingOn: [{ requestId: 'req_1', to: { host: 'node-b', agent: 'sess-b', name: 'api-worker' }, since: '2026-01-01T00:07:00Z', deadline: '2026-01-01T00:37:00Z' }],
+        openAsks: 2,
+      };
+      useStore.setState({ sessions: { [agent.id]: agent }, order: [agent.id], focusedId: agent.id, hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }, { id: 'worker', name: 'Worker', status: 'connected' }] });
+
+      const view = render(<SessionsRail />);
+      expect(view.container.querySelector('.session-waiting')?.textContent).toBe('⏳ waiting on @api-worker · 3m 00s');
+      expect(view.container.querySelector('.session-ask-badge')?.textContent).toBe('✉ 2');
+
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(view.container.querySelector('.session-waiting')?.textContent).toBe('⏳ waiting on @api-worker · 3m 05s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('omits both indicators when nothing is pending', () => {
+    const agent = { ...session(), waitingOn: [], openAsks: 0 };
+    useStore.setState({ sessions: { [agent.id]: agent }, order: [agent.id], focusedId: agent.id });
+    const view = render(<SessionsRail />);
+    expect(view.container.querySelector('.session-waiting')).toBeNull();
+    expect(view.container.querySelector('.session-ask-badge')).toBeNull();
+  });
+});

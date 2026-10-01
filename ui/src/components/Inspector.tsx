@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { InspectorLinks } from './InspectorLinks';
 
 // Bottom inspector — contextual to the focused agent. Stub per the spec:
 // workspace path / branch / status. Collapsible.
@@ -48,6 +49,7 @@ export function Inspector() {
           </div>
         </div>
       )}
+      {open && agent && <InspectorLinks agent={agent} />}
       {open && !agent && <div className="insp-body">No session focused.</div>}
     </div>
   );

@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -319,5 +320,68 @@ func TestChildCannotClaimAnOriginOutsideItsSubtree(t *testing.T) {
 	defer cancel()
 	if _, err := f.alpha.Call(ctx, rootHost.ID, json.RawMessage(`{"t":"spawn_agent"}`)); err == nil || !strings.Contains(err.Error(), f.alphaID) {
 		t.Fatalf("alpha impersonating beta should be denied as alpha, got %v", err)
+	}
+}
+
+func TestMessageLevelSitsBetweenViewAndOperate(t *testing.T) {
+	if !(LevelView < LevelMessage && LevelMessage < LevelOperate) {
+		t.Fatal("message must rank between view and operate")
+	}
+	if LevelMessage.String() != "message" {
+		t.Fatalf("String = %q", LevelMessage.String())
+	}
+	if got, err := ParseLevel("Message"); err != nil || got != LevelMessage {
+		t.Fatalf("ParseLevel = %v, %v", got, err)
+	}
+	for _, command := range []string{"agent_directory", "agent_message_deliver", "agent_link_request"} {
+		if CommandLevel(command) != LevelMessage {
+			t.Errorf("%s needs %s, want message", command, CommandLevel(command))
+		}
+	}
+	for command, want := range map[string]Level{
+		"list_agent_links": LevelView, "get_messaging_state": LevelView,
+		"set_agent_link": LevelOperate, "delete_agent_link": LevelOperate,
+		"set_agent_listed": LevelOperate, "set_messaging_paused": LevelOperate,
+	} {
+		if got := CommandLevel(command); got != want {
+			t.Errorf("CommandLevel(%s) = %s, want %s", command, got, want)
+		}
+	}
+}
+
+// The executing host applies its policy to the command's origin: a sibling
+// granted `message` may deliver messages and ask for links but nothing that
+// edits links or drives agents.
+func TestAuthorizeEnforcesMessageLevel(t *testing.T) {
+	svc, err := New(Options{Store: openStore(t), Policy: Policy{{From: "sibling-*", Level: LevelMessage}, {From: "viewer-*", Level: LevelView}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := func(typ string) json.RawMessage { return json.RawMessage(`{"t":"` + typ + `"}`) }
+	for _, typ := range []string{"agent_directory", "agent_message_deliver", "agent_link_request", "list_agents", "list_agent_links"} {
+		if err := svc.authorize("sibling-1", false, command(typ)); err != nil {
+			t.Errorf("message level must allow %s: %v", typ, err)
+		}
+	}
+	for _, typ := range []string{"set_agent_link", "delete_agent_link", "set_agent_listed", "set_messaging_paused", "prompt", "spawn_agent"} {
+		err := svc.authorize("sibling-1", false, command(typ))
+		if err == nil || !IsAccessDenied(err) {
+			t.Errorf("message level must deny %s as an access denial, got %v", typ, err)
+		}
+	}
+	for _, typ := range []string{"agent_directory", "agent_message_deliver", "agent_link_request"} {
+		if err := svc.authorize("viewer-1", false, command(typ)); !IsAccessDenied(err) {
+			t.Errorf("view level must deny %s, got %v", typ, err)
+		}
+		if err := svc.authorize("stranger", false, command(typ)); !IsAccessDenied(err) {
+			t.Errorf("no access must deny %s, got %v", typ, err)
+		}
+		// Ancestors keep their default admin access, which includes message.
+		if err := svc.authorize("root", true, command(typ)); err != nil {
+			t.Errorf("ancestors must keep access to %s: %v", typ, err)
+		}
+	}
+	if IsAccessDenied(errors.New("federation: route to \"x\" is offline")) {
+		t.Fatal("a transport failure is not an access denial")
 	}
 }
