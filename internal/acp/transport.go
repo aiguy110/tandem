@@ -159,8 +159,7 @@ func (t *Transport) Call(ctx context.Context, method string, params, result any)
 		t.remove(id)
 		return err
 	}
-	select {
-	case r := <-ch:
+	decode := func(r response) error {
 		if r.err != nil {
 			return r.err
 		}
@@ -171,10 +170,21 @@ func (t *Transport) Call(ctx context.Context, method string, params, result any)
 			return fmt.Errorf("acp decode %s result: %w", method, err)
 		}
 		return nil
+	}
+	select {
+	case r := <-ch:
+		return decode(r)
 	case <-ctx.Done():
 		t.remove(id)
 		return ctx.Err()
 	case <-t.done:
+		// A child that answers and then exits makes both cases ready, and
+		// select picks at random; the answer it sent still counts.
+		select {
+		case r := <-ch:
+			return decode(r)
+		default:
+		}
 		t.remove(id)
 		return t.exitError()
 	}
