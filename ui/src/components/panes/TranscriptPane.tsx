@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useStore } from '../../store';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { createUnifiedPatch } from '../diff/textDiff';
-import type { AckResult, SessionView } from '../../store';
+import type { AckResult, DraftAttachment, SessionView } from '../../store';
 import type { AgentAddress, AgentEnvelope, Annotation, Approval, ImageAssetRef, PromptBlock, QueuedPrompt, SlashCommand, ToolStatus, WireEvent, WorkspaceEntry } from '../../wire';
 import { storedToken } from '../../ws/client';
 import { addressRef, agentHostLabel, agentRef, findAgentByAddress } from '../../messaging';
@@ -2009,16 +2009,8 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_TURN_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGES = 4;
 
-type DraftAttachment = {
-  localId: string;
-  file: File;
-  previewUrl?: string;
-  status: 'uploading' | 'ready' | 'error';
-  uploadProgress?: number;
-  asset?: Extract<PromptBlock, { type: 'image' }>;
-  uploadPath?: string;
-  error?: string;
-};
+const attachmentUploads = new Map<string, AbortController>();
+const attachmentUploadKey = (sessionId: string, localId: string) => `${sessionId}\0${localId}`;
 
 function PromptBar({ sessionId, working }: { sessionId: string; working: boolean }) {
   const prompt = useStore((s) => s.prompt);
@@ -2051,12 +2043,17 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const pendingSelectionRef = useRef<{ value: string; start: number; end: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
-  const aborts = useRef(new Map<string, AbortController>());
-  const attachmentRef = useRef<DraftAttachment[]>([]);
   const [caret, setCaret] = useState(0);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const attachments = useStore((s) => s.draftAttachments[sessionId] ?? []);
+  const setAttachments = (update: DraftAttachment[] | ((current: DraftAttachment[]) => DraftAttachment[])) => {
+    useStore.setState((state) => {
+      const current = state.draftAttachments[sessionId] ?? [];
+      const next = typeof update === 'function' ? update(current) : update;
+      return { draftAttachments: { ...state.draftAttachments, [sessionId]: next } };
+    });
+  };
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const { mounted: attachmentMenuMounted, closing: attachmentMenuClosing } = usePresence(attachmentMenuOpen);
@@ -2065,15 +2062,6 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const [queuedFlash, setQueuedFlash] = useState(false);
   const [fileEntries, setFileEntries] = useState<WorkspaceEntry[]>([]);
   const [fileEntriesDir, setFileEntriesDir] = useState<string | null>(null);
-
-  useEffect(() => {
-    attachmentRef.current = attachments;
-  }, [attachments]);
-
-  useEffect(() => () => {
-    for (const controller of aborts.current.values()) controller.abort();
-    for (const attachment of attachmentRef.current) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-  }, []);
 
   const slash = useMemo(() => findSlashToken(text, caret), [text, caret]);
   const file = useMemo(() => findFileToken(text, caret), [text, caret]);
@@ -2234,7 +2222,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
 
   const upload = async (attachment: DraftAttachment) => {
     const controller = new AbortController();
-    aborts.current.set(attachment.localId, controller);
+    const uploadKey = attachmentUploadKey(sessionId, attachment.localId);
+    attachmentUploads.set(uploadKey, controller);
     try {
       const token = storedToken();
       const { status, body } = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
@@ -2277,7 +2266,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
         ? { ...item, status: 'error', error: message }
         : item));
     } finally {
-      aborts.current.delete(attachment.localId);
+      attachmentUploads.delete(uploadKey);
     }
   };
 
@@ -2317,7 +2306,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
 
   const removeAttachment = (localId: string) => {
     const attachment = attachments.find((item) => item.localId === localId);
-    aborts.current.get(localId)?.abort();
+    attachmentUploads.get(attachmentUploadKey(sessionId, localId))?.abort();
     if (attachment?.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
     setAttachments((current) => current.filter((item) => item.localId !== localId));
     setAttachmentError(null);
