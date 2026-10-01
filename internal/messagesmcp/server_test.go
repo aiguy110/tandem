@@ -71,7 +71,13 @@ func TestToolCallPostsToDaemonWithSessionAndToken(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"messages_ask","arguments":{"to":"@bob","body":"hi","timeoutMinutes":5}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"messages_send","arguments":{"to":"nobody","body":"hi"}}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"messages_bogus","arguments":{}}}`)
-	first := <-got
+	// Tool calls are served concurrently, so requests may arrive in any order.
+	var first seen
+	for i := 0; i < 2; i++ {
+		if r := <-got; r.path == "/internal/messages/ask" {
+			first = r
+		}
+	}
 	if first.path != "/internal/messages/ask" || first.auth != "Bearer tok" || first.body["sessionId"] != "sess-1" || first.body["to"] != "@bob" || first.body["timeoutMinutes"] != float64(5) {
 		t.Fatalf("request = %+v", first)
 	}
