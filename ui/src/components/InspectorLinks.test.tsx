@@ -67,10 +67,10 @@ describe('InspectorLinks', () => {
     expect(screen.getByText(/plans work/)).toBeTruthy();
     sent = [];
 
-    fireEvent.change(screen.getByLabelText('Delivery from @api-worker'), { target: { value: 'queue' } });
+    fireEvent.click(screen.getByRole('button', { name: 'queue' }));
     expect(sent).toContainEqual({ t: 'set_agent_link', sessionId: 'sess-local', corrId: expect.any(String), link: { from, delivery: 'queue', budgetPerHour: 60, maxHops: 20, paused: false } });
 
-    fireEvent.click(screen.getByLabelText('Pause link from @api-worker'));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause link from @api-worker' }));
     expect(sent.at(-1)).toMatchObject({ t: 'set_agent_link', link: { paused: true } });
 
     const budget = screen.getByLabelText('Budget per hour from @api-worker');
@@ -85,8 +85,8 @@ describe('InspectorLinks', () => {
   it('adds a one-way link to this agent\'s host', () => {
     setup();
     sent = [];
-    fireEvent.change(screen.getByLabelText('Add link from agent'), { target: { value: remote.id } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add link' }));
+    fireEvent.click(screen.getByText('@api-worker'));
 
     const links = sent.filter((m) => m.t === 'set_agent_link');
     expect(links).toHaveLength(1);
@@ -100,9 +100,9 @@ describe('InspectorLinks', () => {
   it('both ways also grants the reverse link on the other agent\'s host', () => {
     setup();
     sent = [];
-    fireEvent.change(screen.getByLabelText('Add link from agent'), { target: { value: remote.id } });
-    fireEvent.click(screen.getByLabelText('both ways'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Both can message each other' }));
+    fireEvent.click(screen.getByText('@api-worker'));
 
     const links = sent.filter((m) => m.t === 'set_agent_link');
     expect(links).toHaveLength(2);
@@ -115,10 +115,25 @@ describe('InspectorLinks', () => {
 
   it('never offers the focused agent itself and toggles the directory listing', () => {
     setup();
-    const options = Array.from(screen.getByLabelText('Add link from agent').querySelectorAll('option')).map((o) => o.textContent);
-    expect(options).toEqual(['Add link…', '@api-worker · Builder']);
+    fireEvent.click(screen.getByRole('button', { name: '+ Add link' }));
+    const rows = Array.from(screen.getByRole('dialog').querySelectorAll('.row .primary')).map((o) => o.textContent);
+    expect(rows).toEqual(['@api-worker']);
     sent = [];
-    fireEvent.click(screen.getByLabelText('Listed in directory'));
+    fireEvent.click(screen.getByRole('button', { name: 'Hidden' }));
     expect(sent).toContainEqual({ t: 'set_agent_listed', sessionId: 'sess-local', listed: false, corrId: expect.any(String) });
+  });
+
+  it('both ways on an existing link only adds the reverse, keeping its settings', () => {
+    const from = { host: 'node-b', agent: 'sess-remote', name: 'api-worker' };
+    setup({
+      agentLinks: { [local.id]: { listed: true, card: '', links: [{ id: 'lnk_1', from, to: 'sess-local', delivery: 'queue', budgetPerHour: 5, maxHops: 3, paused: false, source: 'user', createdAt: '2026-01-01T00:00:00Z', usedLastHour: 0 }] } },
+    });
+    sent = [];
+    fireEvent.click(screen.getByRole('button', { name: '+ Add link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Both can message each other' }));
+    fireEvent.click(screen.getByRole('dialog').querySelector('.row')!);
+    const links = sent.filter((m) => m.t === 'set_agent_link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ hostId: 'route-b', sessionId: 'sess-remote' });
   });
 });
