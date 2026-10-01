@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -566,5 +567,31 @@ func TestHostNamesAreStoredAndCleared(t *testing.T) {
 	}
 	if _, ok := s.HostNames()["local"]; ok {
 		t.Fatal("cleared name still present")
+	}
+}
+
+func TestConcurrentFirstSelfIDCallsAgree(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		s, err := New(Options{Store: openStore(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		const callers = 8
+		ids := make(chan string, callers)
+		var start sync.WaitGroup
+		start.Add(1)
+		for i := 0; i < callers; i++ {
+			go func() { start.Wait(); ids <- s.selfID() }()
+		}
+		start.Done()
+		first := <-ids
+		for i := 1; i < callers; i++ {
+			if got := <-ids; got != first {
+				t.Fatalf("round %d: selfID returned %q and %q", round, first, got)
+			}
+		}
+		if stored, _ := s.store.FederationIdentity(); stored != first {
+			t.Fatalf("round %d: stored identity %q, announced %q", round, stored, first)
+		}
 	}
 }

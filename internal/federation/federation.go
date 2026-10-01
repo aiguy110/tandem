@@ -262,6 +262,9 @@ type Service struct {
 	// adoptMu serializes adopted parent sessions: a parent that reconnects
 	// replaces its old session only once that session has fully wound down.
 	adoptMu sync.Mutex
+	// identityMu serializes generating this daemon's durable identity, so two
+	// first callers cannot each mint (and announce) a different one.
+	identityMu sync.Mutex
 	// pendingAdoptions are adoption requests awaiting this operator's answer,
 	// keyed by adoptionKey. rejectedAdoptions are refused until restart.
 	pendingAdoptions  map[string]pendingAdoption
@@ -823,6 +826,8 @@ func (s *Service) selfID() string {
 	if cached != "" {
 		return cached
 	}
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
 	id, err := s.store.FederationIdentity()
 	if err != nil {
 		slog.Warn("federation identity lookup failed", "error", err)
