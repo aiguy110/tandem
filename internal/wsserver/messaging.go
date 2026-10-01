@@ -16,6 +16,8 @@ type Messaging interface {
 	Deliver(ctx context.Context, origin string, env messaging.Envelope) messaging.Result
 	LocalDirectory(requester *messaging.Address, query string) []messaging.DirectoryEntry
 	HandleLinkRequest(ctx context.Context, origin string, from, to messaging.Address, reason string) messaging.LinkRequestResult
+	HandlePull(origin string) ([]messaging.Envelope, error)
+	HandlePullAck(origin string, ids []string, results []messaging.PullAck) (int, error)
 	Links(sessionID string) (messaging.LinksView, error)
 	SetLink(sessionID string, in messaging.LinkInput) error
 	DeleteLink(sessionID string, from messaging.Address) error
@@ -155,6 +157,27 @@ func (c *connection) handleMessaging(m clientMessage) {
 			}
 		}
 		c.send(withCorr(reply, m.CorrID))
+	case "agent_message_pull":
+		// The caller's identity is the federation origin and nothing else;
+		// requester is only checked against it.
+		if m.Requester != nil && m.Requester.Host != m.FederationOrigin {
+			slog.Warn("agent pull refused: requester does not match the federation origin", "origin", m.FederationOrigin, "requester", m.Requester.Host)
+			c.commandError(m, errors.New("requester does not match the requesting host"))
+			return
+		}
+		envelopes, err := svc.HandlePull(m.FederationOrigin)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "agent_message_pull_result", "envelopes": envelopes}, m.CorrID))
+	case "agent_message_pull_ack":
+		changed, err := svc.HandlePullAck(m.FederationOrigin, m.IDs, m.Results)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.send(withCorr(map[string]any{"t": "agent_message_pull_ack_result", "applied": changed}, m.CorrID))
 	case "agent_link_request":
 		if m.From == nil || m.To == nil {
 			c.commandError(m, errors.New("from and to are required"))

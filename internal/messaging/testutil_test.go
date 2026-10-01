@@ -115,13 +115,16 @@ type testNet struct {
 	// level overrides the access level the caller has on the callee, keyed
 	// "caller>callee"; the default is message.
 	level map[string]federation.Level
-	calls []string
+	// noPull lists hosts that predate agent_message_pull.
+	noPull map[string]bool
+	calls  []string
 }
 
 func newNet() *testNet {
-	return &testNet{hosts: map[string]*testHost{}, offline: map[string]bool{}, level: map[string]federation.Level{}}
+	return &testNet{hosts: map[string]*testHost{}, offline: map[string]bool{}, level: map[string]federation.Level{}, noPull: map[string]bool{}}
 }
 
+func (n *testNet) setNoPull(id string, v bool)    { n.mu.Lock(); n.noPull[id] = v; n.mu.Unlock() }
 func (n *testNet) setOffline(id string, off bool) { n.mu.Lock(); n.offline[id] = off; n.mu.Unlock() }
 func (n *testNet) setLevel(from, to string, l federation.Level) {
 	n.mu.Lock()
@@ -141,6 +144,17 @@ type testFed struct {
 }
 
 func (f *testFed) SelfID() string { return f.self }
+
+// AccessLevelFor is what this host's policy grants hostID: the level the test
+// set for hostID acting on this host.
+func (f *testFed) AccessLevelFor(hostID string) federation.Level {
+	f.net.mu.Lock()
+	defer f.net.mu.Unlock()
+	if level, ok := f.net.level[hostID+">"+f.self]; ok {
+		return level
+	}
+	return federation.LevelMessage
+}
 func (f *testFed) Hosts() []federation.Host {
 	f.net.mu.Lock()
 	defer f.net.mu.Unlock()
@@ -179,6 +193,8 @@ func (f *testFed) Call(ctx context.Context, hostID string, payload json.RawMessa
 		Reason   string            `json:"reason"`
 		Req      *Address          `json:"requester"`
 		Query    string            `json:"query"`
+		IDs      []string          `json:"ids"`
+		Results  []PullAck         `json:"results"`
 		Extra    map[string]string `json:"-"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
@@ -210,6 +226,26 @@ func (f *testFed) Call(ctx context.Context, hostID string, payload json.RawMessa
 		return json.Marshal(reply)
 	case "agent_directory":
 		return json.Marshal(map[string]any{"t": "agent_directory", "entries": target.svc.LocalDirectory(cmd.Req, cmd.Query)})
+	case "agent_message_pull", "agent_message_pull_ack":
+		f.net.mu.Lock()
+		unsupported := f.net.noPull[hostID]
+		f.net.mu.Unlock()
+		if unsupported {
+			// An older daemon answers an unknown command with an error ack.
+			return json.RawMessage(`{"t":"ack","error":"unknown command"}`), nil
+		}
+		if cmd.T == "agent_message_pull" {
+			envs, err := target.svc.HandlePull(f.self)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{"t": "agent_message_pull_result", "envelopes": envs})
+		}
+		n, err := target.svc.HandlePullAck(f.self, cmd.IDs, cmd.Results)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"t": "agent_message_pull_ack_result", "applied": n})
 	}
 	return nil, fmt.Errorf("unsupported test command %s", cmd.T)
 }

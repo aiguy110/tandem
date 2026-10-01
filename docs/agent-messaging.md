@@ -114,7 +114,38 @@ Outbound envelopes are persisted before sending. A transport failure (host offli
 unknown route) leaves the envelope `pending`; it is retried every 15 s and whenever
 federation reports a host reconnect, until 24 h, after which the sender gets a
 `system`/`undeliverable` envelope. Policy rejections are terminal and returned to the
-calling tool immediately. Recipients deduplicate on envelope `id`.
+calling tool immediately, with one exception below. Recipients deduplicate on envelope `id`.
+
+**Pull fallback.** The host that answers a request may hold no federation rights on the
+host that made it: a parent's children have no access on it by default, and a parent
+omits from a child's fleet view every host that does not grant the child `view`, so the
+child cannot even address it. The requester always has rights on the responder (it sent
+the request), so it fetches the responses itself:
+
+- A **reply, decline or system envelope** whose push fails because the host is unknown,
+  unreachable or the federation access policy denies it stays `pending` in the outbox
+  ("held for pull" in the log) instead of failing, and is still retried every 15 s until the
+  24 h give-up. An access denial of a `send` or `ask` remains terminal and is returned to
+  the caller.
+- `agent_message_pull` returns (at most 100, oldest first) the responder's pending outbox
+  envelopes addressed to the caller. The caller's identity is the federation **origin**
+  of the command, never the `requester` field (which is only checked against it); nothing
+  is served while the kill switch is set. The caller routes each envelope through its normal
+  `Deliver` with the polled host as origin, so the sender, reply-needs-open-request, link
+  and kill-switch checks apply exactly as for a push. A pulled `send`/`ask` additionally needs
+  the puller's own federation policy to grant the polled host at least `message`.
+- `agent_message_pull_ack` `{ids, results: [{id, status, error?}]}` reports the outcome.
+  The responder marks accepted envelopes delivered, and rejected ones failed with the
+  puller's error (same status events and `undeliverable` follow-up as a push rejection).
+  Only pending rows addressed to the caller change, so repeating an ack is harmless; if an
+  ack is lost the envelopes are served again and the recipient deduplicates on `id`.
+  Envelopes the puller could not judge (kill switch, internal lookup failure) are left out
+  of the ack and stay pending.
+- A host polls (every 5 s, and immediately when an ask or link request is created or a
+  federation host reconnects) only the hosts it has an **open outbound ask** or a **pending
+  outbound link request** with, and nothing when none exists. A host that answers with
+  an error ack (it predates the command), denies it by policy, or fails repeatedly is left
+  alone for 5 minutes; a reconnect clears the back-off.
 
 ## Directory and discovery
 
@@ -143,7 +174,7 @@ A new access level **`message`** sits between `view` and `operate`:
 
 | Level | Adds |
 |---|---|
-| `message` | `agent_directory`, `agent_message_deliver`, `agent_link_request` |
+| `message` | `agent_directory`, `agent_message_deliver`, `agent_link_request`, `agent_message_pull`, `agent_message_pull_ack` |
 
 Defaults are unchanged (`ancestors: admin`, `*: none`), so siblings must opt in, e.g.
 
@@ -173,7 +204,7 @@ Declared for every ACP agent (`tandem mcp-messages`), bridging to
 | `messages_ask` | `to`, `body`, `timeoutMinutes?` | `{id, requestId, threadId, status}` |
 | `messages_reply` | `requestId`, `body` | `{id, status}` |
 | `messages_decline` | `requestId`, `reason` | `{id, status}` |
-| `messages_request_link` | `to`, `reason` | `{status: "pending"}` |
+| `messages_request_link` | `to`, `reason` | `{status: "approved"\|"denied"\|"pending", note?}` (blocks, see below) |
 | `messages_set_card` | `card` | `{}` |
 
 `to` accepts `@name`, `name`, `name@<host-id-or-name>`, or `<host>~<agent>`. An
@@ -182,8 +213,18 @@ ambiguous name is an error listing the candidates.
 `messages_request_link` sends `agent_link_request` to the recipient's host, which raises
 a daemon-owned approval on the **recipient's** session (Approvals rail): "@a (host)
 wants to message this agent: <reason>" with options *Allow* / *Deny*. The outcome comes
-back to the requester as `system` `link_approved`/`link_denied`. One-way only; the other
-agent can request the reverse link.
+back to the requester as `system` `link_approved`/`link_denied`, delivered by push or, when
+the deciding host cannot reach the requester, by pull. One-way only; the other agent can
+request the reverse link.
+
+The tool **blocks until the human decides** and returns `{status: "approved"}` or
+`{status: "denied", note}` once the requesting host records the outcome. After 10 minutes
+(`DefaultLinkRequestWait`) it returns `{status: "pending", note}` and the outcome is later
+delivered to the agent as a system message as usual. An outcome that arrives while the call
+is blocked is the tool result only: the agent is not also sent the system prompt, but the
+transcript still gets the inbound `agent_message` event (status `delivered`). The wait is on
+the daemon's HTTP handler (no write timeout applies); a cancelled call stops waiting, and an
+outcome claimed just as it was cancelled is delivered as a system message instead.
 
 ## Browser protocol
 
@@ -200,6 +241,8 @@ Commands (client → daemon; all accept `hostId` for routing like other commands
 | `agent_directory` | `requester` (Address), `query?` | message | `{t:"agent_directory", entries}` |
 | `agent_message_deliver` | `envelope` | message | `{t:"agent_message_result", id, status, error?}` |
 | `agent_link_request` | `from`, `to`, `reason` | message | `{t:"agent_link_request_result", status:"pending"}` |
+| `agent_message_pull` | `requester` (`{host}`; checked against the federation origin, which is the identity used) | message | `{t:"agent_message_pull_result", envelopes: Envelope[]}` |
+| `agent_message_pull_ack` | `ids`, `results: [{id, status, error?}]` | message | `{t:"agent_message_pull_ack_result", applied}` |
 
 Link objects carry `id`, `from`, `to`, `delivery`, `budgetPerHour`, `maxHops`,
 `paused`, `source`, `createdAt`, and `usedLastHour`. Any change to a session's links

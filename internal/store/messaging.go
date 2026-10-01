@@ -335,9 +335,30 @@ func (s *Store) PendingAgentMsgOutbox() ([]AgentMsgOutbox, error) {
 	return out, rows.Err()
 }
 
-// UpdateAgentMsgOutbox records the outcome of an attempt.
+// PendingAgentMsgOutboxForHost lists up to limit undelivered envelopes
+// addressed to host, oldest first: what a pull from that host is served.
+func (s *Store) PendingAgentMsgOutboxForHost(host string, limit int) ([]AgentMsgOutbox, error) {
+	rows, err := s.db.Query(`SELECT `+agentMsgOutboxColumns+` FROM agent_msg_outbox WHERE status = 'pending' AND toHost = ? ORDER BY createdAt, id LIMIT ?`, host, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AgentMsgOutbox{}
+	for rows.Next() {
+		o, err := scanAgentMsgOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAgentMsgOutbox records the outcome of an attempt. Only a pending row
+// changes: a row already delivered or failed (for example by a pull
+// acknowledgement racing a push retry) keeps its final state.
 func (s *Store) UpdateAgentMsgOutbox(id, status, result, errText string, attempts int, nextAttemptAt int64) error {
-	_, err := s.db.Exec(`UPDATE agent_msg_outbox SET status = ?, result = ?, error = ?, attempts = ?, nextAttemptAt = ?, updatedAt = ? WHERE id = ?`,
+	_, err := s.db.Exec(`UPDATE agent_msg_outbox SET status = ?, result = ?, error = ?, attempts = ?, nextAttemptAt = ?, updatedAt = ? WHERE id = ? AND status = 'pending'`,
 		status, result, errText, attempts, nextAttemptAt, s.now().UnixMilli(), id)
 	return err
 }

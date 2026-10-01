@@ -72,6 +72,22 @@ func (n *fedNode) Execute(ctx context.Context, payload json.RawMessage) (json.Ra
 		_ = json.Unmarshal(cmd["reason"], &reason)
 		res := n.svc.HandleLinkRequest(ctx, origin, from, to, reason)
 		return json.Marshal(map[string]any{"t": "agent_link_request_result", "status": res.Status, "error": res.Error})
+	case "agent_message_pull":
+		envs, err := n.svc.HandlePull(origin)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"t": "agent_message_pull_result", "envelopes": envs})
+	case "agent_message_pull_ack":
+		var ids []string
+		var results []PullAck
+		_ = json.Unmarshal(cmd["ids"], &ids)
+		_ = json.Unmarshal(cmd["results"], &results)
+		applied, err := n.svc.HandlePullAck(origin, ids, results)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"t": "agent_message_pull_ack_result", "applied": applied})
 	case "agent_directory":
 		var requester *Address
 		_ = json.Unmarshal(cmd["requester"], &requester)
@@ -121,7 +137,7 @@ func newFedNode(t *testing.T, name string, opts federation.Options, local bool) 
 		t.Fatal(err)
 	}
 	n.fed = fed
-	n.svc, err = New(Options{Store: db, Sessions: n.sessions, Federation: fed, LocalName: name, Token: "tok", CallTimeout: 5 * time.Second})
+	n.svc, err = New(Options{Store: db, Sessions: n.sessions, Federation: fed, LocalName: name, Token: "tok", CallTimeout: 5 * time.Second, TickInterval: 20 * time.Millisecond, PullInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,14 +254,9 @@ func TestSiblingsMessageThroughRealFederation(t *testing.T) {
 	if _, err := beta.svc.Reply(ctx, "bob", ask.RequestID, "yes, via the relay"); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "alice to receive the reply", func() bool {
-		for _, p := range alphaAd.promptTexts() {
-			if strings.Contains(p, "yes, via the relay") {
-				return true
-			}
-		}
-		return false
-	})
+	// Steered into the turn the undeliverable notice started, or queued as a
+	// prompt, depending on timing.
+	eventually(t, "alice to receive the reply", func() bool { return sawText(alphaAd, "yes, via the relay") })
 	if waiting, _ := alpha.svc.SummaryState("alice"); len(waiting) != 0 {
 		t.Fatalf("waitingOn = %+v", waiting)
 	}

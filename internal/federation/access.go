@@ -172,6 +172,10 @@ var commandLevels = map[string]Level{
 	"agent_directory":       LevelMessage,
 	"agent_message_deliver": LevelMessage,
 	"agent_link_request":    LevelMessage,
+	// Pull fallback: a host that cannot push responses to a requester holds
+	// them until the requester fetches (and acknowledges) them.
+	"agent_message_pull":     LevelMessage,
+	"agent_message_pull_ack": LevelMessage,
 
 	"set_agent_link":       LevelOperate,
 	"delete_agent_link":    LevelOperate,

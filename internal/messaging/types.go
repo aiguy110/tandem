@@ -49,7 +49,10 @@ const (
 	outboxMaxAge        = 24 * time.Hour
 	directoryCacheTTL   = 30 * time.Second
 	linkRequestMaxAge   = 24 * time.Hour
-	pruneAfter          = 7 * 24 * time.Hour
+	// DefaultLinkRequestWait is how long messages_request_link blocks for the
+	// human's decision before answering "pending".
+	DefaultLinkRequestWait = 10 * time.Minute
+	pruneAfter             = 7 * 24 * time.Hour
 )
 
 // Link delivery modes.
@@ -67,11 +70,13 @@ const (
 // Delivery result statuses and error codes. A Result carries either one of
 // the statuses or an Error code.
 const (
-	StatusSteered  = "steered"
-	StatusQueued   = "queued"
-	StatusStarted  = "started"
-	StatusPending  = "pending"
-	StatusRejected = "rejected"
+	StatusSteered = "steered"
+	StatusQueued  = "queued"
+	StatusStarted = "started"
+	StatusPending = "pending"
+	// StatusDelivered: a link outcome was handed to the tool call blocked on it.
+	StatusDelivered = "delivered"
+	StatusRejected  = "rejected"
 
 	ErrNoLink               = "no_link"
 	ErrLinkPaused           = "link_paused"
@@ -232,8 +237,13 @@ type DirectoryEntry struct {
 
 // LinkRequestResult is the reply to agent_link_request.
 type LinkRequestResult struct {
+	// Status is "pending" (awaiting the human), or, when the call blocked for
+	// the decision, "approved" or "denied".
 	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	// Note is a human-readable explanation to show the agent (the outcome
+	// notice for a decision, or why the call returned still pending).
+	Note  string `json:"note,omitempty"`
+	Error string `json:"error,omitempty"`
 	// Message explains Error; not part of the wire contract.
 	Message string `json:"message,omitempty"`
 }

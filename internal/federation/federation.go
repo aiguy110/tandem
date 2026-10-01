@@ -861,6 +861,17 @@ func (s *Service) isAncestor(origin string) bool {
 	return false
 }
 
+// AccessLevelFor is the level this daemon's own policy grants the host with
+// stable node ID hostID, as authorize would apply it to a command that host
+// sends here. Agent messaging uses it to re-apply the policy where a host's
+// envelopes are fetched (pulled) rather than pushed through authorize.
+func (s *Service) AccessLevelFor(hostID string) Level {
+	if hostID == "" {
+		return LevelNone
+	}
+	return s.policy.LevelFor(hostID, s.isAncestor(hostID))
+}
+
 // authorize applies this daemon's policy to a command it is about to execute
 // locally. Commands that name a further hostId are relays: the host that
 // finally executes them decides.

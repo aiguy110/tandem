@@ -118,9 +118,127 @@ func (s *Service) SetListed(sessionID string, listed bool) error {
 }
 
 // RequestLink asks, on behalf of a local agent, for permission to message
-// another agent. The outcome arrives later as a system link_approved or
-// link_denied message.
+// another agent and returns at once with status "pending". The outcome arrives
+// later as a system link_approved or link_denied message; RequestLinkWait is
+// the blocking form the agent-facing tool uses.
 func (s *Service) RequestLink(ctx context.Context, sessionID, to, reason string) (LinkRequestResult, error) {
+	return s.requestLink(ctx, sessionID, to, reason, nil)
+}
+
+// linkOutcome is the human's decision on a link request, as recorded on the
+// requesting host.
+type linkOutcome struct {
+	approved bool
+	env      Envelope
+}
+
+func (o linkOutcome) result() LinkRequestResult {
+	status := "denied"
+	if o.approved {
+		status = "approved"
+	}
+	return LinkRequestResult{Status: status, Note: o.env.Body}
+}
+
+// linkWaiter is one messages_request_link call blocked on a decision.
+type linkWaiter struct {
+	id string // the pending outbound link request
+	ch chan linkOutcome
+}
+
+func (s *Service) addLinkWaiter(w *linkWaiter) {
+	s.linkWaitMu.Lock()
+	defer s.linkWaitMu.Unlock()
+	if s.linkWaits[w.id] == nil {
+		s.linkWaits[w.id] = map[*linkWaiter]struct{}{}
+	}
+	s.linkWaits[w.id][w] = struct{}{}
+}
+
+func (s *Service) removeLinkWaiter(w *linkWaiter) {
+	if w == nil || w.id == "" {
+		return
+	}
+	s.linkWaitMu.Lock()
+	defer s.linkWaitMu.Unlock()
+	delete(s.linkWaits[w.id], w)
+	if len(s.linkWaits[w.id]) == 0 {
+		delete(s.linkWaits, w.id)
+	}
+}
+
+// claimLinkWaiters hands a recorded decision to every call blocked on request
+// id and reports whether there was one; if so the calls carry the answer and
+// the agent is not also sent a system message.
+func (s *Service) claimLinkWaiters(id string, o linkOutcome) bool {
+	s.linkWaitMu.Lock()
+	defer s.linkWaitMu.Unlock()
+	claimed := false
+	for w := range s.linkWaits[id] {
+		select {
+		case w.ch <- o:
+			claimed = true
+		default:
+		}
+	}
+	return claimed
+}
+
+// RequestLinkWait is RequestLink that blocks until the human decides: it
+// returns status "approved" or "denied" once the requesting host records the
+// outcome (however it arrived), or "pending" with a note after
+// Options.LinkRequestWait, in which case the outcome is still delivered to the
+// agent as a system message later. An outcome that arrives while this call is
+// blocked is returned here instead, not sent to the agent a second time.
+func (s *Service) RequestLinkWait(ctx context.Context, sessionID, to, reason string) (LinkRequestResult, error) {
+	w := &linkWaiter{ch: make(chan linkOutcome, 1)}
+	defer s.removeLinkWaiter(w)
+	res, err := s.requestLink(ctx, sessionID, to, reason, w)
+	if err != nil || res.Status != StatusPending {
+		return res, err
+	}
+	log := slog.With("session_id", sessionID, "link_request_id", w.id)
+	if w.id == "" {
+		return res, nil
+	}
+	log.Info("agent link request blocking for the human's decision", "wait", s.opts.LinkRequestWait.String())
+	timer := time.NewTimer(s.opts.LinkRequestWait)
+	defer timer.Stop()
+	select {
+	case o := <-w.ch:
+		log.Info("agent link request decided while blocked", "approved", o.approved)
+		return o.result(), nil
+	case <-timer.C:
+	case <-s.ctx.Done():
+	case <-ctx.Done():
+		s.removeLinkWaiter(w)
+		select {
+		case o := <-w.ch:
+			// The decision was claimed for a caller that is gone: the agent
+			// must still learn of it.
+			log.Warn("agent link request caller went away as the decision arrived; delivering it as a message", "approved", o.approved)
+			event := EventLinkDenied
+			if o.approved {
+				event = EventLinkApproved
+			}
+			s.deliverSystem(sessionID, event, o.env.Body, "", o.env.ThreadID, o.env.From)
+		default:
+			log.Info("agent link request caller went away before a decision", "error", ctx.Err())
+		}
+		return LinkRequestResult{}, ctx.Err()
+	}
+	s.removeLinkWaiter(w)
+	select {
+	case o := <-w.ch:
+		return o.result(), nil
+	default:
+	}
+	log.Info("agent link request still pending after the wait", "wait", s.opts.LinkRequestWait.String())
+	res.Note = "No decision yet: the human has not approved or denied this request. The outcome will be delivered to you as a message when it is decided."
+	return res, nil
+}
+
+func (s *Service) requestLink(ctx context.Context, sessionID, to, reason string, w *linkWaiter) (LinkRequestResult, error) {
 	sess, err := s.liveSession(sessionID)
 	if err != nil {
 		return LinkRequestResult{}, err
@@ -149,7 +267,21 @@ func (s *Service) RequestLink(ctx context.Context, sessionID, to, reason string)
 	}
 	if !added {
 		log.Info("agent link request already pending")
+		if w != nil {
+			// Wait on the request that is already out.
+			if existing, err := s.st.AgentMsgLinkRequestFor("out", sess.ID, dest.Host, dest.Agent); err == nil && existing != nil {
+				w.id = existing.ID
+				s.addLinkWaiter(w)
+			}
+		}
+		s.kickPull(false)
 		return LinkRequestResult{Status: StatusPending}, nil
+	}
+	if w != nil {
+		// Registered before the request is sent, so an immediate decision
+		// (an existing link is simply confirmed) cannot be missed.
+		w.id = req.ID
+		s.addLinkWaiter(w)
 	}
 	res := s.sendLinkRequest(ctx, from, dest, reason)
 	if res.Error != "" {
@@ -162,6 +294,9 @@ func (s *Service) RequestLink(ctx context.Context, sessionID, to, reason string)
 		return LinkRequestResult{}, &Rejection{Code: res.Error, Message: firstNonEmpty(res.Message, res.Error)}
 	}
 	log.Info("agent link request sent", "request_id", req.ID)
+	// The decision may come back by push or, when the other host cannot reach
+	// this one, only by pull: start looking now.
+	s.kickPull(false)
 	return LinkRequestResult{Status: StatusPending}, nil
 }
 

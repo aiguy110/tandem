@@ -221,3 +221,33 @@ func TestMessagingDirectoryAndLinkRequestCommands(t *testing.T) {
 		t.Fatalf("link request = %#v", got)
 	}
 }
+
+func TestMessagingPullUsesFederationOriginAsIdentity(t *testing.T) {
+	_, c, _ := setupMessagingWS(t)
+	result := func(corr string) map[string]any {
+		for {
+			if got := recv(t, c); got["corrId"] == corr {
+				return got
+			}
+		}
+	}
+	// No origin: a pull is only meaningful from another host.
+	send(t, c, map[string]any{"t": "agent_message_pull", "corrId": "local"})
+	if got := result("local"); got["t"] == "agent_message_pull_result" {
+		t.Fatalf("local pull = %#v", got)
+	}
+	// The requester field is only checked against the origin.
+	send(t, c, map[string]any{"t": "agent_message_pull", "requester": map[string]any{"host": "hostC"}, "federationOrigin": "hostB", "corrId": "forged"})
+	if got := result("forged"); got["t"] == "agent_message_pull_result" {
+		t.Fatalf("forged requester = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "agent_message_pull", "requester": map[string]any{"host": "hostB"}, "federationOrigin": "hostB", "corrId": "ok"})
+	got := result("ok")
+	if envs, ok := got["envelopes"].([]any); got["t"] != "agent_message_pull_result" || !ok || len(envs) != 0 {
+		t.Fatalf("pull = %#v", got)
+	}
+	send(t, c, map[string]any{"t": "agent_message_pull_ack", "ids": []string{"msg_x"}, "federationOrigin": "hostB", "corrId": "ack"})
+	if got := result("ack"); got["t"] != "agent_message_pull_ack_result" || got["applied"] != float64(0) {
+		t.Fatalf("ack = %#v", got)
+	}
+}

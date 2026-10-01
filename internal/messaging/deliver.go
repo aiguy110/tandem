@@ -84,11 +84,20 @@ func (s *Service) accept(ctx context.Context, env Envelope, log *slog.Logger) Re
 	lock := s.lockFor(sess.ID)
 	lock.Lock()
 	defer lock.Unlock()
+	// The same envelope can arrive by push and by pull at once; both pass the
+	// unlocked dedupe check in Deliver, so repeat it under the session lock.
+	if prior, err := s.st.AgentMsgInbound(env.ID); err == nil && prior != nil {
+		log.Info("agent message duplicate ignored (concurrent delivery)", "status", prior.Status)
+		return Result{ID: env.ID, Status: prior.Status}
+	}
 
 	mode := DeliverySteer
 	var linkID string
 	var after func()  // runs once the message is accepted
 	var before func() // runs just before the agent sees it
+	// consumed: the message answered a blocked tool call, so the agent is not
+	// shown it again (only the transcript records it).
+	consumed := false
 	switch env.Kind {
 	case KindSend, KindAsk:
 		link, err := s.st.AgentMsgLink(env.From.Host, env.From.Agent, sess.ID)
@@ -141,6 +150,7 @@ func (s *Service) accept(ctx context.Context, env Envelope, log *slog.Logger) Re
 			if pending == nil {
 				return rejected(env.ID, ErrUnknownRequest, "no pending link request to "+env.From.String())
 			}
+			consumed = s.claimLinkWaiters(pending.ID, linkOutcome{approved: ev == EventLinkApproved, env: env})
 			// Cleared before the agent is told, so its very next
 			// messages_request_link is not mistaken for a duplicate.
 			before = func() {
@@ -168,10 +178,18 @@ func (s *Service) accept(ctx context.Context, env Envelope, log *slog.Logger) Re
 	if before != nil {
 		before()
 	}
-	status, promptID, err := s.present(ctx, sess, env, mode, "in", log)
-	if err != nil {
-		code := ErrRecipientUnavailable
-		return rejected(env.ID, code, err.Error())
+	var status, promptID string
+	if consumed {
+		status = StatusDelivered
+		sess.PushEvent(agentMessageEvent("in", env, status, ""))
+		log.Info("agent link outcome returned to a blocked tool call; not sent to the agent again", "session_id", sess.ID)
+	} else {
+		var err error
+		status, promptID, err = s.present(ctx, sess, env, mode, "in", log)
+		if err != nil {
+			code := ErrRecipientUnavailable
+			return rejected(env.ID, code, err.Error())
+		}
 	}
 	if _, err := s.st.AddAgentMsgInbound(store.AgentMsgInbound{ID: env.ID, ToSession: sess.ID, LinkID: linkID, FromHost: env.From.Host, FromAgent: env.From.Agent, Kind: env.Kind, Status: status, ReceivedAt: ms(s.now())}); err != nil {
 		log.Error("agent message dedupe record failed", "error", err)

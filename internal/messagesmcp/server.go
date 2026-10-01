@@ -217,7 +217,7 @@ func toolDeclarations() []any {
 			map[string]any{"requestId": str("The request-id of the ask."), "body": str("Your answer.")}, "requestId", "body"),
 		tool(ToolDecline, "Decline an ask you received, with a reason. Needs no link.",
 			map[string]any{"requestId": str("The request-id of the ask."), "reason": str("Why you are not answering.")}, "requestId", "reason"),
-		tool(ToolRequestLink, "Ask a human to let you message another agent. The request appears in that agent's approvals; the outcome arrives as a message (link_approved or link_denied).",
+		tool(ToolRequestLink, "Ask a human to let you message another agent. The request appears in that agent's approvals. This call blocks until the human approves or denies (up to 10 minutes) and returns {status: \"approved\"|\"denied\"}; if there is still no decision it returns {status: \"pending\"} and the outcome later arrives as a message (link_approved or link_denied). Once approved you can use messages_send or messages_ask.",
 			map[string]any{"to": str(toAddr), "reason": str("Why you need to message this agent.")}, "to", "reason"),
 		tool(ToolSetCard, "Set the one-line description of your purpose shown to other agents in the directory.",
 			map[string]any{"card": str("One line, about 200 characters at most.")}, "card"),

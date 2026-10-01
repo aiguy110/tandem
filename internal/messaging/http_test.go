@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/messagesmcp"
 )
@@ -27,6 +28,7 @@ func postTool(t *testing.T, h http.Handler, token, tool string, body map[string]
 
 func TestHTTPBridgeToolsEnforceAuthAndLinks(t *testing.T) {
 	h := newTestHost(t, "hostA", hostOpts{})
+	h.svc.opts.LinkRequestWait = 30 * time.Millisecond
 	h.addSession("alice", "alice")
 	_, bobAd := h.addSession("bob", "bob")
 
@@ -62,7 +64,8 @@ func TestHTTPBridgeToolsEnforceAuthAndLinks(t *testing.T) {
 		t.Fatalf("directory after card = %d %v", code, out)
 	}
 	code, out = postTool(t, h.svc, "tok", "request_link", map[string]any{"sessionId": "bob", "to": "alice", "reason": "just because"})
-	if code != http.StatusOK || out["status"] != "pending" {
+	// Nobody decides within the (shortened) wait: still pending, with a note.
+	if code != http.StatusOK || out["status"] != "pending" || out["note"] == nil {
 		t.Fatalf("request_link = %d %v", code, out)
 	}
 	if code, _ := postTool(t, h.svc, "tok", "decline", map[string]any{"sessionId": "alice", "requestId": "req_nope", "reason": "x"}); code != http.StatusBadRequest {
@@ -89,5 +92,35 @@ func TestMCPBridgeEndToEnd(t *testing.T) {
 	eventually(t, "bob prompt", func() bool { return len(bobAd.promptTexts()) == 1 })
 	if p := bobAd.promptTexts()[0]; !strings.Contains(p, "through the bridge") || strings.Contains(p, "messages_reply") {
 		t.Fatalf("prompt = %s", p)
+	}
+}
+
+// messages_request_link blocks in the HTTP handler until the human decides.
+func TestHTTPRequestLinkBlocksUntilDecision(t *testing.T) {
+	h := newTestHost(t, "hostA", hostOpts{})
+	h.addSession("alice", "alice")
+	bob, _ := h.addSession("bob", "bob")
+	h.svc.Start(context.Background())
+	t.Cleanup(h.svc.Close)
+	type reply struct {
+		code int
+		out  map[string]any
+	}
+	done := make(chan reply, 1)
+	go func() {
+		code, out := postTool(t, h.svc, "tok", "request_link", map[string]any{"sessionId": "alice", "to": "bob", "reason": "pls"})
+		done <- reply{code, out}
+	}()
+	eventually(t, "approval on bob", func() bool { return len(bob.PendingApprovals()) == 1 })
+	select {
+	case r := <-done:
+		t.Fatalf("returned before the decision: %+v", r)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := bob.RespondPermission(bob.PendingApprovals()[0].ReqID, "allow"); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.code != http.StatusOK || r.out["status"] != "approved" {
+		t.Fatalf("request_link = %+v", r)
 	}
 }

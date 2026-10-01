@@ -55,6 +55,12 @@ type Options struct {
 	// TickInterval is how often the maintenance loop looks for due timeouts
 	// (default 1s).
 	TickInterval time.Duration
+	// PullInterval is how often hosts with outstanding requests are polled for
+	// responses they could not push (default 5s).
+	PullInterval time.Duration
+	// LinkRequestWait is how long messages_request_link blocks for the human's
+	// decision before answering "pending" (default DefaultLinkRequestWait).
+	LinkRequestWait time.Duration
 	// OnSummaryChange is called (asynchronously) when waitingOn/openAsks of
 	// some agent changed, so browsers should be sent fresh summaries.
 	OnSummaryChange func()
@@ -80,6 +86,10 @@ type Service struct {
 	bg       sync.WaitGroup
 	kick     chan struct{}
 	outboxMu sync.Mutex
+	pull     *pullState
+
+	linkWaitMu sync.Mutex
+	linkWaits  map[string]map[*linkWaiter]struct{}
 
 	lockMu   sync.Mutex
 	sessLock map[string]*sync.Mutex
@@ -114,13 +124,19 @@ func New(o Options) (*Service, error) {
 	if o.CallTimeout <= 0 {
 		o.CallTimeout = 20 * time.Second
 	}
+	if o.PullInterval <= 0 {
+		o.PullInterval = pullInterval
+	}
+	if o.LinkRequestWait <= 0 {
+		o.LinkRequestWait = DefaultLinkRequestWait
+	}
 	if o.TickInterval <= 0 {
 		o.TickInterval = time.Second
 	}
 	s := &Service{
 		opts: o, st: o.Store, kick: make(chan struct{}, 1),
 		sessLock: map[string]*sync.Mutex{}, watched: map[string]watchedSession{},
-		dirCache: map[string]dirCacheEntry{}, waiting: map[string][]WaitingOn{}, asks: map[string]int{},
+		dirCache: map[string]dirCacheEntry{}, pull: newPullState(), linkWaits: map[string]map[*linkWaiter]struct{}{}, waiting: map[string][]WaitingOn{}, asks: map[string]int{},
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	paused, err := s.st.AgentMsgMeta(metaPausedKey)
@@ -149,17 +165,22 @@ func (s *Service) Start(ctx context.Context) {
 				T string `json:"t"`
 			}
 			if json.Unmarshal(payload, &env) == nil && env.T == "federation_hosts_changed" {
-				slog.Debug("agent messaging: federation topology changed, scheduling outbox flush", "host_id", hostID)
+				slog.Debug("agent messaging: federation topology changed, scheduling outbox flush and pull", "host_id", hostID)
 				s.Kick()
+				s.kickPull(true)
 			}
 		})
 		go func() { <-s.ctx.Done(); unsub() }()
 	}
 	s.resumeLinkApprovals()
-	s.bg.Add(1)
+	s.bg.Add(2)
 	go func() {
 		defer s.bg.Done()
 		s.loop()
+	}()
+	go func() {
+		defer s.bg.Done()
+		s.pullLoop()
 	}()
 	slog.Info("agent messaging started", "tick", s.opts.TickInterval)
 }
@@ -294,6 +315,7 @@ func (s *Service) SetPaused(paused bool) error {
 		}
 		if !paused {
 			s.Kick()
+			s.kickPull(false)
 		}
 	}
 	return nil

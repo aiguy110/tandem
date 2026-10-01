@@ -63,7 +63,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "decline":
 		value, err = s.Decline(r.Context(), req.SessionID, req.RequestID, req.Reason)
 	case "request_link":
-		value, err = s.RequestLink(r.Context(), req.SessionID, req.To, req.Reason)
+		value, err = s.RequestLinkWait(r.Context(), req.SessionID, req.To, req.Reason)
 	case "set_card":
 		if err = s.SetCard(req.SessionID, req.Card); err == nil {
 			value = map[string]any{}

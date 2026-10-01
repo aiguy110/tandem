@@ -398,6 +398,8 @@ type clientMessage struct {
 	To        *messaging.Address   `json:"to,omitempty"`
 	Requester *messaging.Address   `json:"requester,omitempty"`
 	Reason    string               `json:"reason,omitempty"`
+	IDs       []string             `json:"ids,omitempty"`
+	Results   []messaging.PullAck  `json:"results,omitempty"`
 	Listed    *bool                `json:"listed,omitempty"`
 	Paused    *bool                `json:"paused,omitempty"`
 }
@@ -1344,7 +1346,7 @@ func (c *connection) handle(m clientMessage) {
 		c.setAudioFocus(m)
 	case "list_agent_links", "set_agent_link", "delete_agent_link", "set_agent_listed", "get_messaging_state", "set_messaging_paused":
 		c.handleMessaging(m)
-	case "agent_directory", "agent_message_deliver", "agent_link_request":
+	case "agent_directory", "agent_message_deliver", "agent_link_request", "agent_message_pull", "agent_message_pull_ack":
 		// Delivery steers or queues into an agent and a link request raises an
 		// approval; neither should hold up this connection's other commands.
 		go c.handleMessaging(m)

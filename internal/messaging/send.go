@@ -180,6 +180,8 @@ func (s *Service) sendFrom(ctx context.Context, sess *session.Session, env Envel
 			return reject(ErrHostUnreachable, "could not record the request")
 		}
 		s.summaryChanged()
+		// An answer may only ever come by pull; start looking for it.
+		s.kickPull(false)
 	}
 	if err := s.st.NoteAgentMsgThreadHop(sess.ID, env.ThreadID, env.Hop); err != nil {
 		log.Warn("agent thread hop record failed", "error", err)
@@ -241,8 +243,19 @@ func (s *Service) dispatchAsync(env Envelope, fromSession string) {
 	}()
 }
 
+// holdForPull reports whether a federation access denial of an envelope of
+// this kind is non-terminal. A reply, decline or system notice answers a
+// request the other host itself made, so the other host holds rights on this
+// one even when this one holds none on it: the envelope waits in the outbox to
+// be pulled (agent_message_pull) instead of failing.
+func holdForPull(kind string) bool {
+	return kind == KindReply || kind == KindDecline || kind == KindSystem
+}
+
 // attempt tries to deliver one outbox row to its remote host. A transport
-// failure leaves it pending (to be retried); a policy rejection is terminal.
+// failure leaves it pending (to be retried or pulled); a policy rejection is
+// terminal, except that a federation access denial of a reply, decline or
+// system notice is held for the other host to pull.
 func (s *Service) attempt(ctx context.Context, row store.AgentMsgOutbox, env Envelope) Result {
 	log := slog.With("envelope_id", env.ID, "kind", env.Kind, "to", env.To.String(), "attempt", row.Attempts+1)
 	if s.Paused() {
@@ -250,18 +263,30 @@ func (s *Service) attempt(ctx context.Context, row store.AgentMsgOutbox, env Env
 		log.Info("agent outbox attempt skipped: messaging paused")
 		return Result{ID: env.ID, Status: StatusPending}
 	}
-	res, err := s.callRemote(ctx, env)
+	res, fedDenied, err := s.callRemote(ctx, env)
 	now := s.now()
-	if err != nil {
+	hold := func(reason string) Result {
 		attempts := row.Attempts + 1
 		next := now.Add(outboxRetryInterval)
-		if uerr := s.st.UpdateAgentMsgOutbox(env.ID, "pending", "", err.Error(), attempts, ms(next)); uerr != nil {
+		if uerr := s.st.UpdateAgentMsgOutbox(env.ID, "pending", "", reason, attempts, ms(next)); uerr != nil {
 			log.Error("agent outbox update failed", "error", uerr)
 		}
-		log.Warn("agent message not delivered; will retry", "error", err, "next_attempt", next.Format(time.RFC3339))
+		// The first failure is the news; later retries of the same hold are
+		// routine.
+		level := slog.LevelInfo
+		if row.Attempts == 0 {
+			level = slog.LevelWarn
+		}
+		log.Log(context.Background(), level, "agent message not pushed; held for pull and retry", "host_id", env.To.Host, "envelope_id", env.ID, "kind", env.Kind, "reason", reason, "next_attempt", next.Format(time.RFC3339))
 		return Result{ID: env.ID, Status: StatusPending}
 	}
+	if err != nil {
+		return hold(err.Error())
+	}
 	if !res.OK() {
+		if fedDenied && holdForPull(env.Kind) {
+			return hold(firstNonEmpty(res.Message, res.Error))
+		}
 		if uerr := s.st.UpdateAgentMsgOutbox(env.ID, "failed", "", res.Error, row.Attempts+1, ms(now)); uerr != nil {
 			log.Error("agent outbox update failed", "error", uerr)
 		}
@@ -321,15 +346,17 @@ func (s *Service) callFederation(ctx context.Context, hostID string, payload map
 	return raw, nil, nil
 }
 
-// callRemote delivers env to its (remote) recipient host.
-func (s *Service) callRemote(ctx context.Context, env Envelope) (Result, error) {
+// callRemote delivers env to its (remote) recipient host. fedDenied reports
+// that the rejection came from federation's access policy on the way, rather
+// than from the recipient's messaging rules.
+func (s *Service) callRemote(ctx context.Context, env Envelope) (res Result, fedDenied bool, err error) {
 	raw, denied, err := s.callFederation(ctx, env.To.Host, map[string]any{"t": "agent_message_deliver", "envelope": env})
 	if err != nil {
-		return Result{}, err
+		return Result{}, false, err
 	}
 	if denied != nil {
 		denied.ID = env.ID
-		return *denied, nil
+		return *denied, true, nil
 	}
 	var resp struct {
 		T       string `json:"t"`
@@ -339,16 +366,16 @@ func (s *Service) callRemote(ctx context.Context, env Envelope) (Result, error) 
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return Result{}, fmt.Errorf("invalid response from %s: %w", env.To.Host, err)
+		return Result{}, false, fmt.Errorf("invalid response from %s: %w", env.To.Host, err)
 	}
 	if resp.T != "agent_message_result" {
 		// An older daemon answers an unknown command with an error ack.
-		return rejected(env.ID, ErrHostUnreachable, "host "+env.To.Host+" does not support agent messaging: "+resp.Error), nil
+		return rejected(env.ID, ErrHostUnreachable, "host "+env.To.Host+" does not support agent messaging: "+resp.Error), false, nil
 	}
 	if resp.Error != "" {
-		return Result{ID: env.ID, Status: StatusRejected, Error: resp.Error, Message: resp.Message}, nil
+		return Result{ID: env.ID, Status: StatusRejected, Error: resp.Error, Message: resp.Message}, false, nil
 	}
-	return Result{ID: env.ID, Status: resp.Status}, nil
+	return Result{ID: env.ID, Status: resp.Status}, false, nil
 }
 
 // flushOutbox retries every pending outbox row. Rows older than 24 hours are

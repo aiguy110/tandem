@@ -435,6 +435,8 @@ Agents message each other over human-granted links (full contract:
 | { t: 'agent_directory';     requester?: Address; query?: string }     // message → agent_directory
 | { t: 'agent_message_deliver'; envelope: Envelope }                     // message → agent_message_result
 | { t: 'agent_link_request';  from: Address; to: Address; reason: string } // message → agent_link_request_result
+| { t: 'agent_message_pull';  requester?: Address }                      // message → agent_message_pull_result
+| { t: 'agent_message_pull_ack'; ids: string[]; results: { id; status; error? }[] } // message → agent_message_pull_ack_result
 
 // Daemon → Browser
 { t: 'agent_links'; sessionId; links: Link[]; listed: boolean; card: string }
@@ -442,7 +444,14 @@ Agents message each other over human-granted links (full contract:
 { t: 'agent_directory'; entries: DirectoryEntry[] }
 { t: 'agent_message_result'; id: string; status: 'steered'|'queued'|'started'; error?: string; message?: string }
 { t: 'agent_link_request_result'; status: 'pending'; error?: string; message?: string }
+{ t: 'agent_message_pull_result'; envelopes: Envelope[] }     // undelivered outbox envelopes addressed to the caller (max 100)
+{ t: 'agent_message_pull_ack_result'; applied: number }
 ```
+
+`agent_message_pull` lets a host fetch responses (replies, declines, system notices) that
+the responder could not push because it has no access to the requester. The caller is the
+federation origin; `requester` is only checked against it. See
+[agent-messaging.md](agent-messaging.md#outbox).
 
 `LinkInput` is `{ from: Address, delivery: 'steer'|'queue', budgetPerHour, maxHops, paused }`
 (zero budget/hops mean the defaults, 60 and 20). `Link` adds `id`, `to`, `source`
