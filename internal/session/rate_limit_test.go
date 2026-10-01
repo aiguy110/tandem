@@ -72,12 +72,19 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 		t.Fatalf("prompts=%v", got)
 	}
 
-	latest, ok, err := s.Log.LatestOfKind("rate_limit")
-	if err != nil || !ok {
-		t.Fatalf("latest rate limit: ok=%v err=%v", ok, err)
+	// The "sent" state is recorded after the prompt is handed off, so poll.
+	var payload string
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		latest, ok, err := s.Log.LatestOfKind("rate_limit")
+		if err != nil || !ok {
+			t.Fatalf("latest rate limit: ok=%v err=%v", ok, err)
+		}
+		if payload = string(latest.Event.Payload); strings.Contains(payload, `"state":"sent"`) {
+			break
+		}
 	}
-	if !strings.Contains(string(latest.Event.Payload), `"state":"sent"`) {
-		t.Fatalf("payload=%s", latest.Event.Payload)
+	if !strings.Contains(payload, `"state":"sent"`) {
+		t.Fatalf("payload=%s", payload)
 	}
 	if err := s.Dispose(context.Background()); err != nil {
 		t.Fatal(err)
