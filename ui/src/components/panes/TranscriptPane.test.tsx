@@ -67,6 +67,7 @@ afterEach(() => {
   // place for that (jsdom's real pause() throws "not implemented").
   __resetForTests();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   localStorage.clear();
   delete (URL as unknown as Record<string, unknown>).createObjectURL;
   delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
@@ -88,6 +89,54 @@ describe('TranscriptPane rate-limit widget', () => {
     expect(view.getByText('Usage limit reached')).toBeTruthy();
     fireEvent.click(view.getByRole('switch'));
     expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
+  });
+});
+
+describe('PromptBar attachments', () => {
+  it('preserves a pasted image and its upload across session switches', async () => {
+    const first = agent();
+    first.imagePromptSupport = true;
+    const second = { ...agent(), id: 'session-2', name: 'Other session', imagePromptSupport: true };
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': first, 'session-2': second },
+      order: ['session-1', 'session-2'],
+      focusedId: 'session-1',
+      annotations: { 'session-1': [], 'session-2': [] },
+    }, true);
+
+    (URL as typeof URL & { createObjectURL: (blob: Blob) => string }).createObjectURL = vi.fn().mockReturnValue('blob:pasted-image');
+    (URL as typeof URL & { revokeObjectURL: (url: string) => void }).revokeObjectURL = vi.fn();
+
+    class PendingUpload {
+      static current: PendingUpload | null = null;
+      upload: { onprogress: ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = { onprogress: null };
+      status = 201;
+      responseText = JSON.stringify({ asset: { assetId: 'asset-1', mimeType: 'image/png', name: 'paste.png' } });
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open() {}
+      setRequestHeader() {}
+      send() { PendingUpload.current = this; }
+      abort() { this.onabort?.(); }
+    }
+    vi.stubGlobal('XMLHttpRequest', PendingUpload);
+
+    const view = render(<TranscriptPane />);
+    const image = new File(['pixels'], 'paste.png', { type: 'image/png' });
+    fireEvent.paste(view.getByPlaceholderText(/Prompt Mobile test/), { clipboardData: { files: [image] } });
+    expect(view.getByText(/Uploading/)).toBeTruthy();
+
+    act(() => useStore.getState().focus('session-2'));
+    expect(view.queryByAltText('')).toBeNull();
+    act(() => useStore.getState().focus('session-1'));
+    expect(view.getByAltText('').getAttribute('src')).toBe('blob:pasted-image');
+    expect(view.getByText(/Uploading/)).toBeTruthy();
+
+    act(() => PendingUpload.current?.onload?.());
+    await waitFor(() => expect(view.getByText('Ready')).toBeTruthy());
+    expect(useStore.getState().draftAttachments['session-1']?.[0]?.asset?.assetId).toBe('asset-1');
   });
 });
 

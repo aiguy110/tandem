@@ -228,6 +228,20 @@ export interface AgentLinksState {
   card: string;
 }
 
+// Browser-owned prompt attachments. Files and object URLs intentionally stay
+// in memory: the daemon owns the uploaded asset, while this state keeps an
+// unfinished composer intact when its session pane unmounts and remounts.
+export interface DraftAttachment {
+  localId: string;
+  file: File;
+  previewUrl?: string;
+  status: 'uploading' | 'ready' | 'error';
+  uploadProgress?: number;
+  asset?: Extract<PromptBlock, { type: 'image' }>;
+  uploadPath?: string;
+  error?: string;
+}
+
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'appearance';
 
 export interface AckResult {
@@ -297,6 +311,7 @@ interface StoreState {
   // state) so a draft survives tab switches and agent switches, which remount the
   // TranscriptPane.
   drafts: Record<string, string>;
+  draftAttachments: Record<string, DraftAttachment[]>;
   // Pending transcript annotations (review tray), keyed by sessionId. Daemon-owned:
   // hydrated from `snapshot` and replaced wholesale by `annotations` broadcasts —
   // actions never mutate this locally, they only send the WS message and wait
@@ -1245,6 +1260,7 @@ export const useStore = create<StoreState>((set, get) => {
     resumePendingHostIds: {},
     resumeLoading: false,
     drafts: initialDrafts(),
+    draftAttachments: {},
     annotations: {},
     browserSubAgent: null,
 	sessionsRailCollapsed: isNarrowViewport(),
