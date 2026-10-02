@@ -31,21 +31,21 @@
 
   <!-- root -->
   <rect x="300" y="170" width="190" height="62" rx="10" class="host"/>
-  <text x="395" y="194" text-anchor="middle" class="b">laptop</text>
+  <text x="395" y="194" text-anchor="middle" class="b">desktop</text>
   <text x="395" y="212" text-anchor="middle" class="small sub">root · UI you use</text>
-  <text x="395" y="225" text-anchor="middle" class="mono sub">laptop-7c21e0</text>
+  <text x="395" y="225" text-anchor="middle" class="mono sub">desktop-7c21e0</text>
 
-  <!-- bifrost -->
+  <!-- laptop -->
   <rect x="90" y="320" width="190" height="62" rx="10" class="host"/>
-  <text x="185" y="344" text-anchor="middle" class="b">bifrost</text>
+  <text x="185" y="344" text-anchor="middle" class="b">laptop</text>
   <text x="185" y="362" text-anchor="middle" class="small sub">child · dialed out</text>
-  <text x="185" y="375" text-anchor="middle" class="mono sub">bifrost-3f9a1c</text>
+  <text x="185" y="375" text-anchor="middle" class="mono sub">laptop-3f9a1c</text>
 
-  <!-- devbox -->
+  <!-- dev-container -->
   <rect x="510" y="320" width="190" height="62" rx="10" class="host"/>
-  <text x="605" y="344" text-anchor="middle" class="b">devbox</text>
+  <text x="605" y="344" text-anchor="middle" class="b">dev-container</text>
   <text x="605" y="362" text-anchor="middle" class="small sub">child · container, adopted</text>
-  <text x="605" y="375" text-anchor="middle" class="mono sub">devbox-a01b77</text>
+  <text x="605" y="375" text-anchor="middle" class="mono sub">dev-container-a01b77</text>
 
   <!-- gpu-box -->
   <rect x="90" y="470" width="190" height="62" rx="10" class="host"/>
@@ -65,11 +65,11 @@
   <text x="520" y="286" class="small sub">join token, or child approves</text>
 
   <path d="M185,470 L185,384" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ahb)"/>
-  <text x="196" y="432" class="small" fill="#2563eb" font-weight="600">dials bifrost</text>
+  <text x="196" y="432" class="small" fill="#2563eb" font-weight="600">dials laptop</text>
 
   <!-- sibling route -->
   <path d="M280,505 C 420,505 470,420 560,384" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="2 4" fill="none" marker-end="url(#ah)"/>
-  <text x="330" y="470" class="small sub">gpu-box → devbox goes through bifrost and laptop.</text>
+  <text x="330" y="470" class="small sub">gpu-box → dev-container goes through laptop and desktop.</text>
   <text x="330" y="485" class="small sub">Nothing new has to be reachable.</text>
 
   <!-- side notes -->
@@ -142,20 +142,20 @@
 
   <!-- ============ PANEL 3: messaging sequence ============ -->
   <rect x="30" y="645" width="1540" height="555" rx="12" class="panel"/>
-  <text x="50" y="675" class="h2">3 · Agent messaging: planner on laptop asks trainer on gpu-box</text>
+  <text x="50" y="675" class="h2">3 · Agent messaging: planner on desktop asks trainer on gpu-box</text>
   <text x="50" y="695" class="sub small">Default-deny: a send or ask needs (a) at least <tspan class="mono">message</tspan> access on the recipient's host and (b) a directed link stored on that host. Agents use the <tspan class="mono">tandem-messages</tspan> MCP tools.</text>
 
   <!-- lane headers -->
   <rect x="50" y="712" width="170" height="44" rx="8" class="agent"/>
   <text x="135" y="732" text-anchor="middle" class="b">Agent A</text>
-  <text x="135" y="748" text-anchor="middle" class="mono">@agent:laptop/planner</text>
+  <text x="135" y="748" text-anchor="middle" class="mono">@agent:desktop/planner</text>
 
   <rect x="330" y="712" width="150" height="44" rx="8" class="host"/>
-  <text x="405" y="732" text-anchor="middle" class="b">laptop daemon</text>
+  <text x="405" y="732" text-anchor="middle" class="b">desktop daemon</text>
   <text x="405" y="748" text-anchor="middle" class="small sub">sender host · outbox</text>
 
   <rect x="600" y="712" width="150" height="44" rx="8" class="host"/>
-  <text x="675" y="732" text-anchor="middle" class="b">bifrost</text>
+  <text x="675" y="732" text-anchor="middle" class="b">laptop</text>
   <text x="675" y="748" text-anchor="middle" class="small sub">relay · stamps origin</text>
 
   <rect x="870" y="712" width="150" height="44" rx="8" class="host"/>
@@ -189,7 +189,7 @@
   <text x="965" y="829" class="small b">👤 Approval on B's session</text>
   <text x="965" y="844" class="small">“planner wants to message…” Allow / Deny</text>
   <path d="M940,862 L140,862" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ahp)"/>
-  <text x="150" y="878" class="small" fill="#7c3aed">system <tspan class="mono">link_approved</tspan> back to A (pushed, or pulled if gpu-box can't reach laptop). messages_request_link blocks up to 10 min.</text>
+  <text x="150" y="878" class="small" fill="#7c3aed">system <tspan class="mono">link_approved</tspan> back to A (pushed, or pulled if gpu-box can't reach desktop). messages_request_link blocks up to 10 min.</text>
   <text x="955" y="878" class="small">Link stored on gpu-box: <tspan class="mono">planner → trainer</tspan></text>
   <text x="955" y="893" class="mono sub">steer · 60/h · maxHops 20 · paused=false</text>
 
@@ -205,7 +205,7 @@
   <path d="M405,930 L670,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
   <path d="M675,930 L940,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
   <text x="440" y="924" class="mono" fill="#2563eb">agent_message_deliver{envelope}</text>
-  <text x="690" y="924" class="small" fill="#2563eb">origin = laptop</text>
+  <text x="690" y="924" class="small" fill="#2563eb">origin = desktop</text>
   <rect x="870" y="945" width="150" height="26" rx="5" fill="#fef3c7" stroke="#d97706"/>
   <text x="945" y="962" text-anchor="middle" class="small b">run checks ▸</text>
   <path d="M950,990 L1160,990" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
@@ -218,12 +218,12 @@
   <path d="M1165,1060 L950,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
   <text x="1000" y="1054" class="mono" fill="#059669">messages_reply(requestId)</text>
   <path d="M945,1060 L410,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
-  <text x="470" y="1054" class="small" fill="#059669">no link needed: accepted only if laptop has a matching open request</text>
+  <text x="470" y="1054" class="small" fill="#059669">no link needed: accepted only if desktop has a matching open request</text>
   <path d="M405,1060 L140,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
   <text x="160" y="1054" class="small" fill="#059669">delivered as an inbound message</text>
   <path d="M405,1095 L940,1095" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#aho)"/>
   <path d="M940,1110 L410,1110" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#aho)"/>
-  <text x="425" y="1089" class="small" fill="#b45309"><tspan class="b">Pull fallback</tspan> if the push is denied or gpu-box can't reach laptop: the reply is held, and laptop polls</text>
+  <text x="425" y="1089" class="small" fill="#b45309"><tspan class="b">Pull fallback</tspan> if the push is denied or gpu-box can't reach desktop: the reply is held, and desktop polls</text>
   <text x="425" y="1128" class="mono" fill="#b45309">agent_message_pull → agent_message_pull_ack</text>
   <text x="725" y="1128" class="small" fill="#b45309">(every 5 s, only while an ask is open)</text>
   <text x="960" y="1140" class="small sub">If B's turn ends unanswered: one reply_reminder, then an</text>

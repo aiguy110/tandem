@@ -45,6 +45,26 @@ security, reconnect, and remote session-history behavior.
 - **Scale across hosts**: one parent UI can spawn and fully control agents, terminals,
   approvals, and shared browsers on many approved child instances.
 
+## Federation
+
+Tandem instances link into a tree of hosts. A child either dials its parent
+(`tandem --parent https://…`) or is adopted by it, and a human approves each link once.
+The root's UI then works as a **fleet-wide management console**. It lists the agents on
+every reachable host in one rail, collects their approvals in one queue, and offers
+every host in the spawn and resume palettes. **Fleet View** (in the command palette)
+draws the whole hierarchy with each host's connection state, version, and your access
+level. Any host can also be driven from below or beside, but only when its own access
+policy allows it.
+
+Agents can message and ask questions of agents on any host. Delivery is default-deny:
+each message needs `message` access on the recipient's host and a directed link that a
+human approved there.
+
+![Federation, agent messaging, and cross-host permissions](docs/assets/federation-overview.svg)
+
+See [parent and child deployments](docs/federation.md) and
+[agent messaging](docs/agent-messaging.md) for the details.
+
 ## Quick start
 
 Source prerequisites: **Node 22+** for the UI and Node-based agent adapters, **Go 1.24+**
