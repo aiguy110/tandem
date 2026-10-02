@@ -1487,6 +1487,19 @@ function terminalCommand(item: Extract<Item, { kind: 'tool' }>): { text: string;
   return null;
 }
 
+// Claude's Bash tool carries a human-readable rawInput.description. The ACP
+// bridge also reports it as the call's text content until real output arrives,
+// so it would otherwise masquerade as the command's output while pending.
+function terminalDescription(item: Extract<Item, { kind: 'tool' }>): string | null {
+  for (const source of [item.rawInput, (item.rawInput as { arguments?: unknown } | null)?.arguments]) {
+    if (source && typeof source === 'object' && 'description' in source) {
+      const desc = (source as { description?: unknown }).description;
+      if (typeof desc === 'string' && desc.trim()) return desc.trim();
+    }
+  }
+  return null;
+}
+
 // Terminal output is already displayed in a preformatted block. Some ACP
 // agents additionally wrap it in a Markdown code fence (usually ```console),
 // which would otherwise be shown as literal, redundant text. Strip only that
@@ -1508,10 +1521,12 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   // Terminal chunks are delivered independently of tool-call updates. Prefer
   // that live buffer whenever present; the completion event still contains a
   // durable terminal snapshot for transcript replay.
-  const body = item.terminalOutput ?? contentBody;
   const args = formatArgs(item.rawInput);
   const isExecute = item.toolKind === 'execute';
   const command = isExecute ? terminalCommand(item) : null;
+  const description = command != null ? terminalDescription(item) : null;
+  const rawBody = item.terminalOutput ?? contentBody;
+  const body = description != null && rawBody?.trim() === description ? null : rawBody;
   // For a plain execute call, the command *is* the args — showing it again as
   // a raw JSON "Arguments" blob under a terminal prompt line is noise. But when
   // the prompt line is only the tool's title (an MCP `execute` tool whose
@@ -1528,7 +1543,8 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
         {command != null ? (
           <span className="title tool-cmd-title">
-            <span className="tool-prompt">$</span> {command.text}
+            <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
+            {description != null && <span className="tool-cmd-desc">{description}</span>}
           </span>
         ) : (
           <span className="title">{item.title}</span>

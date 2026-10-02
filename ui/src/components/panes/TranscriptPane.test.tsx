@@ -310,6 +310,27 @@ describe('TranscriptPane voice rendering', () => {
     expect(view.container.querySelector('.tool-terminal-output')?.textContent).toBe(output);
   });
 
+  it('shows a pending execute description in the header instead of as output', () => {
+    const withTool = agent();
+    const description = 'Update dnsmasq records';
+    withTool.events = [{
+      seq: 1,
+      event: { kind: 'tool_call', id: 'bash-1', title: 'ls', status: 'pending', toolKind: 'execute', rawInput: { command: 'ls', description }, content: [{ type: 'content', content: { type: 'text', text: description } }] },
+    }];
+    withTool.lastSeq = 1;
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withTool }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.container.querySelector('.card-head .tool-cmd-desc')?.textContent).toBe(description);
+    fireEvent.click(view.container.querySelector('.card-head')!);
+
+    expect(view.container.querySelector('.tool-terminal-output')).toBeNull();
+    expect(view.getByText('(no output)')).toBeTruthy();
+  });
+
   it('shows arguments for an execute tool whose input is not a command string', () => {
     const withTool = agent();
     const code = 'import bpy\nbpy.ops.mesh.primitive_cube_add()';

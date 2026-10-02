@@ -658,7 +658,9 @@ body.dock-resizing .app { transition: none; }
 .tool-args { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
 .tool-args-label { font-family: var(--font-sans, inherit); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-dim)); margin-bottom: 4px; }
 .tool-args pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
-.tool-cmd-title { color: var(--text); }
+.tool-cmd-title { color: var(--text); display: flex; flex-direction: column; min-width: 0; }
+.tool-cmd-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-cmd-desc { font-family: var(--font-ui); color: var(--text-dim); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-prompt { color: var(--agent, var(--ok)); font-weight: 700; }
 .tool-terminal-output {
   margin: 0; padding: 8px 10px; background: #05090c; color: #d6e2ea;
