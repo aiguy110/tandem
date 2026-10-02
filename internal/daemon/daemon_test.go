@@ -223,9 +223,19 @@ func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not stop")
 	}
+	// Frames sent before shutdown may still be buffered; drain them until the
+	// close surfaces. A read deadline expiring means the socket stayed open.
 	ws.SetReadDeadline(time.Now().Add(time.Second))
-	if _, _, err := ws.ReadMessage(); err == nil {
-		t.Fatal("websocket remained open after daemon shutdown")
+	for {
+		_, _, err := ws.ReadMessage()
+		if err == nil {
+			continue
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			t.Fatal("websocket remained open after daemon shutdown")
+		}
+		break
 	}
 }
 
