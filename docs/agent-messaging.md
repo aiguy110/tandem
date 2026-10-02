@@ -1,5 +1,7 @@
 # Agent messaging
 
+![Federation, agent messaging, and cross-host permissions](assets/federation-overview.svg)
+
 Agents in the fleet can send messages to, ask questions of, and reply to other agents,
 on the same host or on any host reachable through federation. Delivery is
 default-deny: an agent can message another only over a **link** a human granted.

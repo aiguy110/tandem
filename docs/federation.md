@@ -1,5 +1,7 @@
 # Parent and child deployments
 
+![Federation, agent messaging, and cross-host permissions](assets/federation-overview.svg)
+
 One Tandem UI can control agents running on several hosts. Tandem instances ("hosts")
 form a tree: each has at most one **parent** and any number of **children**. A parent
 controls its children and everything below them; hosts above a given host are its

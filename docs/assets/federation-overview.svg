@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1220" viewBox="0 0 1600 1220" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#1f2937">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#374151"/></marker>
+    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker>
+    <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d97706"/></marker>
+    <marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker>
+    <style>
+      .mono { font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 11.5px; }
+      .h1 { font-size: 26px; font-weight: 700; }
+      .h2 { font-size: 17px; font-weight: 700; }
+      .sub { fill: #6b7280; }
+      .small { font-size: 11.5px; }
+      .b { font-weight: 700; }
+      .panel { fill: #ffffff; stroke: #e5e7eb; stroke-width: 1.5; }
+      .host { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.5; }
+      .agent { fill: #ecfdf5; stroke: #059669; stroke-width: 1.2; }
+      .note { fill: #f9fafb; stroke: #d1d5db; stroke-width: 1; }
+      .life { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1220" fill="#f3f4f6"/>
+  <text x="40" y="50" class="h1">Tandem federation, agent messaging &amp; cross-host permissions</text>
+  <text x="40" y="74" class="sub">Hosts form a tree. Commands travel over the links in both directions. The host that runs a command applies its own access policy, and agent messages also need a link that a human approved.</text>
+
+  <!-- ============ PANEL 1: topology ============ -->
+  <rect x="30" y="95" width="760" height="530" rx="12" class="panel"/>
+  <text x="50" y="125" class="h2">1 · Federation: a rooted tree of hosts</text>
+  <text x="50" y="145" class="sub small">Each host has at most one parent and any number of children (max depth 8). Trust is granted one link at a time.</text>
+
+  <!-- root -->
+  <rect x="300" y="170" width="190" height="62" rx="10" class="host"/>
+  <text x="395" y="194" text-anchor="middle" class="b">laptop</text>
+  <text x="395" y="212" text-anchor="middle" class="small sub">root · UI you use</text>
+  <text x="395" y="225" text-anchor="middle" class="mono sub">laptop-7c21e0</text>
+
+  <!-- bifrost -->
+  <rect x="90" y="320" width="190" height="62" rx="10" class="host"/>
+  <text x="185" y="344" text-anchor="middle" class="b">bifrost</text>
+  <text x="185" y="362" text-anchor="middle" class="small sub">child · dialed out</text>
+  <text x="185" y="375" text-anchor="middle" class="mono sub">bifrost-3f9a1c</text>
+
+  <!-- devbox -->
+  <rect x="510" y="320" width="190" height="62" rx="10" class="host"/>
+  <text x="605" y="344" text-anchor="middle" class="b">devbox</text>
+  <text x="605" y="362" text-anchor="middle" class="small sub">child · container, adopted</text>
+  <text x="605" y="375" text-anchor="middle" class="mono sub">devbox-a01b77</text>
+
+  <!-- gpu-box -->
+  <rect x="90" y="470" width="190" height="62" rx="10" class="host"/>
+  <text x="185" y="494" text-anchor="middle" class="b">gpu-box</text>
+  <text x="185" y="512" text-anchor="middle" class="small sub">grandchild (depth 2)</text>
+  <text x="185" y="525" text-anchor="middle" class="mono sub">gpu-box-91d2f4</text>
+
+  <!-- links -->
+  <path d="M215,320 L340,234" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ahb)"/>
+  <text x="95" y="250" class="small" fill="#2563eb" font-weight="600">dials parent</text>
+  <text x="80" y="265" class="mono" fill="#2563eb">tandem --parent https://…</text>
+  <text x="80" y="280" class="small sub">optional TANDEM_PARENT_PROXY (SOCKS5)</text>
+
+  <path d="M450,234 L575,318" stroke="#7c3aed" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#ahp)"/>
+  <text x="520" y="256" class="small" fill="#7c3aed" font-weight="600">parent adopts child</text>
+  <text x="520" y="271" class="small sub">settings.federation.children</text>
+  <text x="520" y="286" class="small sub">join token, or child approves</text>
+
+  <path d="M185,470 L185,384" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ahb)"/>
+  <text x="196" y="432" class="small" fill="#2563eb" font-weight="600">dials bifrost</text>
+
+  <!-- sibling route -->
+  <path d="M280,505 C 420,505 470,420 560,384" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="2 4" fill="none" marker-end="url(#ah)"/>
+  <text x="330" y="470" class="small sub">gpu-box → devbox goes through bifrost and laptop.</text>
+  <text x="330" y="485" class="small sub">Nothing new has to be reachable.</text>
+
+  <!-- side notes -->
+  <rect x="330" y="530" width="440" height="80" rx="8" class="note"/>
+  <text x="345" y="550" class="small"><tspan class="b">Link = durable WebSocket tunnel.</tspan> First connect → Accept/Reject.</text>
+  <text x="345" y="566" class="small">After acceptance, both ends store a credential and reconnect on their own.</text>
+  <text x="345" y="582" class="small">Remote agents appear as <tspan class="mono">fed~&lt;hostId&gt;~&lt;agentId&gt;</tspan>. Heartbeats carry</text>
+  <text x="345" y="598" class="small"><tspan class="mono">protocolVersion</tspan>; skew raises a notice, not a refusal.</text>
+
+  <!-- ============ PANEL 2: access policy ============ -->
+  <rect x="810" y="95" width="760" height="530" rx="12" class="panel"/>
+  <text x="830" y="125" class="h2">2 · Cross-host permissions: each host decides who controls it</text>
+  <text x="830" y="145" class="sub small">The host that runs a command enforces its own <tspan class="mono">settings.federation.access</tspan>. The first matching rule wins.</text>
+
+  <!-- ladder -->
+  <g>
+    <rect x="830" y="168" width="110" height="38" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+    <text x="885" y="192" text-anchor="middle" class="b mono">none</text>
+    <text x="955" y="192" class="small">host is hidden from the requester's host list</text>
+
+    <rect x="830" y="214" width="110" height="38" rx="6" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="885" y="238" text-anchor="middle" class="b mono">view</text>
+    <text x="955" y="230" class="small">agent lists, transcript / terminal / screencast subscriptions,</text>
+    <text x="955" y="245" class="small">history search, diffs</text>
+
+    <rect x="830" y="260" width="110" height="38" rx="6" fill="#d1fae5" stroke="#059669"/>
+    <text x="885" y="284" text-anchor="middle" class="b mono">message</text>
+    <text x="955" y="276" class="small">+ agent_directory, agent_message_deliver, agent_link_request,</text>
+    <text x="955" y="291" class="small">agent_message_pull/_ack. <tspan class="b">No control over agents.</tspan></text>
+
+    <rect x="830" y="306" width="110" height="38" rx="6" fill="#fef3c7" stroke="#d97706"/>
+    <text x="885" y="330" text-anchor="middle" class="b mono">operate</text>
+    <text x="955" y="322" class="small">+ prompts, interrupts, approvals, terminal / shell / browser input,</text>
+    <text x="955" y="337" class="small">renames, links, kill switch</text>
+
+    <rect x="830" y="352" width="110" height="38" rx="6" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="885" y="376" text-anchor="middle" class="b mono">admin</text>
+    <text x="955" y="376" class="small">+ spawn, resume, close, settings, installs, and any unclassified command</text>
+
+    <path d="M818,388 L818,172" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ah)"/>
+    <text x="812" y="290" class="small sub" transform="rotate(-90 812 290)" text-anchor="middle">each level includes all below</text>
+  </g>
+
+  <!-- config snippet -->
+  <rect x="830" y="408" width="330" height="120" rx="8" fill="#111827"/>
+  <text xml:space="preserve" x="845" y="430" class="mono" fill="#9ca3af"># gpu-box config.yml</text>
+  <text xml:space="preserve" x="845" y="448" class="mono" fill="#e5e7eb">settings:</text>
+  <text xml:space="preserve" x="845" y="463" class="mono" fill="#e5e7eb">  federation:</text>
+  <text xml:space="preserve" x="845" y="478" class="mono" fill="#e5e7eb">    access:</text>
+  <text xml:space="preserve" x="845" y="493" class="mono" fill="#a7f3d0">      - from: "*"       level: message</text>
+  <text xml:space="preserve" x="845" y="508" class="mono" fill="#6b7280">      # implicit: ancestors: admin</text>
+  <text xml:space="preserve" x="845" y="523" class="mono" fill="#6b7280">      #           *:         none</text>
+
+  <!-- relay rules -->
+  <rect x="1175" y="408" width="380" height="205" rx="8" class="note"/>
+  <text x="1190" y="430" class="b">How relays work</text>
+  <text x="1190" y="450" class="small">• Defaults: <tspan class="mono">ancestors: admin</tspan>, <tspan class="mono">*: none</tspan>. Siblings must</text>
+  <text x="1190" y="465" class="small">  opt in, and they are reached through their shared parent.</text>
+  <text x="1190" y="484" class="small">• Each relay records the command's origin. A parent believes</text>
+  <text x="1190" y="499" class="small">  a child's claim only for hosts in that child's own subtree.</text>
+  <text x="1190" y="518" class="small">• A parent leaves out of a child's fleet view any host that</text>
+  <text x="1190" y="533" class="small">  gives that child less than <tspan class="mono">view</tspan>.</text>
+  <text x="1190" y="552" class="small">• A relay could impersonate the hosts it relays for. So never give</text>
+  <text x="1190" y="567" class="small">  a routed host more access than its relay would get.</text>
+  <text x="1190" y="586" class="small">• Spawning is offered only on hosts where you have <tspan class="mono">admin</tspan>.</text>
+  <text x="1190" y="601" class="small">• Rules are read at startup; restart after changing them.</text>
+
+  <text x="830" y="550" class="small sub">Fleet View, the spawn palette, and the host list</text>
+  <text x="830" y="565" class="small sub">all show your level on each host.</text>
+
+  <!-- ============ PANEL 3: messaging sequence ============ -->
+  <rect x="30" y="645" width="1540" height="555" rx="12" class="panel"/>
+  <text x="50" y="675" class="h2">3 · Agent messaging: planner on laptop asks trainer on gpu-box</text>
+  <text x="50" y="695" class="sub small">Default-deny: a send or ask needs (a) at least <tspan class="mono">message</tspan> access on the recipient's host and (b) a directed link stored on that host. Agents use the <tspan class="mono">tandem-messages</tspan> MCP tools.</text>
+
+  <!-- lane headers -->
+  <rect x="50" y="712" width="170" height="44" rx="8" class="agent"/>
+  <text x="135" y="732" text-anchor="middle" class="b">Agent A</text>
+  <text x="135" y="748" text-anchor="middle" class="mono">@agent:laptop/planner</text>
+
+  <rect x="330" y="712" width="150" height="44" rx="8" class="host"/>
+  <text x="405" y="732" text-anchor="middle" class="b">laptop daemon</text>
+  <text x="405" y="748" text-anchor="middle" class="small sub">sender host · outbox</text>
+
+  <rect x="600" y="712" width="150" height="44" rx="8" class="host"/>
+  <text x="675" y="732" text-anchor="middle" class="b">bifrost</text>
+  <text x="675" y="748" text-anchor="middle" class="small sub">relay · stamps origin</text>
+
+  <rect x="870" y="712" width="150" height="44" rx="8" class="host"/>
+  <text x="945" y="732" text-anchor="middle" class="b">gpu-box daemon</text>
+  <text x="945" y="748" text-anchor="middle" class="small sub">recipient host · enforces</text>
+
+  <rect x="1080" y="712" width="170" height="44" rx="8" class="agent"/>
+  <text x="1165" y="732" text-anchor="middle" class="b">Agent B</text>
+  <text x="1165" y="748" text-anchor="middle" class="mono">@agent:gpu-box/trainer</text>
+
+  <line x1="135" y1="756" x2="135" y2="1180" class="life"/>
+  <line x1="405" y1="756" x2="405" y2="1180" class="life"/>
+  <line x1="675" y1="756" x2="675" y2="1180" class="life"/>
+  <line x1="945" y1="756" x2="945" y2="1180" class="life"/>
+  <line x1="1165" y1="756" x2="1165" y2="1180" class="life"/>
+
+  <!-- step 0: discovery -->
+  <circle cx="48" cy="785" r="11" fill="#6b7280"/><text x="48" y="789" text-anchor="middle" fill="#fff" class="b small">0</text>
+  <path d="M135,785 L400,785" stroke="#374151" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="145" y="779" class="mono">messages_directory()</text>
+  <path d="M405,785 L940,785" stroke="#374151" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#ah)"/>
+  <text x="480" y="779" class="small">fan out <tspan class="mono">agent_directory</tspan> to every host granting ≥ message (30 s cache)</text>
+
+  <!-- step 1: link request -->
+  <circle cx="48" cy="830" r="11" fill="#7c3aed"/><text x="48" y="834" text-anchor="middle" fill="#fff" class="b small">1</text>
+  <path d="M135,830 L400,830" stroke="#7c3aed" stroke-width="2" marker-end="url(#ahp)"/>
+  <text x="145" y="824" class="mono" fill="#7c3aed">messages_request_link(to, reason)</text>
+  <path d="M405,830 L940,830" stroke="#7c3aed" stroke-width="2" marker-end="url(#ahp)"/>
+  <text x="480" y="824" class="mono" fill="#7c3aed">agent_link_request</text>
+  <rect x="955" y="812" width="195" height="40" rx="6" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="965" y="829" class="small b">👤 Approval on B's session</text>
+  <text x="965" y="844" class="small">“planner wants to message…” Allow / Deny</text>
+  <path d="M940,862 L140,862" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ahp)"/>
+  <text x="150" y="878" class="small" fill="#7c3aed">system <tspan class="mono">link_approved</tspan> back to A (pushed, or pulled if gpu-box can't reach laptop). messages_request_link blocks up to 10 min.</text>
+  <text x="955" y="878" class="small">Link stored on gpu-box: <tspan class="mono">planner → trainer</tspan></text>
+  <text x="955" y="893" class="mono sub">steer · 60/h · maxHops 20 · paused=false</text>
+
+  <!-- step 2: ask -->
+  <circle cx="48" cy="930" r="11" fill="#2563eb"/><text x="48" y="934" text-anchor="middle" fill="#fff" class="b small">2</text>
+  <path d="M135,930 L400,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
+  <text x="145" y="924" class="mono" fill="#2563eb">messages_ask(to, body)</text>
+  <text x="145" y="948" class="small sub">returns {requestId} at once; turn ends</text>
+  <text x="145" y="962" class="small sub">A shows ⏳ waitingOn until reply / timeout</text>
+  <rect x="415" y="938" width="170" height="44" rx="6" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="425" y="955" class="small b">Outbox (persisted first)</text>
+  <text x="425" y="970" class="small">retry 15 s / on reconnect · ≤ 24 h</text>
+  <path d="M405,930 L670,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
+  <path d="M675,930 L940,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
+  <text x="440" y="924" class="mono" fill="#2563eb">agent_message_deliver{envelope}</text>
+  <text x="690" y="924" class="small" fill="#2563eb">origin = laptop</text>
+  <rect x="870" y="945" width="150" height="26" rx="5" fill="#fef3c7" stroke="#d97706"/>
+  <text x="945" y="962" text-anchor="middle" class="small b">run checks ▸</text>
+  <path d="M950,990 L1160,990" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
+  <text x="958" y="984" class="small" fill="#059669">steer into active turn, or queue</text>
+  <text x="958" y="1006" class="mono">&lt;tandem-message kind="ask"…&gt;</text>
+  <text x="958" y="1020" class="small sub">marked untrusted, not from the user</text>
+
+  <!-- step 3: reply -->
+  <circle cx="48" cy="1060" r="11" fill="#059669"/><text x="48" y="1064" text-anchor="middle" fill="#fff" class="b small">3</text>
+  <path d="M1165,1060 L950,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
+  <text x="1000" y="1054" class="mono" fill="#059669">messages_reply(requestId)</text>
+  <path d="M945,1060 L410,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
+  <text x="470" y="1054" class="small" fill="#059669">no link needed: accepted only if laptop has a matching open request</text>
+  <path d="M405,1060 L140,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
+  <text x="160" y="1054" class="small" fill="#059669">delivered as an inbound message</text>
+  <path d="M405,1095 L940,1095" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#aho)"/>
+  <path d="M940,1110 L410,1110" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#aho)"/>
+  <text x="425" y="1089" class="small" fill="#b45309"><tspan class="b">Pull fallback</tspan> if the push is denied or gpu-box can't reach laptop: the reply is held, and laptop polls</text>
+  <text x="425" y="1128" class="mono" fill="#b45309">agent_message_pull → agent_message_pull_ack</text>
+  <text x="725" y="1128" class="small" fill="#b45309">(every 5 s, only while an ask is open)</text>
+  <text x="960" y="1140" class="small sub">If B's turn ends unanswered: one reply_reminder, then an</text>
+  <text x="960" y="1155" class="small sub">automatic decline (no_reply). Closed session → recipient_gone.</text>
+  <text x="160" y="1155" class="small sub">At the deadline (30 min by default): system timeout to A.</text>
+
+  <!-- checks panel -->
+  <rect x="1275" y="712" width="280" height="350" rx="8" fill="#fffbeb" stroke="#d97706"/>
+  <text x="1290" y="736" class="b">Checks on the recipient host, in order</text>
+  <text x="1290" y="760" class="small"><tspan class="b">1.</tspan> Federation access for origin ≥ <tspan class="mono">message</tspan></text>
+  <text x="1290" y="780" class="small"><tspan class="b">2.</tspan> <tspan class="mono">from.host</tspan> == command origin</text>
+  <text x="1306" y="794" class="small sub">(no sending as another host)</text>
+  <text x="1290" y="814" class="small"><tspan class="b">3.</tspan> kill switch off (<tspan class="mono">messagingPaused</tspan>)</text>
+  <text x="1290" y="834" class="small"><tspan class="b">4.</tspan> recipient exists and is open</text>
+  <text x="1290" y="854" class="small"><tspan class="b">5.</tspan> link from → to (or reply / system rule)</text>
+  <text x="1290" y="874" class="small"><tspan class="b">6.</tspan> link not paused</text>
+  <text x="1290" y="894" class="small"><tspan class="b">7.</tspan> <tspan class="mono">hop</tspan> ≤ <tspan class="mono">maxHops</tspan></text>
+  <text x="1290" y="914" class="small"><tspan class="b">8.</tspan> hourly budget not exceeded</text>
+  <text x="1290" y="934" class="small"><tspan class="b">9.</tspan> duplicate <tspan class="mono">id</tspan> → original result</text>
+  <line x1="1290" y1="950" x2="1540" y2="950" stroke="#fcd34d"/>
+  <text x="1290" y="970" class="small b">Fail → error code to sender:</text>
+  <text x="1290" y="987" class="mono small">access_denied · no_link</text>
+  <text x="1290" y="1002" class="mono small">link_paused · hop_limit</text>
+  <text x="1290" y="1017" class="mono small">budget_exceeded · messaging_paused</text>
+  <text x="1290" y="1032" class="mono small">recipient_gone · …</text>
+  <text x="1290" y="1050" class="small sub">Errors from these checks are final, not retried.</text>
+
+  <text x="1275" y="1090" class="small sub">Links are one-way: B must request its own</text>
+  <text x="1275" y="1105" class="small sub">link to message A. Links survive resume</text>
+  <text x="1275" y="1120" class="small sub">but not handoff.</text>
+</svg>
