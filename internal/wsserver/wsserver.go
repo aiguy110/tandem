@@ -143,10 +143,13 @@ type HistoryLifecycle interface {
 }
 
 type Handler struct {
-	opts                  Options
-	upgrader              websocket.Upgrader
-	mu                    sync.Mutex
-	connections           map[*connection]struct{}
+	opts        Options
+	upgrader    websocket.Upgrader
+	mu          sync.Mutex
+	connections map[*connection]struct{}
+	// closed is set by Close so a connection upgraded concurrently with
+	// shutdown is refused instead of registering after the sweep and outliving it.
+	closed                bool
 	unsubscribe           func()
 	unsubscribeFederation func()
 	// remoteNotifications holds each connected host's own notification
@@ -216,6 +219,7 @@ func (h *Handler) Close() {
 		h.unsubscribeFederation = nil
 	}
 	h.mu.Lock()
+	h.closed = true
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {
 		connections = append(connections, c)
@@ -318,6 +322,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	c := newConnection(h, ws)
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		slog.Info("refusing websocket connection during shutdown", "remote", r.RemoteAddr)
+		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "shutting down"), time.Now().Add(time.Second))
+		c.close()
+		return
+	}
 	h.connections[c] = struct{}{}
 	h.mu.Unlock()
 	c.run()

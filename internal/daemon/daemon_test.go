@@ -233,7 +233,7 @@ func TestServeLoadsEmbeddedUIAndStopsCleanly(t *testing.T) {
 		}
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			t.Fatal("websocket remained open after daemon shutdown")
+			t.Fatalf("websocket remained open after daemon shutdown: %v", err)
 		}
 		break
 	}
