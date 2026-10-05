@@ -116,8 +116,17 @@ The setup wizard persists the equivalent `browserDriver`, `steelBaseUrl`, and op
 `steelApiKey` settings in owner-only `$TANDEM_HOME/config.yml`; environment variables
 continue to take precedence.
 The Go local driver accepts `TANDEM_CHROMIUM_EXECUTABLE`; when unset it searches ordinary
-Chromium/Chrome executable names on `PATH` (and standard macOS application paths). It does
-not depend on Playwright's private browser installation or `chromium.executablePath()`.
+Chrome/Chromium executable names on `PATH` (branded Chrome first, plus standard macOS
+application paths). It does not depend on Playwright's private browser installation or
+`chromium.executablePath()`.
+
+To reduce bot-detection signals, the local driver runs Chrome **headful** inside a private
+`Xvfb` server (1920x1080, started per browser with `-displayfd` and reaped with Chrome), so
+no windows appear on the user's desktop. It also launches with
+`--disable-blink-features=AutomationControlled` (so `navigator.webdriver` is false) and
+omits `--no-sandbox` unless running as root. When `Xvfb` is not installed it falls back to
+`--headless=new` with a `--user-agent` override that hides the `HeadlessChrome` token.
+Remaining tells (CDP side effects, SwiftShader WebGL, IP reputation) are not addressed.
 
 ### Self-hosting Steel
 

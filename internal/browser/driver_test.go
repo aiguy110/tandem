@@ -170,7 +170,7 @@ func TestDriverSelection(t *testing.T) {
 // shared-browser pane. The launch line must opt out of those checks.
 func TestLocalLaunchArgsDisableLocalNetworkAccessChecks(t *testing.T) {
 	t.Parallel()
-	args := localLaunchArgs(9222, "/tmp/profile")
+	args := localLaunchArgs(9222, "/tmp/profile", false, "")
 	if !slices.Contains(args, "--disable-features=LocalNetworkAccessChecks") {
 		t.Fatalf("launch args missing local network access opt-out: %v", args)
 	}
@@ -179,5 +179,24 @@ func TestLocalLaunchArgsDisableLocalNetworkAccessChecks(t *testing.T) {
 	}
 	if !slices.Contains(args, "--remote-debugging-port=9222") || !slices.Contains(args, "--user-data-dir=/tmp/profile") {
 		t.Fatalf("launch args dropped port/profile: %v", args)
+	}
+}
+
+// Headless mode and the AutomationControlled blink feature are the most common
+// bot-detection signals, so the headful launch line must carry neither, and the
+// headless fallback must override the "HeadlessChrome" user agent.
+func TestLocalLaunchArgsStealth(t *testing.T) {
+	t.Parallel()
+	headful := localLaunchArgs(9222, "/tmp/profile", false, "")
+	if slices.Contains(headful, "--headless=new") {
+		t.Fatalf("headful launch must not pass --headless: %v", headful)
+	}
+	if !slices.Contains(headful, "--disable-blink-features=AutomationControlled") {
+		t.Fatalf("launch args missing AutomationControlled opt-out: %v", headful)
+	}
+	ua := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+	headless := localLaunchArgs(9222, "/tmp/profile", true, ua)
+	if !slices.Contains(headless, "--headless=new") || !slices.Contains(headless, "--user-agent="+ua) {
+		t.Fatalf("headless fallback missing headless flag or UA override: %v", headless)
 	}
 }

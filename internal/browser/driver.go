@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,7 +63,9 @@ func DiscoverChromium(configured string) (string, error) {
 		}
 		return p, nil
 	}
-	names := []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"}
+	// Branded Chrome first: its UA brands, codecs, and fingerprint match what
+	// sites see from real users, whereas Chromium is a mild automation tell.
+	names := []string{"google-chrome-stable", "google-chrome", "chrome", "chromium", "chromium-browser"}
 	if runtime.GOOS == "darwin" {
 		names = append([]string{"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium"}, names...)
 	}
@@ -82,14 +85,111 @@ func DiscoverChromium(configured string) (string, error) {
 // no way for the user to grant access from the shared-browser pane.
 var localNetworkAccessArgs = []string{"--disable-features=LocalNetworkAccessChecks"}
 
+// stealthArgs strip the launch-level signals bot detectors key on: the
+// AutomationControlled blink feature (navigator.webdriver = true) and the
+// "Chrome is being controlled by automated test software" infobar.
+var stealthArgs = []string{"--disable-blink-features=AutomationControlled", "--disable-infobars", "--test-type"}
+
 // localLaunchArgs builds the Chromium command line for a daemon-owned browser
-// listening for CDP on port and using profile as its user-data-dir.
-func localLaunchArgs(port int, profile string) []string {
-	args := []string{"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+// listening for CDP on port and using profile as its user-data-dir. When
+// userAgent is non-empty it overrides the browser's default (used in headless
+// mode to hide the "HeadlessChrome" product token).
+func localLaunchArgs(port int, profile string, headless bool, userAgent string) []string {
+	args := []string{"--disable-gpu", "--disable-dev-shm-usage",
 		fmt.Sprintf("--remote-debugging-port=%d", port), "--user-data-dir=" + profile,
-		"--no-first-run", "--no-default-browser-check", "--window-size=1280,800"}
+		"--no-first-run", "--no-default-browser-check", "--window-size=1280,800", "--window-position=0,0"}
+	if headless {
+		args = append([]string{"--headless=new"}, args...)
+	}
+	// Chrome refuses to run its sandbox as root; elsewhere --no-sandbox only
+	// weakens isolation and adds an "unsupported flag" banner detectors notice.
+	if os.Geteuid() == 0 {
+		args = append(args, "--no-sandbox")
+	}
+	if userAgent != "" {
+		args = append(args, "--user-agent="+userAgent)
+	}
+	args = append(args, stealthArgs...)
 	args = append(args, localNetworkAccessArgs...)
 	return append(args, "about:blank")
+}
+
+// headfulUserAgent derives the UA a headful build of exe would send, so a
+// headless fallback does not advertise "HeadlessChrome". It returns "" when
+// the version cannot be determined.
+func headfulUserAgent(exe string) string {
+	out, err := exec.Command(exe, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	var version string
+	for _, f := range strings.Fields(string(out)) {
+		if len(f) > 0 && f[0] >= '0' && f[0] <= '9' && strings.Contains(f, ".") {
+			version = f
+			break
+		}
+	}
+	if version == "" {
+		return ""
+	}
+	// Chrome reduces the UA to MAJOR.0.0.0 on every platform.
+	major, _, _ := strings.Cut(version, ".")
+	platform := "X11; Linux x86_64"
+	if runtime.GOOS == "darwin" {
+		platform = "Macintosh; Intel Mac OS X 10_15_7"
+	}
+	return "Mozilla/5.0 (" + platform + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+// startXvfb launches a private virtual X server so Chrome can run headful
+// (headless mode is the single biggest bot-detection signal) without opening
+// windows on the user's desktop. It returns the server process and its
+// DISPLAY value.
+func startXvfb(ctx context.Context) (*exec.Cmd, string, error) {
+	exe, err := exec.LookPath("Xvfb")
+	if err != nil {
+		return nil, "", err
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, "", err
+	}
+	defer r.Close()
+	cmd := exec.Command(exe, "-displayfd", "3", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "+extension", "RANDR")
+	cmd.ExtraFiles = []*os.File{w}
+	if err := cmd.Start(); err != nil {
+		_ = w.Close()
+		return nil, "", fmt.Errorf("launch Xvfb: %w", err)
+	}
+	_ = w.Close()
+	type result struct {
+		display string
+		err     error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		var b [16]byte
+		n, err := r.Read(b[:])
+		ch <- result{strings.TrimSpace(string(b[:n])), err}
+	}()
+	select {
+	case res := <-ch:
+		if res.display == "" {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, "", fmt.Errorf("Xvfb did not report a display: %v", res.err)
+		}
+		go func() { _ = cmd.Wait() }()
+		return cmd, ":" + res.display, nil
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, "", ctx.Err()
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, "", errors.New("Xvfb did not report a display within 10s")
+	}
 }
 
 type LocalConfig struct {
@@ -100,6 +200,7 @@ type LocalConfig struct {
 
 type localHandle struct {
 	cmd             *exec.Cmd
+	xvfb            *exec.Cmd
 	cdpURL, profile string
 }
 type LocalDriver struct {
@@ -178,13 +279,35 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 			}
 		}
 	}
-	args := localLaunchArgs(port, profile)
+	xvfb, display, xerr := startXvfb(ctx)
+	headless := xerr != nil
+	var ua string
+	if headless {
+		ua = headfulUserAgent(exe)
+		slog.Warn("browser: Xvfb unavailable, falling back to headless chromium", "session_id", id, "error", xerr)
+	}
+	killXvfb := func() {
+		if xvfb != nil {
+			_ = xvfb.Process.Kill()
+		}
+	}
+	args := localLaunchArgs(port, profile, headless, ua)
 	cmd := exec.Command(exe, args...)
+	if display != "" {
+		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	}
 	if err := cmd.Start(); err != nil {
+		killXvfb()
 		return ProvisionResult{}, fmt.Errorf("launch chromium: %w", err)
 	}
+	slog.Info("browser: launched local chromium", "session_id", id, "pid", cmd.Process.Pid, "executable", exe, "headless", headless, "display", display, "cdp_port", port)
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		// The X server exists only for this browser; reap it with Chrome.
+		killXvfb()
+		done <- err
+	}()
 	cdp := fmt.Sprintf("http://127.0.0.1:%d", port)
 	deadline := time.NewTimer(d.cfg.LaunchTimeout)
 	defer deadline.Stop()
@@ -208,7 +331,7 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 			if err == nil {
 				_ = r.Body.Close()
 				if r.StatusCode >= 200 && r.StatusCode < 300 {
-					d.handles[id] = &localHandle{cmd: cmd, cdpURL: cdp, profile: profile}
+					d.handles[id] = &localHandle{cmd: cmd, xvfb: xvfb, cdpURL: cdp, profile: profile}
 					return ProvisionResult{CDPURL: cdp}, nil
 				}
 			}
@@ -223,6 +346,9 @@ func (d *LocalDriver) Teardown(_ context.Context, id string) error {
 	d.mu.Unlock()
 	if h != nil && h.cmd.Process != nil {
 		_ = h.cmd.Process.Kill()
+	}
+	if h != nil && h.xvfb != nil {
+		_ = h.xvfb.Process.Kill()
 	}
 	// Remove the known profile path even when there is no live handle. An
 	// explicit fresh restart after a daemon/process crash must not silently
