@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,13 +52,14 @@ func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 			Env:  []MCPEnvVariable{},
 		})
 	}
-	if w.BrowserEnabled && w.TandemExecutable != "" {
+	if w.TandemExecutable != "" {
 		servers = append(servers, MCPServer{
 			Name: "tandem-control", Command: w.TandemExecutable, Args: []string{"mcp-control"},
 			Env: []MCPEnvVariable{
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
 				{Name: "TANDEM_AGENT_ID", Value: sessionID},
+				{Name: "TANDEM_BROWSER_ENABLED", Value: fmt.Sprintf("%t", w.BrowserEnabled)},
 			},
 		})
 	}

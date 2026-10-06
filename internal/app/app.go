@@ -54,7 +54,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// internal stdio MCP subprocess from Tandem's session/new declaration.
 	if len(args) == 1 && args[0] == "mcp-control" {
 		err := controlmcp.Run(context.Background(), os.Stdin, stdout, controlmcp.Config{
-			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"),
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"), BrowserEnabled: os.Getenv("TANDEM_BROWSER_ENABLED") == "true",
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-control: %v\n", err)

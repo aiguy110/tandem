@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { useStore, allApprovals, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
+import { useStore, allApprovals, allSecretRequests, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
 import type { NotifSeverity } from '../store';
+import type { SecretRequest } from '../store';
+import { storedToken } from '../ws/client';
 import { PermissionRequestDetails } from './PermissionRequest';
 import { usePresence } from '../transitions';
 
@@ -25,8 +27,10 @@ const SEVERITY_LABEL: Record<NotifSeverity, string> = {
 // requests across every agent. Clicking a completed-turn card marks it read.
 export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
 	const [pendingSystemAction, setPendingSystemAction] = useState<string | null>(null);
+  const [secretEntry, setSecretEntry] = useState<{ sessionId: string; request: SecretRequest } | null>(null);
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
+  const secretRequests = useStore(allSecretRequests);
   const notifications = useStore(allTurnNotifications);
   const systemNotifications = useStore((s) => s.systemNotifications);
   const agents = useStore((s) => s.sessions);
@@ -142,7 +146,15 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           </div>
         </div>
       ))}
-      {items.length === 0 && takeovers.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
+      {secretRequests.map(({ sessionId, request }) => (
+        <div key={request.requestId} className="appr secret-request" onClick={() => setSecretEntry({ sessionId, request })}>
+          <div className="who"><span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · secret</div>
+          <div className="what">requests {request.service}</div>
+          <div className="notification-message">For {request.origin}</div>
+          <div className="acts"><button className="btn-approve" onClick={(e) => { e.stopPropagation(); setSecretEntry({ sessionId, request }); }}>Enter securely…</button></div>
+        </div>
+      ))}
+      {items.length === 0 && takeovers.length === 0 && secretRequests.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
         <div className="empty">No notifications. Completed session turns and requests for attention appear here.</div>
       ) : (
         items.map(({ sessionId, approval }) => {
@@ -181,6 +193,41 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
       )}
       </div>
       )}
+      {secretEntry && <SecretEntryModal entry={secretEntry} onClose={() => setSecretEntry(null)} />}
     </div>
   );
+}
+
+function SecretEntryModal({ entry, onClose }: { entry: { sessionId: string; request: SecretRequest }; onClose: () => void }) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const resolve = async (deny: boolean) => {
+    setBusy(true); setError('');
+    try {
+      const token = storedToken();
+      if (!token) throw new Error('Tandem authentication is unavailable');
+      const response = await fetch('/internal/secrets/resolve', {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: entry.request.requestId, secret: deny ? '' : value, deny }),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+      setValue(''); onClose();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setBusy(false); }
+  };
+  return <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+    <div className="modal secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
+      <div className="secret-body">
+        <div className="adv-section" id="secret-title">Secure secret request</div>
+        <p><strong>{entry.request.service}</strong> credential for <code>{entry.request.origin}</code></p>
+        <p className="sub">Agent-provided reason (untrusted): {entry.request.reason}</p>
+        <p className="secret-assurance">The value is sent directly to Tandem’s in-memory broker. It is not added to the prompt, transcript, event log, or agent tool result.</p>
+        <label>Secret value<input autoFocus type="password" autoComplete="off" spellCheck={false} value={value} onChange={(e) => setValue(e.target.value)} /></label>
+        <div className="sub">Injected only as <code>{entry.request.headerName}</code> when calling the approved origin.</div>
+      </div>
+      {error && <div className="modal-err">{error}</div>}
+      <div className="foot"><button className="btn-deny" disabled={busy} onClick={() => void resolve(true)}>Deny</button><span style={{ flex: 1 }} /><button disabled={busy || !value} className="btn-approve" onClick={() => void resolve(false)}>{busy ? 'Submitting…' : 'Grant for session'}</button></div>
+    </div>
+  </div>;
 }
