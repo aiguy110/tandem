@@ -173,6 +173,35 @@ agent is closed. Steel Cloud can additionally accept `deviceConfig`, `stealthCon
 `solveCaptcha`, and `useProxy` through the same JSON object. Interaction pacing is controlled
 by the agent/Playwright workflow, not by Steel's session API.
 
+### Steel Cloud vs. self-hosted Steel
+
+The local driver is the recommended default: it covers the launch-level anti-detection that
+self-hosted Steel provides (headful Chrome under Xvfb, no `navigator.webdriver`, a real UA)
+without a container to babysit. Self-hosted Steel's Xvfb runs as an unsupervised background
+process; if it dies, every `POST /v1/sessions` fails with `500` (`Browser process error
+(launch_failed) … Missing X server or $DISPLAY`) until the container is restarted.
+
+What self-hosted Steel does **not** include is Steel Cloud's managed residential proxies,
+dedicated IPs, and CAPTCHA solving. On Steel Cloud, CAPTCHA solving is exposed as:
+
+- **Session flag:** `solveCaptcha: true` at session create enables detection, solving, and
+  verification for the whole session. `stealthConfig.autoCaptchaSolving: false` keeps
+  detection but leaves solving to explicit calls.
+- **Endpoints:** `sessions.captchas.status(sessionId)` returns per-page tasks (`type`,
+  `status` = `detected → solving → validating → solved`, `detectionTime`, `solveTime`,
+  `totalDuration`); `sessions.captchas.solve(sessionId, {taskId | url | pageId})` triggers a
+  solve manually.
+- **Coverage:** auto-solves reCAPTCHA v2/v3, Cloudflare Turnstile, image-to-text, and slider
+  challenges. DataDome, Imperva, Amazon WAF, and FunCAPTCHA are detected but not solved.
+
+Pricing (as of 2026-10): the **Launch** plan has no subscription — $0/month plus usage at
+$0.10/browser-hour, $3 per 1k CAPTCHA solves, and $10/GB proxy bandwidth, with $30 of
+one-time credit; CAPTCHA solving and proxies require a $10 prepaid balance to verify the
+account. **Scale** is $250/month plus lower usage rates ($0.08/hour, $1/1k solves, $6/GB).
+See <https://docs.steel.dev/overview/pricinglimits>. Tandem already forwards `solveCaptcha`,
+`useProxy`, and `stealthConfig` from `STEEL_SESSION_OPTIONS`, but does not yet call the
+CAPTCHA status/solve endpoints.
+
 **How the CDP URL is derived (why `SteelDriver` doesn't just use `/json/version`):** Steel's
 `/json/version` (port 9223) advertises a *port-less* `ws://localhost/devtools/...` that
 Playwright dials as `:80` and fails. So the driver uses the create response's

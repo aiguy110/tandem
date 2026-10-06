@@ -101,12 +101,16 @@ Common configuration:
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
 | `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
-| `TANDEM_BROWSER_DRIVER` | `local` | `local` (installed Chrome/Chromium) or `steel` (needs `STEEL_BASE_URL`; see below) |
+| `TANDEM_BROWSER_DRIVER` | `local` | `local` (installed Chrome/Chromium, headful under Xvfb) or `steel` (needs `STEEL_BASE_URL`; see below) |
 | `TANDEM_LANGUAGE_MODEL_ENDPOINT` / `_API_KEY` / `_MODEL` | unset | Shared OpenAI-compatible Chat Completions configuration for voice preparation and future summaries/titles |
 | `TANDEM_VOICE_ENABLED` | `off` | Enables per-message spoken responses; `TANDEM_VOICE_TTS_*` selects the compatible Speech endpoint |
 
-**Self-hosting Steel (optional):** for the shared browser you can back agents with
-[Steel](https://github.com/steel-dev/steel-browser) instead of local Chromium. Run it with
+**Self-hosting Steel (optional):** the default local driver already runs installed Chrome
+headful under a private Xvfb with anti-detection launch flags, so Steel is rarely needed.
+Self-hosted Steel does not include Steel Cloud's CAPTCHA solving or residential proxies
+(see [`docs/browser.md`](docs/browser.md) › **Steel Cloud vs. self-hosted Steel**). You can
+still back agents with [Steel](https://github.com/steel-dev/steel-browser) instead of local
+Chrome. Run it with
 Docker and point Tandem at it. The interactive setup wizard can detect Docker, create this
 container as `tandem-steel`, verify it, and persist the URL automatically:
 
