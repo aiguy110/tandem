@@ -155,6 +155,8 @@ export type SessionEvent =
   | { kind: 'error'; message: string }
   | { kind: 'takeover_request'; reqId: string; reason: string }
   | { kind: 'takeover_resolved'; reqId: string }
+  | { kind: 'secret_request'; requestId: string; service: string; reason: string; origin: string; headerName: string }
+  | { kind: 'secret_resolved'; requestId: string; granted: boolean }
   | { kind: 'session_config'; modes: SessionModeState | null; configOptions: SessionConfigOption[] }
   | { kind: 'available_commands'; commands: SlashCommand[] }
   | { kind: 'prompt_capabilities'; image: boolean }

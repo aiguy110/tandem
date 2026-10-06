@@ -16,10 +16,15 @@ import (
 	"time"
 )
 
-const ToolName = "browser_request_takeover"
+const (
+	ToolName          = "browser_request_takeover"
+	SecretRequestTool = "secret_request"
+	SecretHTTPTool    = "secret_http_request"
+)
 
 type Config struct {
 	ControlURL, Token, SessionID string
+	BrowserEnabled               bool
 	HTTPClient                   *http.Client
 	PollInterval                 time.Duration
 }
@@ -85,36 +90,71 @@ func (s *server) handle(ctx context.Context, line []byte) {
 	case "ping":
 		s.result(req.ID, map[string]any{})
 	case "tools/list":
-		s.result(req.ID, map[string]any{"tools": []any{toolDeclaration()}})
+		tools := []any{secretRequestDeclaration(), secretHTTPDeclaration()}
+		if s.cfg.BrowserEnabled {
+			tools = append([]any{toolDeclaration()}, tools...)
+		}
+		s.result(req.ID, map[string]any{"tools": tools})
 	case "tools/call":
 		var p struct {
-			Name      string `json:"name"`
-			Arguments struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if json.Unmarshal(req.Params, &p) != nil {
+			s.rpcError(req.ID, -32602, "invalid tool call")
+			return
+		}
+		switch p.Name {
+		case ToolName:
+			var args struct {
 				Reason string `json:"reason"`
-			} `json:"arguments"`
-		}
-		if json.Unmarshal(req.Params, &p) != nil || p.Name != ToolName {
+			}
+			_ = json.Unmarshal(p.Arguments, &args)
+			if args.Reason == "" {
+				args.Reason = "the agent needs you"
+			}
+			if err := s.takeover(ctx, args.Reason); err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			s.result(req.ID, toolText("The human took the wheel, completed the step, and handed control back. You may continue."))
+		case SecretRequestTool:
+			var args secretRequestArgs
+			if json.Unmarshal(p.Arguments, &args) != nil {
+				s.rpcError(req.ID, -32602, "invalid secret request")
+				return
+			}
+			grantID, err := s.requestSecret(ctx, args)
+			if err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			s.result(req.ID, toolText("Secret approved. Use secret_http_request with grantId "+grantID+". The secret value was not disclosed."))
+		case SecretHTTPTool:
+			var args secretHTTPArgs
+			if json.Unmarshal(p.Arguments, &args) != nil {
+				s.rpcError(req.ID, -32602, "invalid secret HTTP request")
+				return
+			}
+			result, err := s.secretHTTP(ctx, args)
+			if err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			encoded, _ := json.Marshal(result)
+			s.result(req.ID, toolText(string(encoded)))
+		default:
 			s.rpcError(req.ID, -32602, "unknown tool: "+p.Name)
-			return
 		}
-		if p.Arguments.Reason == "" {
-			p.Arguments.Reason = "the agent needs you"
-		}
-		if err := s.takeover(ctx, p.Arguments.Reason); err != nil {
-			s.rpcError(req.ID, -32603, err.Error())
-			return
-		}
-		s.result(req.ID, map[string]any{
-			"content": []any{map[string]string{
-				"type": "text",
-				"text": "The human took the wheel, completed the step, and handed control back. You may continue.",
-			}},
-		})
 	default:
 		if len(req.ID) > 0 {
 			s.rpcError(req.ID, -32601, "method not found: "+req.Method)
 		}
 	}
+}
+
+func toolText(value string) map[string]any {
+	return map[string]any{"content": []any{map[string]string{"type": "text", "text": value}}}
 }
 
 func toolDeclaration() map[string]any {
@@ -123,6 +163,124 @@ func toolDeclaration() map[string]any {
 		"description": "Ask the human to take control of the shared browser to complete a step you cannot. Blocks until the human hands control back.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"reason": map[string]string{"type": "string", "description": "Short reason shown to the human."}}, "required": []string{"reason"}},
 	}
+}
+
+func secretRequestDeclaration() map[string]any {
+	return map[string]any{
+		"name":        SecretRequestTool,
+		"description": "Ask the human for an API credential without exposing its value to the model. Blocks until approved or denied, then returns only a scoped grant ID.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"service":    map[string]string{"type": "string", "description": "Short service name shown in trusted Tandem UI."},
+			"reason":     map[string]string{"type": "string", "description": "Why the credential is needed; shown as untrusted agent text."},
+			"origin":     map[string]string{"type": "string", "description": "Exact HTTPS origin where Tandem may inject the credential, for example https://api.example.com."},
+			"headerName": map[string]string{"type": "string", "description": "Credential header; defaults to Authorization."},
+			"prefix":     map[string]string{"type": "string", "description": "Optional header prefix, commonly 'Bearer '."},
+		}, "required": []string{"service", "reason", "origin"}},
+	}
+}
+
+func secretHTTPDeclaration() map[string]any {
+	return map[string]any{
+		"name":        SecretHTTPTool,
+		"description": "Make an HTTP request using a secret grant. Tandem injects the credential only for its approved HTTPS origin; the credential is never returned.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"grantId": map[string]string{"type": "string"}, "method": map[string]string{"type": "string"}, "url": map[string]string{"type": "string"},
+			"headers": map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}}, "body": map[string]string{"type": "string"},
+		}, "required": []string{"grantId", "url"}},
+	}
+}
+
+type secretRequestArgs struct {
+	Service    string `json:"service"`
+	Reason     string `json:"reason"`
+	Origin     string `json:"origin"`
+	HeaderName string `json:"headerName"`
+	Prefix     string `json:"prefix"`
+}
+type secretHTTPArgs struct {
+	GrantID string            `json:"grantId"`
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Body    string            `json:"body"`
+	Headers map[string]string `json:"headers"`
+}
+
+func (s *server) requestSecret(ctx context.Context, args secretRequestArgs) (string, error) {
+	var registered struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := s.secretJSON(ctx, http.MethodPost, "/internal/secrets/request", "", map[string]string{
+		"sessionId": s.cfg.SessionID, "service": args.Service, "reason": args.Reason, "origin": args.Origin, "headerName": args.HeaderName, "prefix": args.Prefix,
+	}, &registered); err != nil {
+		return "", err
+	}
+	if registered.RequestID == "" {
+		return "", errors.New("secret request returned no requestId")
+	}
+	ticker := time.NewTicker(s.cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+			var status struct {
+				Done, Denied bool
+				GrantID      string `json:"grantId"`
+			}
+			query := "?sessionId=" + url.QueryEscape(s.cfg.SessionID) + "&requestId=" + url.QueryEscape(registered.RequestID)
+			if err := s.secretJSON(ctx, http.MethodGet, "/internal/secrets/status", query, nil, &status); err != nil {
+				continue
+			}
+			if status.Done {
+				if status.Denied {
+					return "", errors.New("human denied the secret request")
+				}
+				return status.GrantID, nil
+			}
+		}
+	}
+}
+
+func (s *server) secretHTTP(ctx context.Context, args secretHTTPArgs) (map[string]any, error) {
+	var result map[string]any
+	err := s.secretJSON(ctx, http.MethodPost, "/internal/secrets/proxy", "", map[string]any{"sessionId": s.cfg.SessionID, "grantId": args.GrantID, "method": args.Method, "url": args.URL, "headers": args.Headers, "body": args.Body}, &result)
+	return result, err
+}
+
+func (s *server) secretJSON(ctx context.Context, method, path, query string, body any, out any) error {
+	if s.cfg.ControlURL == "" {
+		return errors.New("TANDEM_CONTROL_URL not set")
+	}
+	var reader io.Reader
+	if body != nil {
+		encoded, _ := json.Marshal(body)
+		reader = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(s.cfg.ControlURL, "/")+path+query, reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.Token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := s.cfg.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error == "" {
+			e.Error = resp.Status
+		}
+		return errors.New(e.Error)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func (s *server) takeover(ctx context.Context, reason string) error {

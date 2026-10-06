@@ -148,6 +148,7 @@ Core primitives:
 - **Workspace** — a filesystem context, isolated as a git worktree (or dir) per agent.
 - **Task** — a unit of work assigned to an agent.
 - **Approval / Interrupt** — the human-in-the-loop gate; the conductor's inbox.
+- **Secret broker** — memory-only, session-scoped credential grants used through constrained daemon-side HTTP injection; see [`secrets.md`](secrets.md).
 - **Artifact / Diff** — reviewable results (file diffs, command output, browser recordings).
 
 ## Security notes

@@ -39,6 +39,7 @@ import (
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
+	"github.com/aiguy110/tandem/internal/secretbroker"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
 	"github.com/aiguy110/tandem/internal/updater"
@@ -124,6 +125,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	var agents *registry.Registry
 	var broker *browser.Broker
 	var takeovers *browser.Takeovers
+	var secrets *secretbroker.Broker
 	var factory agentadapter.Factory
 	driver, driverErr := browser.NewDriver(browser.DriverConfig{Driver: cfg.Browser.Driver, UserDataRoot: cfg.Browser.UserDataRoot, ChromiumExecutable: cfg.Browser.ChromiumExecutable, SteelBaseURL: cfg.Browser.SteelBaseURL, SteelAPIKey: cfg.Browser.SteelAPIKey, SteelSessionOptions: cfg.Browser.SteelSessionOptions, SessionStore: db})
 	if driverErr != nil {
@@ -164,6 +166,22 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			if agents != nil {
 				if s := agents.Get(id); s != nil {
 					pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": takeoverResolvedStatus(s.ActiveTurn(), s.Status())})
+				}
+			}
+		},
+	})
+	secrets = secretbroker.New(secretbroker.Options{
+		Token:       token,
+		AgentExists: func(id string) bool { return agents != nil && agents.Get(id) != nil },
+		OnRequest: func(req secretbroker.Request) {
+			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "secret_request", "requestId": req.RequestID, "service": req.Service, "reason": req.Reason, "origin": req.Origin, "headerName": req.HeaderName})
+			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "status", "status": "blocked"})
+		},
+		OnResolved: func(sessionID, requestID string, granted bool) {
+			pushAgentEvent(agents, sessionID, map[string]any{"kind": "secret_resolved", "requestId": requestID, "granted": granted})
+			if agents != nil {
+				if s := agents.Get(sessionID); s != nil && s.ActiveTurn() {
+					pushAgentEvent(agents, sessionID, map[string]any{"kind": "status", "status": "working"})
 				}
 			}
 		},
@@ -413,6 +431,11 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 				takeovers.ServeHTTP(w, r)
 				return
 			}
+		case "/internal/secrets/request", "/internal/secrets/status", "/internal/secrets/resolve", "/internal/secrets/proxy":
+			if secrets != nil {
+				secrets.ServeHTTP(w, r)
+				return
+			}
 		case "/internal/browser/devnav":
 			if broker != nil && os.Getenv("TANDEM_DEV_BROWSER") == "1" {
 				if r.Method != http.MethodPost {
@@ -495,6 +518,18 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return ids
 	})
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-restored:
+		}
+		for _, summary := range agents.List() {
+			reconcileOrphanedSecrets(summary.ID, db.EventsOfKinds, func(sessionID, requestID string) {
+				pushAgentEvent(agents, sessionID, map[string]any{"kind": "secret_resolved", "requestId": requestID, "granted": false})
+			})
+		}
+	}()
 	go func() {
 		<-restored
 		boot.phase("restore_agents")

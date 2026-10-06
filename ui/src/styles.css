@@ -1066,6 +1066,14 @@ body.dock-resizing .app { transition: none; }
 /* The spawn palette's scrim sits above the rail's menu layer. */
 .session-context-menu.spawn-profile-menu { z-index: 110; }
 .modal .foot { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-faint); flex-wrap: wrap; }
+.secret-modal { width: min(560px, 92vw); }
+.secret-modal .secret-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
+.secret-modal .adv-section { color: var(--text); font-weight: 650; font-size: var(--fs-md); margin-bottom: 12px; }
+.secret-modal p { margin: 8px 0; }
+.secret-modal .sub { color: var(--text-faint); font-size: var(--fs-xs); }
+.secret-modal .secret-assurance { padding: 10px; background: var(--agent-soft); border: 1px solid var(--agent); border-radius: var(--r-sm); }
+.secret-modal label { display: flex; flex-direction: column; gap: 5px; margin: 14px 0 8px; color: var(--text-dim); }
+.secret-modal input { padding: 9px 10px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm); font: var(--fs-sm) var(--font-mono); }
 .modal .foot .kbd { margin-right: 4px; }
 .automation-modal { width: min(760px, 92vw); }
 .adapter-modal { width: min(820px, 94vw); }

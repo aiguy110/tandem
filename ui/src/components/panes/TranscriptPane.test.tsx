@@ -35,6 +35,7 @@ function agent(): SessionView {
     browserOwner: 'agent',
     browserTakeoverHeld: false,
     takeovers: [],
+    secretRequests: [],
     sessionConfig: null,
     usage: null,
     waitingOn: [],

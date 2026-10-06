@@ -64,6 +64,13 @@ export interface Takeover {
   reqId: string;
   reason: string;
 }
+export interface SecretRequest {
+  requestId: string;
+  service: string;
+  reason: string;
+  origin: string;
+  headerName: string;
+}
 
 // Severity of a completed-turn notification, in ascending order of urgency.
 // success = the agent finished its turn cleanly (green); attention = it needs
@@ -107,7 +114,7 @@ function turnNotificationSeverity(prev: SessionStatus, next: SessionStatus): Not
 // green.
 export function agentBadge(agent: SessionView): { count: number; severity: NotifSeverity | null } {
   const severities = agent.turnNotifications.map((n) => n.severity);
-  const attention = agent.pendingApprovals.length + agent.takeovers.length;
+  const attention = agent.pendingApprovals.length + agent.takeovers.length + (agent.secretRequests?.length ?? 0);
   for (let i = 0; i < attention; i++) severities.push('attention');
   return { count: severities.length, severity: maxSeverity(severities) };
 }
@@ -175,6 +182,7 @@ export interface SessionView {
   // the hand-back action visually distinct from an unsolicited manual grab.
   browserTakeoverHeld: boolean;
   takeovers: Takeover[];
+  secretRequests: SecretRequest[];
   // Permission-mode + config-option (incl. model selector) state, from the last
   // session_config event. Null until the ACP agent reports it (or for pty sessions,
   // which never do) — the picker bar hides itself in that case.
@@ -1033,6 +1041,7 @@ export const useStore = create<StoreState>((set, get) => {
           // transcript so reconnecting cannot erase a prompt while its MCP call
           // remains blocked.
           const replayedTakeovers: Takeover[] = [];
+          const replayedSecrets: SecretRequest[] = [];
           for (const entry of transcript) {
             const event = entry.event;
             if (event.kind === 'takeover_request' && !replayedTakeovers.some((t) => t.reqId === event.reqId)) {
@@ -1040,6 +1049,11 @@ export const useStore = create<StoreState>((set, get) => {
             } else if (event.kind === 'takeover_resolved') {
               const index = replayedTakeovers.findIndex((t) => t.reqId === event.reqId);
               if (index !== -1) replayedTakeovers.splice(index, 1);
+            } else if (event.kind === 'secret_request' && !replayedSecrets.some((s) => s.requestId === event.requestId)) {
+              replayedSecrets.push({ requestId: event.requestId, service: event.service, reason: event.reason, origin: event.origin, headerName: event.headerName });
+            } else if (event.kind === 'secret_resolved') {
+              const index = replayedSecrets.findIndex((s) => s.requestId === event.requestId);
+              if (index !== -1) replayedSecrets.splice(index, 1);
             }
           }
           sessions[msg.sessionId] = {
@@ -1074,6 +1088,7 @@ export const useStore = create<StoreState>((set, get) => {
             // Pane-change subscriptions replay the still-pending request while
             // the user holds the wheel. Keep it acknowledged in that case.
             takeovers: prev.browserOwner === 'user' && prev.browserTakeoverHeld ? [] : replayedTakeovers,
+            secretRequests: replayedSecrets,
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
@@ -1999,6 +2014,7 @@ function shell(id: string): SessionView {
     browserOwner: 'agent',
     browserTakeoverHeld: false,
     takeovers: [],
+    secretRequests: [],
     sessionConfig: null,
     usage: null,
     waitingOn: [],
@@ -2052,6 +2068,11 @@ function applyEventToView(v: SessionView, event: WireEvent): void {
   if (event.kind === 'takeover_resolved') {
     v.takeovers = v.takeovers.filter((t) => t.reqId !== event.reqId);
   }
+  if (event.kind === 'secret_request') {
+    v.status = 'blocked';
+    if (!(v.secretRequests ?? []).some((s) => s.requestId === event.requestId)) v.secretRequests = [...(v.secretRequests ?? []), { requestId: event.requestId, service: event.service, reason: event.reason, origin: event.origin, headerName: event.headerName }];
+  }
+  if (event.kind === 'secret_resolved') v.secretRequests = (v.secretRequests ?? []).filter((s) => s.requestId !== event.requestId);
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
   if (event.kind === 'available_commands') v.commands = event.commands;
   if (event.kind === 'prompt_capabilities') v.imagePromptSupport = event.image;
@@ -2082,6 +2103,13 @@ export function allTakeovers(st: StoreState): { sessionId: string; takeover: Tak
   for (const id of rankSessions(st.sessions, st.order)) {
     const a = st.sessions[id];
     for (const t of a.takeovers) out.push({ sessionId: id, takeover: t });
+  }
+  return out;
+}
+export function allSecretRequests(st: StoreState): { sessionId: string; request: SecretRequest }[] {
+  const out: { sessionId: string; request: SecretRequest }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    for (const request of st.sessions[id].secretRequests ?? []) out.push({ sessionId: id, request });
   }
   return out;
 }
