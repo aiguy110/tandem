@@ -2628,7 +2628,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       {queuedPrompts.length > 0 && (
         <div className="prompt-queue">
           <div className="prompt-queue-header">
-            <span>Next up ({queuedPrompts.length})</span>
+            <span>{scheduledRateLimit ? `Wake message (${queuedPrompts.length})` : `Next up (${queuedPrompts.length})`}</span>
+            {scheduledRateLimit && <small>Sent when the agent wakes.</small>}
             <span className="prompt-queue-actions">
               <button type="button" onClick={() => {
                 if (scheduledRateLimit?.queuedMessage) void setRateLimitAutoContinue(sessionId, scheduledRateLimit.enabled, '');

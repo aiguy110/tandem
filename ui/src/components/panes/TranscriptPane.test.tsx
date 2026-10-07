@@ -123,7 +123,8 @@ describe('TranscriptPane rate-limit widget', () => {
     const view = render(<TranscriptPane />);
     const input = view.getByPlaceholderText(/Message for the scheduled wake-up/) as HTMLTextAreaElement;
     expect(input.value).toBe('');
-    expect(view.getByText('Next up (1)')).toBeTruthy();
+    expect(view.getByText('Wake message (1)')).toBeTruthy();
+    expect(view.getByText('Sent when the agent wakes.')).toBeTruthy();
     fireEvent.click(view.getByRole('button', { name: 'Edit queued prompt 1' }));
     await waitFor(() => expect(input.value).toBe('Resume the deployment notes.\nThen notify me.'));
     fireEvent.change(input, { target: { value: 'A revised wake-up.' } });
