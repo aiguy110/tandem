@@ -37,7 +37,7 @@ type Item =
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
   | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
-  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; error?: string }
+  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
@@ -191,11 +191,13 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       case 'rate_limit': {
         const existing = rateLimits.get(ev.id);
         if (existing) {
+          existing.resetAt = ev.resetAt;
           existing.enabled = ev.enabled;
           existing.state = ev.state;
+          existing.queuedMessage = ev.queuedMessage;
           existing.error = ev.error;
         } else {
-          const item: Extract<Item, { kind: 'rate-limit' }> = { kind: 'rate-limit', key: `limit-${ev.id}`, id: ev.id, harness: ev.harness, resetAt: ev.resetAt, enabled: ev.enabled, state: ev.state, error: ev.error };
+          const item: Extract<Item, { kind: 'rate-limit' }> = { kind: 'rate-limit', key: `limit-${ev.id}`, id: ev.id, harness: ev.harness, resetAt: ev.resetAt, enabled: ev.enabled, state: ev.state, queuedMessage: ev.queuedMessage, error: ev.error };
           rateLimits.set(ev.id, item);
           items.push(item);
         }
@@ -845,7 +847,7 @@ export function TranscriptPane() {
         commands={agent.commands}
         quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
         onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-        onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
+        onRateLimitToggle={(enabled, message) => void setRateLimitAutoContinue(agent.id, enabled, message)}
         onJumpToQuote={jumpToQuote}
         onJumpToLinkedBlock={jumpToLinkedBlock}
         onOpenPeer={openPeer}
@@ -1121,7 +1123,7 @@ function Row({
   renderingAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
-  onRateLimitToggle: (enabled: boolean) => void;
+  onRateLimitToggle: (enabled: boolean, message?: string) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
   onOpenPeer: (peer: AgentAddress, envelopeId: string) => void;
@@ -1315,8 +1317,10 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
   );
 }
 
-function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {
+function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean, message?: string) => void }) {
   const [now, setNow] = useState(Date.now());
+  const [message, setMessage] = useState(item.queuedMessage ?? '');
+  useEffect(() => setMessage(item.queuedMessage ?? ''), [item.id, item.queuedMessage]);
   useEffect(() => {
     if (item.state !== 'pending') return;
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -1329,14 +1333,25 @@ function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate
     <section className={`rate-limit-card ${item.state}`} aria-label="Usage limit">
       <div className="rate-limit-icon" aria-hidden="true">◷</div>
       <div className="rate-limit-copy">
-        <strong>{item.state === 'sent' ? 'Continuation sent' : item.state === 'failed' ? 'Could not continue automatically' : 'Usage limit reached'}</strong>
-        <span>{item.state === 'pending' ? `Resets ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent “continue” to the agent.' : '')}</span>
+        <strong>{item.state === 'sent' ? 'Continuation sent' : item.state === 'failed' ? 'Could not continue automatically' : item.enabled ? 'Wake-up scheduled' : 'Usage limit reached'}</strong>
+        <span>{item.state === 'pending' ? `${item.enabled ? 'Will wake' : 'Resets'} ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent the scheduled message to the agent.' : '')}</span>
       </div>
       {item.state === 'pending' && (
-        <label className="rate-limit-toggle">
-          <span>Auto-continue</span>
-          <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked)} />
-        </label>
+        <div className="rate-limit-actions">
+          <label className="rate-limit-message">
+            <span>Message to send after reset</span>
+            <input
+              value={message}
+              placeholder="Continue"
+              onChange={(event) => setMessage(event.target.value)}
+              onBlur={() => { if (item.enabled) onToggle(true, message); }}
+            />
+          </label>
+          <label className="rate-limit-toggle">
+            <span>Wake after reset</span>
+            <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked, message)} />
+          </label>
+        </div>
       )}
     </section>
   );
