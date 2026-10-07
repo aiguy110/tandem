@@ -67,6 +67,31 @@ func TestRestoreRecoversRecentRateLimitWithoutStructuredEvent(t *testing.T) {
 	}
 }
 
+func TestRestoreDoesNotRecoverLimitSupersededByManualPrompt(t *testing.T) {
+	_, _, db := testSession(t)
+	log, err := eventlog.New("recovered-after-manual", db, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []eventlog.Event{
+		{Kind: "message_chunk", Payload: json.RawMessage(`{"kind":"message_chunk","text":"You've hit your monthly spend limit; your session limit resets 11pm (America/New_York)"}`)},
+		{Kind: "user_message", Payload: json.RawMessage(`{"kind":"user_message","text":"continue"}`)},
+		{Kind: "message_chunk", Payload: json.RawMessage(`{"kind":"message_chunk","text":"Work resumed."}`)},
+	} {
+		if _, err := log.Append(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := New("recovered-after-manual", "recovered-after-manual", agentadapter.Spec{Harness: "claude"}, newFake(), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Dispose(context.Background()) })
+	if _, ok, err := log.LatestOfKind("rate_limit"); err != nil || ok {
+		t.Fatalf("stale rate limit recovered: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	s, adapter, _ := testSession(t)
 	s.Spec.Harness = "claude"
@@ -118,6 +143,38 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	}
 	if err := s.Dispose(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManualPromptSupersedesPendingRateLimit(t *testing.T) {
+	s, adapter, _ := testSession(t)
+	s.Spec.Harness = "claude"
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Now().In(ny).Add(time.Hour).Format("3:04pm")
+	s.detectRateLimit("You've hit your monthly spend limit; your session limit resets " + reset + " (America/New_York)")
+	if err := s.SetRateLimitAutoContinue(true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	payload, _ := json.Marshal(map[string]any{"kind": "user_message", "text": "continue manually"})
+	if _, err := s.append(eventlog.Event{Kind: "user_message", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.rateLimitMu.Lock()
+	state := s.rateLimit
+	s.rateLimitMu.Unlock()
+	if state.State != "superseded" || state.Enabled {
+		t.Fatalf("state=%+v", state)
+	}
+	adapter.mu.Lock()
+	prompts := append([]string(nil), adapter.prompts...)
+	adapter.mu.Unlock()
+	if len(prompts) != 0 {
+		t.Fatalf("auto-continue prompts=%v", prompts)
 	}
 }
 

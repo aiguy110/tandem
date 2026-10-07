@@ -23,7 +23,7 @@ type rateLimitState struct {
 	Harness    string `json:"harness"`
 	ResetAt    int64  `json:"resetAt"`
 	Enabled    bool   `json:"enabled"`
-	State      string `json:"state"` // pending, sent, failed
+	State      string `json:"state"` // pending, sent, failed, superseded
 	DetectedAt int64  `json:"detectedAt"`
 	Subagents  bool   `json:"subagents,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -61,7 +61,22 @@ func (s *Session) observeRateLimitEventAt(ev eventlog.Event, observedAt time.Tim
 		s.rateLimitMu.Lock()
 		s.rateLimitText = ""
 		s.rateLimitSawSubagent = false
+		var superseded *rateLimitState
+		// A pending incident can only predate this event: the user message that
+		// began the limited turn was observed before the incident existed.
+		if s.rateLimit.State == "pending" {
+			state := s.rateLimit
+			state.Enabled = false
+			state.State = "superseded"
+			s.rateLimit = state
+			s.stopRateLimitTimerLocked()
+			superseded = &state
+		}
 		s.rateLimitMu.Unlock()
+		if superseded != nil {
+			s.emitRateLimit(*superseded)
+			slog.Info("agent rate limit superseded by manual prompt", "session_id", s.ID, "limit_id", superseded.ID)
+		}
 	case "message_chunk":
 		var payload struct {
 			Text string `json:"text"`
@@ -175,7 +190,13 @@ func (s *Session) recoverRecentRateLimit() {
 		return
 	}
 	cutoff := time.Now().Add(-24 * time.Hour)
-	for _, logged := range replay.Events {
+	start := 0
+	for i, logged := range replay.Events {
+		if logged.Event.Kind == "user_message" {
+			start = i
+		}
+	}
+	for _, logged := range replay.Events[start:] {
 		observedAt := time.UnixMilli(logged.TS)
 		if observedAt.Before(cutoff) {
 			continue
@@ -214,6 +235,22 @@ func (s *Session) fireRateLimit(id string) {
 		return
 	}
 	state := s.rateLimit
+	latestUser, hasUser, err := s.Log.LatestOfKind("user_message")
+	if err != nil {
+		s.rateLimitMu.Unlock()
+		slog.Warn("check agent rate-limit supersession failed", "session_id", s.ID, "limit_id", id, "error", err)
+		return
+	}
+	if hasUser && latestUser.TS > state.DetectedAt {
+		state.State = "superseded"
+		state.Enabled = false
+		s.rateLimit = state
+		s.rateLimitTimer = nil
+		s.rateLimitMu.Unlock()
+		s.emitRateLimit(state)
+		slog.Info("agent rate-limit auto-continue skipped after manual prompt", "session_id", s.ID, "limit_id", id, "user_message_ts", latestUser.TS)
+		return
+	}
 	state.State = "sent"
 	state.Enabled = false
 	s.rateLimit = state
@@ -224,7 +261,7 @@ func (s *Session) fireRateLimit(id string) {
 	if state.Subagents {
 		prompt = "Continue. Some sub-agents may have been interrupted by the usage limit; resume them if needed."
 	}
-	_, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
+	_, err = s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	if err != nil {
 		state.State = "failed"
 		state.Error = err.Error()

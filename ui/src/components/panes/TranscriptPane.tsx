@@ -37,7 +37,7 @@ type Item =
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
   | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
-  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string }
+  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
@@ -235,7 +235,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
     if (index >= 0) items.splice(index, 1);
   }
   // Keep only still-pending permission cards inline (answered ones fall away).
-  const visible = items.filter((it) => it.kind !== 'permission' || pendingIds.has(it.reqId));
+  const visible = items.filter((it) => (it.kind !== 'permission' || pendingIds.has(it.reqId)) && (it.kind !== 'rate-limit' || it.state !== 'superseded'));
   // The current task list is session state rather than transcript history.
   // Append it here so callers can split it into the pane's fixed bottom slot.
   if (plan) visible.push(plan);
@@ -2135,7 +2135,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const { mounted: attachmentMenuMounted, closing: attachmentMenuClosing } = usePresence(attachmentMenuOpen);
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
-  const [queuedFlash, setQueuedFlash] = useState(false);
+  const sendingRef = useRef(false);
+  const [queuedPosition, setQueuedPosition] = useState<number | null>(null);
   const [fileEntries, setFileEntries] = useState<WorkspaceEntry[]>([]);
   const [fileEntriesDir, setFileEntriesDir] = useState<string | null>(null);
 
@@ -2396,7 +2397,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   };
 
   const send = async (steering = false) => {
-    if (sending) return;
+    if (sendingRef.current) return;
     const t = text.trim();
     const hasAnnotations = annotations.length > 0;
     if (!t && attachments.length === 0 && !hasAnnotations) return;
@@ -2409,14 +2410,21 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       return;
     }
     if (attachments.length === 0 && !hasAnnotations) {
+      sendingRef.current = true;
       setSending(true);
-      const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
-      const result = !steering && btw ? await aside(sessionId, btw[1].trim()) : await (steering ? steer : prompt)(sessionId, t);
-      setSending(false);
-      if (result.error) setAttachmentError(result.error);
-      if (result.disposition === 'queued') {
-        setQueuedFlash(true);
-        window.setTimeout(() => setQueuedFlash(false), 1200);
+      try {
+        const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
+        const result = !steering && btw ? await aside(sessionId, btw[1].trim()) : await (steering ? steer : prompt)(sessionId, t);
+        if (result.error) setAttachmentError(result.error);
+        if (result.disposition === 'queued') {
+          setQueuedPosition(result.position ?? 1);
+          window.setTimeout(() => setQueuedPosition(null), 2000);
+        }
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : 'Could not send prompt.');
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
       }
       return;
     }
@@ -2430,9 +2438,18 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     blocks.push(...attachments.flatMap((attachment) => attachment.asset ? [attachment.asset] : []));
     const uploaded = attachments.flatMap((attachment) => attachment.uploadPath ? [attachment.uploadPath] : []);
     if (uploaded.length > 0) blocks.push({ type: 'text', text: `Tandem uploaded these files into your workspace: ${uploaded.join(', ')}. Read or use them as needed. If you configure a dedicated upload directory, add it to .gitignore unless the user asks to commit uploaded files.` });
+    sendingRef.current = true;
     setSending(true);
-    const result = await (steering ? steer : prompt)(sessionId, blocks);
-    setSending(false);
+    let result: AckResult;
+    try {
+      result = await (steering ? steer : prompt)(sessionId, blocks);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : 'Could not send prompt.');
+      return;
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
     if (result.error) {
       setAttachmentError(result.error);
       return;
@@ -2442,8 +2459,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     setAttachmentError(null);
     if (hasAnnotations) void clearAnnotations(sessionId);
     if (result.disposition === 'queued') {
-      setQueuedFlash(true);
-      window.setTimeout(() => setQueuedFlash(false), 1200);
+      setQueuedPosition(result.position ?? 1);
+      window.setTimeout(() => setQueuedPosition(null), 2000);
     }
   };
 
@@ -2707,7 +2724,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
             disabled={sending || uploadsPending || !canSubmit}
             title={working ? 'Send after the current turn finishes' : 'Send prompt'}
           >
-            {sending ? 'Sending…' : queuedFlash ? 'Queued ✓' : working ? 'Queue' : 'Send'}
+            {sending ? 'Sending…' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>
