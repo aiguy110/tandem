@@ -155,7 +155,7 @@ func TestRebasePromptLeadsWithUpstreamCheck(t *testing.T) {
 	}
 }
 
-func TestReleaseNotificationDistinguishesTestedFromUntested(t *testing.T) {
+func TestReleaseNotification(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		update        runtimeinstall.UpdateInfo
@@ -170,21 +170,21 @@ func TestReleaseNotificationDistinguishesTestedFromUntested(t *testing.T) {
 			wantInMessage: []string{"1.12.0 is available", "installed 1.8.0"},
 		},
 		{
-			// The claude case: pinned ^0.70.0, upstream on 0.79.0. Surfacing it is
-			// the point of the optimistic check, but it must not look routine.
-			name: "an update beyond the tested range says so",
+			// The claude case: pinned ^0.70.0, upstream on 0.79.0. Such releases
+			// have not broken in practice, so the offer reads as routine.
+			name: "an update beyond the constraint reads as routine",
 			update: runtimeinstall.UpdateInfo{Agent: "claude", Package: "claude-agent-acp", Constraint: "^0.70.0",
 				CurrentVersion: "0.70.0", LatestVersion: "0.79.0", Compatible: false, Kind: runtimeinstall.UpdateKindRelease},
-			wantTitle:     "claude ACP update available (untested)",
-			wantInMessage: []string{"0.79.0 is available", "beyond the range Tandem is tested against (^0.70.0)", "roll back"},
+			wantTitle:     "claude ACP update available",
+			wantInMessage: []string{"0.79.0 is available", "installed 0.70.0"},
 		},
 		{
-			name: "a compatible offer still mentions a newer untested release",
+			name: "a held-back offer still mentions the newer release",
 			update: runtimeinstall.UpdateInfo{Agent: "pi", Package: "pi-acp", Constraint: "~0.0.31",
 				CurrentVersion: "0.0.31", LatestVersion: "0.0.33", Compatible: true, NewestPublished: "0.1.0",
 				Kind: runtimeinstall.UpdateKindRelease},
 			wantTitle:     "pi ACP update available",
-			wantInMessage: []string{"0.0.33 is available", "0.1.0 is also out", "beyond Tandem's tested range (~0.0.31)"},
+			wantInMessage: []string{"0.0.33 is available", "0.1.0 is also out"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -220,11 +220,10 @@ func TestPollOffersUntestedUpdateEndToEnd(t *testing.T) {
 		}})
 	s.poll(context.Background())
 	items := center.List()
-	if len(items) != 1 || !strings.Contains(items[0].Title, "(untested)") {
+	if len(items) != 1 || strings.Contains(items[0].Title+items[0].Message, "tested") {
 		t.Fatalf("notification=%#v", items)
 	}
-	// An untested offer is still installable — optimism is only useful if acting
-	// on it works.
+	// An offer beyond the constraint carries no warning and is installable.
 	if _, err := s.HandleAction(context.Background(), items[0].ID, "install"); err != nil {
 		t.Fatal(err)
 	}

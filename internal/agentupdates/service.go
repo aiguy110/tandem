@@ -125,26 +125,18 @@ func (s *Service) poll(ctx context.Context) {
 	}
 }
 
-// releaseNotification describes an available published update. Tandem checks
-// optimistically, so an offer can point past the compatibility range Tandem was
-// tested against; when it does, the message says so rather than presenting it as
-// a routine upgrade.
+// releaseNotification describes an available published update. Offers may
+// point beyond the declared compatibility constraint; in practice ACP adapters
+// have not broken across such releases, so the notification does not warn about
+// it.
 func (s *Service) releaseNotification(u runtimeinstall.UpdateInfo) notifications.Notification {
 	message := fmt.Sprintf("%s is available (installed %s). New sessions will use it after updating.", u.LatestVersion, u.CurrentVersion)
-	if !u.Compatible {
-		message = fmt.Sprintf("%s is available (installed %s). It is beyond the range Tandem is tested against (%s), so it may not be compatible — the previous version stays installed and you can roll back.",
-			u.LatestVersion, u.CurrentVersion, u.Constraint)
-	} else if u.NewestPublished != "" {
-		// A newer release exists but sits outside the tested range, so the offer
-		// was held back to the compatible one. Say both, so the operator is not
-		// left thinking LatestVersion is the newest that exists.
-		message += fmt.Sprintf(" %s is also out, beyond Tandem's tested range (%s); pick it in the ACP manager to try it.", u.NewestPublished, u.Constraint)
+	if u.NewestPublished != "" {
+		// The offer was held back to stay inside the constraint, so say a newer
+		// release exists rather than leave LatestVersion looking like the newest.
+		message += fmt.Sprintf(" %s is also out; pick it in the ACP manager to try it.", u.NewestPublished)
 	}
-	title := u.Agent + " ACP update available"
-	if !u.Compatible {
-		title = u.Agent + " ACP update available (untested)"
-	}
-	return notifications.Notification{ID: Prefix + u.Agent, Severity: "attention", Title: title, Message: message,
+	return notifications.Notification{ID: Prefix + u.Agent, Severity: "attention", Title: u.Agent + " ACP update available", Message: message,
 		Actions: []notifications.Action{{ID: "install", Label: "Update", Primary: true}, {ID: "dismiss", Label: "Later"}}}
 }
 
