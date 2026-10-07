@@ -1603,8 +1603,8 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
         {command != null ? (
           <span className="title tool-cmd-title">
-            <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
             {description != null && <span className="tool-cmd-desc">{description}</span>}
+            <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
           </span>
         ) : (
           <span className="title">{item.title}</span>
