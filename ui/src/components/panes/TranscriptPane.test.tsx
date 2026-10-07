@@ -110,6 +110,21 @@ describe('TranscriptPane rate-limit widget', () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  it('restores a queued wake-up message into the editable prompt box', async () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: true, queuedMessage: 'Resume the deployment notes.\nThen notify me.', state: 'pending' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, drafts: {},
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const input = view.getByPlaceholderText(/Message for the scheduled wake-up/) as HTMLTextAreaElement;
+    await waitFor(() => expect(input.value).toBe('Resume the deployment notes.\nThen notify me.'));
+    fireEvent.change(input, { target: { value: 'A revised wake-up.' } });
+    expect(input.value).toBe('A revised wake-up.');
+  });
+
   it('hides a rate limit superseded by a later manual prompt', () => {
     const limited = agent();
     limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() - 60_000, detectedAt: Date.now() - 120_000, enabled: false, state: 'superseded' } }];

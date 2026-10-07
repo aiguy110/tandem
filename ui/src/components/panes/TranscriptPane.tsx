@@ -847,7 +847,7 @@ export function TranscriptPane() {
         commands={agent.commands}
         quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
         onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-        onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
+        onRateLimitToggle={(enabled) => setRateLimitAutoContinue(agent.id, enabled)}
         onJumpToQuote={jumpToQuote}
         onJumpToLinkedBlock={jumpToLinkedBlock}
         onOpenPeer={openPeer}
@@ -1123,7 +1123,7 @@ function Row({
   renderingAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
-  onRateLimitToggle: (enabled: boolean) => void;
+  onRateLimitToggle: (enabled: boolean) => Promise<AckResult>;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
   onOpenPeer: (peer: AgentAddress, envelopeId: string) => void;
@@ -1317,8 +1317,10 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
   );
 }
 
-function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {
+function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => Promise<AckResult> }) {
   const [now, setNow] = useState(Date.now());
+  const [enabled, setEnabled] = useState(item.enabled);
+  useEffect(() => setEnabled(item.enabled), [item.enabled]);
   useEffect(() => {
     if (item.state !== 'pending') return;
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -1337,7 +1339,16 @@ function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate
       {item.state === 'pending' && (
         <label className="rate-limit-toggle">
           <span>Wake after reset</span>
-          <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked)} />
+          <input
+            type="checkbox"
+            role="switch"
+            checked={enabled}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setEnabled(next);
+              void onToggle(next);
+            }}
+          />
         </label>
       )}
     </section>
@@ -2115,6 +2126,13 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     }
     return null;
   });
+  // A freshly restored browser has no local draft. Seed it from the durable
+  // wake-up state so a queued message is always visible and editable in the
+  // normal multiline composer.
+  useEffect(() => {
+    const draft = useStore.getState().drafts[sessionId];
+    if (draft === undefined && scheduledRateLimit?.queuedMessage) setDraft(sessionId, scheduledRateLimit.queuedMessage);
+  }, [sessionId, scheduledRateLimit?.id, scheduledRateLimit?.queuedMessage, setDraft]);
   const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
@@ -2425,7 +2443,6 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
         const result = await setRateLimitAutoContinue(sessionId, true, t);
         if (result.error) setAttachmentError(result.error);
         else {
-          setDraft(sessionId, '');
           setAttachmentError(null);
         }
       } catch (error) {
