@@ -25,6 +25,7 @@ type rateLimitState struct {
 	Enabled    bool   `json:"enabled"`
 	State      string `json:"state"` // pending, sent, failed
 	DetectedAt int64  `json:"detectedAt"`
+	Subagents  bool   `json:"subagents,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -46,10 +47,16 @@ var harnessLimitParsers = map[string][]limitParser{
 }
 
 func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
+	var attribution struct {
+		ParentID string `json:"parentId"`
+	}
+	_ = json.Unmarshal(ev.Payload, &attribution)
+
 	switch ev.Kind {
 	case "user_message":
 		s.rateLimitMu.Lock()
 		s.rateLimitText = ""
+		s.rateLimitSawSubagent = false
 		s.rateLimitMu.Unlock()
 	case "message_chunk":
 		var payload struct {
@@ -59,6 +66,9 @@ func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
 			return
 		}
 		s.rateLimitMu.Lock()
+		if attribution.ParentID != "" {
+			s.rateLimitSawSubagent = true
+		}
 		s.rateLimitText += payload.Text
 		if len(s.rateLimitText) > rateLimitTextWindow {
 			s.rateLimitText = s.rateLimitText[len(s.rateLimitText)-rateLimitTextWindow:]
@@ -66,6 +76,12 @@ func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
 		text := s.rateLimitText
 		s.rateLimitMu.Unlock()
 		s.detectRateLimit(text)
+	default:
+		if attribution.ParentID != "" {
+			s.rateLimitMu.Lock()
+			s.rateLimitSawSubagent = true
+			s.rateLimitMu.Unlock()
+		}
 	}
 }
 
@@ -85,8 +101,8 @@ func (s *Session) detectRateLimit(message string) {
 		if !ok {
 			continue
 		}
-		state := rateLimitState{Kind: "rate_limit", ID: fmt.Sprintf("%s-%d", harness, reset.UnixMilli()), Harness: harness, ResetAt: reset.UnixMilli(), State: "pending", DetectedAt: now.UnixMilli()}
 		s.rateLimitMu.Lock()
+		state := rateLimitState{Kind: "rate_limit", ID: fmt.Sprintf("%s-%d", harness, reset.UnixMilli()), Harness: harness, ResetAt: reset.UnixMilli(), State: "pending", DetectedAt: now.UnixMilli(), Subagents: s.rateLimitSawSubagent}
 		if s.rateLimit.ID == state.ID && s.rateLimit.State == "pending" {
 			s.rateLimitMu.Unlock()
 			return
@@ -166,7 +182,11 @@ func (s *Session) fireRateLimit(id string) {
 	s.rateLimitTimer = nil
 	s.rateLimitMu.Unlock()
 
-	_, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "continue"}})
+	prompt := "continue"
+	if state.Subagents {
+		prompt = "Continue. Some sub-agents may have been interrupted by the usage limit; resume them if needed."
+	}
+	_, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	if err != nil {
 		state.State = "failed"
 		state.Error = err.Error()
