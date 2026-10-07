@@ -71,6 +71,7 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		return nil, err
 	}
 	var mcpServers []acpadapter.MCPServer
+	var notices []eventlog.Event
 	if f.MCPServers != nil {
 		progress.Report(ctx, "Preparing MCP servers…")
 		configured, err := f.MCPServers(req.SessionID, req.CWD)
@@ -80,6 +81,15 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 			return nil, fmt.Errorf("load MCP servers: %w", err)
 		}
 		for _, server := range configured {
+			if server.AuthRequired {
+				// Handing the agent a server it cannot authenticate to only
+				// produces a harness-specific "run /mcp" dead end. Withhold
+				// it and say so in the transcript, with Tandem's own
+				// Authorize action.
+				payload, _ := json.Marshal(map[string]any{"kind": "mcp_auth_required", "server": server.Name, "serverKey": server.AuthKey})
+				notices = append(notices, eventlog.Event{Kind: "mcp_auth_required", Payload: payload})
+				continue
+			}
 			env := make([]acp.EnvVariable, len(server.Env))
 			for i, variable := range server.Env {
 				env[i] = acp.EnvVariable{Name: variable.Name, Value: variable.Value}
@@ -116,6 +126,9 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 		return nil, err
 	}
 	wrapped := &acpAdapter{Adapter: a, fs: fs, host: host, appender: proxy, events: make(chan eventlog.Event, 256), serversFile: serversFile}
+	for _, notice := range notices {
+		wrapped.events <- notice
+	}
 	go wrapped.forwardEvents()
 	return wrapped, nil
 }

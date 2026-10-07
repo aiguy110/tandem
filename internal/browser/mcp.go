@@ -18,6 +18,12 @@ type MCPServer struct {
 	Env     []MCPEnvVariable
 	URL     string
 	Headers []MCPEnvVariable
+	// AuthRequired marks an HTTP server that requires an OAuth sign-in Tandem
+	// does not yet hold (internal/mcpauth). It is withheld from agents, which
+	// are told why instead, and AuthKey identifies it for the UI's Authorize
+	// action.
+	AuthRequired bool
+	AuthKey      string
 }
 
 type MCPEnvVariable struct{ Name, Value string }

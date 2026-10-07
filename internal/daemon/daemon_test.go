@@ -22,6 +22,7 @@ import (
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/httpserver"
+	"github.com/aiguy110/tandem/internal/mcpauth"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/session"
 	"github.com/aiguy110/tandem/internal/store"
@@ -61,7 +62,7 @@ func TestConfiguredMCPServersUsesLiveGlobalAndProjectConfiguration(t *testing.T)
 	if err := os.WriteFile(local, []byte("mcpServers:\n  project:\n    command: project-server\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	servers, err := configuredMCPServers(browser.MCPWiring{}, home, "agent-1", project)
+	servers, err := configuredMCPServers(browser.MCPWiring{}, nil, home, "agent-1", project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestConfiguredMCPServersUsesLiveGlobalAndProjectConfiguration(t *testing.T)
 	if _, err := config.AddMCPServer(home, project, "later", config.MCPServer{Command: "later-server"}, false); err != nil {
 		t.Fatal(err)
 	}
-	servers, err = configuredMCPServers(browser.MCPWiring{}, home, "agent-2", project)
+	servers, err = configuredMCPServers(browser.MCPWiring{}, nil, home, "agent-2", project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,5 +569,29 @@ func TestRemoteMessageAudioSurfacesTheOwningHostsError(t *testing.T) {
 	_, err := remoteMessageAudio(ctx, parent, hostID, "faraday-66", 12)
 	if err == nil || err.Error() != "voice rendering is not configured; run tandem setup" {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestConfiguredMCPServersWithholdsServersNeedingSignIn(t *testing.T) {
+	locked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer locked.Close()
+	home := t.TempDir()
+	body := "mcpServers:\n  locked:\n    type: http\n    url: " + locked.URL + "/mcp\n"
+	if err := os.WriteFile(config.ConfigFilePath(home), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := mcpauth.New(mcpauth.Options{Home: home, Token: "t", ProxyOrigin: "http://127.0.0.1:7717", Center: notifications.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := configuredMCPServers(browser.MCPWiring{}, auth, home, "agent-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || !servers[0].AuthRequired || servers[0].AuthKey != mcpauth.Key(locked.URL+"/mcp") {
+		t.Fatalf("servers = %#v", servers)
 	}
 }

@@ -122,6 +122,7 @@ The daemon serves the built UI (`ui/dist`) via `TANDEM_UI_DIR`; there is no sepa
 - `docs/spawn-and-workspaces.md` — spawn mechanics, keymap, worktrees
 - `docs/terminal.md` — terminal pane (ghostty-web) + spike findings
 - `docs/browser.md` — shared browser (Playwright MCP + Steel, control token)
+- `docs/mcp-auth.md` — daemon-held OAuth sign-in + authenticating proxy for remote (HTTP) MCP servers
 - `docs/acp-notes.md` — pinned ACP protocol facts
 - `docs/backlog.md` — deliberately-deferred cross-cutting work and why
 

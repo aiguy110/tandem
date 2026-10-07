@@ -29,6 +29,7 @@ export function buildCommands(): Command[] {
     { id: 'automation.open', title: 'Automation…', subtitle: 'View schedules and recent runs', run: () => s().setModal('automation') },
     { id: 'fleet.open', title: 'Fleet View', subtitle: 'See Tandem nodes and their child → parent links', run: () => s().setModal('fleet') },
     { id: 'adapters.manage', title: 'Manage ACP adapters…', subtitle: 'Update or roll back managed ACP bridge versions', run: () => s().setModal('adapters') },
+    { id: 'mcp.manage', title: 'Manage MCP servers…', subtitle: 'Sign in to remote MCP servers that require OAuth', run: () => s().setModal('mcp') },
     {
       id: 'agent.spawn.sibling',
       title: 'Spawn sibling session',

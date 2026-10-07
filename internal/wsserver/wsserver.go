@@ -88,6 +88,9 @@ type Options struct {
 	// Messaging serves the agent-messaging commands; nil answers them with an
 	// error.
 	Messaging Messaging
+	// MCPAuth serves the MCP server sign-in commands; nil answers them with
+	// an error.
+	MCPAuth MCPAuth
 	// AudioReadySeqs returns durable rendered-audio metadata for snapshot
 	// hydration. Audio bytes are still fetched from the authenticated API.
 	AudioReadySeqs func(string) []int64
@@ -401,6 +404,8 @@ type clientMessage struct {
 	AssetID          string `json:"assetId"`
 	MIMEType         string `json:"mimeType"`
 	Version          string `json:"version"`
+	// Origin is the UI origin an MCP OAuth callback should return to.
+	Origin string `json:"origin"`
 
 	// Agent messaging (docs/agent-messaging.md).
 	Envelope  *messaging.Envelope  `json:"envelope,omitempty"`
@@ -1233,6 +1238,8 @@ func (c *connection) handle(m clientMessage) {
 		// notifications; the reply below carries whatever is already known.
 		go c.server.syncHostNotifications()
 		c.sendSystemNotifications(m.CorrID)
+	case "list_mcp_servers", "begin_mcp_auth", "sign_out_mcp_server", "recheck_mcp_server":
+		c.handleMCPAuth(m)
 	case "list_agent_distributions":
 		if c.server.opts.AgentDistributions == nil {
 			c.send(withCorr(map[string]any{"t": "agent_distributions", "error": "managed ACP adapters are unavailable"}, m.CorrID))
