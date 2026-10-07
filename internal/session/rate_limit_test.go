@@ -114,7 +114,7 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 		adapter.mu.Lock()
 		joined := strings.Join(adapter.prompts, ",")
 		adapter.mu.Unlock()
-		if joined == "continue" {
+		if strings.Contains(joined, "paused because this session hit its usage limit") {
 			adapter.gate <- struct{}{}
 			break
 		}
@@ -123,7 +123,7 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	adapter.mu.Lock()
 	got := append([]string(nil), adapter.prompts...)
 	adapter.mu.Unlock()
-	if len(got) != 1 || got[0] != "continue" {
+	if len(got) != 1 || !strings.Contains(got[0], "paused because this session hit its usage limit") {
 		t.Fatalf("prompts=%v", got)
 	}
 
@@ -169,7 +169,7 @@ func TestRateLimitWakeSendsQueuedMessage(t *testing.T) {
 		got := append([]string(nil), adapter.prompts...)
 		adapter.mu.Unlock()
 		if len(got) > 0 {
-			if got[0] != "Pick up with the failing federation test." {
+			if !strings.Contains(got[0], "paused because this session hit its usage limit") || !strings.Contains(got[0], "Pick up with the failing federation test.") {
 				t.Fatalf("wake prompt=%q", got[0])
 			}
 			adapter.gate <- struct{}{}
@@ -249,7 +249,7 @@ func TestRateLimitAutoContinueRemindsParentAboutSubagents(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(got, "sub-agents") || !strings.Contains(got, "resume them") {
+	if !strings.Contains(got, "paused because this session hit its usage limit") || !strings.Contains(got, "sub-agents") || !strings.Contains(got, "resume them") {
 		t.Fatalf("auto-continue prompt = %q", got)
 	}
 	if err := s.Dispose(context.Background()); err != nil {

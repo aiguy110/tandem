@@ -1387,9 +1387,6 @@ body.dock-resizing .app { transition: none; }
 .rate-limit-copy span { color: var(--text-dim); font-size: var(--fs-sm); }
 .rate-limit-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; }
 .rate-limit-toggle input { width: 34px; height: 18px; accent-color: var(--agent); cursor: pointer; }
-.rate-limit-actions { display: flex; align-items: end; gap: 12px; }
-.rate-limit-message { display: flex; min-width: 190px; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: var(--fs-sm); }
-.rate-limit-message input { min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); background: var(--surface-raised); font: inherit; }
 .rate-limit-card.sent { border-color: color-mix(in srgb, var(--agent) 55%, var(--border)); background: var(--agent-soft); }
 .rate-limit-card.failed { border-color: var(--err); }
 .is-updated-a { animation: ev-updated .825s ease-out; }
