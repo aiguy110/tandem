@@ -49,14 +49,15 @@ func (f *fakeFactory) Start(_ context.Context, r agentadapter.StartRequest) (age
 }
 
 type regAdapter struct {
-	events chan eventlog.Event
-	done   chan struct{}
-	gate   chan struct{}
-	sid    string
-	once   sync.Once
-	mu     sync.Mutex
-	modes  []string
-	config map[string]any
+	events     chan eventlog.Event
+	done       chan struct{}
+	gate       chan struct{}
+	sid        string
+	once       sync.Once
+	mu         sync.Mutex
+	modes      []string
+	config     map[string]any
+	interrupts int
 }
 
 func (a *regAdapter) Capabilities() agentadapter.Capabilities {
@@ -75,7 +76,16 @@ func (a *regAdapter) Prompt(ctx context.Context, _ []agentadapter.PromptBlock) (
 func (a *regAdapter) SendInput([]byte) error                 { return nil }
 func (a *regAdapter) Resize(uint16, uint16) error            { return nil }
 func (a *regAdapter) RespondPermission(string, string) error { return nil }
-func (a *regAdapter) Interrupt() error                       { return nil }
+func (a *regAdapter) Interrupt() error {
+	a.mu.Lock()
+	a.interrupts++
+	a.mu.Unlock()
+	select {
+	case a.gate <- struct{}{}:
+	default:
+	}
+	return nil
+}
 func (a *regAdapter) SetMode(_ context.Context, mode string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

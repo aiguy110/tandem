@@ -194,6 +194,22 @@ func TestPromptSerializationAndIndependentDurableEvents(t *testing.T) {
 	}
 }
 
+func TestHandoffSnapshotRejectsNewPromptAdmissionUntilReleased(t *testing.T) {
+	s, a, _ := testSession(t)
+	wasActive, release := s.BeginHandoffSnapshot()
+	if wasActive {
+		t.Fatal("idle session reported active at snapshot start")
+	}
+	if _, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "too late"}}); err == nil || !strings.Contains(err.Error(), "hand-off snapshot") {
+		t.Fatalf("prompt during snapshot error = %v", err)
+	}
+	release()
+	a.gate <- struct{}{}
+	if _, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "after snapshot"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPromptFailureIsRecordedInTranscript(t *testing.T) {
 	s, a, _ := testSession(t)
 	a.promptErr = errors.New("ACP transport unavailable")

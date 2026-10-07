@@ -135,3 +135,155 @@ func TestBriefModeCountsPastTheFullModeCap(t *testing.T) {
 		t.Errorf("want the true total, got:\n%s", got)
 	}
 }
+
+func TestRenderGroupsDelegatedWorkByParentID(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "fix auth and tests"}),
+		event(t, 2, map[string]any{"kind": "message_chunk", "text": "I will delegate the investigation."}),
+		event(t, 3, map[string]any{"kind": "tool_call", "id": "task-1", "title": "Explore authentication flow", "status": "pending"}),
+		event(t, 4, map[string]any{"kind": "message_chunk", "parentId": "task-1", "text": "I found the token check. "}),
+		event(t, 5, map[string]any{"kind": "tool_call", "parentId": "task-1", "id": "read-1", "title": "Read", "status": "completed", "rawInput": map[string]any{"file_path": "/repo/auth.go"}}),
+		event(t, 6, map[string]any{"kind": "message_chunk", "parentId": "task-1", "text": "The expiry comparison is reversed."}),
+		event(t, 7, map[string]any{"kind": "tool_call_update", "id": "task-1", "status": "completed"}),
+		event(t, 8, map[string]any{"kind": "message_chunk", "text": "I am applying that finding."}),
+	}
+
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeFull)
+	for _, want := range []string{
+		"## Delegated work",
+		"### Explore authentication flow — completed",
+		"Child-agent narration:\n\nI found the token check.",
+		"Final child response:\n\nThe expiry comparison is reversed.",
+		"Tool activity:\n\n- Read — /repo/auth.go",
+		"I am applying that finding.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hierarchical hand-off missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "I found the token check.") != 1 {
+		t.Errorf("child output was duplicated into the parent transcript:\n%s", got)
+	}
+}
+
+func TestRenderDelegationStatesAndMissingChildResponse(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "delegate these"}),
+		event(t, 2, map[string]any{"kind": "tool_call", "id": "running", "title": "Update tests", "status": "in_progress"}),
+		event(t, 3, map[string]any{"kind": "tool_call", "parentId": "running", "id": "write", "title": "Write tests", "status": "pending"}),
+		event(t, 4, map[string]any{"kind": "tool_call", "id": "failed", "title": "Review schema", "status": "failed"}),
+		event(t, 5, map[string]any{"kind": "message_chunk", "parentId": "failed", "text": "The schema file is malformed."}),
+		event(t, 6, map[string]any{"kind": "tool_call", "id": "unknown", "title": "Check deployment"}),
+		event(t, 7, map[string]any{"kind": "message_chunk", "parentId": "unknown", "text": "Still checking."}),
+	}
+
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeFull)
+	for _, want := range []string{
+		"### Update tests — running",
+		"_No child response was recorded before hand-off._",
+		"### Review schema — failed",
+		"Final child response:\n\nThe schema file is malformed.",
+		"### Check deployment — unresolved",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("delegation state render missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBriefModeRetainsDelegationOutcome(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "investigate"}),
+		event(t, 2, map[string]any{"kind": "tool_call", "id": "task", "title": "Investigate cache", "status": "completed"}),
+		event(t, 3, map[string]any{"kind": "message_chunk", "parentId": "task", "text": "First I inspected it."}),
+		event(t, 4, map[string]any{"kind": "tool_call", "parentId": "task", "id": "read", "title": "Read cache.go", "status": "completed"}),
+		event(t, 5, map[string]any{"kind": "tool_call", "parentId": "task", "id": "search", "title": "Search invalidation", "status": "completed"}),
+		event(t, 6, map[string]any{"kind": "message_chunk", "parentId": "task", "text": "The cache key omits the tenant ID."}),
+	}
+
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeBrief)
+	for _, want := range []string{
+		"### Investigate cache — completed",
+		"Final child response:\n\nThe cache key omits the tenant ID.",
+		"2 tool calls (details omitted in brief mode)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("brief delegation render missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"First I inspected it.", "Read cache.go", "Search invalidation"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("brief delegation render should omit %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestRenderSupportsNestedDelegations(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "research"}),
+		event(t, 2, map[string]any{"kind": "tool_call", "id": "outer", "title": "Research API", "status": "completed"}),
+		event(t, 3, map[string]any{"kind": "tool_call", "parentId": "outer", "id": "inner", "title": "Inspect client", "status": "completed"}),
+		event(t, 4, map[string]any{"kind": "message_chunk", "parentId": "inner", "text": "Client retries twice."}),
+		event(t, 5, map[string]any{"kind": "message_chunk", "parentId": "outer", "text": "The API is safe to retry."}),
+	}
+
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeFull)
+	outer := strings.Index(got, "### Research API — completed")
+	inner := strings.Index(got, "#### Inspect client — completed")
+	if outer < 0 || inner < 0 || inner < outer {
+		t.Errorf("nested delegation hierarchy is missing or out of order:\n%s", got)
+	}
+	for _, want := range []string{"The API is safe to retry.", "Client retries twice."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("nested delegation missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderPreservesOrphanedChildEventsAsUnresolvedDelegation(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "user_message", "text": "continue"}),
+		event(t, 2, map[string]any{"kind": "message_chunk", "parentId": "missing-task", "text": "I changed the parser but did not run tests."}),
+		event(t, 3, map[string]any{"kind": "tool_call", "parentId": "missing-task", "id": "edit", "title": "Edit parser.go", "status": "completed"}),
+	}
+
+	got := handoff.Render(history, handoff.Source{}, handoff.ModeFull)
+	for _, want := range []string{
+		"### Delegated task missing-task — unresolved",
+		"I changed the parser but did not run tests.",
+		"- Edit parser.go",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("orphaned child output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAnalyzeDelegationsIncludesNestedAndOrphanedTasks(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "tool_call", "id": "done", "title": "Done task", "status": "completed"}),
+		event(t, 2, map[string]any{"kind": "message_chunk", "parentId": "done", "text": "done"}),
+		event(t, 3, map[string]any{"kind": "tool_call", "parentId": "done", "id": "nested", "title": "Nested task", "status": "failed"}),
+		event(t, 4, map[string]any{"kind": "message_chunk", "parentId": "nested", "text": "failed"}),
+		event(t, 5, map[string]any{"kind": "tool_call", "id": "running", "title": "Running task", "status": "pending"}),
+		event(t, 6, map[string]any{"kind": "tool_call", "parentId": "running", "id": "read", "title": "Read", "status": "completed"}),
+		event(t, 7, map[string]any{"kind": "message_chunk", "parentId": "orphan", "text": "orphaned"}),
+	}
+
+	got := handoff.AnalyzeDelegations(history)
+	if got.Completed != 1 || got.Failed != 1 || got.Running != 1 || got.Unresolved != 1 || got.Total() != 4 {
+		t.Fatalf("AnalyzeDelegations = %+v, want one task in each state", got)
+	}
+}
+
+func TestAnalyzeDelegationsTreatsCancelledWorkAsFailed(t *testing.T) {
+	history := []eventlog.LoggedEvent{
+		event(t, 1, map[string]any{"kind": "tool_call", "id": "cancelled", "title": "Cancelled task", "status": "cancelled"}),
+		event(t, 2, map[string]any{"kind": "message_chunk", "parentId": "cancelled", "text": "Stopped during hand-off."}),
+	}
+
+	got := handoff.AnalyzeDelegations(history)
+	if got.Failed != 1 || got.Total() != 1 {
+		t.Fatalf("AnalyzeDelegations = %+v, want one failed task", got)
+	}
+}

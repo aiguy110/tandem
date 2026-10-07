@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
-import type { BrowserSnapshot, FederationHost, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec } from '../wire';
+import type { BrowserSnapshot, FederationHost, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec, ToolStatus, WireEvent } from '../wire';
 import { usePresence, useValuePresence } from '../transitions';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
@@ -16,6 +16,56 @@ const FALLBACK_HARNESSES = [
   { id: 'agent:codex', name: 'Codex', agent: 'codex', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
   { id: 'agent:pi', name: 'Pi', agent: 'pi', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
 ];
+
+export interface DelegatedWorkPreview {
+  completed: number;
+  failed: number;
+  active: number;
+  activeTitles: string[];
+}
+
+// A delegation is recognizable without harness-specific tool names: ACP child
+// events point back to the spawning tool call. Summarize only top-level roots,
+// since nested delegates are part of that root's work rather than additional
+// hand-off units. Sessions from older daemons simply produce no preview.
+export function delegatedWorkPreview(events: { seq: number; event: WireEvent }[]): DelegatedWorkPreview | null {
+  const tools = new Map<string, { title: string; status: ToolStatus; parentId?: string; order: number }>();
+  const referencedParents = new Set<string>();
+  for (const { seq, event } of events) {
+    if ('parentId' in event && event.parentId) referencedParents.add(event.parentId);
+    if (event.kind === 'tool_call') {
+      const existing = tools.get(event.id);
+      tools.set(event.id, {
+        title: event.title || existing?.title || 'Delegated task',
+        status: event.status,
+        parentId: event.parentId ?? existing?.parentId,
+        order: existing?.order ?? seq,
+      });
+    } else if (event.kind === 'tool_call_update') {
+      const existing = tools.get(event.id);
+      if (existing) tools.set(event.id, {
+        ...existing,
+        title: event.title || existing.title,
+        status: event.status ?? existing.status,
+        parentId: event.parentId ?? existing.parentId,
+      });
+    }
+  }
+  const roots = [...tools.entries()]
+    .filter(([id, tool]) => referencedParents.has(id) && (!tool.parentId || !tools.has(tool.parentId)))
+    .sort((a, b) => a[1].order - b[1].order);
+  if (roots.length === 0) return null;
+  const preview: DelegatedWorkPreview = { completed: 0, failed: 0, active: 0, activeTitles: [] };
+  for (const [, tool] of roots) {
+    if (tool.status === 'done') preview.completed++;
+    else if (tool.status === 'error' || tool.status === 'cancelled') preview.failed++;
+    else {
+      preview.active++;
+      preview.activeTitles.push(tool.title);
+    }
+  }
+  return preview;
+}
 
 function loadProjectAgent(project: string): string | undefined {
   try {
@@ -291,6 +341,10 @@ export function SpawnPalette() {
   const selectedAttachRef = gitRefs.find((ref) => ref.ref === attachBranchRef);
   const agentSlug = selectedHarness?.agent ?? agent.replace(/^agent:/, '');
   const parentAgent = parentSession ? agents[parentSession] : undefined;
+  const delegationPreview = useMemo(
+    () => parentAgent ? delegatedWorkPreview(parentAgent.events) : null,
+    [parentAgent],
+  );
   // Sessions offered as a hand-off source, newest names last is unhelpful here,
   // so order them the way the rail does: alphabetically by display name.
   const parentCandidates = useMemo(
@@ -876,6 +930,20 @@ export function SpawnPalette() {
                           : "Every user message is carried over verbatim, but only each turn's closing message is — the work in between appears as a count of tool calls."}
                         {' '}It is built mechanically from the event log, so no model is asked to summarize anything.
                       </div>
+                      {delegationPreview && (
+                        <div className="handoff-delegation-preview" style={{ gridColumn: '1 / -1' }} role="status">
+                          <strong>Delegated work</strong>
+                          <span>
+                            {delegationPreview.completed} completed · {delegationPreview.failed} failed or cancelled · {delegationPreview.active} active
+                          </span>
+                          {delegationPreview.active > 0 && (
+                            <span className="handoff-delegation-warning">
+                              Unfinished delegated work will not transfer; an active source turn will be interrupted before takeover
+                              {delegationPreview.activeTitles.length > 0 ? `: ${delegationPreview.activeTitles.slice(0, 3).join(', ')}${delegationPreview.activeTitles.length > 3 ? '…' : ''}` : '.'}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </>

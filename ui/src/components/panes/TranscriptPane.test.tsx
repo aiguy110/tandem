@@ -93,6 +93,63 @@ describe('TranscriptPane rate-limit widget', () => {
   });
 });
 
+describe('TranscriptPane sub-agent groups', () => {
+  it('groups attributed output beneath its spawning tool and preserves root output', () => {
+    const delegated = agent();
+    delegated.events = [
+      { seq: 1, event: { kind: 'message_chunk', text: 'Root before.' } },
+      { seq: 2, event: { kind: 'tool_call', id: 'task-1', title: 'Explore authentication', status: 'running' } },
+      { seq: 3, event: { kind: 'message_chunk', text: 'Child finding.', parentId: 'task-1' } },
+      { seq: 4, event: { kind: 'tool_call', id: 'read-1', title: 'Read auth.go', status: 'done', parentId: 'task-1' } },
+      { seq: 5, event: { kind: 'message_chunk', text: 'Root after.' } },
+    ];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': delegated }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const group = view.getByRole('region', { name: 'Delegated activity for Explore authentication' });
+    const children = within(group).getByRole('group', { name: 'Sub-agent activity' });
+    expect(within(children).getByText('Child finding.')).toBeTruthy();
+    expect(within(children).getByText('Read auth.go')).toBeTruthy();
+    expect(within(children).queryByText('Root after.')).toBeNull();
+    expect(view.getByText('Root before.')).toBeTruthy();
+    expect(view.getByText('Root after.')).toBeTruthy();
+  });
+
+  it('renders nested delegated tool output as nested accessible groups', () => {
+    const delegated = agent();
+    delegated.events = [
+      { seq: 1, event: { kind: 'tool_call', id: 'task-1', title: 'Primary delegate', status: 'running' } },
+      { seq: 2, event: { kind: 'tool_call', id: 'task-2', title: 'Nested delegate', status: 'running', parentId: 'task-1' } },
+      { seq: 3, event: { kind: 'message_chunk', text: 'Nested result.', parentId: 'task-2' } },
+    ];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': delegated }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const outer = view.getByRole('region', { name: 'Delegated activity for Primary delegate' });
+    const nested = within(outer).getByRole('region', { name: 'Delegated activity for Nested delegate' });
+    expect(within(nested).getByText('Nested result.')).toBeTruthy();
+  });
+
+  it('leaves output with an unknown parent visible at the transcript root', () => {
+    const delegated = agent();
+    delegated.events = [{ seq: 1, event: { kind: 'message_chunk', text: 'Still visible.', parentId: 'missing-task' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': delegated }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getByText('Still visible.')).toBeTruthy();
+    expect(view.queryByRole('group', { name: 'Sub-agent activity' })).toBeNull();
+  });
+});
+
 describe('PromptBar attachments', () => {
   it('preserves a pasted image and its upload across session switches', async () => {
     const first = agent();

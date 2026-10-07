@@ -105,11 +105,24 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	if got := waitForUserMessage(t, db, source.ID); got != "port the parser to the new API" {
 		t.Fatalf("source prompt not recorded, got %q", got)
 	}
-	f.adapters[source.ID].events <- eventlog.Event{
+	if _, err := source.AppendEvent(eventlog.Event{
 		Kind:    "message_chunk",
 		Payload: json.RawMessage(`{"kind":"message_chunk","text":"Started on parser.go, not finished."}`),
+	}); err != nil {
+		t.Fatal(err)
 	}
-	waitForEventKind(t, db, source.ID, "message_chunk")
+	if _, err := source.AppendEvent(eventlog.Event{
+		Kind:    "tool_call",
+		Payload: json.RawMessage(`{"kind":"tool_call","id":"delegate-1","title":"Delegate parser tests","status":"in_progress"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.AppendEvent(eventlog.Event{
+		Kind:    "message_chunk",
+		Payload: json.RawMessage(`{"kind":"message_chunk","parentId":"delegate-1","text":"Checking parser tests."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	spec := existing(t.TempDir())
 	spec.HandoffFrom = source.ID
@@ -142,6 +155,33 @@ func TestHandoffSeedsTheFirstMessageFromTheSourceTranscript(t *testing.T) {
 	}
 	if strings.Contains(string(rec.Spec), "Started on parser.go") {
 		t.Errorf("hand-off transcript was persisted into the spec: %s", rec.Spec)
+	}
+	log, err := eventlog.New(received.ID, db, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, ok, err := log.LatestOfKind("handoff_received")
+	if err != nil || !ok {
+		t.Fatalf("durable hand-off provenance: ok=%v err=%v", ok, err)
+	}
+	var got struct {
+		SourceSessionID string `json:"sourceSessionId"`
+		CutoffSeq       int64  `json:"cutoffSeq"`
+		Mode            string `json:"mode"`
+		RendererVersion int    `json:"rendererVersion"`
+		SourceWasActive bool   `json:"sourceWasActive"`
+		Delegations     struct {
+			Running int `json:"running"`
+		} `json:"delegations"`
+	}
+	if err := json.Unmarshal(provenance.Event.Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceSessionID != source.ID || got.CutoffSeq <= 0 || got.Mode != "full" || got.RendererVersion != 2 || !got.SourceWasActive || got.Delegations.Running != 1 {
+		t.Fatalf("provenance = %#v", got)
+	}
+	if strings.Contains(string(provenance.Event.Payload), "Started on parser.go") {
+		t.Fatalf("provenance exposed transcript content: %s", provenance.Event.Payload)
 	}
 }
 
@@ -204,6 +244,45 @@ func TestHandoffFromAnUnknownAgentFailsBeforeProvisioning(t *testing.T) {
 	spec.HandoffFrom = "nobody"
 	if _, err := r.Spawn(context.Background(), spec); err == nil {
 		t.Fatal("want an error for an unknown hand-off source")
+	}
+}
+
+func TestHandoffFromIdleSourceDoesNotInterruptIt(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, _ := setup(t, f)
+	source, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"kind":"user_message","text":"resume this idle session"}`)
+	if _, err := source.AppendEvent(eventlog.Event{Kind: "user_message", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	spec := existing(t.TempDir())
+	spec.HandoffFrom = source.ID
+	received, err := r.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.adapters[source.ID].interrupts; got != 0 {
+		t.Fatalf("idle source interrupted %d times", got)
+	}
+	log, err := eventlog.New(received.ID, db, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, ok, err := log.LatestOfKind("handoff_received")
+	if err != nil || !ok {
+		t.Fatalf("durable hand-off provenance: ok=%v err=%v", ok, err)
+	}
+	var got struct {
+		SourceWasActive bool `json:"sourceWasActive"`
+	}
+	if err := json.Unmarshal(provenance.Event.Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceWasActive {
+		t.Fatal("idle source recorded as active")
 	}
 }
 

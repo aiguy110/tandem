@@ -56,6 +56,9 @@ type Session struct {
 	promptQueue   []*queuedPrompt
 	promptCurrent *queuedPrompt
 	promptRunning bool
+	// handoffSnapshotting rejects new prompt admission while the registry
+	// quiesces this session and selects a fixed event-log cutoff.
+	handoffSnapshotting bool
 
 	// User escape-hatch shell (docs/terminal.md: the Terminal tab). Independent
 	// of the agent adapter, so it survives ACP↔CLI control swaps and runs
@@ -360,9 +363,15 @@ func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
 func (s *Session) Status() Status     { s.mu.RLock(); defer s.mu.RUnlock(); return s.status }
 func (s *Session) SetStatus(v Status) { s.mu.Lock(); s.status = v; s.mu.Unlock() }
 
-// PushEvent lets daemon-owned auxiliary services (notably browser takeover)
-// enter the same durable event stream as adapter updates.
-func (s *Session) PushEvent(ev eventlog.Event) { s.emit(ev) }
+// AppendEvent lets daemon-owned services enter the same durable event stream
+// as adapter updates and observe persistence failures.
+func (s *Session) AppendEvent(ev eventlog.Event) (eventlog.LoggedEvent, error) {
+	return s.append(ev)
+}
+
+// PushEvent is the best-effort form retained for auxiliary services whose
+// state is recoverable without this event (notably browser takeover).
+func (s *Session) PushEvent(ev eventlog.Event) { _, _ = s.AppendEvent(ev) }
 func (s *Session) ExternalSessionID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -468,6 +477,12 @@ func (s *Session) SteerWithEvent(ctx context.Context, blocks []agentadapter.Prom
 	if err := s.ValidatePrompt(blocks); err != nil {
 		return err
 	}
+	s.promptMu.Lock()
+	if s.handoffSnapshotting {
+		s.promptMu.Unlock()
+		return errors.New("agent hand-off snapshot is in progress")
+	}
+	defer s.promptMu.Unlock()
 	steerer, ok := s.adapter.(agentadapter.SteeringAdapter)
 	if !ok {
 		return errors.New("this agent does not support steering")
@@ -512,6 +527,10 @@ func (s *Session) EnqueuePromptWithEvent(ctx context.Context, blocks []agentadap
 		done:         make(chan promptResult, 1),
 	}
 	s.promptMu.Lock()
+	if s.handoffSnapshotting {
+		s.promptMu.Unlock()
+		return PromptReceipt{}, errors.New("agent hand-off snapshot is in progress")
+	}
 	disposition := "queued"
 	position := len(s.promptQueue) + 1
 	startRunner := !s.promptRunning
@@ -557,6 +576,10 @@ func (s *Session) EnqueueAside(ctx context.Context, text string) (PromptReceipt,
 		ctx:          ctx, done: make(chan promptResult, 1), aside: true,
 	}
 	s.promptMu.Lock()
+	if s.handoffSnapshotting {
+		s.promptMu.Unlock()
+		return PromptReceipt{}, errors.New("agent hand-off snapshot is in progress")
+	}
 	disposition, position := "queued", len(s.promptQueue)+1
 	startRunner := !s.promptRunning
 	if startRunner {
@@ -890,7 +913,7 @@ func (s *Session) InterruptAndWait(ctx context.Context) error {
 	}
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
-	for s.ActiveTurn() {
+	for s.promptInFlight() || s.ActiveTurn() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -898,6 +921,63 @@ func (s *Session) InterruptAndWait(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Session) promptInFlight() bool {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	return s.promptRunning
+}
+
+// BeginHandoffSnapshot temporarily closes prompt admission so the registry can
+// cancel any already-accepted work and take an atomic transcript snapshot.
+// The returned release must be called after the cutoff history has been read.
+func (s *Session) BeginHandoffSnapshot() (wasActive bool, release func()) {
+	s.promptMu.Lock()
+	s.handoffSnapshotting = true
+	wasActive = s.promptRunning
+	s.promptMu.Unlock()
+	var once sync.Once
+	return wasActive, func() {
+		once.Do(func() {
+			s.promptMu.Lock()
+			s.handoffSnapshotting = false
+			s.promptMu.Unlock()
+		})
+	}
+}
+
+// WaitForEventDrain waits until the durable event head has remained unchanged
+// for quiet. It closes the small gap between a prompt settling and the adapter
+// event pump flushing its final buffered update before a hand-off snapshot.
+func (s *Session) WaitForEventDrain(ctx context.Context, quiet time.Duration) (int64, error) {
+	if quiet <= 0 {
+		return s.Log.Head(), nil
+	}
+	head := s.Log.Head()
+	timer := time.NewTimer(quiet)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer timer.Stop()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-ticker.C:
+			if next := s.Log.Head(); next != head {
+				head = next
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(quiet)
+			}
+		case <-timer.C:
+			return head, nil
+		}
+	}
 }
 
 func (s *Session) SetControlMode(mode string) {

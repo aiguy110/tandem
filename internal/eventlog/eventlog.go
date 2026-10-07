@@ -249,9 +249,27 @@ func (l *Log) LatestOfKind(kind string) (LoggedEvent, bool, error) {
 }
 
 func (l *Log) FullHistory() ([]LoggedEvent, error) {
+	return l.FullHistoryThrough(0)
+}
+
+// FullHistoryThrough returns the retained history through cutoff, inclusive.
+// A non-positive cutoff means the current durable head. Filtering happens
+// before stream chunks are coalesced so a chunk appended after a hand-off
+// snapshot can never be folded into the snapshot's final logical message.
+func (l *Log) FullHistoryThrough(cutoff int64) ([]LoggedEvent, error) {
 	rows, err := l.store.RangeEvents(l.sessionID, 0)
 	if err != nil {
 		return nil, err
+	}
+	if cutoff > 0 {
+		end := len(rows)
+		for i, row := range rows {
+			if row.Seq > cutoff {
+				end = i
+				break
+			}
+		}
+		rows = rows[:end]
 	}
 	events, err := decodeRows(rows)
 	if err != nil {

@@ -28,9 +28,9 @@ import { InlineAudioBar } from '../audio/InlineAudioBar';
 
 type Item =
   | { kind: 'user'; key: string; seq: number; blocks: PromptBlock[] }
-  | { kind: 'message'; key: string; seq: number; text: string }
-  | { kind: 'thought'; key: string; seq: number; text: string }
-  | { kind: 'tool'; key: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; terminalOutput?: string; terminalTruncated?: boolean }
+  | { kind: 'message'; key: string; seq: number; text: string; parentId?: string }
+  | { kind: 'thought'; key: string; seq: number; text: string; parentId?: string }
+  | { kind: 'tool'; key: string; id: string; title: string; status: ToolStatus; content?: unknown; rawInput?: unknown; toolKind?: string; terminalId?: string; terminalOutput?: string; terminalTruncated?: boolean; parentId?: string }
   | { kind: 'compaction'; key: string; status: ToolStatus; summary: string; error?: string; trigger?: string; preTokens?: number; postTokens?: number; durationMs?: number }
   | { kind: 'plan'; key: string; entries: { label: string; status: 'pending' | 'in_progress' | 'done' }[] }
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
@@ -87,14 +87,14 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       }
       case 'message_chunk': {
         const last = items[items.length - 1];
-        if (last && last.kind === 'message') last.text += ev.text;
-        else items.push({ kind: 'message', key: `m${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text });
+        if (last && last.kind === 'message' && last.parentId === ev.parentId) last.text += ev.text;
+        else items.push({ kind: 'message', key: `m${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text, parentId: ev.parentId });
         break;
       }
       case 'thought_chunk': {
         const last = items[items.length - 1];
-        if (last && last.kind === 'thought') last.text += ev.text;
-        else items.push({ kind: 'thought', key: `t${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text });
+        if (last && last.kind === 'thought' && last.parentId === ev.parentId) last.text += ev.text;
+        else items.push({ kind: 'thought', key: `t${ev.startSeq ?? seq}`, seq: ev.startSeq ?? seq, text: ev.text, parentId: ev.parentId });
         break;
       }
       case 'tool_call': {
@@ -109,9 +109,10 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           if (ev.content != null) existing.content = ev.content;
           if (ev.rawInput != null) existing.rawInput = ev.rawInput;
           if (ev.toolKind != null) existing.toolKind = ev.toolKind;
+          if (ev.parentId != null) existing.parentId = ev.parentId;
           if (ev.terminalId != null) associateTerminal(existing, ev.terminalId);
         } else {
-          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput, toolKind: ev.toolKind };
+          const item: Extract<Item, { kind: 'tool' }> = { kind: 'tool', key: `tc${ev.id}`, id: ev.id, title: ev.title, status: ev.status, content: ev.content, rawInput: ev.rawInput, toolKind: ev.toolKind, parentId: ev.parentId };
           tools.set(ev.id, item);
           items.push(item);
           if (ev.terminalId != null) associateTerminal(item, ev.terminalId);
@@ -130,6 +131,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
           if (ev.title) t.title = ev.title;
           if (ev.rawInput != null) t.rawInput = ev.rawInput;
           if (ev.toolKind != null) t.toolKind = ev.toolKind;
+          if (ev.parentId != null) t.parentId = ev.parentId;
           if (ev.terminalId != null) associateTerminal(t, ev.terminalId);
         }
         break;
@@ -238,6 +240,49 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   // Append it here so callers can split it into the pane's fixed bottom slot.
   if (plan) visible.push(plan);
   return visible;
+}
+
+interface TranscriptNode {
+  item: Item;
+  children: TranscriptNode[];
+}
+
+// ACP identifies sub-agent output with the id of the tool call that spawned
+// it. Project that flat, replayable event stream into a display tree without
+// changing the underlying ordering or hiding events whose parent is missing.
+// The ancestry check also keeps malformed/cyclic input visible at the root.
+export function groupTranscriptItems(items: Item[]): TranscriptNode[] {
+  const tools = new Map<string, Extract<Item, { kind: 'tool' }>>();
+  for (const item of items) if (item.kind === 'tool') tools.set(item.id, item);
+
+  const validParent = (item: Item): string | undefined => {
+    if (item.kind !== 'message' && item.kind !== 'thought' && item.kind !== 'tool') return undefined;
+    const parentId = item.parentId;
+    if (!parentId || !tools.has(parentId) || (item.kind === 'tool' && item.id === parentId)) return undefined;
+    const seen = new Set<string>();
+    let cursor: string | undefined = parentId;
+    while (cursor) {
+      if (seen.has(cursor) || (item.kind === 'tool' && cursor === item.id)) return undefined;
+      seen.add(cursor);
+      const parent = tools.get(cursor);
+      cursor = parent?.parentId;
+    }
+    return parentId;
+  };
+
+  const children = new Map<string, TranscriptNode[]>();
+  const roots: TranscriptNode[] = [];
+  for (const item of items) {
+    const node = { item, children: [] };
+    const parentId = validParent(item);
+    if (parentId) children.set(parentId, [...(children.get(parentId) ?? []), node]);
+    else roots.push(node);
+  }
+  const attach = (node: TranscriptNode): TranscriptNode => {
+    if (node.item.kind === 'tool') node.children = (children.get(node.item.id) ?? []).map(attach);
+    return node;
+  };
+  return roots.map(attach);
 }
 
 // A captured, in-progress selection: the anchor row it resolved to plus the
@@ -511,6 +556,7 @@ export function TranscriptPane() {
   const items = useMemo(() => (agent ? build(agent.events, agent.pendingApprovals) : []), [agent?.events, agent?.pendingApprovals]);
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
   const transcriptItems = useMemo(() => items.filter((item) => item.kind !== 'plan'), [items]);
+  const transcriptTree = useMemo(() => groupTranscriptItems(transcriptItems), [transcriptItems]);
   // The actively-streaming last message row never offers annotation — its text
   // is still growing underneath any selection the user made.
   const lastMessageItem = useMemo(
@@ -790,6 +836,40 @@ export function TranscriptPane() {
 
   if (!agent) return null;
 
+  const renderTranscriptNode = (node: TranscriptNode): React.ReactNode => {
+    const it = node.item;
+    const row = (
+      <Row
+        item={it}
+        entering={isNewRow(it.key)}
+        commands={agent.commands}
+        quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
+        onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
+        onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
+        onJumpToQuote={jumpToQuote}
+        onJumpToLinkedBlock={jumpToLinkedBlock}
+        onOpenPeer={openPeer}
+        onFork={it.kind === 'user' && agent.adapter === 'acp' && agent.asideSupport === true
+          ? (edit) => forkSession(agent.id, { seq: it.seq, edit })
+          : undefined}
+        sessionId={agent.id}
+        canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
+        cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
+        renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
+      />
+    );
+    if (node.children.length === 0 || it.kind !== 'tool') return <div key={`${agent.id}:${it.key}`} className="transcript-node">{row}</div>;
+    return (
+      <section key={`${agent.id}:${it.key}`} className="transcript-node subagent-group" aria-label={`Delegated activity for ${it.title}`} data-parent-tool-id={it.id}>
+        {row}
+        <div className="subagent-children" role="group" aria-label="Sub-agent activity">
+          <div className="subagent-label" aria-hidden="true">Sub-agent activity</div>
+          {node.children.map(renderTranscriptNode)}
+        </div>
+      </section>
+    );
+  };
+
   return (
     <div className="pane">
       <div className="transcript-wrap">
@@ -804,27 +884,7 @@ export function TranscriptPane() {
             {transcriptItems.length === 0 && (agent.historyLoaded
               ? <div className="empty">No activity yet. Send a prompt below to start a turn.</div>
               : <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />Loading conversation…</div>)}
-            {transcriptItems.map((it) => (
-              <Row
-                key={`${agent.id}:${it.key}`}
-                item={it}
-                entering={isNewRow(it.key)}
-                commands={agent.commands}
-                quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
-                onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-                onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
-                onJumpToQuote={jumpToQuote}
-                onJumpToLinkedBlock={jumpToLinkedBlock}
-                onOpenPeer={openPeer}
-                onFork={it.kind === 'user' && agent.adapter === 'acp' && agent.asideSupport === true
-                  ? (edit) => forkSession(agent.id, { seq: it.seq, edit })
-                  : undefined}
-                sessionId={agent.id}
-                canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
-                cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
-                renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
-              />
-            ))}
+            {transcriptTree.map(renderTranscriptNode)}
           </div>
           {!atBottom && (
             <button className="scroll-latest" onClick={() => scrollToBottom(true)} title="Scroll to latest">

@@ -145,6 +145,13 @@ agent's first user message (`internal/handoff`), at the detail `spec.handoffMode
 the result is dispatched as a prompt rather than persisted onto the spec. An unknown or
 transcript-less source rejects the spawn before anything is provisioned.
 
+Before taking the snapshot, Tandem interrupts an active source turn and waits for the event
+stream to remain quiet briefly; idle and rate-limited sources are not interrupted. The
+snapshot is then fixed at a durable sequence cutoff. The destination records a
+`handoff_received` event containing the source session id, cutoff, renderer version, mode,
+whether the source was active, and delegation-state counts. It never duplicates transcript
+or prompt content into that provenance event.
+
 `close_agent { force?, deinitSubmodules? }` removes the worktree checkout but **keeps the branch**. If the
 worktree has uncommitted changes and `force` isn't set, the close is **refused** — the agent
 keeps running, no `agent_closed` is broadcast — with a `dirty_worktree` error; `force:true`
@@ -351,6 +358,9 @@ type ServerMsg =
 //   { kind:'raw_pty', dataB64: string }   // agent CLI / native PTY agent
 //   { kind:'shell_pty', dataB64: string } // independent user worktree shell
 //   { kind:'shell_exit', message: string }
+//   { kind:'handoff_received', sourceSessionId: string, cutoffSeq: number,
+//     mode: 'full'|'brief', rendererVersion: number, sourceWasActive: boolean,
+//     delegations: { completed: number, failed: number, running: number, unresolved: number } }
 ```
 
 `snapshot.audioReadySeqs` lists the seqs with a durably cached rendered clip (bytes

@@ -232,6 +232,17 @@ summarize it. `internal/handoff` walks the source agent's durable event log and 
   between collapses to `_[N tool calls]_`. The count is of the whole turn, so it is not
   subject to full mode's cap.
 
+ACP child-agent output is not flattened into the lead agent's narration. Tandem uses the
+normalized `parentId` on message and tool events to render a nested delegated-work tree.
+Each task records its state (`completed`, `failed`, `running`, or `unresolved`), its final
+child response, and its tool activity. Full mode also retains intermediate child narration
+and summarized tool lines; brief mode retains the task state and final response but reduces
+its ordinary tools to a count. Nested delegations remain nested. If a bounded or damaged
+event log contains child events but not their spawning call, the child output is retained as
+an explicitly unresolved task rather than silently dropped. Child processes never transfer
+to the replacement; a task that was still running at the cutoff is labeled accordingly and
+must be verified or re-delegated by the receiving agent.
+
 A short preamble explains that the receiving agent is taking over an unfinished session,
 states the working directory and branch, and says which mode produced the transcript so the
 reader knows what is missing.

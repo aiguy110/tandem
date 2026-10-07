@@ -86,6 +86,22 @@ func TestEncodingAndAppend(t *testing.T) {
 	}
 }
 
+func TestFullHistoryThroughDoesNotCoalescePastCutoff(t *testing.T) {
+	log, _, _ := openLog(t, 8)
+	for _, text := range []string{"before", " after"} {
+		if _, err := log.Append(message(t, text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history, err := log.FullHistoryThrough(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Seq != 1 || eventText(history[0]) != "before" {
+		t.Fatalf("history through cutoff = %#v, want only first chunk", history)
+	}
+}
+
 func TestRingEvictionColdReplayAndRestart(t *testing.T) {
 	log, s, _ := openLog(t, 2)
 	for _, text := range []string{"one", "two", "three", "four"} {

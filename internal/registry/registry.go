@@ -962,10 +962,10 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	// spawn outright rather than leaving a worktree behind. It is deliberately
 	// not folded into spec.Task: the transcript can be large, and the spec is
 	// re-marshalled into the agent row on every restore.
-	var handoffText string
+	var handoff handoffSnapshot
 	if spec.HandoffFrom != "" {
 		progress.Report(ctx, "Preparing hand-off transcript…")
-		if handoffText, err = r.handoffMessage(spec.HandoffFrom, spec.HandoffMode); err != nil {
+		if handoff, err = r.prepareHandoff(ctx, spec.HandoffFrom, spec.HandoffMode); err != nil {
 			return nil, err
 		}
 	}
@@ -999,6 +999,34 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 		r.releaseKnown(id)
 		return nil, err
 	}
+	if handoff.SourceSessionID != "" {
+		payload, marshalErr := json.Marshal(map[string]any{
+			"kind": "handoff_received", "sourceSessionId": handoff.SourceSessionID,
+			"cutoffSeq": handoff.CutoffSeq, "mode": handoff.Mode,
+			"rendererVersion": 2, "sourceWasActive": handoff.SourceWasActive,
+			"delegations": handoff.Delegations,
+		})
+		if marshalErr != nil {
+			_ = r.store.DeleteSession(id)
+			r.rollback(ctx, spec.Workspace, provisioned)
+			r.releaseKnown(id)
+			return nil, marshalErr
+		}
+		destinationLog, logErr := eventlog.New(id, r.store, r.ring)
+		if logErr != nil {
+			_ = r.store.DeleteSession(id)
+			r.rollback(ctx, spec.Workspace, provisioned)
+			r.releaseKnown(id)
+			return nil, logErr
+		}
+		if _, appendErr := destinationLog.Append(eventlog.Event{Kind: "handoff_received", Payload: payload}); appendErr != nil {
+			_ = r.store.DeleteSession(id)
+			r.rollback(ctx, spec.Workspace, provisioned)
+			r.releaseKnown(id)
+			slog.Error("persist destination handoff provenance", "destination_session_id", id, "source_session_id", handoff.SourceSessionID, "error", appendErr)
+			return nil, fmt.Errorf("persist hand-off provenance: %w", appendErr)
+		}
+	}
 	s, err := r.start(ctx, rec, spec, "")
 	if err != nil {
 		_ = r.store.DeleteSession(id)
@@ -1006,7 +1034,10 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 		r.releaseKnown(id)
 		return nil, err
 	}
-	if prompt := firstPrompt(handoffText, spec.Task); prompt != "" {
+	if handoff.SourceSessionID != "" {
+		slog.Info("handoff destination started", "destination_session_id", s.ID, "source_session_id", handoff.SourceSessionID, "cutoff_seq", handoff.CutoffSeq, "mode", handoff.Mode, "delegations_total", handoff.Delegations.Total(), "delegations_running", handoff.Delegations.Running, "delegations_unresolved", handoff.Delegations.Unresolved)
+	}
+	if prompt := firstPrompt(handoff.Text, spec.Task); prompt != "" {
 		go s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	}
 	return s, nil

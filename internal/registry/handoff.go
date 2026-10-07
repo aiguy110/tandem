@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -52,19 +54,20 @@ func (r *Registry) sourceAgent(id string) (store.Session, agentadapter.Spec, err
 
 // handoffMessage renders the source agent's transcript into the text that will
 // become the receiving agent's first user message. It never calls a model.
-func (r *Registry) handoffMessage(sourceID, mode string) (string, error) {
+func (r *Registry) handoffMessage(sourceID, mode string, cutoff int64) (string, handoff.DelegationSummary, error) {
 	rec, spec, err := r.sourceAgent(sourceID)
 	if err != nil {
-		return "", err
+		return "", handoff.DelegationSummary{}, err
 	}
 	log, err := eventlog.New(rec.ID, r.store, 1)
 	if err != nil {
-		return "", err
+		return "", handoff.DelegationSummary{}, err
 	}
-	history, err := log.FullHistory()
+	history, err := log.FullHistoryThrough(cutoff)
 	if err != nil {
-		return "", err
+		return "", handoff.DelegationSummary{}, err
 	}
+	delegations := handoff.AnalyzeDelegations(history)
 	text := handoff.Render(history, handoff.Source{
 		SessionName: rec.Name,
 		Harness:     r.harnessLabel(spec),
@@ -72,9 +75,73 @@ func (r *Registry) handoffMessage(sourceID, mode string) (string, error) {
 		Branch:      spec.Workspace.Branch,
 	}, handoff.ParseMode(mode))
 	if text == "" {
-		return "", fmt.Errorf("agent %s has no transcript to hand off", rec.Name)
+		return "", handoff.DelegationSummary{}, fmt.Errorf("agent %s has no transcript to hand off", rec.Name)
 	}
-	return text, nil
+	return text, delegations, nil
+}
+
+const (
+	handoffInterruptTimeout = 5 * time.Second
+	handoffDrainQuiet       = 300 * time.Millisecond
+)
+
+type handoffSnapshot struct {
+	Text            string
+	SourceSessionID string
+	CutoffSeq       int64
+	Mode            string
+	SourceWasActive bool
+	Delegations     handoff.DelegationSummary
+}
+
+// prepareHandoff establishes the write boundary before rendering a source.
+// Active sources are cancelled; idle and closed sources remain untouched. The
+// per-source handoff lock also excludes ACP/terminal adapter swaps while the
+// cutoff is selected and the durable history is read.
+func (r *Registry) prepareHandoff(ctx context.Context, sourceID, mode string) (handoffSnapshot, error) {
+	lock := r.handoffLock(sourceID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	rec, _, err := r.sourceAgent(sourceID)
+	if err != nil {
+		return handoffSnapshot{}, err
+	}
+	snapshot := handoffSnapshot{SourceSessionID: sourceID, Mode: string(handoff.ParseMode(mode))}
+	live := r.Get(sourceID)
+	if live != nil {
+		var release func()
+		snapshot.SourceWasActive, release = live.BeginHandoffSnapshot()
+		defer release()
+		if snapshot.SourceWasActive {
+			slog.Info("quiescing handoff source", "source_session_id", sourceID, "status", live.Status())
+			waitCtx, cancel := context.WithTimeout(ctx, handoffInterruptTimeout)
+			err = live.InterruptAndWait(waitCtx)
+			cancel()
+			if err != nil {
+				slog.Warn("handoff source failed to quiesce", "source_session_id", sourceID, "timeout", handoffInterruptTimeout, "error", err)
+				return handoffSnapshot{}, fmt.Errorf("quiesce hand-off source %s: %w", rec.Name, err)
+			}
+		}
+		drainCtx, cancel := context.WithTimeout(ctx, handoffInterruptTimeout)
+		snapshot.CutoffSeq, err = live.WaitForEventDrain(drainCtx, handoffDrainQuiet)
+		cancel()
+		if err != nil {
+			return handoffSnapshot{}, fmt.Errorf("drain hand-off source %s: %w", rec.Name, err)
+		}
+	} else {
+		log, logErr := eventlog.New(sourceID, r.store, 1)
+		if logErr != nil {
+			return handoffSnapshot{}, logErr
+		}
+		snapshot.CutoffSeq = log.Head()
+	}
+	snapshot.Text, snapshot.Delegations, err = r.handoffMessage(sourceID, mode, snapshot.CutoffSeq)
+	if err != nil {
+		return handoffSnapshot{}, err
+	}
+	slog.Info("handoff snapshot prepared", "source_session_id", sourceID, "cutoff_seq", snapshot.CutoffSeq, "mode", snapshot.Mode, "source_was_active", snapshot.SourceWasActive, "delegations_total", snapshot.Delegations.Total(), "delegations_running", snapshot.Delegations.Running, "delegations_unresolved", snapshot.Delegations.Unresolved)
+	return snapshot, nil
 }
 
 // Cohabitants names the other agents that have not been closed and are working
