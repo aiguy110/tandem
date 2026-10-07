@@ -100,6 +100,10 @@ func localLaunchArgs(port int, profile string, headless bool, userAgent string) 
 		"--no-first-run", "--no-default-browser-check", "--window-size=1280,800", "--window-position=0,0"}
 	if headless {
 		args = append([]string{"--headless=new"}, args...)
+	} else {
+		// Headful runs target the private Xvfb display; without this Chrome's
+		// ozone auto-detection prefers Wayland and opens on the user's desktop.
+		args = append(args, "--ozone-platform=x11")
 	}
 	// Chrome refuses to run its sandbox as root; elsewhere --no-sandbox only
 	// weakens isolation and adds an "unsupported flag" banner detectors notice.
@@ -139,6 +143,22 @@ func headfulUserAgent(exe string) string {
 		platform = "Macintosh; Intel Mac OS X 10_15_7"
 	}
 	return "Mozilla/5.0 (" + platform + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+// xvfbEnv returns environ pointed at the private Xvfb display. Any inherited
+// desktop-session display variables are dropped so Chromium cannot attach to
+// the user's real Wayland/X session and pop up a visible window.
+func xvfbEnv(environ []string, display string) []string {
+	env := make([]string, 0, len(environ)+2)
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE":
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "DISPLAY="+display, "XDG_SESSION_TYPE=x11")
 }
 
 // startXvfb launches a private virtual X server so Chrome can run headful
@@ -294,7 +314,7 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 	args := localLaunchArgs(port, profile, headless, ua)
 	cmd := exec.Command(exe, args...)
 	if display != "" {
-		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		cmd.Env = xvfbEnv(os.Environ(), display)
 	}
 	if err := cmd.Start(); err != nil {
 		killXvfb()

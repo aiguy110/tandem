@@ -200,3 +200,18 @@ func TestLocalLaunchArgsStealth(t *testing.T) {
 		t.Fatalf("headless fallback missing headless flag or UA override: %v", headless)
 	}
 }
+
+// On a Wayland desktop the daemon inherits WAYLAND_DISPLAY; Chrome's ozone
+// auto-detection would then open a visible window on the user's session
+// instead of the private Xvfb display.
+func TestHeadfulLaunchStaysOnXvfb(t *testing.T) {
+	t.Parallel()
+	if args := localLaunchArgs(9222, "/tmp/profile", false, ""); !slices.Contains(args, "--ozone-platform=x11") {
+		t.Fatalf("headful launch must force X11 ozone platform: %v", args)
+	}
+	env := xvfbEnv([]string{"HOME=/h", "DISPLAY=:0", "WAYLAND_DISPLAY=wayland-0", "XAUTHORITY=/x", "XDG_SESSION_TYPE=wayland"}, ":7")
+	want := []string{"HOME=/h", "DISPLAY=:7", "XDG_SESSION_TYPE=x11"}
+	if !slices.Equal(env, want) {
+		t.Fatalf("xvfbEnv = %v, want %v", env, want)
+	}
+}
