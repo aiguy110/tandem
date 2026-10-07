@@ -1761,34 +1761,6 @@ export const useStore = create<StoreState>((set, get) => {
     setRateLimitAutoContinue: (sessionId, enabled, message) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        // The rate-limit event is authoritative when it arrives, but project
-        // this change immediately. A busy socket used to lose the following
-        // acknowledgement/event ordering, leaving an already-scheduled wake-up
-        // visibly unchecked forever.
-        set((st) => {
-          const session = st.sessions[sessionId];
-          if (!session) return st;
-          let index = -1;
-          for (let i = session.events.length - 1; i >= 0; i--) {
-            if (session.events[i].event.kind === 'rate_limit') {
-              index = i;
-              break;
-            }
-          }
-          if (index < 0) return st;
-          const events = session.events.map((entry, eventIndex) => {
-            if (eventIndex !== index || entry.event.kind !== 'rate_limit') return entry;
-            return {
-              ...entry,
-              event: {
-                ...entry.event,
-                enabled,
-                queuedMessage: enabled ? message?.trim() || undefined : undefined,
-              },
-            };
-          });
-          return { sessions: { ...st.sessions, [sessionId]: { ...session, events } } };
-        });
         const timer = window.setTimeout(() => {
           if (!pendingAcks.delete(corrId)) return;
           resolve({ sessionId, error: 'Wake-up confirmation timed out. The schedule may still have been saved; refresh to verify before retrying.' });

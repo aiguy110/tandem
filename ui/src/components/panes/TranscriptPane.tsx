@@ -847,7 +847,7 @@ export function TranscriptPane() {
         commands={agent.commands}
         quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
         onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-        onRateLimitToggle={(enabled) => setRateLimitAutoContinue(agent.id, enabled)}
+        onRateLimitToggle={(enabled) => setRateLimitAutoContinue(agent.id, enabled, it.kind === 'rate-limit' ? it.queuedMessage : undefined)}
         onJumpToQuote={jumpToQuote}
         onJumpToLinkedBlock={jumpToLinkedBlock}
         onOpenPeer={openPeer}
@@ -1320,6 +1320,7 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
 function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => Promise<AckResult> }) {
   const [now, setNow] = useState(Date.now());
   const [enabled, setEnabled] = useState(item.enabled);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => setEnabled(item.enabled), [item.enabled]);
   useEffect(() => {
     if (item.state !== 'pending') return;
@@ -1346,11 +1347,18 @@ function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate
             onChange={(event) => {
               const next = event.target.checked;
               setEnabled(next);
-              void onToggle(next);
+              setError(null);
+              void onToggle(next).then((result) => {
+                if (result.error) {
+                  setEnabled(item.enabled);
+                  setError(result.error);
+                }
+              });
             }}
           />
         </label>
       )}
+      {error && <span role="alert">{error}</span>}
     </section>
   );
 }
@@ -2126,19 +2134,20 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     }
     return null;
   });
-  // A freshly restored browser has no local draft. Seed it from the durable
-  // wake-up state so a queued message is always visible and editable in the
-  // normal multiline composer.
-  useEffect(() => {
-    const draft = useStore.getState().drafts[sessionId];
-    if (draft === undefined && scheduledRateLimit?.queuedMessage) setDraft(sessionId, scheduledRateLimit.queuedMessage);
-  }, [sessionId, scheduledRateLimit?.id, scheduledRateLimit?.queuedMessage, setDraft]);
   const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
   const asideSupport = useStore((s) => s.sessions[sessionId]?.asideSupport ?? null);
   const steeringSupport = useStore((s) => s.sessions[sessionId]?.steeringSupport ?? null);
-  const queuedPrompts = useStore((s) => s.sessions[sessionId]?.queuedPrompts ?? []);
+  const turnQueuedPrompts = useStore((s) => s.sessions[sessionId]?.queuedPrompts ?? []);
+  const wakePromptId = scheduledRateLimit ? `wake-${scheduledRateLimit.id}` : null;
+  const queuedPrompts: QueuedPrompt[] = [
+    ...(scheduledRateLimit?.enabled && scheduledRateLimit.queuedMessage ? [{
+      id: wakePromptId!, blocks: [{ type: 'text' as const, text: scheduledRateLimit.queuedMessage }],
+      queuedAt: new Date(scheduledRateLimit.detectedAt).toISOString(),
+    }] : []),
+    ...turnQueuedPrompts,
+  ];
   // A federated agent's ID is namespaced by its owning host, which reads as
   // noise in a placeholder; its name is what the rail shows.
   const agentLabel = useStore((s) => s.sessions[sessionId]?.name || sessionId);
@@ -2443,6 +2452,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
         const result = await setRateLimitAutoContinue(sessionId, true, t);
         if (result.error) setAttachmentError(result.error);
         else {
+          setDraft(sessionId, '');
           setAttachmentError(null);
         }
       } catch (error) {
@@ -2533,7 +2543,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       setAttachmentError('Queued prompts with images cannot be edited yet.');
       return;
     }
-    const result = await removeQueuedPrompt(sessionId, queued.id);
+    const result = queued.id === wakePromptId ? {} : await removeQueuedPrompt(sessionId, queued.id);
     if (result.error) {
       setAttachmentError(result.error);
       return;
@@ -2620,17 +2630,23 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
           <div className="prompt-queue-header">
             <span>Next up ({queuedPrompts.length})</span>
             <span className="prompt-queue-actions">
-              <button type="button" onClick={() => void clearPromptQueue(sessionId)}>Clear queue</button>
+              <button type="button" onClick={() => {
+                if (scheduledRateLimit?.queuedMessage) void setRateLimitAutoContinue(sessionId, scheduledRateLimit.enabled, '');
+                void clearPromptQueue(sessionId);
+              }}>Clear queue</button>
             </span>
           </div>
           {queuedPrompts.map((queued, index) => {
             const preview = previewQueuedPrompt(queued.blocks);
             return (
               <div className="prompt-queue-row" key={queued.id}>
-                <span className="prompt-queue-position">{index + 1}.</span>
+                <span className="prompt-queue-position">{queued.id === wakePromptId ? '◷' : `${index + 1}.`}</span>
                 <span className="prompt-queue-preview" title={preview}>{preview}</span>
                 <button type="button" onClick={() => void editQueuedPrompt(queued)} title="Edit queued prompt" aria-label={`Edit queued prompt ${index + 1}`}>Edit</button>
-                <button type="button" onClick={() => void removeQueuedPrompt(sessionId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
+                <button type="button" onClick={() => {
+                  if (queued.id === wakePromptId && scheduledRateLimit) void setRateLimitAutoContinue(sessionId, scheduledRateLimit.enabled, '');
+                  else void removeQueuedPrompt(sessionId, queued.id);
+                }} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
               </div>
             );
           })}
@@ -2778,7 +2794,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
             disabled={sending || uploadsPending || !canSubmit}
             title={scheduledRateLimit ? 'Send this multiline message when the rate limit resets' : working ? 'Send after the current turn finishes' : 'Send prompt'}
           >
-            {sending ? 'Scheduling…' : scheduledRateLimit ? 'Schedule wake-up' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
+            {sending ? (scheduledRateLimit ? 'Scheduling…' : 'Sending…') : scheduledRateLimit ? 'Schedule wake-up' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>
