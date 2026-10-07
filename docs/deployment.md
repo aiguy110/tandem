@@ -19,6 +19,30 @@ SIGTERM, clean deferred exit, bind/port configuration, `TANDEM_HOME`, browser se
 launcher settings, and all other inherited environment variables retain their existing
 semantics.
 
+## Login-shell environment
+
+A supervisor such as systemd starts the daemon with a bare environment, so the PATH entries
+and exports in the operator's shell rc files would otherwise never reach agents. Unless it was
+started from a terminal (which already passes that environment down), the daemon runs `$SHELL`
+(falling back to `/etc/passwd`) once at startup as a login, interactive shell, captures the
+environment that shell ends up with, and merges it into its own before anything is spawned:
+
+- Variables the daemon already has keep their values, so `Environment=` lines in the unit and
+  every `TANDEM_*` setting win. `TANDEM_*` and shell bookkeeping (`PWD`, `SHLVL`, `TERM`, …)
+  are never imported.
+- `PATH` is merged: the shell's entries first, then any daemon entries the shell lacks. The
+  unit's `Environment=PATH=` is therefore the floor agents get if resolution fails.
+- Everything else the shell exports is imported, including credentials such as
+  `GITHUB_TOKEN`; agents see what a terminal would. The log records variable names only.
+
+While resolving, the shell sees `TANDEM_RESOLVING_ENVIRONMENT=1` (and VS Code's equivalent
+`VSCODE_RESOLVING_ENVIRONMENT=1`) so rc files can skip slow or session-hijacking setup:
+`[[ -n $TANDEM_RESOLVING_ENVIRONMENT ]] || exec tmux`. Resolution times out after
+`TANDEM_SHELL_ENV_TIMEOUT` (default `10s`); on failure the daemon logs a warning and continues
+with its own environment. Set `TANDEM_SHELL_ENV=off` to disable it, or `force` to resolve even
+from a terminal. Changes to rc files take effect at the next daemon restart. Look for
+`imported login shell environment` in `journalctl --user -u tandem` to see what was added.
+
 Back up `TANDEM_HOME` before an operational upgrade. Rollbacks use a previous native release
 or Git revision; there is no alternate TypeScript daemon.
 

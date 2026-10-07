@@ -16,6 +16,7 @@ import (
 	"github.com/aiguy110/tandem/internal/daemon"
 	"github.com/aiguy110/tandem/internal/messagesmcp"
 	"github.com/aiguy110/tandem/internal/setup"
+	"github.com/aiguy110/tandem/internal/shellenv"
 	"github.com/aiguy110/tandem/internal/updater"
 	"github.com/mattn/go-isatty"
 )
@@ -58,6 +59,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-control: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	// Internal: the daemon's login shell runs this to report its environment.
+	if len(args) == 1 && args[0] == shellenv.DumpArg {
+		if err := shellenv.Dump(os.Stdout); err != nil {
+			fmt.Fprintf(stderr, "dump shell environment: %v\n", err)
 			return 1
 		}
 		return 0
@@ -255,6 +264,9 @@ func setupHome() (string, error) {
 }
 
 func runDaemon(stdout, stderr io.Writer, parentURL string) int {
+	// Before config.Load, so launcher and PATH resolution see the operator's
+	// login-shell environment rather than the supervisor's bare one.
+	shellenv.Apply(context.Background(), stdinIsTerminal())
 	if err := daemon.RunWithOptions(stdout, daemon.RunOptions{ParentURL: parentURL}); err != nil {
 		fmt.Fprintf(stderr, "run daemon: %v\n", err)
 		return 1

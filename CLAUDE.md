@@ -54,6 +54,8 @@ For Go changes, run the relevant package tests or `go test ./...`.
 | `TANDEM_RESUME_CMD_CLAUDE` / `_CODEX` / `_PI` | agent-specific CLI command | JSON array or command template for Terminal handoff; `{sessionId}` is substituted |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (bundled Chromium) or `steel` (needs `STEEL_BASE_URL`) |
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |
+| `TANDEM_SHELL_ENV` | `on` | `off` skips importing the login shell's environment at daemon startup; `force` imports even when started from a terminal |
+| `TANDEM_SHELL_ENV_TIMEOUT` | `10s` | How long the login shell may take to report its environment |
 
 Agent launches are declared by the shipped `config.yml.example`, overlaid by optional
 `$TANDEM_HOME/config.yml` definitions and reusable profiles. Claude, Codex, and Pi are

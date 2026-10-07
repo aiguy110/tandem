@@ -5,6 +5,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Projects/tandem
+# Baseline only: at startup the daemon also imports the PATH and exports from
+# your login shell ($SHELL -i -l); see docs/deployment.md.
 Environment=PATH=%h/.local/share/fnm/aliases/default/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin
 # Shared browser: the local driver launches installed Google Chrome per agent
 # (headful under a private Xvfb, with anti-detection flags) and serves CDP.
