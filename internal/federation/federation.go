@@ -1102,14 +1102,18 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 	queued := s.queues[hello.HostID]
 	delete(s.queues, hello.HostID)
 	s.rules[hello.HostID] = hello.Rules
-	s.mu.Unlock()
-	if old != nil {
-		_ = old.conn.Close()
-	}
+	// Recorded under s.mu, together with the registration above, so a
+	// superseded tunnel's cleanup (dropChild) cannot interleave between the
+	// two and leave a live tunnel recorded offline.
 	peer.Status = "connected"
 	peer.LastSeenAt = time.Now().UnixMilli()
 	peer.ProtocolVersion, peer.BuildVersion = hello.ProtocolVersion, hello.BuildVersion
 	_ = s.store.UpsertFederationChild(*peer)
+	s.mu.Unlock()
+	if old != nil {
+		slog.Info("federation tunnel superseded by reconnect", "host_id", hello.HostID)
+		_ = old.conn.Close()
+	}
 	upstreamCapable := hasCapability(hello.Capabilities, upstreamCapability)
 	slog.Info("federation host connected", "host_id", hello.HostID, "protocol_version", hello.ProtocolVersion, "build_version", hello.BuildVersion, "upstream_capable", upstreamCapable, "access_rules", len(hello.Rules))
 	s.checkProtocol(*peer)
@@ -1122,22 +1126,7 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 			break
 		}
 	}
-	defer func() {
-		s.mu.Lock()
-		if s.tunnels[hello.HostID] == t {
-			delete(s.tunnels, hello.HostID)
-		}
-		s.mu.Unlock()
-		s.stopChildLink(hello.HostID, t)
-		s.removeProtocolNotification(hello.HostID)
-		p, _ := s.store.FederationChild(hello.HostID)
-		if p != nil && p.Status == "connected" {
-			p.Status = "offline"
-			_ = s.store.UpsertFederationChild(*p)
-			s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
-		}
-		slog.Warn("federation host disconnected", "host_id", hello.HostID)
-	}()
+	defer s.dropChild(hello.HostID, t)
 	for {
 		var msg tunnelMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -1166,6 +1155,36 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 			s.publish(s.relayHostID(hello.HostID, msg.HostID), msg.Payload)
 		}
 	}
+}
+
+// dropChild cleans up after a child's tunnel ends. A reconnecting child's new
+// tunnel closes the old one, whose cleanup then runs concurrently with (or
+// after) the new registration; only the current tunnel may mark the host
+// offline. Otherwise the parent records a live child as offline, keeps
+// showing the events it relays, and refuses every command routed to it.
+func (s *Service) dropChild(hostID string, t *tunnel) {
+	s.mu.Lock()
+	current := s.tunnels[hostID] == t
+	offline := false
+	if current {
+		delete(s.tunnels, hostID)
+		if p, _ := s.store.FederationChild(hostID); p != nil && p.Status == "connected" {
+			p.Status = "offline"
+			_ = s.store.UpsertFederationChild(*p)
+			offline = true
+		}
+	}
+	s.mu.Unlock()
+	s.stopChildLink(hostID, t)
+	if !current {
+		slog.Info("superseded federation tunnel closed", "host_id", hostID)
+		return
+	}
+	s.removeProtocolNotification(hostID)
+	if offline {
+		s.publish(hostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	}
+	slog.Warn("federation host disconnected", "host_id", hostID)
 }
 
 func cloneHosts(in []Host) []Host {

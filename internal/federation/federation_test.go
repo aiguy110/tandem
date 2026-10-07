@@ -595,3 +595,38 @@ func TestConcurrentFirstSelfIDCallsAgree(t *testing.T) {
 		}
 	}
 }
+
+// A reconnecting child's new tunnel closes the old one, whose cleanup runs
+// afterwards. That stale cleanup must not record the still-connected child as
+// offline, or the parent refuses every command routed to it while continuing
+// to show the events the live tunnel relays.
+func TestSupersededTunnelCleanupKeepsChildConnected(t *testing.T) {
+	s := openStore(t)
+	service, err := New(Options{Store: s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertFederationChild(store.FederationChild{ID: "host-1", Name: "build-host", Credential: "secret", Status: "connected"}); err != nil {
+		t.Fatal(err)
+	}
+	stale, live := &tunnel{}, &tunnel{}
+	service.mu.Lock()
+	service.tunnels["host-1"] = live
+	service.mu.Unlock()
+
+	service.dropChild("host-1", stale)
+	if peer, _ := s.FederationChild("host-1"); peer == nil || peer.Status != "connected" {
+		t.Fatalf("superseded cleanup changed live child: %#v", peer)
+	}
+	service.mu.Lock()
+	current := service.tunnels["host-1"]
+	service.mu.Unlock()
+	if current != live {
+		t.Fatal("superseded cleanup removed the live tunnel")
+	}
+
+	service.dropChild("host-1", live)
+	if peer, _ := s.FederationChild("host-1"); peer == nil || peer.Status != "offline" {
+		t.Fatalf("live tunnel cleanup did not mark child offline: %#v", peer)
+	}
+}
