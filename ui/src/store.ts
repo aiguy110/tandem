@@ -68,7 +68,9 @@ export interface SecretRequest {
   requestId: string;
   service: string;
   reason: string;
+  usage?: 'http' | 'file';
   origin: string;
+  path?: string;
   headerName: string;
 }
 
@@ -1063,7 +1065,7 @@ export const useStore = create<StoreState>((set, get) => {
               const index = replayedTakeovers.findIndex((t) => t.reqId === event.reqId);
               if (index !== -1) replayedTakeovers.splice(index, 1);
             } else if (event.kind === 'secret_request' && !replayedSecrets.some((s) => s.requestId === event.requestId)) {
-              replayedSecrets.push({ requestId: event.requestId, service: event.service, reason: event.reason, origin: event.origin, headerName: event.headerName });
+              replayedSecrets.push({ requestId: event.requestId, service: event.service, reason: event.reason, usage: event.usage, origin: event.origin, path: event.path, headerName: event.headerName });
             } else if (event.kind === 'secret_resolved') {
               const index = replayedSecrets.findIndex((s) => s.requestId === event.requestId);
               if (index !== -1) replayedSecrets.splice(index, 1);
@@ -2074,7 +2076,7 @@ function applyEventToView(v: SessionView, event: WireEvent): void {
   }
   if (event.kind === 'secret_request') {
     v.status = 'blocked';
-    if (!(v.secretRequests ?? []).some((s) => s.requestId === event.requestId)) v.secretRequests = [...(v.secretRequests ?? []), { requestId: event.requestId, service: event.service, reason: event.reason, origin: event.origin, headerName: event.headerName }];
+    if (!(v.secretRequests ?? []).some((s) => s.requestId === event.requestId)) v.secretRequests = [...(v.secretRequests ?? []), { requestId: event.requestId, service: event.service, reason: event.reason, usage: event.usage, origin: event.origin, path: event.path, headerName: event.headerName }];
   }
   if (event.kind === 'secret_resolved') v.secretRequests = (v.secretRequests ?? []).filter((s) => s.requestId !== event.requestId);
   if (event.kind === 'session_config') v.sessionConfig = { modes: event.modes, configOptions: event.configOptions };
