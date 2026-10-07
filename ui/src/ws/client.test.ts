@@ -59,6 +59,90 @@ afterEach(() => {
 });
 
 describe('WsClient.wake', () => {
+  it('ignores delayed callbacks from a retired socket', () => {
+    vi.useFakeTimers();
+    const handlers = opts();
+    const client = new WsClient(handlers);
+    client.start('tok');
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    // Capture already queued browser callbacks: clearing handlers alone cannot
+    // cancel events whose callbacks have already been scheduled.
+    const oldClose = first.onclose;
+    const oldOpen = first.onopen;
+    const oldMessage = first.onmessage;
+    client.setToken('replacement');
+    const second = FakeWebSocket.instances[1];
+    second.open();
+    oldClose?.({ code: 1006 });
+    oldOpen?.();
+    oldMessage?.({ data: JSON.stringify({ t: 'agents', sessions: [] }) });
+    expect(handlers.onState).toHaveBeenLastCalledWith('connected');
+    expect(handlers.onOpen).toHaveBeenCalledTimes(2);
+    expect(handlers.onMessage).not.toHaveBeenCalled();
+    expect(client.reconnectTimerRef()).toBeNull();
+    client.send({ t: 'list_agents' });
+    expect(second.sent).toContain(JSON.stringify({ t: 'list_agents' }));
+    vi.runOnlyPendingTimers();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('requires the matching pong even while browser frames arrive', () => {
+    vi.useFakeTimers();
+    const client = new WsClient(opts());
+    client.start('tok');
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    client.wake();
+    first.onmessage?.({ data: JSON.stringify({ t: 'browser_frame', sessionId: 'a', dataB64: '', meta: {} }) });
+    first.onmessage?.({ data: JSON.stringify({ t: 'pong', corrId: 'unrelated' }) });
+    vi.advanceTimersByTime(3000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('cancels a closed socket probe before its replacement connects', () => {
+    vi.useFakeTimers();
+    const client = new WsClient(opts());
+    client.start('tok');
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    client.wake();
+    first.onclose?.({ code: 1006 });
+    client.wake();
+    FakeWebSocket.instances[1].open();
+    vi.advanceTimersByTime(5000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('assembles interleaved snapshot chunks with routed session IDs', () => {
+    const handlers = opts();
+    const client = new WsClient(handlers);
+    client.start('tok');
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    const receive = (msg: object) => socket.onmessage?.({ data: JSON.stringify(msg) });
+    const data = JSON.stringify({ t: 'snapshot', sessionId: 'child-local', seq: 9, transcript: [] });
+    receive({ t: 'snapshot_start', sessionId: 'host-a/child-local', replayId: 'same' });
+    receive({ t: 'snapshot_start', sessionId: 'host-b/child-local', replayId: 'same' });
+    receive({ t: 'snapshot_chunk', sessionId: 'host-a/child-local', replayId: 'same', data: data.slice(0, 20) });
+    receive({ t: 'snapshot_chunk', sessionId: 'host-b/child-local', replayId: 'same', data });
+    receive({ t: 'snapshot_chunk', sessionId: 'host-a/child-local', replayId: 'same', data: data.slice(20) });
+    expect(handlers.onMessage).not.toHaveBeenCalled();
+    receive({ t: 'snapshot_end', sessionId: 'host-a/child-local', replayId: 'same' });
+    receive({ t: 'snapshot_end', sessionId: 'host-b/child-local', replayId: 'same' });
+    expect(handlers.onMessage.mock.calls.map(([msg]) => msg.sessionId)).toEqual(['host-a/child-local', 'host-b/child-local']);
+  });
+
+  it('does not replay offline mouse input into a replacement browser', () => {
+    const client = new WsClient(opts());
+    client.start('tok');
+    client.send({ t: 'browser_input', sessionId: 'a', event: { kind: 'click', x: 1, y: 2 } });
+    client.send({ t: 'list_agents' });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    expect(socket.sent).toEqual([JSON.stringify({ t: 'list_agents' })]);
+  });
+
   it('keeps a healthy socket when the probe is answered', () => {
     vi.useFakeTimers();
     const client = new WsClient(opts());
@@ -70,10 +154,10 @@ describe('WsClient.wake', () => {
 
     // The probe goes out on the existing socket rather than replacing it.
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(first.sent.some((raw) => JSON.parse(raw).t === 'list_agents')).toBe(true);
+    const probe = JSON.parse(first.sent[first.sent.length - 1]);
+    expect(probe.t).toBe('ping');
 
-    // Any inbound frame proves the socket is alive.
-    first.onmessage?.({ data: JSON.stringify({ t: 'agents', sessions: [] }) });
+    first.onmessage?.({ data: JSON.stringify({ t: 'pong', corrId: probe.corrId }) });
     vi.advanceTimersByTime(5000);
 
     expect(FakeWebSocket.instances).toHaveLength(1);

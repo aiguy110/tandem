@@ -1,7 +1,7 @@
 # Browser ↔ Daemon WebSocket protocol
 
 Multiplexed by `sessionId` + channel, with a **monotonic `seq` per session** so reconnect can
-replay. JSON envelopes; binary frames for `raw_pty` and browser screencast. The browser
+replay. JSON envelopes; terminal bytes and browser JPEGs are base64-encoded. The browser
 speaks Tandem's **normalized shapes** (see [`agent-adapter.md`](agent-adapter.md)) — the
 daemon has already translated ACP away, so the UI is adapter-agnostic.
 
@@ -22,6 +22,40 @@ transport error). The token is generated on first run into `$TANDEM_HOME/token` 
 the UI reads once and stores. The native daemon serves its embedded UI by default;
 `TANDEM_UI_DIR` optionally overrides those assets for frontend development. A build made
 with the `tandem_dev` tag has no embedded assets and shows a placeholder without an override.
+
+### Connection recovery and backpressure
+
+`{ "t": "ping", "corrId": "<id>" }` receives a matching `pong` on a priority
+queue. This is the browser's wake probe; session listings and Git checks are
+not liveness probes. A replaced browser socket's callbacks cannot mutate the
+replacement connection, and offline pointer/keyboard input is discarded.
+
+A subscription may opt into `pagedReplay: true`. Snapshot replies then use
+`snapshot_start`, one or more `snapshot_chunk` envelopes, and `snapshot_end`.
+Each envelope carries `sessionId` and `replayId`; chunks carry a `data` string
+containing a consecutive fragment of the original snapshot JSON. Fragments
+are at most 128 KiB, split at UTF-8 boundaries. The client assembles and applies
+the snapshot only at `snapshot_end`, using the envelope's routed `sessionId`
+when federation has rewritten it. Peers omitting the option retain the single
+`snapshot` response. Replay waits above a 4 MiB outbound backlog instead of
+disconnecting merely because replay filled the message queue. Snapshot replay
+retains only the latest command catalog, configuration, and capability state;
+durable history and incremental replay remain intact.
+
+Subscription recovery and ordered browser input/control run separately from
+the connection reader. Adjacent uncorrelated mouse movements may coalesce;
+button/key events and grab/release retain their order. Chromium writes and lock
+contention are bounded, and returning control drains held commands without
+holding the browser state mutex across network writes. Failed drains close the
+affected proxy streams and leave control with the user. The frontend socket
+closes before browser cleanup, so cleanup cannot prevent reconnect recovery.
+
+Screencast frames retain only the latest unsent image and yield to control
+traffic. Frame pacing slows when socket writes are expensive. A socket write
+still has a five-second deadline. Structured daemon logs identify connection
+IDs, closure causes, queue bytes/messages, slow writes and commands, replay
+volume, dropped intermediate frames, and CDP failures without logging prompts
+or credentials.
 
 ### Transcript attachments
 

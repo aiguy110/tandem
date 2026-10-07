@@ -692,7 +692,7 @@ export const useStore = create<StoreState>((set, get) => {
     // background. Request its full channel history only on the first visit to
     // a terminal surface; normal re-subscriptions continue incrementally.
     const sinceSeq = replayPty ? 0 : get().sessions[id]?.lastSeq ?? 0;
-    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq });
+    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq, pagedReplay: true });
   }
   function replayPtyFor(id: string): void {
     if (!get().sessions[id]) return;
@@ -1272,7 +1272,9 @@ export const useStore = create<StoreState>((set, get) => {
       get().refreshHostDirs(LOCAL_HOST_ID);
       get().refreshProfiles(LOCAL_HOST_ID);
       // Also re-subscribe to anything we already track, immediately (idempotent).
-      for (const id of get().order) subscribeAgent(id);
+      const focused = get().focusedId;
+      if (focused) subscribeAgent(focused);
+      for (const id of get().order) if (id !== focused) subscribeAgent(id);
     },
   });
 

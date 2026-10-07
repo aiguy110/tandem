@@ -548,7 +548,8 @@ export interface WorkspaceEntry {
 }
 
 export type ClientMsg =
-  | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string }
+  | { t: 'ping'; corrId: string }
+  | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean }
   | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
@@ -650,6 +651,9 @@ export interface BrowserInputWire {
 }
 
 export type ServerMsg =
+  | { t: 'pong'; corrId?: string }
+  | { t: 'snapshot_start' | 'snapshot_end'; sessionId: string; replayId: string }
+  | { t: 'snapshot_chunk'; sessionId: string; replayId: string; data: string }
   | { t: 'snapshot'; sessionId: string; seq: number; transcript: { seq: number; event: WireEvent }[]; status: SessionStatus; controlMode: ControlMode; pendingApprovals: Approval[]; queuedPrompts: QueuedPrompt[]; annotations?: Annotation[]; audioReadySeqs?: number[]; audioReady?: { seq: number; durationMs: number }[]; audioPosition?: { seq: number; positionMs: number; updatedAt: number } }
   | { t: 'audio_position'; sessionId: string; seq: number; positionMs: number; updatedAt: number }
   | { t: 'prompt_queue'; sessionId: string; queuedPrompts: QueuedPrompt[] }

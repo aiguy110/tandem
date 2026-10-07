@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -35,7 +36,8 @@ type heldFrame struct {
 }
 type proxyLink struct {
 	agent, upstream *websocket.Conn
-	writeMu         sync.Mutex
+	writeMu         transportMutex
+	agentWriteMu    transportMutex
 	held            []heldFrame
 	heldBytes       int64
 	closed          chan struct{}
@@ -48,6 +50,8 @@ type agentBrowser struct {
 	cdpURL, browserWS string
 	wsRoutes          map[string]string
 	owner             ControlOwner
+	ownerEpoch        uint64
+	releaseMu         transportMutex
 	links             map[*proxyLink]struct{}
 	shared            *SharedBrowser
 	nextListener      uint64
@@ -276,6 +280,7 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 		a.browserWS = ws
 		// This client dials the real browser WebSocket, not the gated proxy.
 		a.shared = NewSharedBrowser(ws)
+		a.shared.ownerID = id
 	}
 	a.provisioning = nil
 	close(wait)
@@ -559,10 +564,11 @@ func (b *Broker) bridge(ctx context.Context, id, rest string, agent *websocket.C
 			if err != nil {
 				return
 			}
-			link.writeMu.Lock()
-			err = agent.WriteMessage(kind, data)
-			link.writeMu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err = writeTransport(ctx, &link.agentWriteMu, agent, kind, data)
+			cancel()
 			if err != nil {
+				slog.Warn("browser proxy response write failed", "session_id", id, "bytes", len(data), "error", err)
 				return
 			}
 		}
@@ -577,19 +583,22 @@ func (b *Broker) bridge(ctx context.Context, id, rest string, agent *websocket.C
 		a.mu.Lock()
 		if a.owner == ControlUser {
 			if link.heldBytes+int64(len(data)) > b.cfg.MaxHeldBytes {
+				slog.Warn("browser held command queue full", "session_id", id, "held_bytes", link.heldBytes, "message_bytes", len(data), "limit_bytes", b.cfg.MaxHeldBytes)
 				a.mu.Unlock()
 				return
 			}
 			link.held = append(link.held, frame)
 			link.heldBytes += int64(len(data))
+			slog.Debug("browser agent command held", "session_id", id, "held_frames", len(link.held), "held_bytes", link.heldBytes)
 			a.mu.Unlock()
 			continue
 		}
 		a.mu.Unlock()
-		link.writeMu.Lock()
-		err = up.WriteMessage(kind, data)
-		link.writeMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err = writeTransport(ctx, &link.writeMu, up, kind, data)
+		cancel()
 		if err != nil {
+			slog.Warn("browser proxy command write failed", "session_id", id, "bytes", len(data), "error", err)
 			return
 		}
 	}
@@ -599,32 +608,73 @@ func (b *Broker) Grab(id string) {
 	a.mu.Lock()
 	changed := a.owner != ControlUser
 	a.owner = ControlUser
+	a.ownerEpoch++
 	a.mu.Unlock()
 	if changed {
 		b.emitState(id)
 	}
 }
 func (b *Broker) Release(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return b.ReleaseContext(ctx, id)
+}
+
+func (b *Broker) ReleaseContext(ctx context.Context, id string) error {
 	a := b.record(id)
+	if err := a.releaseMu.lock(ctx); err != nil {
+		return err
+	}
+	defer a.releaseMu.unlock()
+	started := time.Now()
 	a.mu.Lock()
-	// Keep owner=user until every held frame is written. Readers take a.mu before
-	// forwarding, so a newly arriving command cannot overtake the held queue.
-	for l := range a.links {
-		frames := l.held
-		l.held = nil
-		l.heldBytes = 0
-		l.writeMu.Lock()
-		for _, f := range frames {
-			if err := l.upstream.WriteMessage(f.kind, f.data); err != nil {
-				l.writeMu.Unlock()
-				a.mu.Unlock()
-				return err
+	epoch := a.ownerEpoch
+	a.mu.Unlock()
+	framesSent, bytesSent := 0, 0
+	// New commands remain held while each detached batch drains. No network
+	// operation holds the browser state lock, and ownership changes only once
+	// every batch is empty. Thus new commands cannot overtake held commands.
+	for {
+		if err := ctx.Err(); err != nil {
+			slog.Warn("browser release timed out", "session_id", id, "frames", framesSent, "bytes", bytesSent, "error", err)
+			return err
+		}
+		a.mu.Lock()
+		if a.ownerEpoch != epoch {
+			a.mu.Unlock()
+			return errors.New("browser release superseded by a new grab")
+		}
+		batches := make(map[*proxyLink][]heldFrame)
+		for l := range a.links {
+			if len(l.held) > 0 {
+				batches[l] = l.held
+				l.held, l.heldBytes = nil, 0
 			}
 		}
-		l.writeMu.Unlock()
+		if len(batches) == 0 {
+			a.owner = ControlAgent
+			a.mu.Unlock()
+			break
+		}
+		a.mu.Unlock()
+		for l, frames := range batches {
+			for _, f := range frames {
+				if err := writeTransport(ctx, &l.writeMu, l.upstream, f.kind, f.data); err != nil {
+					// A failed WebSocket write poisons the stream. Closing both ends
+					// rejects held RPCs rather than silently losing them.
+					for failed := range batches {
+						_ = failed.upstream.Close()
+						_ = failed.agent.Close()
+					}
+					slog.Warn("browser release failed", "session_id", id, "frames", framesSent, "bytes", bytesSent, "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+					return err
+				}
+				framesSent++
+				bytesSent += len(f.data)
+			}
+		}
 	}
-	a.owner = ControlAgent
-	a.mu.Unlock()
+	slog.Info("browser control released", "session_id", id, "frames", framesSent, "bytes", bytesSent, "elapsed_ms", time.Since(started).Milliseconds())
 	if b.cfg.OnRelease != nil {
 		b.cfg.OnRelease(id)
 	}

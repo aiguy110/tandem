@@ -56,7 +56,7 @@ export interface WsClientOpts {
   onOpen: () => void;
 }
 
-// How long wake()'s liveness probe waits for any daemon frame before deciding
+// How long wake()'s liveness probe waits for its pong before deciding
 // the socket is dead. Short enough to feel instant, long enough for a phone
 // re-acquiring its radio on unlock.
 const WAKE_PROBE_TIMEOUT_MS = 3000;
@@ -68,10 +68,10 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUs = false;
   private outbox: ClientMsg[] = [];
-  // Epoch ms of the last frame received from the daemon. wake() uses it to
-  // tell a live socket from one the OS killed while the page was frozen.
-  private lastMessageAt = 0;
   private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private probeId: string | null = null;
+  private probeSequence = 0;
+  private snapshots = new Map<string, string[]>();
 
   constructor(private opts: WsClientOpts) {}
 
@@ -109,8 +109,10 @@ export class WsClient {
       return;
     }
     this.ws = ws;
+    this.snapshots.clear();
 
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       this.attempts = 0;
       this.opts.onState('connected');
       // Flush anything queued while offline, then let the store subscribe.
@@ -121,18 +123,52 @@ export class WsClient {
     };
 
     ws.onmessage = (e) => {
+      if (this.ws !== ws) return;
       let msg: ServerMsg;
       try {
         msg = JSON.parse(e.data as string);
       } catch {
         return;
       }
-      this.lastMessageAt = Date.now();
+      if (msg.t === 'pong') {
+        if (msg.corrId === this.probeId) {
+          if (this.probeTimer) clearTimeout(this.probeTimer);
+          this.probeTimer = null;
+          this.probeId = null;
+        }
+        return;
+      }
+      if (msg.t === 'snapshot_start') {
+        this.snapshots.set(`${msg.sessionId}/${msg.replayId}`, []);
+        return;
+      }
+      if (msg.t === 'snapshot_chunk') {
+        this.snapshots.get(`${msg.sessionId}/${msg.replayId}`)?.push(msg.data);
+        return;
+      }
+      if (msg.t === 'snapshot_end') {
+        const key = `${msg.sessionId}/${msg.replayId}`;
+        const chunks = this.snapshots.get(key);
+        this.snapshots.delete(key);
+        if (chunks) {
+          try {
+            const snapshot = JSON.parse(chunks.join('')) as Extract<ServerMsg, { t: 'snapshot' }>;
+            // Federation rewrites the envelope; the opaque JSON chunks still
+            // contain the child's local ID. Use the routed envelope's ID.
+            snapshot.sessionId = msg.sessionId;
+            this.opts.onMessage(snapshot);
+          } catch { this.forceReconnect(); }
+        }
+        return;
+      }
       this.opts.onMessage(msg);
     };
 
     ws.onclose = (e) => {
+      if (this.ws !== ws) return;
+      console.info('Tandem WebSocket closed', { code: e.code, reason: e.reason, clean: e.wasClean });
       this.ws = null;
+      this.closeSocket(); // Clear this generation's pending probe and snapshot fragments.
       if (this.closedByUs) return;
       if (e.code === 4401) {
         // Token rejected — no amount of reconnecting helps.
@@ -163,7 +199,7 @@ export class WsClient {
   // Public send: queues while offline so intent isn't lost across a blip.
   send(m: ClientMsg): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.rawSend(m);
-    else this.outbox.push(m);
+    else if (m.t !== 'browser_input') this.outbox.push(m);
   }
 
   private closeSocket(): void {
@@ -171,14 +207,18 @@ export class WsClient {
       clearTimeout(this.probeTimer);
       this.probeTimer = null;
     }
+    this.probeId = null;
+    this.snapshots.clear();
     if (this.ws) {
       this.closedByUs = true;
+      const retiring = this.ws;
+      this.ws = null;
+      retiring.onopen = retiring.onmessage = retiring.onclose = retiring.onerror = null;
       try {
-        this.ws.close();
+        retiring.close();
       } catch {
         /* ignore */
       }
-      this.ws = null;
       this.closedByUs = false;
     }
   }
@@ -198,7 +238,7 @@ export class WsClient {
   // reporting OPEN until some future write notices. But unconditionally
   // reconnecting is worse — every ordinary tab switch would drop a healthy
   // connection and force a full replay. So probe instead: ask the daemon for
-  // something cheap it always answers, and reconnect only if nothing comes
+  // a dedicated ping it always answers, and reconnect if its pong never comes
   // back. Healthy sockets survive; dead ones are replaced in ~3s instead of
   // waiting out scheduleReconnect's backoff, which stays as-is for genuine
   // network failures.
@@ -212,15 +252,17 @@ export class WsClient {
       return;
     }
     if (this.probeTimer) return; // a probe is already outstanding
-    const probedAt = Date.now();
-    this.rawSend({ t: 'list_agents' });
+    const probeId = `wake-${++this.probeSequence}`;
+    this.probeId = probeId;
+    this.rawSend({ t: 'ping', corrId: probeId });
     this.probeTimer = setTimeout(() => {
       this.probeTimer = null;
-      if (this.lastMessageAt < probedAt) this.forceReconnect();
+      if (this.probeId === probeId) this.forceReconnect();
     }, WAKE_PROBE_TIMEOUT_MS);
   }
 
   private forceReconnect(): void {
+    console.info('Tandem WebSocket recovery requested', { readyState: this.ws?.readyState, probePending: this.probeId !== null });
     clearReconnect(this);
     this.attempts = 0;
     this.closeSocket();

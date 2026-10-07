@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -77,7 +78,8 @@ type cdpEnvelope struct {
 // SharedBrowser is the daemon-owned, ungated CDP connection used by the human
 // browser pane. It intentionally dials Chrome directly rather than Broker.EndpointFor.
 type SharedBrowser struct {
-	wsURL string
+	wsURL   string
+	ownerID string
 
 	mu            sync.Mutex
 	conn          *websocket.Conn
@@ -90,8 +92,8 @@ type SharedBrowser struct {
 	reconnecting  bool
 	frameCallback func(ScreencastFrame)
 	lastFrameSent time.Time
-	writeMu       sync.Mutex
-	connectMu     sync.Mutex
+	writeMu       transportMutex
+	connectMu     transportMutex
 	closeOnce     sync.Once
 	closedCh      chan struct{}
 }
@@ -101,8 +103,10 @@ func NewSharedBrowser(browserWSURL string) *SharedBrowser {
 }
 
 func (s *SharedBrowser) Connect(ctx context.Context) error {
-	s.connectMu.Lock()
-	defer s.connectMu.Unlock()
+	if err := s.connectMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.connectMu.unlock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -318,6 +322,12 @@ func (s *SharedBrowser) sessionCall(ctx context.Context, method string, params a
 }
 
 func (s *SharedBrowser) callOn(ctx context.Context, conn *websocket.Conn, session, method string, params any, out any) error {
+	started := time.Now()
+	defer func() {
+		if elapsed := time.Since(started); elapsed >= 250*time.Millisecond {
+			slog.Warn("browser CDP call slow", "session_id", s.ownerID, "method", method, "elapsed_ms", elapsed.Milliseconds())
+		}
+	}()
 	if conn == nil {
 		return errors.New("shared browser not connected")
 	}
@@ -333,14 +343,16 @@ func (s *SharedBrowser) callOn(ctx context.Context, conn *websocket.Conn, sessio
 	}
 	payload, err := json.Marshal(message)
 	if err == nil {
-		s.writeMu.Lock()
-		err = conn.WriteMessage(websocket.TextMessage, payload)
-		s.writeMu.Unlock()
+		err = writeTransport(ctx, &s.writeMu, conn, websocket.TextMessage, payload)
 	}
 	if err != nil {
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
+		slog.Warn("browser CDP write failed", "session_id", s.ownerID, "method", method, "bytes", len(payload), "error", err)
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			s.disconnect(conn, err)
+		}
 		return err
 	}
 	select {
@@ -356,6 +368,7 @@ func (s *SharedBrowser) callOn(ctx context.Context, conn *websocket.Conn, sessio
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
+		slog.Warn("browser CDP response timed out", "session_id", s.ownerID, "method", method, "error", ctx.Err())
 		return ctx.Err()
 	case <-s.closedCh:
 		return errors.New("shared browser closed")
@@ -417,9 +430,11 @@ func (s *SharedBrowser) readLoop(conn *websocket.Conn) {
 			}
 			// Chrome will not send the next frame until this one is acknowledged.
 			go func(frameID int, session string) {
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				_ = s.callOn(ctx, conn, session, "Page.screencastFrameAck", map[string]any{"sessionId": frameID}, nil)
+				if err := s.callOn(ctx, conn, session, "Page.screencastFrameAck", map[string]any{"sessionId": frameID}, nil); err != nil {
+					s.disconnect(conn, err)
+				}
 			}(frame.SessionID, session)
 		}
 	}
@@ -439,6 +454,7 @@ func (s *SharedBrowser) disconnect(conn *websocket.Conn, cause error) {
 		s.reconnecting = true
 	}
 	s.mu.Unlock()
+	slog.Info("browser CDP disconnected", "session_id", s.ownerID, "reconnect", shouldReconnect, "pending_calls", len(pending), "error", cause)
 	_ = conn.Close()
 	for _, ch := range pending {
 		select {

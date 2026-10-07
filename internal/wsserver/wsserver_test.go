@@ -96,6 +96,139 @@ type testBackend struct {
 	dirsCalls atomic.Int32
 }
 
+type stalledBrowserDriver struct {
+	started chan struct{}
+}
+
+func (d stalledBrowserDriver) Kind() string { return "stalled-test" }
+func (d stalledBrowserDriver) Provision(ctx context.Context, _ string) (browser.ProvisionResult, error) {
+	close(d.started)
+	<-ctx.Done()
+	return browser.ProvisionResult{}, ctx.Err()
+}
+func (stalledBrowserDriver) Teardown(context.Context, string) error { return nil }
+func (stalledBrowserDriver) IsProvisioned(string) bool              { return false }
+func (stalledBrowserDriver) PID(string) int                         { return 0 }
+
+func TestPingContinuesWhileBrowserInputIsStalled(t *testing.T) {
+	started := make(chan struct{})
+	broker := browser.NewBroker(stalledBrowserDriver{started: started}, browser.BrokerConfig{})
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(opts *Options) { opts.Browser = broker })
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "browser_control", "sessionId": "a", "action": "grab", "corrId": "grab"})
+	if got := recv(t, c); got["corrId"] != "grab" {
+		t.Fatalf("grab ack=%v", got)
+	}
+	send(t, c, map[string]any{"t": "browser_input", "sessionId": "a", "event": map[string]any{"kind": "click"}, "corrId": "input"})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("browser operation did not start")
+	}
+	send(t, c, map[string]any{"t": "ping", "corrId": "alive"})
+	c.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var got map[string]any
+	if err := c.ReadJSON(&got); err != nil || got["t"] != "pong" || got["corrId"] != "alive" {
+		t.Fatalf("ping blocked behind browser: reply=%v err=%v", got, err)
+	}
+}
+
+func TestPagedSnapshotPreservesUnicodeAndSurvivesSmallWriteQueue(t *testing.T) {
+	_, backend, _, _, url := setupWS(t, 2)
+	text := strings.Repeat("🙂 browser \"state\"\n", 40000)
+	payload, _ := json.Marshal(map[string]any{"kind": "message_chunk", "role": "assistant", "text": text})
+	if _, err := backend.Get("a").Log.Append(eventlog.Event{Kind: "message_chunk", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "subscribe", "sessionId": "a", "pagedReplay": true})
+	var assembled strings.Builder
+	chunks := 0
+	for {
+		msg := recv(t, c)
+		switch msg["t"] {
+		case "snapshot_start":
+		case "snapshot_chunk":
+			chunk := msg["data"].(string)
+			if len(chunk) > 128<<10 {
+				t.Fatalf("unbounded snapshot chunk: %d", len(chunk))
+			}
+			assembled.WriteString(chunk)
+			chunks++
+		case "snapshot_end":
+			var snapshot struct {
+				Transcript []struct{ Event struct{ Text string } }
+			}
+			if err := json.Unmarshal([]byte(assembled.String()), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if chunks < 2 || len(snapshot.Transcript) != 1 || snapshot.Transcript[0].Event.Text != text {
+				t.Fatal("snapshot lost history or corrupted Unicode")
+			}
+			if got := recv(t, c); got["t"] != "ack" {
+				t.Fatalf("subscribe ack=%v", got)
+			}
+			send(t, c, map[string]any{"t": "ping", "corrId": "after-replay"})
+			if got := recv(t, c); got["t"] != "pong" {
+				t.Fatalf("connection did not survive replay: %v", got)
+			}
+			return
+		default:
+			t.Fatalf("unexpected replay message: %v", msg["t"])
+		}
+	}
+}
+
+func TestMouseMoveCoalescingPreservesButtonAndControlOrder(t *testing.T) {
+	c := newConnection(&Handler{opts: Options{WriteQueue: 16}}, nil)
+	defer c.close()
+	for _, m := range []clientMessage{
+		{T: "browser_input", SessionID: "a", Event: browser.BrowserInputEvent{Kind: "mousemove", X: 1}},
+		{T: "browser_input", SessionID: "a", Event: browser.BrowserInputEvent{Kind: "mousemove", X: 2}},
+		{T: "browser_input", SessionID: "a", Event: browser.BrowserInputEvent{Kind: "mousedown"}},
+		{T: "browser_input", SessionID: "a", Event: browser.BrowserInputEvent{Kind: "mousemove", X: 3}},
+		{T: "browser_input", SessionID: "a", Event: browser.BrowserInputEvent{Kind: "mouseup"}},
+		{T: "browser_control", SessionID: "a", Action: "release"},
+	} {
+		c.enqueueBrowser(m)
+	}
+	if len(c.browserQueue) != 5 || c.browserQueue[0].Event.X != 2 || c.browserQueue[1].Event.Kind != "mousedown" || c.browserQueue[3].Event.Kind != "mouseup" || c.browserQueue[4].Action != "release" {
+		t.Fatalf("input order lost: %#v", c.browserQueue)
+	}
+}
+
+func TestPingOvertakesBackpressuredSnapshotReplay(t *testing.T) {
+	_, backend, _, _, url := setupWS(t, 2)
+	payload, _ := json.Marshal(map[string]any{"kind": "message_chunk", "role": "assistant", "text": strings.Repeat("x", 16<<20)})
+	if _, err := backend.Get("a").Log.Append(eventlog.Event{Kind: "message_chunk", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "subscribe", "sessionId": "a", "pagedReplay": true})
+	// Preparing a 16 MiB fixture under the race detector is intentionally
+	// expensive; the assertion below measures ping ordering once streaming starts.
+	c.SetReadDeadline(time.Now().Add(15 * time.Second))
+	var msg map[string]any
+	if err := c.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["t"] != "snapshot_start" {
+		t.Fatalf("snapshot start=%v", msg["t"])
+	}
+	// Stop consuming briefly so the two-message queue and TCP send buffer fill.
+	time.Sleep(50 * time.Millisecond)
+	send(t, c, map[string]any{"t": "ping", "corrId": "during-replay"})
+	for {
+		msg := recv(t, c)
+		if msg["t"] == "pong" && msg["corrId"] == "during-replay" {
+			return
+		}
+		if msg["t"] == "snapshot_end" || msg["t"] == "ack" {
+			t.Fatal("liveness probe waited for the entire replay")
+		}
+	}
+}
+
 type inertBrowserDriver struct{}
 
 func (inertBrowserDriver) Kind() string { return "test" }

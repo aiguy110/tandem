@@ -230,7 +230,30 @@ func (l *Log) ReplaySince(since int64) (Replay, error) {
 	if err != nil {
 		return Replay{}, err
 	}
+	if snapshot {
+		events = compactSnapshotState(events)
+	}
 	return Replay{Source: source, Events: coalesceStreamChunks(events)}, nil
+}
+
+// Capability/catalog/config events describe current state, not transcript
+// history. Replaying every old catalog can add megabytes to a reconnect.
+// Keep their final values without altering durable history or delta replay.
+func compactSnapshotState(events []LoggedEvent) []LoggedEvent {
+	latest := make(map[string]int)
+	for i, event := range events {
+		switch event.Event.Kind {
+		case "available_commands", "session_config", "prompt_capabilities", "aside_capabilities", "steering_capabilities":
+			latest[event.Event.Kind] = i
+		}
+	}
+	out := make([]LoggedEvent, 0, len(events))
+	for i, event := range events {
+		if last, ok := latest[event.Event.Kind]; !ok || last == i {
+			out = append(out, event)
+		}
+	}
+	return out
 }
 
 // LatestOfKind returns the newest logged event of a kind. ok is false when the

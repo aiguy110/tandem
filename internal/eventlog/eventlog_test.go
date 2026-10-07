@@ -29,6 +29,28 @@ func openLog(t *testing.T, capacity int) (*Log, *store.Store, string) {
 	return log, s, path
 }
 
+func TestSnapshotCompactsCatalogWithoutChangingDurableOrDeltaHistory(t *testing.T) {
+	log, _, _ := openLog(t, 16)
+	for _, kind := range []string{"available_commands", "status", "available_commands", "session_config", "session_config"} {
+		payload, _ := json.Marshal(map[string]any{"kind": kind})
+		if _, err := log.Append(Event{Kind: kind, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := log.ReplaySince(0)
+	if err != nil || seqs(snapshot.Events) != "2,3,5" {
+		t.Fatalf("snapshot=%v err=%v", seqs(snapshot.Events), err)
+	}
+	history, err := log.FullHistory()
+	if err != nil || len(history) != 5 {
+		t.Fatalf("durable history count=%d err=%v", len(history), err)
+	}
+	delta, err := log.ReplaySince(1)
+	if err != nil || seqs(delta.Events) != "2,3,4,5" {
+		t.Fatalf("delta=%v err=%v", seqs(delta.Events), err)
+	}
+}
+
 func message(t *testing.T, text string) Event {
 	t.Helper()
 	event, err := ParseNormalized([]byte(`{"kind":"message_chunk","text":` + string(mustJSON(t, text)) + `}`))
