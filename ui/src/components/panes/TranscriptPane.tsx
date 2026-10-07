@@ -856,16 +856,20 @@ export function TranscriptPane() {
         canRenderAudio={it.kind === 'message' && !(agent.status === 'working' && it.key === lastMessageItem?.key)}
         cachedAudio={it.kind === 'message' && (agent.audioReadySeqs.includes(it.seq) || (agent.audioState === 'ready' && agent.audioSeq === it.seq))}
         renderingAudio={it.kind === 'message' && agent.audioState === 'rendering' && agent.audioSeq === it.seq}
+        subagentActivity={it.kind === 'tool' && node.children.length > 0 ? (
+          <div className="subagent-children" role="group" aria-label="Sub-agent activity">
+            <div className="subagent-label" aria-hidden="true">Sub-agent activity</div>
+            {node.children.map(renderTranscriptNode)}
+          </div>
+        ) : undefined}
       />
     );
     if (node.children.length === 0 || it.kind !== 'tool') return <div key={`${agent.id}:${it.key}`} className="transcript-node">{row}</div>;
+    // The delegate's own calls live inside its tool card's collapsible body, so
+    // collapsing the spawning call folds its whole sub-agent run away.
     return (
       <section key={`${agent.id}:${it.key}`} className="transcript-node subagent-group" aria-label={`Delegated activity for ${it.title}`} data-parent-tool-id={it.id}>
         {row}
-        <div className="subagent-children" role="group" aria-label="Sub-agent activity">
-          <div className="subagent-label" aria-hidden="true">Sub-agent activity</div>
-          {node.children.map(renderTranscriptNode)}
-        </div>
       </section>
     );
   };
@@ -1111,6 +1115,7 @@ function Row({
   onJumpToLinkedBlock,
   onOpenPeer,
   onFork,
+  subagentActivity,
 }: {
   item: Item;
   entering: boolean;
@@ -1129,6 +1134,8 @@ function Row({
   // forks after this message's turn; with blocks it forks before the message
   // and sends them in its place.
   onFork?: (edit?: PromptBlock[]) => Promise<AckResult>;
+  // Rendered transcript nodes attributed to this tool call's sub-agent.
+  subagentActivity?: React.ReactNode;
 }) {
   const sourceRef = useRef<HTMLElement>(null);
   const [userMenu, setUserMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1239,7 +1246,7 @@ function Row({
         </details>
       );
     case 'tool':
-      return <ToolCard item={item} enterClass={enterClass} />;
+      return <ToolCard item={item} enterClass={enterClass} subagentActivity={subagentActivity} />;
     case 'compaction':
       return <CompactionCard item={item} enterClass={enterClass} />;
     case 'plan':
@@ -1569,7 +1576,15 @@ function terminalOutput(text: string): string {
   return withoutOpeningFence.replace(/\r?\n```[ \t]*$/, '');
 }
 
-function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string }) {
+// A tool call spawns a sub-agent when output is attributed to it, or — before
+// any arrives — when its input names a subagent type (Claude's Agent/Task tool).
+function isSubagentTool(item: Extract<Item, { kind: 'tool' }>, hasActivity: boolean): boolean {
+  if (hasActivity) return true;
+  const input = item.rawInput;
+  return input != null && typeof input === 'object' && typeof (input as Record<string, unknown>).subagent_type === 'string';
+}
+
+function ToolCard({ item, enterClass, subagentActivity }: { item: Extract<Item, { kind: 'tool' }>; enterClass: string; subagentActivity?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   // Keep the body mounted slightly beyond its 225ms collapse keyframe so the
   // final frame has time to paint before React removes it.
@@ -1593,14 +1608,16 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
   // params aren't a `command` string, say a script body), the args are the only
   // place the executed code appears, so they must stay visible.
   const showArgs = args != null && !(isExecute && command?.fromInput);
-  const hasBody = body != null || showArgs || images.length > 0 || diffs.length > 0 || command != null;
+  const subagent = isSubagentTool(item, subagentActivity != null);
+  const hasBody = body != null || showArgs || images.length > 0 || diffs.length > 0 || command != null || subagentActivity != null;
   useEffect(() => {
     if (images.length > 0) setOpen(true);
   }, [images.length]);
   return (
-    <div className={`card${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
+    <div className={`card${subagent ? ' subagent-card' : ''}${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
       <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
+        {subagent && <span className="subagent-icon" role="img" aria-label="Sub-agent">🤖</span>}
         {command != null ? (
           <span className="title tool-cmd-title">
             <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
@@ -1642,9 +1659,11 @@ function ToolCard({ item, enterClass }: { item: Extract<Item, { kind: 'tool' }>;
                 </div>
               )}
               {diffs.map((diff, index) => <UnifiedDiff key={`${diff.path}-${index}`} patch={toolDiffPatch(diff)} />)}
+              {subagentActivity}
               {body != null && <ToolText label="Output" className="tool-output">{body}</ToolText>}
             </>
           )}
+          {command != null && subagentActivity}
           {images.map((image, index) => <ToolResultImage key={`${'assetId' in image ? image.assetId : index}-${index}`} image={image} />)}
             </div>
           </div>

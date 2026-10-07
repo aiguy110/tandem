@@ -145,6 +145,11 @@ describe('TranscriptPane sub-agent groups', () => {
 
     const view = render(<TranscriptPane />);
     const group = view.getByRole('region', { name: 'Delegated activity for Explore authentication' });
+    expect(within(group).getByRole('img', { name: 'Sub-agent' })).toBeTruthy();
+    // Delegated activity stays folded inside the spawning card until it is opened.
+    expect(within(group).queryByRole('group', { name: 'Sub-agent activity' })).toBeNull();
+    expect(view.queryByText('Child finding.')).toBeNull();
+    fireEvent.click(within(group).getByText('Explore authentication'));
     const children = within(group).getByRole('group', { name: 'Sub-agent activity' });
     expect(within(children).getByText('Child finding.')).toBeTruthy();
     expect(within(children).getByText('Read auth.go')).toBeTruthy();
@@ -167,8 +172,25 @@ describe('TranscriptPane sub-agent groups', () => {
 
     const view = render(<TranscriptPane />);
     const outer = view.getByRole('region', { name: 'Delegated activity for Primary delegate' });
+    fireEvent.click(within(outer).getByText('Primary delegate'));
+    fireEvent.click(within(outer).getByText('Nested delegate'));
     const nested = within(outer).getByRole('region', { name: 'Delegated activity for Nested delegate' });
     expect(within(nested).getByText('Nested result.')).toBeTruthy();
+  });
+
+  it('marks an Agent tool call as a sub-agent before any delegated output arrives', () => {
+    const delegated = agent();
+    delegated.events = [
+      { seq: 1, event: { kind: 'tool_call', id: 'task-1', title: 'Review PR', status: 'running', rawInput: { subagent_type: 'general-purpose', prompt: 'Review it' } } },
+      { seq: 2, event: { kind: 'tool_call', id: 'read-1', title: 'Read file', status: 'done' } },
+    ];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': delegated }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getAllByRole('img', { name: 'Sub-agent' })).toHaveLength(1);
   });
 
   it('leaves output with an unknown parent visible at the transcript root', () => {

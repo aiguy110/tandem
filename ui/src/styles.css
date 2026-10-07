@@ -459,19 +459,22 @@ body.dock-resizing .app { transition: none; }
 .transcript > * { flex-shrink: 0; }
 .transcript-node { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
 .subagent-group { max-width: 900px; }
+.subagent-icon { line-height: 1; }
+/* Delegated rows render inside the spawning card's body; undo its mono/pre-wrap
+   tool-output styling so they look like ordinary transcript rows. */
 .subagent-children {
   display: flex; min-width: 0; flex-direction: column; gap: 10px;
-  margin-left: 14px; padding: 8px 0 2px 14px;
+  margin: 10px 0; padding: 8px 0 2px 14px;
   border-left: 2px solid color-mix(in srgb, var(--agent) 38%, var(--border));
+  font-family: var(--font-ui); font-size: var(--fs-base); color: var(--text); white-space: normal;
 }
+.subagent-children:last-child { margin-bottom: 0; }
 .subagent-label {
   color: var(--text-faint); font: 600 var(--fs-xs)/1 var(--font-mono);
   letter-spacing: .04em; text-transform: uppercase;
 }
-.subagent-children .subagent-children { margin-left: 8px; }
 @media (max-width: 560px) {
-  .subagent-children { margin-left: 4px; padding-left: 10px; }
-  .subagent-children .subagent-children { margin-left: 2px; }
+  .subagent-children { padding-left: 10px; }
 }
 .aside-card { margin: 2px 22px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--agent) 42%, var(--border)); border-left: 3px solid var(--agent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--agent) 6%, var(--surface-2)); }
 .aside-label { margin-bottom: 8px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
