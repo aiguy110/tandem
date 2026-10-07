@@ -8,12 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"os/exec"
 	"reflect"
 	"sync"
+	"time"
 )
 
 const jsonRPCVersion = "2.0"
+
+// stdoutDrainTimeout bounds how long reap waits, after the child exits, for the
+// reader to reach EOF. A grandchild that inherited stdout can hold the pipe
+// open indefinitely; past this point the pipe is closed to unblock the reader.
+var stdoutDrainTimeout = 5 * time.Second
 
 // Config describes an ACP-speaking child process. Stderr is copied verbatim to
 // Stderr; it is never mixed into the newline-delimited protocol stream.
@@ -76,6 +84,7 @@ type Transport struct {
 	in       io.WriteCloser
 	done     chan struct{}
 	readDone chan struct{}
+	stdout   *os.File
 	wait     error
 
 	requests      chan Request
@@ -107,18 +116,25 @@ func Start(ctx context.Context, cfg Config) (*Transport, error) {
 		cancel()
 		return nil, fmt.Errorf("acp stdin: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	// Not cmd.StdoutPipe: Wait closes that pipe as soon as the child exits,
+	// which can discard the child's final response before read consumes it.
+	stdout, stdoutW, err := os.Pipe()
 	if err != nil {
 		cancel()
+		_ = stdin.Close()
 		return nil, fmt.Errorf("acp stdout: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	cmd.Stdout = stdoutW
+	err = cmd.Start()
+	_ = stdoutW.Close()
+	if err != nil {
 		cancel()
+		_ = stdout.Close()
 		return nil, fmt.Errorf("acp start: %w", err)
 	}
 
 	t := &Transport{
-		cmd: cmd, in: stdin, done: make(chan struct{}), readDone: make(chan struct{}), requests: make(chan Request, 16),
+		cmd: cmd, in: stdin, stdout: stdout, done: make(chan struct{}), readDone: make(chan struct{}), requests: make(chan Request, 16),
 		notifications: make(chan Notification, 32), errors: make(chan error, 16),
 		pending: make(map[string]chan response), stop: cancel,
 	}
@@ -328,7 +344,14 @@ func (t *Transport) report(err error) {
 
 func (t *Transport) reap() {
 	err := t.cmd.Wait()
-	<-t.readDone
+	select {
+	case <-t.readDone:
+	case <-time.After(stdoutDrainTimeout):
+		slog.Warn("acp: stdout still open after child exit; closing it", "pid", t.cmd.Process.Pid, "timeout", stdoutDrainTimeout)
+		_ = t.stdout.Close()
+		<-t.readDone
+	}
+	_ = t.stdout.Close()
 	t.once.Do(func() {
 		t.mu.Lock()
 		t.wait = err
