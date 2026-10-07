@@ -23,10 +23,15 @@ const SEVERITY_LABEL: Record<NotifSeverity, string> = {
   failure: 'Turn failed',
 };
 
+
+// System notifications raised by the daemon's MCP sign-in service.
+const MCP_AUTH_PREFIX = 'mcp-auth:';
+
 // Right rail — the conductor's inbox for completed turns, approvals, and browser
 // requests across every agent. Clicking a completed-turn card marks it read.
 export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
 	const [pendingSystemAction, setPendingSystemAction] = useState<string | null>(null);
+  const [systemActionError, setSystemActionError] = useState<{ id: string; message: string } | null>(null);
   const [secretEntry, setSecretEntry] = useState<{ sessionId: string; request: SecretRequest } | null>(null);
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
@@ -43,6 +48,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
   const summary = useStore(notificationsSummary);
   const actOnSystemNotification = useStore((s) => s.actOnSystemNotification);
+  const authorizeMcpServer = useStore((s) => s.authorizeMcpServer);
 
   const total = summary.total;
   // The panel badge takes the color of its highest-severity item (red > yellow
@@ -88,22 +94,40 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           {notification.message && <div className="notification-message">{notification.message}</div>}
           {!!notification.actions?.length && (
             <div className="acts">
-              {notification.actions.map((action) => (
-                <button
-                  key={action.id}
-                  className={action.primary ? 'btn-approve' : 'btn-deny'}
-                  disabled={pendingSystemAction === `${notification.id}:${action.id}`}
-                  onClick={() => {
-                    const key = `${notification.id}:${action.id}`;
-                    setPendingSystemAction(key);
-                    void actOnSystemNotification(notification.id, action.id).finally(() => setPendingSystemAction(null));
-                  }}
-                >
-                  {pendingSystemAction === `${notification.id}:${action.id}` ? 'Working…' : action.label}
-                </button>
-              ))}
+              {notification.actions.map((action) => {
+                // MCP sign-in opens the provider's page in a new tab, which
+                // must happen inside this click; the daemon only supplies
+                // the URL. A relayed one would return to that host's own
+                // daemon, which this browser may not reach.
+                const mcpAuthorize = action.id === 'authorize' && notification.id.startsWith(MCP_AUTH_PREFIX);
+                const remoteMcpAuthorize = mcpAuthorize && !!notification.hostId;
+                return (
+                  <button
+                    key={action.id}
+                    className={action.primary ? 'btn-approve' : 'btn-deny'}
+                    disabled={pendingSystemAction === `${notification.id}:${action.id}` || remoteMcpAuthorize}
+                    title={remoteMcpAuthorize ? `Authorize from ${notification.hostName || notification.hostId}'s own Tandem UI` : undefined}
+                    onClick={() => {
+                      const key = `${notification.id}:${action.id}`;
+                      setPendingSystemAction(key);
+                      setSystemActionError(null);
+                      const work = mcpAuthorize
+                        ? authorizeMcpServer(notification.id.slice(MCP_AUTH_PREFIX.length))
+                        : actOnSystemNotification(notification.id, action.id).then((result) => {
+                            if (result.error) throw new Error(result.error);
+                          });
+                      void work
+                        .catch((err) => setSystemActionError({ id: notification.id, message: err instanceof Error ? err.message : String(err) }))
+                        .finally(() => setPendingSystemAction(null));
+                    }}
+                  >
+                    {pendingSystemAction === `${notification.id}:${action.id}` ? 'Working…' : action.label}
+                  </button>
+                );
+              })}
             </div>
           )}
+          {systemActionError?.id === notification.id && <div className="notification-message notification-error">{systemActionError.message}</div>}
         </div>
       ))}
       {notifications.map(({ sessionId, notification }) => (

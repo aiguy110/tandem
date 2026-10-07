@@ -33,6 +33,7 @@ import type {
   ClientMsg,
   GitRefInfo,
   ManagedAdapter,
+  McpServerStatus,
   FederationHost,
   Profile,
   RepoInfo,
@@ -252,7 +253,7 @@ export interface DraftAttachment {
   error?: string;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'appearance';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'mcp' | 'appearance';
 
 export interface AckResult {
   sessionId?: string;
@@ -336,6 +337,8 @@ interface StoreState {
   approvalsRailCollapsed: boolean;
   // Daemon-owned operational notifications, including self-update actions.
   systemNotifications: SystemNotification[];
+  // HTTP MCP servers' sign-in states; null until first listed.
+  mcpServers: McpServerStatus[] | null;
   // Agent messaging, both daemon-owned: inbound links per agent (keyed by rail
   // session ID, hydrated by list_agent_links and agent_links broadcasts) and
   // each host's kill-switch flag (keyed by host ID; absent = not yet known).
@@ -386,6 +389,12 @@ interface StoreState {
   actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
   listAgentDistributions: () => Promise<ManagedAdapter[]>;
   installAgentDistribution: (agent: string, version: string) => Promise<void>;
+  listMcpServers: () => Promise<McpServerStatus[]>;
+  // Must be called from the click handler: it opens the sign-in tab before
+  // the daemon round trip so popup blockers allow it.
+  authorizeMcpServer: (key: string) => Promise<void>;
+  signOutMcpServer: (key: string) => Promise<void>;
+  recheckMcpServer: (key: string) => Promise<void>;
   getSpawnOptions: (agent: string, cwd: string, harness?: string, hostId?: string) => Promise<SpawnOptions>;
   listGitRefs: (repo: string, hostId?: string) => Promise<GitRefInfo[]>;
   listWorkspaceEntries: (sessionId: string, path: string) => Promise<WorkspaceEntry[]>;
@@ -507,6 +516,8 @@ const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; re
 const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
 const pendingAutomation = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 const pendingAgentDistributions = new Map<string, { resolve: (adapters: ManagedAdapter[]) => void; reject: (error: Error) => void }>();
+const pendingMcpServers = new Map<string, { resolve: (servers: McpServerStatus[]) => void; reject: (error: Error) => void }>();
+const pendingMcpAuth = new Map<string, { resolve: (url: string) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -822,6 +833,24 @@ export const useStore = create<StoreState>((set, get) => {
       case 'system_notifications':
         set({ systemNotifications: msg.notifications });
         return;
+      case 'mcp_servers': {
+        const pending = msg.corrId ? pendingMcpServers.get(msg.corrId) : undefined;
+        if (msg.corrId) pendingMcpServers.delete(msg.corrId);
+        if (msg.servers) set({ mcpServers: msg.servers });
+        if (pending) {
+          if (msg.error) pending.reject(new Error(msg.error));
+          else pending.resolve(msg.servers ?? []);
+        }
+        return;
+      }
+      case 'mcp_auth_url': {
+        const pending = msg.corrId ? pendingMcpAuth.get(msg.corrId) : undefined;
+        if (!pending || !msg.corrId) return;
+        pendingMcpAuth.delete(msg.corrId);
+        if (msg.error || !msg.url) pending.reject(new Error(msg.error ?? 'no authorization URL'));
+        else pending.resolve(msg.url);
+        return;
+      }
       case 'agent_distributions': {
         const pending = msg.corrId ? pendingAgentDistributions.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -1297,6 +1326,7 @@ export const useStore = create<StoreState>((set, get) => {
 	sessionsRailCollapsed: isNarrowViewport(),
     approvalsRailCollapsed: isNarrowViewport(),
     systemNotifications: [],
+    mcpServers: null,
     agentLinks: {},
     messagingPausedByHost: {},
 
@@ -1643,6 +1673,46 @@ export const useStore = create<StoreState>((set, get) => {
     }),
     installAgentDistribution: (agent,version) => new Promise<void>((resolve,reject) => {
       const corrId=nextCorr();pendingAcks.set(corrId,(result)=>result.error?reject(new Error(result.error)):resolve());client.send({t:'install_agent_distribution',agent,version,corrId});
+    }),
+    listMcpServers: () => new Promise<McpServerStatus[]>((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingMcpServers.set(corrId, { resolve, reject });
+      client.send({ t: 'list_mcp_servers', corrId });
+    }),
+    authorizeMcpServer: (key) => {
+      // The sign-in URL needs a daemon round trip (OAuth discovery, client
+      // registration). Opening the tab first, inside the user's click, keeps
+      // popup blockers from swallowing it; it is pointed at the URL once known.
+      const tab = window.open('', '_blank');
+      if (!tab) return Promise.reject(new Error('The browser blocked the sign-in tab. Allow pop-ups for Tandem and try again.'));
+      // The tab hosts a third-party sign-in page; cut its handle back to Tandem.
+      tab.opener = null;
+      tab.document.title = 'Signing in…';
+      tab.document.body.textContent = 'Contacting the MCP server…';
+      return new Promise<void>((resolve, reject) => {
+        const corrId = nextCorr();
+        pendingMcpAuth.set(corrId, {
+          resolve: (url) => {
+            tab.location.href = url;
+            resolve();
+          },
+          reject: (error) => {
+            tab.close();
+            reject(error);
+          },
+        });
+        client.send({ t: 'begin_mcp_auth', id: key, origin: window.location.origin, corrId });
+      });
+    },
+    signOutMcpServer: (key) => new Promise<void>((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingAcks.set(corrId, (result) => (result.error ? reject(new Error(result.error)) : resolve()));
+      client.send({ t: 'sign_out_mcp_server', id: key, corrId });
+    }),
+    recheckMcpServer: (key) => new Promise<void>((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingAcks.set(corrId, (result) => (result.error ? reject(new Error(result.error)) : resolve()));
+      client.send({ t: 'recheck_mcp_server', id: key, corrId });
     }),
     getSpawnOptions: (agent, cwd, harness, hostId) =>
       new Promise<SpawnOptions>((resolve, reject) => {

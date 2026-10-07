@@ -223,6 +223,9 @@ flagsDone:
 		return 1
 	}
 	fmt.Fprintf(stdout, "added MCP server %q to %s; new Tandem agent sessions will use it immediately\n", args[0], path)
+	if server.Type == "http" && !project {
+		fmt.Fprintln(stdout, "if it requires sign-in, the Tandem UI will show an Authorize notification within a few seconds")
+	}
 	return 0
 }
 

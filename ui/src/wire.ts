@@ -153,6 +153,9 @@ export type SessionEvent =
   | { kind: 'permission_request'; reqId: string; toolCallId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'status'; status: SessionStatus }
   | { kind: 'error'; message: string }
+  // An HTTP MCP server was withheld from this session because it needs a
+  // sign-in Tandem does not hold yet (docs/mcp-auth.md).
+  | { kind: 'mcp_auth_required'; server: string; serverKey: string }
   | { kind: 'takeover_request'; reqId: string; reason: string }
   | { kind: 'takeover_resolved'; reqId: string }
   | { kind: 'secret_request'; requestId: string; service: string; reason: string; usage?: 'http' | 'file'; origin: string; path?: string; headerName: string }
@@ -572,6 +575,10 @@ export type ClientMsg =
   | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
   | { t: 'list_agent_distributions'; corrId?: string }
   | { t: 'install_agent_distribution'; agent: string; version: string; corrId?: string }
+  | { t: 'list_mcp_servers'; corrId?: string }
+  | { t: 'begin_mcp_auth'; id: string; origin: string; corrId?: string }
+  | { t: 'sign_out_mcp_server'; id: string; corrId?: string }
+  | { t: 'recheck_mcp_server'; id: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
   | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; hostId?: string; corrId?: string }
@@ -654,6 +661,8 @@ export type ServerMsg =
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
+  | { t: 'mcp_servers'; corrId?: string; servers?: McpServerStatus[]; error?: string }
+  | { t: 'mcp_auth_url'; corrId?: string; url?: string; error?: string }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; refreshing?: boolean; hostId?: string }
   | { t: 'workspace_entries'; corrId?: string; entries?: WorkspaceEntry[]; error?: string }
   | { t: 'git_refs'; corrId?: string; refs?: GitRefInfo[]; error?: string; hostId?: string }
@@ -670,6 +679,22 @@ export type ServerMsg =
   // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
   | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
   | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };
+
+// An HTTP MCP server's sign-in state, held by the daemon (docs/mcp-auth.md).
+export type McpServerState = 'checking' | 'open' | 'needs_auth' | 'authorized' | 'static' | 'error';
+
+export interface McpServerStatus {
+  key: string;
+  name: string;
+  url: string;
+  state: McpServerState;
+  error?: string;
+  scope?: string;
+  authorizedAt?: string;
+  expiresAt?: string;
+  refreshable?: boolean;
+  configured: boolean;
+}
 
 export interface ManagedAdapter {
   agent: string;

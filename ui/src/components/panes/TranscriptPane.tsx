@@ -36,10 +36,50 @@ type Item =
   | { kind: 'terminal'; key: string; termId: string; text: string; truncated: boolean }
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
+  | { kind: 'mcp-auth'; key: string; server: string; serverKey: string }
   | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
   | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
+
+// A session started while an HTTP MCP server awaited sign-in has none of its
+// tools. Say so where the user is looking, with Tandem's own Authorize action
+// instead of the harness's "/mcp" advice, which does not apply under Tandem.
+function McpAuthNotice({ server, serverKey }: { server: string; serverKey: string }) {
+  const servers = useStore((s) => s.mcpServers);
+  const listMcpServers = useStore((s) => s.listMcpServers);
+  const authorize = useStore((s) => s.authorizeMcpServer);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (servers === null) void listMcpServers().catch(() => undefined);
+  }, [servers, listMcpServers]);
+  const authorized = servers?.find((row) => row.key === serverKey)?.state === 'authorized';
+  return (
+    <div className="mcp-auth-banner">
+      <span>
+        {authorized
+          ? <>The <b>{server}</b> MCP server is now authorized. Restart this session's harness to give it access.</>
+          : <>This session has no <b>{server}</b> tools: the MCP server needs sign-in.{error && <> {error}</>}</>}
+      </span>
+      {!authorized && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(null);
+            authorize(serverKey)
+              .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {busy ? 'Opening…' : 'Authorize'}
+        </button>
+      )}
+    </div>
+  );
+}
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
   const items: Item[] = [];
   const tools = new Map<string, Extract<Item, { kind: 'tool' }>>();
@@ -51,6 +91,7 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
   const compactions = new Map<string, Extract<Item, { kind: 'compaction' }>>();
   const rateLimits = new Map<string, Extract<Item, { kind: 'rate-limit' }>>();
   const agentMessages = new Map<string, Extract<Item, { kind: 'agent-message' }>>();
+  const mcpNotices = new Set<string>();
 
   for (const { seq, event: ev } of events) {
     switch (ev.kind) {
@@ -187,6 +228,14 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         break;
       case 'error':
         items.push({ kind: 'error', key: `err${seq}`, message: ev.message });
+        break;
+      case 'mcp_auth_required':
+        // Every harness (re)start repeats the notice while the server is
+        // unauthorized; one per server says it.
+        if (!mcpNotices.has(ev.serverKey)) {
+          mcpNotices.add(ev.serverKey);
+          items.push({ kind: 'mcp-auth', key: `mcp${seq}`, server: ev.server, serverKey: ev.serverKey });
+        }
         break;
       case 'rate_limit': {
         const existing = rateLimits.get(ev.id);
@@ -1276,6 +1325,8 @@ function Row({
       );
     case 'error':
       return <div className="err-banner">⛔ {item.message}</div>;
+    case 'mcp-auth':
+      return <McpAuthNotice server={item.server} serverKey={item.serverKey} />;
     case 'agent-message':
       return <AgentMessageCard item={item} enterClass={enterClass} onOpenPeer={onOpenPeer} />;
     case 'rate-limit':

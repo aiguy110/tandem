@@ -70,6 +70,8 @@ The first command is global; the second writes in the current repository.
 Project entries override global entries of the same name. The running daemon
 reads this configuration when starting each new ACP agent, so no daemon restart
 is needed for an added server to appear in newly spawned sessions. Existing
-agent sessions retain their original declarations. Do not add or change MCP
+agent sessions retain their original declarations. An HTTP server that requires
+OAuth sign-in is detected automatically and raises an **Authorize** notification
+in the Tandem UI; see `docs/mcp-auth.md`. Do not add or change MCP
 servers unless the user asks; this migration is primarily to make the new
 surface discoverable.

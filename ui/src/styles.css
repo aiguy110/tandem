@@ -983,6 +983,7 @@ body.dock-resizing .app { transition: none; }
 .appr.notification.sev-attention { border-color: var(--warn); background: var(--warn-soft); }
 .appr.notification.sev-failure { border-color: var(--err); background: var(--err-soft); }
 .appr.system-notification .notification-message { margin-top: 5px; color: var(--muted); font-size: calc(12px * var(--ui-scale)); line-height: 1.35; }
+.appr.system-notification .notification-error { color: var(--err); }
 .appr.system-notification .acts { margin-top: 9px; }
 .appr .who { font-weight: 600; font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .appr .what { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 8px; word-break: break-word; }
@@ -1122,6 +1123,18 @@ body.dock-resizing .app { transition: none; }
 /* Updates are offered optimistically, so a version can sit outside the range
    Tandem is tested against. Mark it rather than hide it. */
 .adapter-untested { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
+/* MCP server sign-in rows (McpServersModal). */
+.mcp-name { text-transform: none !important; }
+.mcp-state { padding: 1px 6px; border-radius: 999px; font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; border: 1px dashed var(--border-strong); color: var(--text-faint); }
+.mcp-state-authorized, .mcp-state-open, .mcp-state-static { border: 0; background: var(--ok-soft); color: var(--ok); }
+.mcp-state-needs_auth { border: 0; background: var(--warn-soft); color: var(--warn); }
+.mcp-state-error { border: 0; background: var(--err-soft); color: var(--err); }
+.mcp-row.mcp-needs_auth { border-left: 2px solid var(--warn); }
+.mcp-error { color: var(--err); }
+.mcp-auth-banner { display: flex; align-items: center; gap: 12px; border: 1px solid var(--warn); background: var(--warn-soft); color: var(--text); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-sm); }
+.mcp-auth-banner span { flex: 1; }
+.mcp-auth-banner button { padding: 4px 10px; border: 1px solid var(--warn); border-radius: var(--r-sm); background: transparent; color: var(--warn); font-size: var(--fs-xs); }
+.mcp-auth-banner button:disabled { opacity: .5; cursor: default; }
 .automation-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .automation-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .automation-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }

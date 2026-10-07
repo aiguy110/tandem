@@ -27,8 +27,10 @@ func StartMCPToolSession(ctx context.Context, servers []browser.MCPServer, cwd s
 		if !ok || server == "" {
 			return nil, fmt.Errorf("automation tool %q must be qualified as server.tool", qualified)
 		}
-		if _, exists := byName[server]; !exists {
+		if definition, exists := byName[server]; !exists {
 			return nil, fmt.Errorf("MCP server %q is unavailable", server)
+		} else if definition.AuthRequired {
+			return nil, fmt.Errorf("MCP server %q needs sign-in; authorize it from Tandem's Notifications or MCP servers panel", server)
 		}
 		wantedServers[server], allowed[qualified] = true, true
 	}

@@ -106,6 +106,17 @@ type MCPServer struct {
 	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty"`
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	// OAuth optionally pins the OAuth client Tandem uses when an HTTP server
+	// requires authorization and its authorization server does not support
+	// dynamic client registration. See docs/mcp-auth.md.
+	OAuth *MCPOAuth `yaml:"oauth,omitempty" json:"oauth,omitempty"`
+}
+
+// MCPOAuth is a pre-registered OAuth client for an HTTP MCP server.
+type MCPOAuth struct {
+	ClientID     string   `yaml:"clientId,omitempty" json:"clientId,omitempty"`
+	ClientSecret string   `yaml:"clientSecret,omitempty" json:"clientSecret,omitempty"`
+	Scopes       []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
 }
 
 type Config struct {

@@ -35,6 +35,7 @@ import (
 	"github.com/aiguy110/tandem/internal/homebase"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/languagemodel"
+	"github.com/aiguy110/tandem/internal/mcpauth"
 	"github.com/aiguy110/tandem/internal/messaging"
 	"github.com/aiguy110/tandem/internal/notifications"
 	"github.com/aiguy110/tandem/internal/registry"
@@ -197,8 +198,24 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return exeErr
 	}
 	wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
+	// wsHandler is set once the browser handler exists; services created
+	// before it broadcast through it.
+	var wsHandler atomic.Pointer[wsserver.Handler]
+	notificationCenter := notifications.New()
+	mcpAuth, err := mcpauth.New(mcpauth.Options{
+		Home: cfg.Home, Token: token, ProxyOrigin: origin, Center: notificationCenter,
+		Servers: func() (map[string]config.MCPServer, error) { return config.LoadMCPServers(cfg.Home, "") },
+		OnChange: func() {
+			if h := wsHandler.Load(); h != nil {
+				h.BroadcastMCPServers()
+			}
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("configure MCP authorization: %w", err)
+	}
 	factory = registry.DefaultFactory{Assets: assetStore, Config: cfg, MCPServers: func(id, cwd string) ([]browser.MCPServer, error) {
-		return configuredMCPServers(wiring, cfg.Home, id, cwd)
+		return configuredMCPServers(wiring, mcpAuth, cfg.Home, id, cwd)
 	}}
 	audioCache := newMessageAudioCache(ctx, db, voiceRenderer)
 	agents, err = registry.New(registry.Options{Store: db, Config: cfg, Assets: assetStore, Factory: factory, Browser: broker,
@@ -255,7 +272,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			}
 			broker.SeedSnapshot(runID, selected.Kind, selected.Ref)
 		}
-		servers, serversErr := configuredMCPServers(wiring, cfg.Home, runID, repoRoot)
+		servers, serversErr := configuredMCPServers(wiring, mcpAuth, cfg.Home, runID, repoRoot)
 		if serversErr != nil {
 			return nil, serversErr
 		}
@@ -298,7 +315,6 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		_ = agents.DisposeAll(disposeCtx)
 	}()
 	deferred := newDeferredShutdown(ctx, token, agents)
-	notificationCenter := notifications.New()
 	loopback, err := federation.NewLoopbackLocal(origin, token)
 	if err != nil {
 		return fmt.Errorf("configure federation loopback: %w", err)
@@ -334,8 +350,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}
 	// Agent messaging reads the registry and federation, and the registry
 	// reports back to it (summaries, session close), so the two are joined
-	// here. wsHandler is set once the browser handler exists.
-	var wsHandler atomic.Pointer[wsserver.Handler]
+	// here.
 	messagingService, err := messaging.New(messaging.Options{
 		Store: db, Sessions: agents, Federation: federationService, LocalName: federationName, Token: token,
 		OnSummaryChange: func() {
@@ -425,6 +440,14 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			messagingService.ServeHTTP(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, mcpauth.ProxyPrefix) {
+			mcpAuth.ServeProxy(w, r)
+			return
+		}
+		if r.URL.Path == mcpauth.CallbackPath {
+			mcpAuth.ServeCallback(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/internal/automation/run", "/internal/automation/evaluate", "/internal/automation/preapprove":
 			automationService.ServeHTTP(w, r)
@@ -488,9 +511,12 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		if strings.HasPrefix(id, agentupdates.Prefix) {
 			return agentUpdateService.HandleAction(actionCtx, id, action)
 		}
+		if strings.HasPrefix(id, mcpauth.NotificationPrefix) {
+			return mcpAuth.HandleAction(actionCtx, id, action)
+		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a
@@ -544,6 +570,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}()
 	updateService.Start(ctx)
 	agentUpdateService.Start(ctx)
+	mcpAuth.Start(ctx)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -593,7 +620,11 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 // project-local server configuration. This is intentionally evaluated per
 // session creation, so changes made by `tandem mcp add` are available to new
 // agents immediately without restarting the daemon.
-func configuredMCPServers(wiring browser.MCPWiring, home, sessionID, cwd string) ([]browser.MCPServer, error) {
+//
+// HTTP servers pass through mcpAuth: one Tandem holds an OAuth authorization
+// for is rewritten to the daemon's authenticating proxy, and one that needs
+// sign-in Tandem lacks is marked AuthRequired so callers withhold it.
+func configuredMCPServers(wiring browser.MCPWiring, mcpAuth *mcpauth.Service, home, sessionID, cwd string) ([]browser.MCPServer, error) {
 	servers := browser.BuildMCPServers(wiring, sessionID, cwd)
 	used := make(map[string]bool, len(servers))
 	for _, server := range servers {
@@ -613,6 +644,12 @@ func configuredMCPServers(wiring browser.MCPWiring, home, sessionID, cwd string)
 			return nil, fmt.Errorf("mcp server %q conflicts with a Tandem-provided server", name)
 		}
 		definition := configured[name]
+		authRequired, authKey := false, ""
+		if mcpAuth != nil {
+			resolved := mcpAuth.Resolve(context.Background(), name, definition, sessionID)
+			definition.URL, definition.Headers = resolved.URL, resolved.Headers
+			authRequired, authKey = resolved.AuthRequired, resolved.Key
+		}
 		keys := make([]string, 0, len(definition.Env))
 		for key := range definition.Env {
 			keys = append(keys, key)
@@ -631,7 +668,7 @@ func configuredMCPServers(wiring browser.MCPWiring, home, sessionID, cwd string)
 		for _, key := range headerKeys {
 			headers = append(headers, browser.MCPEnvVariable{Name: key, Value: definition.Headers[key]})
 		}
-		servers = append(servers, browser.MCPServer{Name: name, Type: definition.Type, Command: definition.Command, Args: definition.Args, Env: env, URL: definition.URL, Headers: headers})
+		servers = append(servers, browser.MCPServer{Name: name, Type: definition.Type, Command: definition.Command, Args: definition.Args, Env: env, URL: definition.URL, Headers: headers, AuthRequired: authRequired, AuthKey: authKey})
 		used[name] = true
 	}
 	return servers, nil

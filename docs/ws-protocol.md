@@ -279,6 +279,10 @@ type ClientMsg =
   | { t: 'system_notification_action'; notificationId: string; action: string }
   | { t: 'list_agent_distributions' }
   | { t: 'install_agent_distribution'; agent: string; version: string }
+  | { t: 'list_mcp_servers' }                                           // HTTP MCP sign-in states, see docs/mcp-auth.md
+  | { t: 'begin_mcp_auth'; id: string; origin: string }                // id = server key; origin = UI origin for the OAuth callback
+  | { t: 'sign_out_mcp_server'; id: string }
+  | { t: 'recheck_mcp_server'; id: string }
   | { t: 'browser_input'; sessionId: string; event: BrowserInputWire }   // Phase 5: user mouse/key/wheel (owner=user only)
   | { t: 'list_dirs' }                                                  // Phase 2: repo discovery, see below
   | { t: 'list_agents' }                                                // Phase 4: rail discovery, see below
@@ -340,6 +344,8 @@ type ServerMsg =
   | { t: 'agent_catalog'; catalog: AgentCatalog }                       // reply to list_agent_catalog
   | { t: 'system_notifications'; notifications: SystemNotification[] }  // daemon-owned operational notifications
   | { t: 'agent_distributions'; adapters?: ManagedAdapter[]; error?: string }
+  | { t: 'mcp_servers'; servers?: McpServerStatus[]; error?: string }   // reply to list_mcp_servers; also broadcast on every change
+  | { t: 'mcp_auth_url'; url?: string; error?: string }                 // reply to begin_mcp_auth: the provider sign-in page
   | { t: 'dirs';     dirs: RepoInfo[] }                                 // reply to list_dirs
   | { t: 'spawn_options'; options?: SpawnOptions; error?: string }      // reply to get_spawn_options
   | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions
