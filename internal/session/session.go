@@ -80,6 +80,7 @@ type Session struct {
 	rateLimitMu    sync.Mutex
 	rateLimit      rateLimitState
 	rateLimitTimer *time.Timer
+	rateLimitText  string
 }
 
 // usageReport is the daemon's view of a context-usage event: the numbers the
@@ -321,6 +322,11 @@ func (s *Session) durableUsage() usageReport {
 }
 
 func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
+	// Some harnesses return a generic RPC failure while streaming the useful
+	// quota/reset explanation as ordinary assistant text. Observe that text at
+	// the session boundary, where arbitrary ACP chunking has already been
+	// normalized, so detection is not coupled to one adapter's error shape.
+	s.observeRateLimitEvent(ev)
 	if ev.Kind != "raw_pty" {
 		var wire struct {
 			Kind, Status, ReqID, ToolCallID, Title string
