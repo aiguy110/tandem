@@ -23,6 +23,7 @@ func TestHarnessRateLimitParsers(t *testing.T) {
 		want          time.Time
 	}{
 		{"claude", "You've hit your monthly spend limit; your session limit resets 10:20am (America/New_York)", parseClaudeLimit, time.Date(2026, time.September, 30, 10, 20, 0, 0, ny)},
+		{"claude without minutes", "You've hit your monthly spend limit · your session limit resets 11pm (America/New_York)", parseClaudeLimit, time.Date(2026, time.September, 30, 23, 0, 0, 0, ny)},
 		{"codex dated", "You've hit your usage limit. You can use Codex again at Sep 30, 2026 2:03 PM (America/New_York)", parseCodexLimit, time.Date(2026, time.September, 30, 14, 3, 0, 0, ny)},
 		{"duration", "Quota limit reached; try again in 2 hours", parseDurationLimit, now.Add(2 * time.Hour)},
 	}
@@ -36,6 +37,33 @@ func TestHarnessRateLimitParsers(t *testing.T) {
 	}
 	if _, ok := parseClaudeLimit("ordinary failure at 10:20am (America/New_York)", now); ok {
 		t.Fatal("non-limit message matched")
+	}
+}
+
+func TestRestoreRecoversRecentRateLimitWithoutStructuredEvent(t *testing.T) {
+	_, _, db := testSession(t)
+	log, err := eventlog.New("recovered", db, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"kind": "message_chunk",
+		"text": "You've hit your monthly spend limit · your session limit resets 11pm (America/New_York)",
+	})
+	if _, err := log.Append(eventlog.Event{Kind: "message_chunk", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New("recovered", "recovered", agentadapter.Spec{Harness: "claude"}, newFake(), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Dispose(context.Background()) })
+	latest, ok, err := log.LatestOfKind("rate_limit")
+	if err != nil || !ok {
+		t.Fatalf("recovered rate limit: ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(string(latest.Event.Payload), `"state":"pending"`) {
+		t.Fatalf("payload=%s", latest.Event.Payload)
 	}
 }
 
