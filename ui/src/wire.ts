@@ -644,6 +644,8 @@ export interface BrowserInputWire {
   code?: string;
   keyCode?: number;
   autoRepeat?: boolean;
+  /** CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8. */
+  modifiers?: number;
   text?: string;
 }
 

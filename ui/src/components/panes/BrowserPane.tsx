@@ -218,12 +218,20 @@ export function BrowserPane() {
     ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34,
   };
   const keyCode = (e: React.KeyboardEvent) => e.keyCode || VK_CODES[e.key];
+  // CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+  const modifiers = (e: React.KeyboardEvent) =>
+    (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+  // A Ctrl/Cmd chord is a shortcut (select all, copy, …), not typed text;
+  // sending its character would insert it instead. AltGr reports Ctrl+Alt but
+  // does type characters.
+  const typedText = (e: React.KeyboardEvent) =>
+    e.key.length === 1 && (!(e.ctrlKey || e.metaKey) || e.getModifierState('AltGraph')) ? e.key : undefined;
   const emitKeyDown = (e: React.KeyboardEvent) => emit({
     kind: 'keydown', key: e.key, code: e.code, keyCode: keyCode(e),
-    autoRepeat: e.repeat,
-    text: e.key.length === 1 ? e.key : undefined,
+    autoRepeat: e.repeat, modifiers: modifiers(e),
+    text: typedText(e),
   });
-  const emitKeyUp = (e: React.KeyboardEvent) => emit({ kind: 'keyup', key: e.key, code: e.code, keyCode: keyCode(e) });
+  const emitKeyUp = (e: React.KeyboardEvent) => emit({ kind: 'keyup', key: e.key, code: e.code, keyCode: keyCode(e), modifiers: modifiers(e) });
   const emitKeyPress = (key: string, code: string) => {
     const vk = VK_CODES[key];
     emit({ kind: 'keydown', key, code, keyCode: vk });

@@ -256,6 +256,9 @@ func TestSharedBrowserInputMappingNavigationReconnectAndCleanup(t *testing.T) {
 		{Kind: "keydown", Key: "A", Code: "KeyA", KeyCode: 65, AutoRepeat: true, Text: "a"},
 		{Kind: "keyup", Key: "A", Code: "KeyA", KeyCode: 65},
 		{Kind: "text", Text: "hello"},
+		{Kind: "keydown", Key: "Enter", Code: "Enter", KeyCode: 13},
+		{Kind: "keydown", Key: "a", Code: "KeyA", KeyCode: 65, Modifiers: 2},
+		{Kind: "keydown", Key: "a", Code: "KeyA", KeyCode: 65, Modifiers: 4 | 8},
 	}
 	for _, input := range inputs {
 		if err := shared.Dispatch(ctx, input); err != nil {
@@ -270,11 +273,23 @@ func TestSharedBrowserInputMappingNavigationReconnectAndCleanup(t *testing.T) {
 		t.Fatalf("synthetic click release buttons=%v", mouse[4].Params["buttons"])
 	}
 	keys := fake.commandsFor("Input.dispatchKeyEvent")
-	if len(keys) != 2 || keys[0].Params["text"] != "a" || keys[1].Params["type"] != "keyUp" {
+	if len(keys) != 5 || keys[0].Params["text"] != "a" || keys[1].Params["type"] != "keyUp" {
 		t.Fatalf("key mapping=%+v", keys)
 	}
 	if keys[0].Params["autoRepeat"] != true {
 		t.Fatalf("keydown autoRepeat=%v", keys[0].Params["autoRepeat"])
+	}
+	// Enter must carry "\r" or Chromium never submits the form.
+	if keys[2].Params["text"] != "\r" {
+		t.Fatalf("enter text=%q", keys[2].Params["text"])
+	}
+	// Ctrl+A reaches the page as a modified shortcut, not typed text; a macOS
+	// viewer's Cmd is translated to Ctrl for the Linux browser.
+	if keys[3].Params["modifiers"] != float64(2) || keys[3].Params["text"] != nil {
+		t.Fatalf("ctrl+a=%+v", keys[3].Params)
+	}
+	if keys[4].Params["modifiers"] != float64(2|8) {
+		t.Fatalf("cmd+shift+a modifiers=%v", keys[4].Params["modifiers"])
 	}
 	if text := fake.commandsFor("Input.insertText"); len(text) != 1 || text[0].Params["text"] != "hello" {
 		t.Fatalf("text mapping=%+v", text)

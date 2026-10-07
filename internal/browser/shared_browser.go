@@ -38,6 +38,23 @@ type BrowserInputEvent struct {
 	KeyCode    int
 	AutoRepeat bool
 	Text       string
+	// Modifiers is the CDP bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+	Modifiers int
+}
+
+const (
+	modCtrl = 2
+	modMeta = 4
+)
+
+// keyModifiers maps the viewer's modifiers onto the Linux Chromium being
+// driven. A macOS viewer's Cmd shortcuts (select all, copy, undo) are Ctrl
+// shortcuts there, so a lone Meta is sent as Ctrl.
+func keyModifiers(m int) int {
+	if m&modMeta != 0 && m&modCtrl == 0 {
+		m = m&^modMeta | modCtrl
+	}
+	return m
 }
 
 type cdpResponse struct {
@@ -255,13 +272,19 @@ func (s *SharedBrowser) Dispatch(ctx context.Context, event BrowserInputEvent) e
 		params["type"], params["deltaX"], params["deltaY"] = "mouseWheel", event.DeltaX, event.DeltaY
 	case "keydown":
 		method = "Input.dispatchKeyEvent"
-		params = map[string]any{"type": "keyDown", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode, "autoRepeat": event.AutoRepeat}
-		if event.Text != "" {
-			params["text"] = event.Text
+		params = map[string]any{"type": "keyDown", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode, "autoRepeat": event.AutoRepeat, "modifiers": keyModifiers(event.Modifiers)}
+		text := event.Text
+		// Chromium only generates the keypress that submits forms / inserts
+		// newlines when Enter carries its "\r" character.
+		if text == "" && event.Key == "Enter" {
+			text = "\r"
+		}
+		if text != "" {
+			params["text"], params["unmodifiedText"] = text, text
 		}
 	case "keyup":
 		method = "Input.dispatchKeyEvent"
-		params = map[string]any{"type": "keyUp", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode}
+		params = map[string]any{"type": "keyUp", "key": event.Key, "code": event.Code, "windowsVirtualKeyCode": event.KeyCode, "modifiers": keyModifiers(event.Modifiers)}
 	case "text":
 		method, params = "Input.insertText", map[string]any{"text": event.Text}
 	default:
