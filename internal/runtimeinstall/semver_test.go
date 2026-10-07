@@ -160,30 +160,27 @@ func TestSortVersionsNewestFirst(t *testing.T) {
 	}
 }
 
-func TestPickUpdateIsOptimisticButPrefersCompatible(t *testing.T) {
+func TestPickUpdateOffersNewestRelease(t *testing.T) {
 	const pi = "pi-acp"
 	for _, tc := range []struct {
 		name, constraint, current string
 		versions                  []string
 		wantOffer                 string
-		wantCompatible            bool
-		wantNewestPublished       string
 		wantOK                    bool
 	}{
 		{
-			// The reported bug: a caret pin on 0.0.x froze the range at the
-			// installed version, so no update was ever offered. Optimism means the
-			// newer release is surfaced anyway, flagged as beyond the range.
+			// A caret pin on 0.0.x admits nothing newer; the constraint must not
+			// hold the update back.
 			name:       "offers beyond a range that admits nothing newer",
 			constraint: "^0.0.31", current: "0.0.31",
 			versions:  []string{"0.0.31", "0.0.32", "0.0.33"},
-			wantOffer: "0.0.33", wantCompatible: false, wantOK: true,
+			wantOffer: "0.0.33", wantOK: true,
 		},
 		{
-			name:       "prefers the newest compatible version when one exists",
+			name:       "offers the newest release even when an in-range one exists",
 			constraint: "~0.0.31", current: "0.0.31",
 			versions:  []string{"0.0.31", "0.0.33", "0.1.0"},
-			wantOffer: "0.0.33", wantCompatible: true, wantNewestPublished: "0.1.0", wantOK: true,
+			wantOffer: "0.1.0", wantOK: true,
 		},
 		{
 			name:       "no offer when already on the newest release",
@@ -198,16 +195,16 @@ func TestPickUpdateIsOptimisticButPrefersCompatible(t *testing.T) {
 			wantOK:   false,
 		},
 		{
-			name:       "an in-range upgrade that is also the newest reports no extra",
+			name:       "an in-range upgrade that is also the newest",
 			constraint: "^1.8.0", current: "1.8.0",
 			versions:  []string{"1.8.0", "1.12.0"},
-			wantOffer: "1.12.0", wantCompatible: true, wantOK: true,
+			wantOffer: "1.12.0", wantOK: true,
 		},
 		{
 			name:       "prereleases are never offered",
 			constraint: "^1.8.0", current: "1.8.0",
 			versions:  []string{"1.8.0", "1.9.0", "2.0.0-beta.1"},
-			wantOffer: "1.9.0", wantCompatible: true, wantOK: true,
+			wantOffer: "1.9.0", wantOK: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -220,12 +217,6 @@ func TestPickUpdateIsOptimisticButPrefersCompatible(t *testing.T) {
 			}
 			if got.LatestVersion != tc.wantOffer {
 				t.Errorf("offer=%q want %q", got.LatestVersion, tc.wantOffer)
-			}
-			if got.Compatible != tc.wantCompatible {
-				t.Errorf("compatible=%v want %v", got.Compatible, tc.wantCompatible)
-			}
-			if got.NewestPublished != tc.wantNewestPublished {
-				t.Errorf("newestPublished=%q want %q", got.NewestPublished, tc.wantNewestPublished)
 			}
 			if got.Kind != UpdateKindRelease {
 				t.Errorf("kind=%q want %q", got.Kind, UpdateKindRelease)

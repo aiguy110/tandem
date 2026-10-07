@@ -1120,9 +1120,6 @@ body.dock-resizing .app { transition: none; }
 .adapter-fork-reason { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-xs); }
 .adapter-controls-fork { align-self: flex-start; }
 .adapter-fork-cmd { padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
-/* Updates are offered optimistically, so a version can sit outside the range
-   Tandem is tested against. Mark it rather than hide it. */
-.adapter-untested { padding: 1px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; }
 /* MCP server sign-in rows (McpServersModal). */
 .mcp-name { text-transform: none !important; }
 .mcp-state { padding: 1px 6px; border-radius: 999px; font-size: calc(10px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .04em; border: 1px dashed var(--border-strong); color: var(--text-faint); }

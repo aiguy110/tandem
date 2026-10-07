@@ -107,19 +107,17 @@ export function AdapterManagerModal() {
           const latest = row.latestVersion ?? '';
           const choice = selected[row.agent] ?? row.currentVersion;
           const changing = busy === row.agent;
-          const compatible = (version: string) => row.compatibleVersions.includes(version);
-          const beyondRange = Boolean(choice) && !compatible(choice);
           return <div className="adapter-row" key={row.agent}>
             <div className="adapter-main">
-              <div className="adapter-heading"><span className="primary">{row.agent}</span><span className="adapter-current">current {row.currentVersion || 'not installed'}</span>{row.currentVersion && !compatible(row.currentVersion) && <span className="adapter-untested" title={`Outside the range Tandem is tested against (${row.constraint})`}>beyond tested range</span>}</div>
-              <div className="automation-path">{row.package} · tested {row.constraint}</div>
-              <div className="adapter-installed">Installed: {row.installedVersions.length ? row.installedVersions.join(', ') : 'none'}{row.latestCompatibleVersion && <> · newest tested {row.latestCompatibleVersion}, newest published {latest}</>}</div>
+              <div className="adapter-heading"><span className="primary">{row.agent}</span><span className="adapter-current">current {row.currentVersion || 'not installed'}</span></div>
+              <div className="automation-path">{row.package}</div>
+              <div className="adapter-installed">Installed: {row.installedVersions.length ? row.installedVersions.join(', ') : 'none'}</div>
             </div>
             <div className="adapter-controls">
               <select aria-label={`${row.agent} version`} value={choice} disabled={changing} onChange={(e) => setSelected((all) => ({ ...all, [row.agent]: e.target.value }))}>
-                {row.availableVersions.map((version) => <option value={version} key={version}>{version}{version === row.currentVersion ? ' (current)' : row.installedVersions.includes(version) ? ' (installed)' : ''}{compatible(version) ? '' : ' — untested'}</option>)}
+                {row.availableVersions.map((version) => <option value={version} key={version}>{version}{version === row.currentVersion ? ' (current)' : row.installedVersions.includes(version) ? ' (installed)' : ''}</option>)}
               </select>
-              <button type="button" disabled={changing || !choice || choice === row.currentVersion} onClick={() => void choose(row.agent, choice)}>{changing ? 'Installing…' : row.installedVersions.includes(choice) ? 'Roll back' : beyondRange ? 'Use anyway' : 'Use version'}</button>
+              <button type="button" disabled={changing || !choice || choice === row.currentVersion} onClick={() => void choose(row.agent, choice)}>{changing ? 'Installing…' : row.installedVersions.includes(choice) ? 'Roll back' : 'Use version'}</button>
               {latest && latest !== row.currentVersion && <button type="button" className="adapter-latest" disabled={changing} onClick={() => void choose(row.agent, latest)}>Update to latest</button>}
             </div>
           </div>;

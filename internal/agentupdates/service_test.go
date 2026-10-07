@@ -165,7 +165,7 @@ func TestReleaseNotification(t *testing.T) {
 		{
 			name: "a compatible update reads as routine",
 			update: runtimeinstall.UpdateInfo{Agent: "codex", Package: "codex-acp", Constraint: "^1.8.0",
-				CurrentVersion: "1.8.0", LatestVersion: "1.12.0", Compatible: true, Kind: runtimeinstall.UpdateKindRelease},
+				CurrentVersion: "1.8.0", LatestVersion: "1.12.0", Kind: runtimeinstall.UpdateKindRelease},
 			wantTitle:     "codex ACP update available",
 			wantInMessage: []string{"1.12.0 is available", "installed 1.8.0"},
 		},
@@ -174,17 +174,9 @@ func TestReleaseNotification(t *testing.T) {
 			// have not broken in practice, so the offer reads as routine.
 			name: "an update beyond the constraint reads as routine",
 			update: runtimeinstall.UpdateInfo{Agent: "claude", Package: "claude-agent-acp", Constraint: "^0.70.0",
-				CurrentVersion: "0.70.0", LatestVersion: "0.79.0", Compatible: false, Kind: runtimeinstall.UpdateKindRelease},
+				CurrentVersion: "0.70.0", LatestVersion: "0.79.0", Kind: runtimeinstall.UpdateKindRelease},
 			wantTitle:     "claude ACP update available",
 			wantInMessage: []string{"0.79.0 is available", "installed 0.70.0"},
-		},
-		{
-			name: "a held-back offer still mentions the newer release",
-			update: runtimeinstall.UpdateInfo{Agent: "pi", Package: "pi-acp", Constraint: "~0.0.31",
-				CurrentVersion: "0.0.31", LatestVersion: "0.0.33", Compatible: true, NewestPublished: "0.1.0",
-				Kind: runtimeinstall.UpdateKindRelease},
-			wantTitle:     "pi ACP update available",
-			wantInMessage: []string{"0.0.33 is available", "0.1.0 is also out"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -212,7 +204,7 @@ func TestPollOffersUntestedUpdateEndToEnd(t *testing.T) {
 	s := NewService(Options{Center: center,
 		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
 			return []runtimeinstall.UpdateInfo{{Agent: "claude", Package: "claude-agent-acp", Constraint: "^0.70.0",
-				CurrentVersion: "0.70.0", LatestVersion: "0.79.0", Compatible: false, Kind: runtimeinstall.UpdateKindRelease}}, nil
+				CurrentVersion: "0.70.0", LatestVersion: "0.79.0", Kind: runtimeinstall.UpdateKindRelease}}, nil
 		},
 		Install: func(_ context.Context, _ config.Config, agent, version string, _ io.Writer) (runtimeinstall.LockedAgent, error) {
 			installed = agent + "@" + version

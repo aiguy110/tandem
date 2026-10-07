@@ -14,7 +14,6 @@ function adapter(overrides: Partial<ManagedAdapter> = {}): ManagedAdapter {
     currentVersion: '1.12.0',
     installedVersions: ['1.12.0'],
     availableVersions: ['1.12.0', '1.9.0'],
-    compatibleVersions: ['1.12.0', '1.9.0'],
     latestVersion: '1.12.0',
     ...overrides,
   };
@@ -105,7 +104,6 @@ it('never offers a prerelease as "latest"', async () => {
       currentVersion: '1.9.0',
       installedVersions: ['1.9.0'],
       availableVersions: ['1.12.1-preview.1', '1.12.0', '1.9.0'],
-      compatibleVersions: ['1.12.0', '1.9.0'],
       latestVersion: '1.12.0',
     }),
   ]);
@@ -114,9 +112,7 @@ it('never offers a prerelease as "latest"', async () => {
   await waitFor(() => expect(install).toHaveBeenCalledWith('codex', '1.12.0'));
 });
 
-it('marks versions beyond the tested range and still allows installing them', async () => {
-  // The claude case: pinned ^0.70.0 while upstream is on 0.79.0. An optimistic
-  // check surfaces it, so the UI has to label it rather than hide it.
+it('installs a version beyond the declared constraint without warning', async () => {
   mount([
     adapter({
       agent: 'claude',
@@ -125,32 +121,14 @@ it('marks versions beyond the tested range and still allows installing them', as
       currentVersion: '0.70.0',
       installedVersions: ['0.70.0'],
       availableVersions: ['0.79.0', '0.70.0'],
-      compatibleVersions: ['0.70.0'],
       latestVersion: '0.79.0',
-      latestCompatibleVersion: '0.70.0',
     }),
   ]);
   const select = (await screen.findByLabelText('claude version')) as HTMLSelectElement;
-  const untested = [...select.options].find((o) => o.value === '0.79.0');
-  expect(untested?.textContent).toContain('untested');
-  expect(screen.getByText(/newest tested 0\.70\.0, newest published 0\.79\.0/)).toBeTruthy();
+  expect([...select.options].map((o) => o.textContent).join()).not.toContain('untested');
 
   fireEvent.change(select, { target: { value: '0.79.0' } });
   const install = useStore.getState().installAgentDistribution;
-  screen.getByText('Use anyway').click();
+  screen.getByText('Use version').click();
   await waitFor(() => expect(install).toHaveBeenCalledWith('claude', '0.79.0'));
-});
-
-it('flags a current version that has fallen outside the tested range', async () => {
-  mount([
-    adapter({
-      currentVersion: '2.0.0',
-      installedVersions: ['2.0.0'],
-      availableVersions: ['2.0.0', '1.12.0'],
-      compatibleVersions: ['1.12.0'],
-      latestVersion: '2.0.0',
-      latestCompatibleVersion: '1.12.0',
-    }),
-  ]);
-  expect(await screen.findByText('beyond tested range')).toBeTruthy();
 });

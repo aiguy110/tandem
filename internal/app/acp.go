@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -88,16 +87,6 @@ func acpStatus(args []string, stdout, stderr io.Writer) int {
 	for _, row := range rows {
 		if row.Fork == nil {
 			fmt.Fprintf(stdout, "%-8s %s  current %s  latest %s\n", row.Agent, row.Package, orNone(row.CurrentVersion), orNone(row.LatestVersion))
-			// Updates are offered optimistically, so say when the newest release is
-			// outside the range Tandem has been tested against — that is the case an
-			// operator most needs to know about before taking it.
-			if row.LatestCompatibleVersion != "" {
-				fmt.Fprintf(stdout, "         newest tested %s (range %s); %s is published but untested\n",
-					row.LatestCompatibleVersion, row.Constraint, row.LatestVersion)
-			}
-			if row.CurrentVersion != "" && !slices.Contains(row.CompatibleVersions, row.CurrentVersion) {
-				fmt.Fprintf(stdout, "         installed %s is beyond the tested range %s\n", row.CurrentVersion, row.Constraint)
-			}
 			continue
 		}
 		f := row.Fork

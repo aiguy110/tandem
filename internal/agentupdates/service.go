@@ -113,8 +113,7 @@ func (s *Service) poll(ctx context.Context) {
 			continue
 		}
 		slog.Info("ACP adapter update available", "agent", u.Agent, "installed_version", u.CurrentVersion,
-			"available_version", u.LatestVersion, "within_tested_range", u.Compatible, "tested_range", u.Constraint,
-			"newest_published", u.NewestPublished)
+			"available_version", u.LatestVersion)
 		s.opts.Center.Upsert(s.releaseNotification(u))
 	}
 	for agent := range s.available {
@@ -125,17 +124,9 @@ func (s *Service) poll(ctx context.Context) {
 	}
 }
 
-// releaseNotification describes an available published update. Offers may
-// point beyond the declared compatibility constraint; in practice ACP adapters
-// have not broken across such releases, so the notification does not warn about
-// it.
+// releaseNotification recommends updating to the newest published release.
 func (s *Service) releaseNotification(u runtimeinstall.UpdateInfo) notifications.Notification {
 	message := fmt.Sprintf("%s is available (installed %s). New sessions will use it after updating.", u.LatestVersion, u.CurrentVersion)
-	if u.NewestPublished != "" {
-		// The offer was held back to stay inside the constraint, so say a newer
-		// release exists rather than leave LatestVersion looking like the newest.
-		message += fmt.Sprintf(" %s is also out; pick it in the ACP manager to try it.", u.NewestPublished)
-	}
 	return notifications.Notification{ID: Prefix + u.Agent, Severity: "attention", Title: u.Agent + " ACP update available", Message: message,
 		Actions: []notifications.Action{{ID: "install", Label: "Update", Primary: true}, {ID: "dismiss", Label: "Later"}}}
 }

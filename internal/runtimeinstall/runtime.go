@@ -291,15 +291,6 @@ const (
 
 type UpdateInfo struct {
 	Agent, Package, Constraint, CurrentVersion, LatestVersion string
-	// Compatible reports whether LatestVersion satisfies Constraint. Tandem
-	// offers updates optimistically, so an offer may deliberately point beyond
-	// the range Tandem has been tested against; this is how the notification and
-	// the UI know to say so.
-	Compatible bool
-	// NewestPublished is the newest release on npm when it is newer than the
-	// version being offered, i.e. when the offer was held back to stay inside
-	// Constraint. Empty when the offer already is the newest release.
-	NewestPublished string
 	// Kind is UpdateKindRelease or UpdateKindRebase.
 	Kind string
 	// Fork carries the tracking record when Kind is UpdateKindRebase, so the
@@ -314,22 +305,13 @@ type AdapterStatus struct {
 	CurrentVersion    string   `json:"currentVersion"`
 	InstalledVersions []string `json:"installedVersions"`
 	// AvailableVersions is every published version, newest first — not only the
-	// ones inside Constraint. Tandem is optimistic about updates: a newer release
-	// is offered even when it falls outside the range Tandem was tested against,
-	// because a stale pin should not hide a fix.
+	// ones inside Constraint, which only seeds a fresh install.
 	AvailableVersions []string `json:"availableVersions"`
-	// CompatibleVersions is the subset of AvailableVersions satisfying
-	// Constraint, so the UI can mark everything else as beyond the tested range.
-	CompatibleVersions []string `json:"compatibleVersions"`
 	// LatestVersion is the newest published *release*. AvailableVersions can lead
 	// with a prerelease (1.12.1-preview.1 outranks 1.12.0 in semver), and an
 	// "update to latest" action must never mean "move onto a preview", so this is
 	// the version such an action should offer.
 	LatestVersion string `json:"latestVersion,omitempty"`
-	// LatestCompatibleVersion is the newest release inside Constraint, present
-	// only when it differs from LatestVersion — i.e. when the newest release is
-	// beyond the range Tandem has been tested against.
-	LatestCompatibleVersion string `json:"latestCompatibleVersion,omitempty"`
 	// Fork is set when this agent's ACP server is tracked as a fork. While it is
 	// set, the published versions above are not what runs: they are what the
 	// agent would return to once the fork is retired.
@@ -364,12 +346,6 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 		if err != nil {
 			return nil, fmt.Errorf("list %s versions: %w", agent, err)
 		}
-		compatible := make([]string, 0, len(versions))
-		for _, v := range versions {
-			if satisfies(v, constraint) {
-				compatible = append(compatible, v)
-			}
-		}
 		locked := l.Agents[agent]
 		current := locked.Version
 		if current == "" {
@@ -380,12 +356,9 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 			installed = append(installed, current)
 			sortVersions(installed)
 		}
-		row := AdapterStatus{Agent: agent, Package: p.packageName, Constraint: constraint, CurrentVersion: current, InstalledVersions: installed, AvailableVersions: versions, CompatibleVersions: compatible}
+		row := AdapterStatus{Agent: agent, Package: p.packageName, Constraint: constraint, CurrentVersion: current, InstalledVersions: installed, AvailableVersions: versions}
 		if latest, ok := newestPublished(versions); ok {
 			row.LatestVersion = latest
-			if inRange, ok := newestInRange(compatible, constraint); ok && inRange != latest {
-				row.LatestCompatibleVersion = inRange
-			}
 		}
 		if fork, tracked := forks[agent]; tracked {
 			status := &ForkStatus{
@@ -431,13 +404,10 @@ func installedVersions(root, agent string, p pin) []string {
 // CheckUpdates looks for newer published versions of each managed ACP server.
 // It never mutates the runtime.
 //
-// It is deliberately optimistic. A newer release is reported even when it falls
-// outside the agent's declared compatibility range, because that range records
-// what Tandem has been *tested* against and goes stale the moment upstream
-// publishes; treating it as a ceiling means a stale pin silently hides every
-// later fix. Where a compatible update exists it is the one offered, and the
-// newer out-of-range release is reported alongside it so the operator can see
-// both. UpdateInfo.Compatible says which case an offer is.
+// The offer is always the newest published release, regardless of the agent's
+// declared constraint: that constraint only seeds a fresh install, and in
+// practice ACP adapters have not broken across upstream releases, so a stale
+// pin should never hold an update back.
 func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) {
 	if os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return nil, nil
@@ -477,7 +447,7 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 				// notification's by-hand path) never see an empty directory.
 				record.Clone = config.ForkCloneDir(cfg.RuntimeRoot, agent, fork)
 				out = append(out, UpdateInfo{Agent: agent, Package: fork.UpstreamPackage, Constraint: constraint,
-					CurrentVersion: fork.UpstreamVersion, LatestVersion: latest, Compatible: satisfies(latest, constraint),
+					CurrentVersion: fork.UpstreamVersion, LatestVersion: latest,
 					Kind: UpdateKindRebase, Fork: &record})
 			}
 			continue
@@ -502,38 +472,18 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 	return out, nil
 }
 
-// pickUpdate applies Tandem's optimistic update policy to one agent's published
-// version list, returning the offer to make (if any).
-//
-// A compatible update is preferred when one exists, since it is the safer move
-// and is still an upgrade. Only when the range admits nothing newer does the
-// offer reach past it — that is the case a conservative check would drop on the
-// floor, leaving the operator on a stale version with no signal at all.
+// pickUpdate returns the offer to make for one agent's published version list:
+// the newest release (never a prerelease), if it is newer than current.
 func pickUpdate(agent, pkg, constraint, current string, versions []string) (UpdateInfo, bool) {
-	newest, haveNewest := newestPublished(versions)
-	inRange, haveInRange := newestInRange(versions, constraint)
-
-	offer, compatible := "", false
-	switch {
-	case haveInRange && semverNewer(inRange, current):
-		offer, compatible = inRange, true
-	case haveNewest && semverNewer(newest, current):
-		offer, compatible = newest, false
-	default:
+	newest, ok := newestPublished(versions)
+	if !ok || !semverNewer(newest, current) {
 		return UpdateInfo{}, false
 	}
-
-	info := UpdateInfo{Agent: agent, Package: pkg, Constraint: constraint,
-		CurrentVersion: current, LatestVersion: offer, Compatible: compatible, Kind: UpdateKindRelease}
-	// Mention a still-newer out-of-range release only when the offer was held
-	// back to stay compatible; otherwise the offer already is the newest.
-	if haveNewest && semverNewer(newest, offer) {
-		info.NewestPublished = newest
-	}
-	return info, true
+	return UpdateInfo{Agent: agent, Package: pkg, Constraint: constraint,
+		CurrentVersion: current, LatestVersion: newest, Kind: UpdateKindRelease}, true
 }
 
-// InstallUpdate installs a selected compatible version beside all existing
+// InstallUpdate installs a selected published version beside all existing
 // versions, then atomically changes the preferred resolution for new sessions.
 func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string, log io.Writer) (LockedAgent, error) {
 	installMu.Lock()
@@ -575,20 +525,14 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 	if err != nil {
 		return LockedAgent{}, err
 	}
-	// The version must exist, but it need not be inside Tandem's declared range.
-	// Refusing an out-of-range version would make the optimistic update offer
-	// unusable, and the range is a record of what has been tested rather than a
-	// hard compatibility boundary. Installing beside the current version and
-	// leaving Rollback available is what makes this safe to allow.
+	// The version must exist, but it need not be inside the declared constraint,
+	// which only seeds a fresh install. Installing beside the current version and
+	// leaving Rollback available keeps any version safe to try.
 	if !slices.Contains(published, version) {
 		return LockedAgent{}, fmt.Errorf("%s has no published version %s", p.packageName, version)
 	}
-	constraint := strings.TrimPrefix(p.spec, p.packageName+"@")
-	if !satisfies(version, constraint) {
-		slog.Warn("installing ACP adapter beyond tested compatibility range",
-			"agent", agent, "package", p.packageName, "version", version, "tested_range", constraint,
-			"previous_version", current.Version)
-	}
+	slog.Info("installing ACP adapter version", "agent", agent, "package", p.packageName,
+		"version", version, "previous_version", current.Version)
 	// Adopt a legacy shared-node_modules install into an immutable directory
 	// before replacing it, so rollback and old session restoration cannot be
 	// affected by a future mutation of the shared runtime.

@@ -200,13 +200,8 @@ func ReturnToUpstream(ctx context.Context, cfg config.Config, agent, version str
 			installMu.Unlock()
 			return LockedAgent{}, listErr
 		}
-		// Prefer the newest release inside Tandem's tested range, but fall back to
-		// the newest release overall rather than refusing to retire the fork: a
-		// stale pin should not be able to trap an agent on a fork.
-		constraint := strings.TrimPrefix(p.spec, p.packageName+"@")
-		if pick, ok := newestInRange(published, constraint); ok {
-			version = pick
-		} else if pick, ok := newestPublished(published); ok {
+		// Return to the newest release, regardless of the declared constraint.
+		if pick, ok := newestPublished(published); ok {
 			version = pick
 		} else {
 			installMu.Unlock()
