@@ -34,7 +34,7 @@ type limitParser func(string, time.Time) (time.Time, bool)
 const rateLimitTextWindow = 8 * 1024
 
 var (
-	claudeReset   = regexp.MustCompile(`(?i)(?:session limit |usage limit )?resets?\s+(?:at\s+)?([0-9]{1,2}:[0-9]{2}\s*(?:am|pm))\s*\(([^)]+)\)`)
+	claudeReset   = regexp.MustCompile(`(?i)(?:session limit |usage limit )?resets?\s+(?:at\s+)?([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm))\s*\(([^)]+)\)`)
 	codexReset    = regexp.MustCompile(`(?i)(?:use codex again|try again|limit resets?)\s+(?:at|after)\s+((?:[A-Z][a-z]{2}\s+[0-9]{1,2},?\s+[0-9]{4}\s+)?[0-9]{1,2}:[0-9]{2}\s*(?:am|pm))(?:\s*\(([^)]+)\))?`)
 	durationReset = regexp.MustCompile(`(?i)(?:resets?|try again)\s+(?:in|after)\s+([0-9]+)\s*(seconds?|minutes?|hours?)`)
 )
@@ -47,6 +47,10 @@ var harnessLimitParsers = map[string][]limitParser{
 }
 
 func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
+	s.observeRateLimitEventAt(ev, time.Now())
+}
+
+func (s *Session) observeRateLimitEventAt(ev eventlog.Event, observedAt time.Time) {
 	var attribution struct {
 		ParentID string `json:"parentId"`
 	}
@@ -75,7 +79,7 @@ func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
 		}
 		text := s.rateLimitText
 		s.rateLimitMu.Unlock()
-		s.detectRateLimit(text)
+		s.detectRateLimitAt(text, observedAt)
 	default:
 		if attribution.ParentID != "" {
 			s.rateLimitMu.Lock()
@@ -86,6 +90,10 @@ func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
 }
 
 func (s *Session) detectRateLimit(message string) {
+	s.detectRateLimitAt(message, time.Now())
+}
+
+func (s *Session) detectRateLimitAt(message string, now time.Time) {
 	harness := strings.ToLower(strings.TrimSpace(s.Spec.Harness))
 	parsers := harnessLimitParsers[harness]
 	if len(parsers) == 0 {
@@ -95,7 +103,6 @@ func (s *Session) detectRateLimit(message string) {
 	if len(parsers) == 0 {
 		return
 	}
-	now := time.Now()
 	for _, parse := range parsers {
 		reset, ok := parse(message, now)
 		if !ok {
@@ -143,7 +150,11 @@ func (s *Session) restoreRateLimit() {
 		slog.Warn("restore agent rate-limit state failed", "session_id", s.ID, "error", err)
 		return
 	}
-	if !ok || json.Unmarshal(logged.Event.Payload, &s.rateLimit) != nil || s.rateLimit.ID == "" {
+	if !ok {
+		s.recoverRecentRateLimit()
+		return
+	}
+	if json.Unmarshal(logged.Event.Payload, &s.rateLimit) != nil || s.rateLimit.ID == "" {
 		return
 	}
 	if s.rateLimit.Enabled && s.rateLimit.State == "pending" {
@@ -151,6 +162,33 @@ func (s *Session) restoreRateLimit() {
 		s.scheduleRateLimitLocked(s.rateLimit)
 		s.rateLimitMu.Unlock()
 		slog.Info("restored agent rate-limit auto-continue", "session_id", s.ID, "limit_id", s.rateLimit.ID, "reset_at_ms", s.rateLimit.ResetAt)
+	}
+}
+
+// recoverRecentRateLimit repairs sessions whose transcript contains a quota
+// message written before structured detection supported that message shape.
+// The bounded window avoids manufacturing incidents from stale session history.
+func (s *Session) recoverRecentRateLimit() {
+	replay, err := s.Log.ReplaySince(0)
+	if err != nil {
+		slog.Warn("recover agent rate-limit transcript failed", "session_id", s.ID, "error", err)
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, logged := range replay.Events {
+		observedAt := time.UnixMilli(logged.TS)
+		if observedAt.Before(cutoff) {
+			continue
+		}
+		s.observeRateLimitEventAt(logged.Event, observedAt)
+	}
+	s.rateLimitMu.Lock()
+	recovered := s.rateLimit.ID != ""
+	limitID := s.rateLimit.ID
+	resetAt := s.rateLimit.ResetAt
+	s.rateLimitMu.Unlock()
+	if recovered {
+		slog.Info("recovered agent rate limit from transcript", "session_id", s.ID, "limit_id", limitID, "reset_at_ms", resetAt)
 	}
 }
 
@@ -216,7 +254,14 @@ func parseClaudeLimit(message string, now time.Time) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	clock, err := time.ParseInLocation("3:04pm", strings.ToLower(strings.ReplaceAll(m[1], " ", "")), loc)
+	clockText := strings.ToLower(strings.ReplaceAll(m[1], " ", ""))
+	var clock time.Time
+	for _, layout := range []string{"3:04pm", "3pm"} {
+		clock, err = time.ParseInLocation(layout, clockText, loc)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return time.Time{}, false
 	}
