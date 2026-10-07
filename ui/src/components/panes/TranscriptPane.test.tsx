@@ -86,6 +86,41 @@ describe('TranscriptPane rate-limit widget', () => {
     fireEvent.click(view.getByRole('switch'));
     expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
   });
+
+  it('hides a rate limit superseded by a later manual prompt', () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() - 60_000, detectedAt: Date.now() - 120_000, enabled: false, state: 'superseded' } }];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.queryByLabelText('Usage limit')).toBeNull();
+  });
+});
+
+describe('TranscriptPane prompt submission', () => {
+  it('prevents duplicate submissions and reports the daemon queue position', async () => {
+    const working = agent();
+    working.status = 'working';
+    let resolvePrompt!: (result: { disposition: 'queued'; position: number }) => void;
+    const prompt = vi.fn().mockImplementation(() => new Promise((resolve) => { resolvePrompt = resolve; }));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': working }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'Do the next thing.' }, prompt,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const queue = view.getByRole('button', { name: 'Queue' });
+    fireEvent.click(queue);
+    fireEvent.click(queue);
+    expect(prompt).toHaveBeenCalledOnce();
+
+    await act(async () => resolvePrompt({ disposition: 'queued', position: 2 }));
+    expect(view.getByRole('button', { name: 'Queued #2 ✓' })).toBeTruthy();
+  });
 });
 
 describe('TranscriptPane voice rendering', () => {

@@ -108,7 +108,7 @@ export type SessionEvent =
   | { kind: 'prompt_removed'; promptId: string; blocks: PromptBlock[]; queuedAt: string }
   | { kind: 'audio_preference'; enabled: boolean }
   | { kind: 'audio_state'; state: 'rendering' | 'ready' | 'error'; seq: number; message?: string; durationMs?: number }
-  | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed'; error?: string };
+  | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; error?: string };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
 // SessionEvent. shell_pty/shell_exit carry the user escape-hatch shell (Terminal

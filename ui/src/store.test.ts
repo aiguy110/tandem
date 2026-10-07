@@ -32,12 +32,26 @@ function annotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
   useStore.setState({ sessions: {}, order: [], annotations: {}, focusedId: null, pendingSpawns: [], focusedSpawnId: null, pane: 'chat', panesBySession: {}, drafts: {}, systemNotifications: [], hosts: [{ id: LOCAL_HOST_ID, name: 'This host', status: 'connected', local: true }], dirs: [], dirsByHost: {}, dirsStatusByHost: {}, dirsErrorByHost: {}, profilesByHost: {}, agentCatalog: null, agentCatalogByHost: {}, resumeCatalog: null, resumeCatalogByHost: {}, resumePendingHostIds: {}, resumeLoading: false });
   localStorage.removeItem('tandem.agentOrder');
   localStorage.removeItem('tandem.focusedAgent');
   localStorage.removeItem('tandem.agentPanes');
   localStorage.removeItem('tandem.promptDrafts');
   localStorage.removeItem('tandem.spawnCache.v1');
+});
+
+describe('prompt acknowledgements', () => {
+  it('times out without leaving the composer waiting forever', async () => {
+    vi.useFakeTimers();
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const pending = useStore.getState().prompt('session-1', 'continue');
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(pending).resolves.toEqual({ error: 'Prompt confirmation timed out. Check the queue before retrying.' });
+    expect(sendSpy).toHaveBeenCalledOnce();
+  });
 });
 
 function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {

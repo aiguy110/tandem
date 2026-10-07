@@ -389,6 +389,19 @@ interface StoreState {
 let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
+const PROMPT_ACK_TIMEOUT_MS = 15_000;
+
+function registerPromptAck(corrId: string, resolve: (result: AckResult) => void, onAccepted: () => void): void {
+  const timer = window.setTimeout(() => {
+    if (!pendingAcks.delete(corrId)) return;
+    resolve({ error: 'Prompt confirmation timed out. Check the queue before retrying.' });
+  }, PROMPT_ACK_TIMEOUT_MS);
+  pendingAcks.set(corrId, (result) => {
+    window.clearTimeout(timer);
+    if (!result.error) onAccepted();
+    resolve(result);
+  });
+}
 
 // Rail moves the daemon has not yet reflected back. An `agents` message built
 // before the move landed (a concurrent broadcast, or a federation parent still
@@ -1621,10 +1634,7 @@ export const useStore = create<StoreState>((set, get) => {
     prompt: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
-          resolve(result);
-        });
+        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
         client.send(typeof input === 'string'
           ? { t: 'prompt', sessionId, text: input, corrId }
           : { t: 'prompt', sessionId, blocks: input, corrId });
@@ -1632,10 +1642,7 @@ export const useStore = create<StoreState>((set, get) => {
     steer: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
-          resolve(result);
-        });
+        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
         client.send(typeof input === 'string'
           ? { t: 'steer', sessionId, text: input, corrId }
           : { t: 'steer', sessionId, blocks: input, corrId });
@@ -1643,10 +1650,7 @@ export const useStore = create<StoreState>((set, get) => {
     aside: (sessionId, question) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, (result) => {
-          if (!result.error) set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } }));
-          resolve(result);
-        });
+        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
         client.send({ t: 'aside', sessionId, text: question, corrId });
       }),
     removeQueuedPrompt: (sessionId, promptId) =>
