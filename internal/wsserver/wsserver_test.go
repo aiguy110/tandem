@@ -31,10 +31,11 @@ import (
 )
 
 type testFederation struct {
-	hosts      []federation.Host
-	mu         sync.Mutex
-	calls      []json.RawMessage
-	subscriber func(string, json.RawMessage)
+	hosts         []federation.Host
+	mu            sync.Mutex
+	calls         []json.RawMessage
+	subscriber    func(string, json.RawMessage)
+	subscribeGate <-chan struct{}
 }
 
 func (f *testFederation) Hosts() []federation.Host { return f.hosts }
@@ -44,7 +45,7 @@ func (f *testFederation) Subscribe(fn func(string, json.RawMessage)) func() {
 	f.mu.Unlock()
 	return func() {}
 }
-func (f *testFederation) Call(_ context.Context, hostID string, payload json.RawMessage) (json.RawMessage, error) {
+func (f *testFederation) Call(ctx context.Context, hostID string, payload json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, append(json.RawMessage(nil), payload...))
 	subscriber := f.subscriber
@@ -63,6 +64,13 @@ func (f *testFederation) Call(_ context.Context, hostID string, payload json.Raw
 	case "close_agent":
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
 	case "subscribe":
+		if f.subscribeGate != nil {
+			select {
+			case <-f.subscribeGate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		if subscriber != nil {
 			subscriber(hostID, json.RawMessage(`{"t":"snapshot","agentId":"remote-agent","seq":0,"transcript":[],"status":"idle","pendingApprovals":[]}`))
 		}
@@ -360,6 +368,26 @@ func (*testAdapter) PID() int                  { return 0 }
 
 func setupWS(t *testing.T, queue int) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {
 	return setupWSHistory(t, queue, nil)
+}
+
+func TestRemoteSubscriptionDoesNotBlockLocalWakeup(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	f := &testFederation{subscribeGate: gate}
+	_, backend, _, _, url := setupWSOptions(t, 64, nil, func(o *Options) { o.Federation = f })
+	backend.Get("a").Spec.Harness = "claude"
+	backend.Get("a").PushEvent(eventlog.Event{Kind: "message_chunk", Payload: json.RawMessage(`{"kind":"message_chunk","text":"Usage limit reached; try again in 2 hours"}`)})
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "subscribe", "hostId": "offline", "sessionId": "remote", "corrId": "remote-sub"})
+	send(t, c, map[string]any{"t": "set_rate_limit_auto_continue", "sessionId": "a", "enabled": true, "message": "First line.\nSecond line.", "corrId": "wake"})
+	got := recv(t, c)
+	if got["t"] != "ack" || got["corrId"] != "wake" || got["error"] != nil {
+		t.Fatalf("wake-up blocked by remote subscription: %#v", got)
+	}
+	latest, ok, err := backend.Get("a").Log.LatestOfKind("rate_limit")
+	if err != nil || !ok || !strings.Contains(string(latest.Event.Payload), `"enabled":true`) || !strings.Contains(string(latest.Event.Payload), `First line.\nSecond line.`) {
+		t.Fatalf("wake-up was not persisted: %s, %v", latest.Event.Payload, err)
+	}
 }
 
 func setupWSHistory(t *testing.T, queue int, history HistoryLifecycle) (*store.Store, *testBackend, *testAdapter, *httptest.Server, string) {

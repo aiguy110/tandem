@@ -406,7 +406,7 @@ interface StoreState {
   aside: (sessionId: string, question: string) => Promise<AckResult>;
   removeQueuedPrompt: (sessionId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (sessionId: string) => Promise<AckResult>;
-  setRateLimitAutoContinue: (sessionId: string, enabled: boolean) => Promise<AckResult>;
+  setRateLimitAutoContinue: (sessionId: string, enabled: boolean, message?: string) => Promise<AckResult>;
   interruptAndClearQueue: (sessionId: string) => Promise<AckResult>;
   addAnnotation: (sessionId: string, anchor: { seq: number; role: string; quote: string }, comment: string) => Promise<AckResult>;
   updateAnnotation: (sessionId: string, id: string, comment: string) => Promise<AckResult>;
@@ -447,6 +447,7 @@ let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
+const RATE_LIMIT_ACK_TIMEOUT_MS = 5_000;
 
 function registerPromptAck(corrId: string, resolve: (result: AckResult) => void, onAccepted: () => void): void {
   const timer = window.setTimeout(() => {
@@ -1757,11 +1758,18 @@ export const useStore = create<StoreState>((set, get) => {
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'clear_prompt_queue', sessionId, corrId });
       }),
-    setRateLimitAutoContinue: (sessionId, enabled) =>
+    setRateLimitAutoContinue: (sessionId, enabled, message) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        pendingAcks.set(corrId, resolve);
-        client.send({ t: 'set_rate_limit_auto_continue', sessionId, enabled, corrId });
+        const timer = window.setTimeout(() => {
+          if (!pendingAcks.delete(corrId)) return;
+          resolve({ sessionId, error: 'Wake-up confirmation timed out. The schedule may still have been saved; refresh to verify before retrying.' });
+        }, RATE_LIMIT_ACK_TIMEOUT_MS);
+        pendingAcks.set(corrId, (result) => {
+          window.clearTimeout(timer);
+          resolve(result);
+        });
+        client.send({ t: 'set_rate_limit_auto_continue', sessionId, enabled, message, corrId });
       }),
     interruptAndClearQueue: (sessionId) =>
       new Promise<AckResult>((resolve) => {

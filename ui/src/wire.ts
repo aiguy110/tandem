@@ -177,7 +177,7 @@ export type SessionEvent =
   // for the envelope with the same id (e.g. pending -> started).
   | { kind: 'agent_message'; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
   | { kind: 'agent_message_status'; id: string; status: string; error?: string }
-  | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; error?: string }
+  | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'handoff_received'; sourceSessionId: string; cutoffSeq: number; mode: 'full' | 'brief'; rendererVersion: number; sourceWasActive: boolean; delegations: { completed: number; failed: number; running: number; unresolved: number } };
 
 // On the wire raw_pty/shell_pty bytes are base64; everything else is a plain
@@ -552,7 +552,7 @@ export type ClientMsg =
   | { t: 'aside'; sessionId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; sessionId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; sessionId: string; corrId?: string }
-  | { t: 'set_rate_limit_auto_continue'; sessionId: string; enabled: boolean; corrId?: string }
+  | { t: 'set_rate_limit_auto_continue'; sessionId: string; enabled: boolean; message?: string; corrId?: string }
   | { t: 'add_annotation'; sessionId: string; seq: number; role: string; quote: string; comment: string; corrId?: string }
   | { t: 'update_annotation'; sessionId: string; id: string; comment: string; corrId?: string }
   | { t: 'delete_annotation'; sessionId: string; id: string; corrId?: string }

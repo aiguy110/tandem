@@ -26,7 +26,11 @@ type rateLimitState struct {
 	State      string `json:"state"` // pending, sent, failed, superseded
 	DetectedAt int64  `json:"detectedAt"`
 	Subagents  bool   `json:"subagents,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// QueuedMessage is appended to the explicit rate-limit-resumption prompt
+	// when the reset timer fires. It is persisted with the scheduled wake-up,
+	// but deliberately never included in operational logs.
+	QueuedMessage string `json:"queuedMessage,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type limitParser func(string, time.Time) (time.Time, bool)
@@ -139,8 +143,9 @@ func (s *Session) detectRateLimitAt(message string, now time.Time) {
 }
 
 // SetRateLimitAutoContinue changes daemon-owned state for the latest pending
-// widget. Enabling schedules the continuation; disabling cancels its timer.
-func (s *Session) SetRateLimitAutoContinue(enabled bool) error {
+// widget. Enabling schedules the continuation (and optional queued message);
+// disabling cancels its timer and discards that message.
+func (s *Session) SetRateLimitAutoContinue(enabled bool, queuedMessage string) error {
 	s.rateLimitMu.Lock()
 	state := s.rateLimit
 	if state.ID == "" || state.State != "pending" {
@@ -148,6 +153,11 @@ func (s *Session) SetRateLimitAutoContinue(enabled bool) error {
 		return fmt.Errorf("no pending rate limit")
 	}
 	state.Enabled = enabled
+	if enabled {
+		state.QueuedMessage = strings.TrimSpace(queuedMessage)
+	} else {
+		state.QueuedMessage = ""
+	}
 	s.rateLimit = state
 	s.stopRateLimitTimerLocked()
 	if enabled {
@@ -155,7 +165,7 @@ func (s *Session) SetRateLimitAutoContinue(enabled bool) error {
 	}
 	s.rateLimitMu.Unlock()
 	s.emitRateLimit(state)
-	slog.Info("agent rate-limit auto-continue changed", "session_id", s.ID, "limit_id", state.ID, "enabled", enabled, "reset_at_ms", state.ResetAt)
+	slog.Info("agent rate-limit auto-continue changed", "session_id", s.ID, "limit_id", state.ID, "enabled", enabled, "has_queued_message", state.QueuedMessage != "", "reset_at_ms", state.ResetAt)
 	return nil
 }
 
@@ -257,9 +267,12 @@ func (s *Session) fireRateLimit(id string) {
 	s.rateLimitTimer = nil
 	s.rateLimitMu.Unlock()
 
-	prompt := "continue"
+	prompt := "The previous turn paused because this session hit its usage limit. The limit has now reset; resume the work from where it left off."
 	if state.Subagents {
-		prompt = "Continue. Some sub-agents may have been interrupted by the usage limit; resume them if needed."
+		prompt += " Some sub-agents may have been interrupted by the usage limit; resume them if needed."
+	}
+	if state.QueuedMessage != "" {
+		prompt += "\n\nUser's queued message for this resumed turn:\n" + state.QueuedMessage
 	}
 	_, err = s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	if err != nil {
@@ -272,7 +285,7 @@ func (s *Session) fireRateLimit(id string) {
 		s.rateLimitMu.Unlock()
 		slog.Warn("agent rate-limit auto-continue failed", "session_id", s.ID, "limit_id", id, "error", err)
 	} else {
-		slog.Info("agent rate-limit auto-continue sent", "session_id", s.ID, "limit_id", id)
+		slog.Info("agent rate-limit auto-continue sent", "session_id", s.ID, "limit_id", id, "used_queued_message", state.QueuedMessage != "")
 	}
 	s.emitRateLimit(state)
 }

@@ -89,7 +89,51 @@ describe('TranscriptPane rate-limit widget', () => {
     const view = render(<TranscriptPane />);
     expect(view.getByText('Usage limit reached')).toBeTruthy();
     fireEvent.click(view.getByRole('switch'));
-    expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
+    expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true, undefined);
+  });
+
+  it('uses the normal multiline prompt box to schedule a wake-up message', async () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: false, state: 'pending' } }];
+    const setRateLimitAutoContinue = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    const prompt = vi.fn();
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'First line.\nSecond line.' }, setRateLimitAutoContinue, prompt,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getByPlaceholderText(/Message for the scheduled wake-up/)).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Schedule wake-up' }));
+    await waitFor(() => expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true, 'First line.\nSecond line.'));
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('restores a wake-up message into the existing queue and edits it in the composer', async () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: true, queuedMessage: 'Resume the deployment notes.\nThen notify me.', state: 'pending' } }];
+    const setRateLimitAutoContinue = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] }, drafts: {},
+      setRateLimitAutoContinue,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const input = view.getByPlaceholderText(/Message for the scheduled wake-up/) as HTMLTextAreaElement;
+    expect(input.value).toBe('');
+    expect(view.getByText('Wake message (1)')).toBeTruthy();
+    expect(view.getByText('Sent when the agent wakes.')).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Edit queued prompt 1' }));
+    await waitFor(() => expect(input.value).toBe('Resume the deployment notes.\nThen notify me.'));
+    fireEvent.change(input, { target: { value: 'A revised wake-up.' } });
+    expect(input.value).toBe('A revised wake-up.');
+    fireEvent.click(view.getByRole('button', { name: 'Schedule wake-up' }));
+    await waitFor(() => expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true, 'A revised wake-up.'));
+    await waitFor(() => expect(input.value).toBe(''));
+    fireEvent.click(view.getByRole('button', { name: 'Remove queued prompt 1' }));
+    expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true, '');
   });
 
   it('hides a rate limit superseded by a later manual prompt', () => {

@@ -37,7 +37,7 @@ type Item =
   | { kind: 'permission'; key: string; reqId: string; title: string; options: { optionId: string; name: string }[] }
   | { kind: 'error'; key: string; message: string }
   | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
-  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; error?: string }
+  | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
 function build(events: { seq: number; event: WireEvent }[], pending: Approval[]): Item[] {
@@ -191,11 +191,13 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
       case 'rate_limit': {
         const existing = rateLimits.get(ev.id);
         if (existing) {
+          existing.resetAt = ev.resetAt;
           existing.enabled = ev.enabled;
           existing.state = ev.state;
+          existing.queuedMessage = ev.queuedMessage;
           existing.error = ev.error;
         } else {
-          const item: Extract<Item, { kind: 'rate-limit' }> = { kind: 'rate-limit', key: `limit-${ev.id}`, id: ev.id, harness: ev.harness, resetAt: ev.resetAt, enabled: ev.enabled, state: ev.state, error: ev.error };
+          const item: Extract<Item, { kind: 'rate-limit' }> = { kind: 'rate-limit', key: `limit-${ev.id}`, id: ev.id, harness: ev.harness, resetAt: ev.resetAt, enabled: ev.enabled, state: ev.state, queuedMessage: ev.queuedMessage, error: ev.error };
           rateLimits.set(ev.id, item);
           items.push(item);
         }
@@ -845,7 +847,7 @@ export function TranscriptPane() {
         commands={agent.commands}
         quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
         onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-        onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
+        onRateLimitToggle={(enabled) => setRateLimitAutoContinue(agent.id, enabled, it.kind === 'rate-limit' ? it.queuedMessage : undefined)}
         onJumpToQuote={jumpToQuote}
         onJumpToLinkedBlock={jumpToLinkedBlock}
         onOpenPeer={openPeer}
@@ -1126,7 +1128,7 @@ function Row({
   renderingAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
-  onRateLimitToggle: (enabled: boolean) => void;
+  onRateLimitToggle: (enabled: boolean) => Promise<AckResult>;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
   onOpenPeer: (peer: AgentAddress, envelopeId: string) => void;
@@ -1322,8 +1324,11 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
   );
 }
 
-function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {
+function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => Promise<AckResult> }) {
   const [now, setNow] = useState(Date.now());
+  const [enabled, setEnabled] = useState(item.enabled);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setEnabled(item.enabled), [item.enabled]);
   useEffect(() => {
     if (item.state !== 'pending') return;
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -1336,15 +1341,31 @@ function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate
     <section className={`rate-limit-card ${item.state}`} aria-label="Usage limit">
       <div className="rate-limit-icon" aria-hidden="true">◷</div>
       <div className="rate-limit-copy">
-        <strong>{item.state === 'sent' ? 'Continuation sent' : item.state === 'failed' ? 'Could not continue automatically' : 'Usage limit reached'}</strong>
-        <span>{item.state === 'pending' ? `Resets ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent “continue” to the agent.' : '')}</span>
+        <strong>{item.state === 'sent' ? 'Continuation sent' : item.state === 'failed' ? 'Could not continue automatically' : item.enabled ? 'Wake-up scheduled' : 'Usage limit reached'}</strong>
+        <span>{item.state === 'pending' ? `${item.enabled ? 'Will wake' : 'Resets'} ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent the scheduled message to the agent.' : '')}</span>
       </div>
       {item.state === 'pending' && (
         <label className="rate-limit-toggle">
-          <span>Auto-continue</span>
-          <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked)} />
+          <span>Wake after reset</span>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={enabled}
+            onChange={(event) => {
+              const next = event.target.checked;
+              setEnabled(next);
+              setError(null);
+              void onToggle(next).then((result) => {
+                if (result.error) {
+                  setEnabled(item.enabled);
+                  setError(result.error);
+                }
+              });
+            }}
+          />
         </label>
       )}
+      {error && <span role="alert">{error}</span>}
     </section>
   );
 }
@@ -1620,8 +1641,8 @@ function ToolCard({ item, enterClass, subagentActivity }: { item: Extract<Item, 
         {subagent && <span className="subagent-icon" role="img" aria-label="Sub-agent">🤖</span>}
         {command != null ? (
           <span className="title tool-cmd-title">
-            <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
             {description != null && <span className="tool-cmd-desc">{description}</span>}
+            <span className="tool-cmd-line"><span className="tool-prompt">$</span> {command.text}</span>
           </span>
         ) : (
           <span className="title">{item.title}</span>
@@ -2111,6 +2132,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const prompt = useStore((s) => s.prompt);
   const steer = useStore((s) => s.steer);
   const aside = useStore((s) => s.aside);
+  const setRateLimitAutoContinue = useStore((s) => s.setRateLimitAutoContinue);
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
@@ -2121,12 +2143,30 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[sessionId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
+  // The most recent rate-limit event is authoritative. While it is pending,
+  // the ordinary composer becomes the multiline message for its wake-up.
+  const scheduledRateLimit = useStore((s) => {
+    const events = s.sessions[sessionId]?.events ?? [];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i].event;
+      if (event.kind === 'rate_limit') return event.state === 'pending' ? event : null;
+    }
+    return null;
+  });
   const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
   const asideSupport = useStore((s) => s.sessions[sessionId]?.asideSupport ?? null);
   const steeringSupport = useStore((s) => s.sessions[sessionId]?.steeringSupport ?? null);
-  const queuedPrompts = useStore((s) => s.sessions[sessionId]?.queuedPrompts ?? []);
+  const turnQueuedPrompts = useStore((s) => s.sessions[sessionId]?.queuedPrompts ?? []);
+  const wakePromptId = scheduledRateLimit ? `wake-${scheduledRateLimit.id}` : null;
+  const queuedPrompts: QueuedPrompt[] = [
+    ...(scheduledRateLimit?.enabled && scheduledRateLimit.queuedMessage ? [{
+      id: wakePromptId!, blocks: [{ type: 'text' as const, text: scheduledRateLimit.queuedMessage }],
+      queuedAt: new Date(scheduledRateLimit.detectedAt).toISOString(),
+    }] : []),
+    ...turnQueuedPrompts,
+  ];
   // A federated agent's ID is namespaced by its owning host, which reads as
   // noise in a placeholder; its name is what the rail shows.
   const agentLabel = useStore((s) => s.sessions[sessionId]?.name || sessionId);
@@ -2420,6 +2460,28 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     const t = text.trim();
     const hasAnnotations = annotations.length > 0;
     if (!t && attachments.length === 0 && !hasAnnotations) return;
+    if (scheduledRateLimit) {
+      if (steering || attachments.length > 0 || hasAnnotations) {
+        setAttachmentError('The scheduled wake-up accepts text from the prompt box only.');
+        return;
+      }
+      sendingRef.current = true;
+      setSending(true);
+      try {
+        const result = await setRateLimitAutoContinue(sessionId, true, t);
+        if (result.error) setAttachmentError(result.error);
+        else {
+          setDraft(sessionId, '');
+          setAttachmentError(null);
+        }
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : 'Could not schedule wake-up.');
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+      return;
+    }
     if (attachments.some((attachment) => attachment.status === 'uploading')) {
       setAttachmentError('Wait for image uploads to finish.');
       return;
@@ -2500,7 +2562,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       setAttachmentError('Queued prompts with images cannot be edited yet.');
       return;
     }
-    const result = await removeQueuedPrompt(sessionId, queued.id);
+    const result = queued.id === wakePromptId ? {} : await removeQueuedPrompt(sessionId, queued.id);
     if (result.error) {
       setAttachmentError(result.error);
       return;
@@ -2585,19 +2647,26 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       {queuedPrompts.length > 0 && (
         <div className="prompt-queue">
           <div className="prompt-queue-header">
-            <span>Next up ({queuedPrompts.length})</span>
+            <span>{scheduledRateLimit ? `Wake message (${queuedPrompts.length})` : `Next up (${queuedPrompts.length})`}</span>
+            {scheduledRateLimit && <small>Sent when the agent wakes.</small>}
             <span className="prompt-queue-actions">
-              <button type="button" onClick={() => void clearPromptQueue(sessionId)}>Clear queue</button>
+              <button type="button" onClick={() => {
+                if (scheduledRateLimit?.queuedMessage) void setRateLimitAutoContinue(sessionId, scheduledRateLimit.enabled, '');
+                void clearPromptQueue(sessionId);
+              }}>Clear queue</button>
             </span>
           </div>
           {queuedPrompts.map((queued, index) => {
             const preview = previewQueuedPrompt(queued.blocks);
             return (
               <div className="prompt-queue-row" key={queued.id}>
-                <span className="prompt-queue-position">{index + 1}.</span>
+                <span className="prompt-queue-position">{queued.id === wakePromptId ? '◷' : `${index + 1}.`}</span>
                 <span className="prompt-queue-preview" title={preview}>{preview}</span>
                 <button type="button" onClick={() => void editQueuedPrompt(queued)} title="Edit queued prompt" aria-label={`Edit queued prompt ${index + 1}`}>Edit</button>
-                <button type="button" onClick={() => void removeQueuedPrompt(sessionId, queued.id)} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
+                <button type="button" onClick={() => {
+                  if (queued.id === wakePromptId && scheduledRateLimit) void setRateLimitAutoContinue(sessionId, scheduledRateLimit.enabled, '');
+                  else void removeQueuedPrompt(sessionId, queued.id);
+                }} title="Remove queued prompt" aria-label={`Remove queued prompt ${index + 1}`}>×</button>
               </div>
             );
           })}
@@ -2630,9 +2699,11 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
           <textarea
             ref={textRef}
             data-prompt-agent={sessionId}
-            placeholder={usesSoftKeyboard()
-              ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
-              : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`)}
+            placeholder={scheduledRateLimit
+              ? (usesSoftKeyboard() ? 'Message for the scheduled wake-up…  (use the button to schedule)' : 'Message for the scheduled wake-up…  (Enter to schedule, Shift+Enter for newline)')
+              : (usesSoftKeyboard()
+                ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
+                : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`))}
             value={text}
             onPaste={(e) => {
               const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
@@ -2741,9 +2812,9 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
             className="btn primary"
             onClick={() => void send()}
             disabled={sending || uploadsPending || !canSubmit}
-            title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+            title={scheduledRateLimit ? 'Send this multiline message when the rate limit resets' : working ? 'Send after the current turn finishes' : 'Send prompt'}
           >
-            {sending ? 'Sending…' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
+            {sending ? (scheduledRateLimit ? 'Scheduling…' : 'Sending…') : scheduledRateLimit ? 'Schedule wake-up' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>

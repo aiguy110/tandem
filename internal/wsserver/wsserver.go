@@ -390,6 +390,7 @@ type clientMessage struct {
 	Role              string                     `json:"role"`
 	Quote             string                     `json:"quote"`
 	Comment           string                     `json:"comment"`
+	Message           string                     `json:"message"`
 	Path              string                     `json:"path"`
 	PositionMs        int64                      `json:"positionMs"`
 	NotificationID    string                     `json:"notificationId"`
@@ -439,18 +440,19 @@ func (m *clientMessage) UnmarshalJSON(data []byte) error {
 }
 
 type connection struct {
-	server       *Handler
-	ws           *websocket.Conn
-	out          chan []byte
-	frameReady   chan string
-	frameMu      sync.Mutex
-	latestFrames map[string][]byte
-	done         chan struct{}
-	closeOnce    sync.Once
-	mu           sync.Mutex
-	subs         map[string]*subscription
-	remoteSubs   map[string]struct{}
-	audioFocusID string
+	server                  *Handler
+	ws                      *websocket.Conn
+	out                     chan []byte
+	frameReady              chan string
+	frameMu                 sync.Mutex
+	latestFrames            map[string][]byte
+	done                    chan struct{}
+	closeOnce               sync.Once
+	mu                      sync.Mutex
+	subs                    map[string]*subscription
+	remoteSubs              map[string]struct{}
+	audioFocusID            string
+	remoteSubscriptionTails map[string]chan struct{}
 }
 
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
@@ -813,6 +815,43 @@ func (c *connection) handle(m clientMessage) {
 		m.TargetSessionID = targetID
 	}
 	if m.HostID != "" {
+		if m.T == "subscribe" || m.T == "unsubscribe" {
+			// Fleet reconnects must not hold local commands behind an offline
+			// host's timeout. Chain each remote session's subscription changes
+			// so subscribe/unsubscribe still execute in browser order.
+			key := remoteSessionID(m.HostID, m.SessionID)
+			c.mu.Lock()
+			if c.remoteSubscriptionTails == nil {
+				c.remoteSubscriptionTails = make(map[string]chan struct{})
+			}
+			previous := c.remoteSubscriptionTails[key]
+			completed := make(chan struct{})
+			c.remoteSubscriptionTails[key] = completed
+			c.mu.Unlock()
+			slog.Debug("remote subscription queued without blocking browser commands", "type", m.T, "host_id", m.HostID, "session_id", m.SessionID, "waiting_for_previous", previous != nil)
+			go func() {
+				defer close(completed)
+				if previous != nil {
+					select {
+					case <-previous:
+					case <-c.done:
+						return
+					}
+				}
+				select {
+				case <-c.done:
+					return
+				default:
+				}
+				c.forwardFederation(m)
+				c.mu.Lock()
+				if c.remoteSubscriptionTails[key] == completed {
+					delete(c.remoteSubscriptionTails, key)
+				}
+				c.mu.Unlock()
+			}()
+			return
+		}
 		if asyncForwards[m.T] {
 			// Read-only listings may take a child a while (a repository scan);
 			// they must not stall this browser's other commands meanwhile.
@@ -1112,11 +1151,13 @@ func (c *connection) handle(m clientMessage) {
 		if !ok {
 			return
 		}
-		if err := sess.SetRateLimitAutoContinue(m.Enabled); err != nil {
+		if err := sess.SetRateLimitAutoContinue(m.Enabled, m.Message); err != nil {
+			slog.Warn("browser wake-up request rejected", "session_id", sess.ID, "enabled", m.Enabled, "error", err)
 			c.commandError(m, err)
 			return
 		}
 		c.commandAck(m, sess.ID)
+		slog.Debug("browser wake-up request acknowledged", "session_id", sess.ID, "enabled", m.Enabled, "has_queued_message", m.Message != "")
 	case "interrupt_and_clear_queue":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -1583,7 +1624,12 @@ func (c *connection) handle(m clientMessage) {
 // asyncForwards are read-only listings routed to a remote host concurrently
 // with the connection's other commands. Their replies are correlated or
 // idempotent snapshots, so reordering them is harmless.
-var asyncForwards = map[string]bool{"list_dirs": true, "list_profiles": true, "list_agent_catalog": true}
+var asyncForwards = map[string]bool{
+	"list_dirs": true, "list_profiles": true, "list_agent_catalog": true,
+	"list_sessions": true, "search_sessions": true, "history_status": true,
+	"get_messaging_state": true, "list_agent_links": true,
+	"list_system_notifications": true,
+}
 
 func (c *connection) forwardFederation(m clientMessage) {
 	if c.server.opts.Federation == nil {
