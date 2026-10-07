@@ -92,6 +92,24 @@ describe('TranscriptPane rate-limit widget', () => {
     expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true);
   });
 
+  it('uses the normal multiline prompt box to schedule a wake-up message', async () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: false, state: 'pending' } }];
+    const setRateLimitAutoContinue = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    const prompt = vi.fn();
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'First line.\nSecond line.' }, setRateLimitAutoContinue, prompt,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    expect(view.getByPlaceholderText(/Message for the scheduled wake-up/)).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Schedule wake-up' }));
+    await waitFor(() => expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', true, 'First line.\nSecond line.'));
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
   it('hides a rate limit superseded by a later manual prompt', () => {
     const limited = agent();
     limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() - 60_000, detectedAt: Date.now() - 120_000, enabled: false, state: 'superseded' } }];

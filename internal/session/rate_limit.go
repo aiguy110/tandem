@@ -26,9 +26,9 @@ type rateLimitState struct {
 	State      string `json:"state"` // pending, sent, failed, superseded
 	DetectedAt int64  `json:"detectedAt"`
 	Subagents  bool   `json:"subagents,omitempty"`
-	// QueuedMessage is sent instead of the default continuation prompt when
-	// the reset timer fires. It is persisted with the scheduled wake-up, but
-	// deliberately never included in operational logs.
+	// QueuedMessage is appended to the explicit rate-limit-resumption prompt
+	// when the reset timer fires. It is persisted with the scheduled wake-up,
+	// but deliberately never included in operational logs.
 	QueuedMessage string `json:"queuedMessage,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
@@ -267,12 +267,12 @@ func (s *Session) fireRateLimit(id string) {
 	s.rateLimitTimer = nil
 	s.rateLimitMu.Unlock()
 
-	prompt := state.QueuedMessage
-	if prompt == "" {
-		prompt = "continue"
+	prompt := "The previous turn paused because this session hit its usage limit. The limit has now reset; resume the work from where it left off."
+	if state.Subagents {
+		prompt += " Some sub-agents may have been interrupted by the usage limit; resume them if needed."
 	}
-	if state.Subagents && state.QueuedMessage == "" {
-		prompt = "Continue. Some sub-agents may have been interrupted by the usage limit; resume them if needed."
+	if state.QueuedMessage != "" {
+		prompt += "\n\nUser's queued message for this resumed turn:\n" + state.QueuedMessage
 	}
 	_, err = s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	if err != nil {

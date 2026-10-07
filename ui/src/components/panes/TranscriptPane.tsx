@@ -847,7 +847,7 @@ export function TranscriptPane() {
         commands={agent.commands}
         quoteLinks={it.kind === 'user' || it.kind === 'message' || it.kind === 'thought' ? quoteLinksBySeq.get(it.seq) ?? [] : []}
         onRespond={(opt) => it.kind === 'permission' && respond(agent.id, it.reqId, opt)}
-        onRateLimitToggle={(enabled, message) => void setRateLimitAutoContinue(agent.id, enabled, message)}
+        onRateLimitToggle={(enabled) => void setRateLimitAutoContinue(agent.id, enabled)}
         onJumpToQuote={jumpToQuote}
         onJumpToLinkedBlock={jumpToLinkedBlock}
         onOpenPeer={openPeer}
@@ -1123,7 +1123,7 @@ function Row({
   renderingAudio: boolean;
   quoteLinks: QuoteLink[];
   onRespond: (optionId: string) => void;
-  onRateLimitToggle: (enabled: boolean, message?: string) => void;
+  onRateLimitToggle: (enabled: boolean) => void;
   onJumpToQuote: (seq: number, targetId: string) => boolean;
   onJumpToLinkedBlock: (targetId: string) => void;
   onOpenPeer: (peer: AgentAddress, envelopeId: string) => void;
@@ -1317,10 +1317,8 @@ function AgentMessageCard({ item, enterClass, onOpenPeer }: { item: Extract<Item
   );
 }
 
-function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean, message?: string) => void }) {
+function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate-limit' }>; onToggle: (enabled: boolean) => void }) {
   const [now, setNow] = useState(Date.now());
-  const [message, setMessage] = useState(item.queuedMessage ?? '');
-  useEffect(() => setMessage(item.queuedMessage ?? ''), [item.id, item.queuedMessage]);
   useEffect(() => {
     if (item.state !== 'pending') return;
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -1337,21 +1335,10 @@ function RateLimitWidget({ item, onToggle }: { item: Extract<Item, { kind: 'rate
         <span>{item.state === 'pending' ? `${item.enabled ? 'Will wake' : 'Resets'} ${resetLabel}${minutes > 0 ? ` · in about ${minutes} min` : ''}` : item.error ?? (item.state === 'sent' ? 'Sent the scheduled message to the agent.' : '')}</span>
       </div>
       {item.state === 'pending' && (
-        <div className="rate-limit-actions">
-          <label className="rate-limit-message">
-            <span>Message to send after reset</span>
-            <input
-              value={message}
-              placeholder="Continue"
-              onChange={(event) => setMessage(event.target.value)}
-              onBlur={() => { if (item.enabled) onToggle(true, message); }}
-            />
-          </label>
-          <label className="rate-limit-toggle">
-            <span>Wake after reset</span>
-            <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked, message)} />
-          </label>
-        </div>
+        <label className="rate-limit-toggle">
+          <span>Wake after reset</span>
+          <input type="checkbox" role="switch" checked={item.enabled} onChange={(event) => onToggle(event.target.checked)} />
+        </label>
       )}
     </section>
   );
@@ -2107,6 +2094,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const prompt = useStore((s) => s.prompt);
   const steer = useStore((s) => s.steer);
   const aside = useStore((s) => s.aside);
+  const setRateLimitAutoContinue = useStore((s) => s.setRateLimitAutoContinue);
   const interrupt = useStore((s) => s.interrupt);
   const removeQueuedPrompt = useStore((s) => s.removeQueuedPrompt);
   const clearPromptQueue = useStore((s) => s.clearPromptQueue);
@@ -2117,6 +2105,16 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   // tab switch or agent switch cause.
   const text = useStore((s) => s.drafts[sessionId] ?? '');
   const setDraft = useStore((s) => s.setDraft);
+  // The most recent rate-limit event is authoritative. While it is pending,
+  // the ordinary composer becomes the multiline message for its wake-up.
+  const scheduledRateLimit = useStore((s) => {
+    const events = s.sessions[sessionId]?.events ?? [];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i].event;
+      if (event.kind === 'rate_limit') return event.state === 'pending' ? event : null;
+    }
+    return null;
+  });
   const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
@@ -2416,6 +2414,28 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     const t = text.trim();
     const hasAnnotations = annotations.length > 0;
     if (!t && attachments.length === 0 && !hasAnnotations) return;
+    if (scheduledRateLimit) {
+      if (steering || attachments.length > 0 || hasAnnotations) {
+        setAttachmentError('The scheduled wake-up accepts text from the prompt box only.');
+        return;
+      }
+      sendingRef.current = true;
+      setSending(true);
+      try {
+        const result = await setRateLimitAutoContinue(sessionId, true, t);
+        if (result.error) setAttachmentError(result.error);
+        else {
+          setDraft(sessionId, '');
+          setAttachmentError(null);
+        }
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : 'Could not schedule wake-up.');
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+      return;
+    }
     if (attachments.some((attachment) => attachment.status === 'uploading')) {
       setAttachmentError('Wait for image uploads to finish.');
       return;
@@ -2626,9 +2646,11 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
           <textarea
             ref={textRef}
             data-prompt-agent={sessionId}
-            placeholder={usesSoftKeyboard()
-              ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
-              : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`)}
+            placeholder={scheduledRateLimit
+              ? (usesSoftKeyboard() ? 'Message for the scheduled wake-up…  (use the button to schedule)' : 'Message for the scheduled wake-up…  (Enter to schedule, Shift+Enter for newline)')
+              : (usesSoftKeyboard()
+                ? (working ? 'Queue a follow-up…  (use the button to queue)' : `Prompt ${agentLabel}…  (use the button to send)`)
+                : (working ? 'Queue a follow-up…  (Enter to queue, Shift+Enter for newline)' : `Prompt ${agentLabel}…  (Enter to send, Shift+Enter for newline)`))}
             value={text}
             onPaste={(e) => {
               const images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith('image/'));
@@ -2737,9 +2759,9 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
             className="btn primary"
             onClick={() => void send()}
             disabled={sending || uploadsPending || !canSubmit}
-            title={working ? 'Send after the current turn finishes' : 'Send prompt'}
+            title={scheduledRateLimit ? 'Send this multiline message when the rate limit resets' : working ? 'Send after the current turn finishes' : 'Send prompt'}
           >
-            {sending ? 'Sending…' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
+            {sending ? 'Scheduling…' : scheduledRateLimit ? 'Schedule wake-up' : queuedPosition != null ? `Queued #${queuedPosition} ✓` : working ? 'Queue' : 'Send'}
           </button>
         </div>
       </div>
