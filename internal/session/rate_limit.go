@@ -30,6 +30,8 @@ type rateLimitState struct {
 
 type limitParser func(string, time.Time) (time.Time, bool)
 
+const rateLimitTextWindow = 8 * 1024
+
 var (
 	claudeReset   = regexp.MustCompile(`(?i)(?:session limit |usage limit )?resets?\s+(?:at\s+)?([0-9]{1,2}:[0-9]{2}\s*(?:am|pm))\s*\(([^)]+)\)`)
 	codexReset    = regexp.MustCompile(`(?i)(?:use codex again|try again|limit resets?)\s+(?:at|after)\s+((?:[A-Z][a-z]{2}\s+[0-9]{1,2},?\s+[0-9]{4}\s+)?[0-9]{1,2}:[0-9]{2}\s*(?:am|pm))(?:\s*\(([^)]+)\))?`)
@@ -41,6 +43,30 @@ var harnessLimitParsers = map[string][]limitParser{
 	"codex":  {parseCodexLimit, parseDurationLimit},
 	"gemini": {parseDurationLimit},
 	"pi":     {parseDurationLimit},
+}
+
+func (s *Session) observeRateLimitEvent(ev eventlog.Event) {
+	switch ev.Kind {
+	case "user_message":
+		s.rateLimitMu.Lock()
+		s.rateLimitText = ""
+		s.rateLimitMu.Unlock()
+	case "message_chunk":
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Payload, &payload) != nil || payload.Text == "" {
+			return
+		}
+		s.rateLimitMu.Lock()
+		s.rateLimitText += payload.Text
+		if len(s.rateLimitText) > rateLimitTextWindow {
+			s.rateLimitText = s.rateLimitText[len(s.rateLimitText)-rateLimitTextWindow:]
+		}
+		text := s.rateLimitText
+		s.rateLimitMu.Unlock()
+		s.detectRateLimit(text)
+	}
 }
 
 func (s *Session) detectRateLimit(message string) {

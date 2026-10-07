@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/eventlog"
 )
 
 func TestHarnessRateLimitParsers(t *testing.T) {
@@ -90,5 +92,26 @@ func TestRateLimitParserIsHarnessSpecific(t *testing.T) {
 	s.detectRateLimit("You've hit your monthly spend limit; your session limit resets 10:20am (America/New_York)")
 	if _, ok, err := s.Log.LatestOfKind("rate_limit"); err != nil || ok {
 		t.Fatalf("unexpected rate limit: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCodexRateLimitDetectedFromAssistantChunks(t *testing.T) {
+	s, _, _ := testSession(t)
+	s.Spec.Agent = "codex"
+	for _, text := range []string{
+		"You've hit your usage limit. Upgrade to Pro, visit settings ",
+		"to purchase more credits or try again at 10:22 PM.",
+	} {
+		payload, _ := json.Marshal(map[string]any{"kind": "message_chunk", "text": text})
+		if _, err := s.append(eventlog.Event{Kind: "message_chunk", Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest, ok, err := s.Log.LatestOfKind("rate_limit")
+	if err != nil || !ok {
+		t.Fatalf("assistant limit not detected: ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(string(latest.Event.Payload), `"harness":"codex"`) {
+		t.Fatalf("payload=%s", latest.Event.Payload)
 	}
 }
