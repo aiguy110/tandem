@@ -105,7 +105,7 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	s.rateLimitMu.Lock()
 	s.rateLimit.ResetAt = time.Now().Add(20 * time.Millisecond).UnixMilli()
 	s.rateLimitMu.Unlock()
-	if err := s.SetRateLimitAutoContinue(true); err != nil {
+	if err := s.SetRateLimitAutoContinue(true, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,6 +146,40 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	}
 }
 
+func TestRateLimitWakeSendsQueuedMessage(t *testing.T) {
+	s, adapter, _ := testSession(t)
+	s.Spec.Harness = "claude"
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Now().In(ny).Add(time.Hour).Format("3:04pm")
+	s.detectRateLimit("You've hit your monthly spend limit; your session limit resets " + reset + " (America/New_York)")
+
+	s.rateLimitMu.Lock()
+	s.rateLimit.ResetAt = time.Now().Add(20 * time.Millisecond).UnixMilli()
+	s.rateLimitMu.Unlock()
+	if err := s.SetRateLimitAutoContinue(true, "Pick up with the failing federation test."); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		adapter.mu.Lock()
+		got := append([]string(nil), adapter.prompts...)
+		adapter.mu.Unlock()
+		if len(got) > 0 {
+			if got[0] != "Pick up with the failing federation test." {
+				t.Fatalf("wake prompt=%q", got[0])
+			}
+			adapter.gate <- struct{}{}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("queued wake message was not sent")
+}
+
 func TestManualPromptSupersedesPendingRateLimit(t *testing.T) {
 	s, adapter, _ := testSession(t)
 	s.Spec.Harness = "claude"
@@ -155,7 +189,7 @@ func TestManualPromptSupersedesPendingRateLimit(t *testing.T) {
 	}
 	reset := time.Now().In(ny).Add(time.Hour).Format("3:04pm")
 	s.detectRateLimit("You've hit your monthly spend limit; your session limit resets " + reset + " (America/New_York)")
-	if err := s.SetRateLimitAutoContinue(true); err != nil {
+	if err := s.SetRateLimitAutoContinue(true, ""); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Millisecond)
@@ -197,7 +231,7 @@ func TestRateLimitAutoContinueRemindsParentAboutSubagents(t *testing.T) {
 	s.rateLimitMu.Lock()
 	s.rateLimit.ResetAt = time.Now().Add(20 * time.Millisecond).UnixMilli()
 	s.rateLimitMu.Unlock()
-	if err := s.SetRateLimitAutoContinue(true); err != nil {
+	if err := s.SetRateLimitAutoContinue(true, ""); err != nil {
 		t.Fatal(err)
 	}
 

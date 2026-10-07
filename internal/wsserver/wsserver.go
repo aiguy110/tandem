@@ -390,6 +390,7 @@ type clientMessage struct {
 	Role              string                     `json:"role"`
 	Quote             string                     `json:"quote"`
 	Comment           string                     `json:"comment"`
+	Message           string                     `json:"message"`
 	Path              string                     `json:"path"`
 	PositionMs        int64                      `json:"positionMs"`
 	NotificationID    string                     `json:"notificationId"`
@@ -1112,7 +1113,7 @@ func (c *connection) handle(m clientMessage) {
 		if !ok {
 			return
 		}
-		if err := sess.SetRateLimitAutoContinue(m.Enabled); err != nil {
+		if err := sess.SetRateLimitAutoContinue(m.Enabled, m.Message); err != nil {
 			c.commandError(m, err)
 			return
 		}
