@@ -73,10 +73,11 @@ type Session struct {
 	lastUsage   usageReport
 	usageSeeded bool
 
-	rateLimitMu    sync.Mutex
-	rateLimit      rateLimitState
-	rateLimitTimer *time.Timer
-	rateLimitText  string
+	rateLimitMu          sync.Mutex
+	rateLimit            rateLimitState
+	rateLimitTimer       *time.Timer
+	rateLimitText        string
+	rateLimitSawSubagent bool
 }
 
 // usageReport is the daemon's view of a context-usage event: the numbers the

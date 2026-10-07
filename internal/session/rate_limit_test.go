@@ -86,6 +86,51 @@ func TestRateLimitOptInSchedulesContinueAndPersistsState(t *testing.T) {
 	}
 }
 
+func TestRateLimitAutoContinueRemindsParentAboutSubagents(t *testing.T) {
+	s, adapter, _ := testSession(t)
+	s.Spec.Harness = "claude"
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPayload, _ := json.Marshal(map[string]any{
+		"kind": "tool_call", "id": "child-work", "parentId": "spawn-child",
+	})
+	if _, err := s.append(eventlog.Event{Kind: "tool_call", Payload: childPayload}); err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Now().In(ny).Add(time.Hour).Format("3:04pm")
+	s.detectRateLimit("You've hit your monthly spend limit; your session limit resets " + reset + " (America/New_York)")
+
+	s.rateLimitMu.Lock()
+	s.rateLimit.ResetAt = time.Now().Add(20 * time.Millisecond).UnixMilli()
+	s.rateLimitMu.Unlock()
+	if err := s.SetRateLimitAutoContinue(true); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		adapter.mu.Lock()
+		if len(adapter.prompts) > 0 {
+			got = adapter.prompts[0]
+		}
+		adapter.mu.Unlock()
+		if got != "" {
+			adapter.gate <- struct{}{}
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !strings.Contains(got, "sub-agents") || !strings.Contains(got, "resume them") {
+		t.Fatalf("auto-continue prompt = %q", got)
+	}
+	if err := s.Dispose(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRateLimitParserIsHarnessSpecific(t *testing.T) {
 	s, _, _ := testSession(t)
 	s.Spec = agentadapter.Spec{Harness: "gemini"}
