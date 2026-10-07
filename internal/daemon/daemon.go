@@ -173,8 +173,14 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	secrets = secretbroker.New(secretbroker.Options{
 		Token:       token,
 		AgentExists: func(id string) bool { return agents != nil && agents.Get(id) != nil },
+		Workspace: func(id string) string {
+			if agents == nil {
+				return ""
+			}
+			return agents.CWD(id)
+		},
 		OnRequest: func(req secretbroker.Request) {
-			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "secret_request", "requestId": req.RequestID, "service": req.Service, "reason": req.Reason, "origin": req.Origin, "headerName": req.HeaderName})
+			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "secret_request", "requestId": req.RequestID, "service": req.Service, "reason": req.Reason, "usage": req.Usage, "origin": req.Origin, "path": req.Path, "headerName": req.HeaderName})
 			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "status", "status": "blocked"})
 		},
 		OnResolved: func(sessionID, requestID string, granted bool) {
@@ -431,7 +437,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 				takeovers.ServeHTTP(w, r)
 				return
 			}
-		case "/internal/secrets/request", "/internal/secrets/status", "/internal/secrets/resolve", "/internal/secrets/proxy":
+		case "/internal/secrets/request", "/internal/secrets/status", "/internal/secrets/resolve", "/internal/secrets/proxy", "/internal/secrets/file/read", "/internal/secrets/file/write":
 			if secrets != nil {
 				secrets.ServeHTTP(w, r)
 				return

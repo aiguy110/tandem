@@ -150,7 +150,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
         <div key={request.requestId} className="appr secret-request" onClick={() => setSecretEntry({ sessionId, request })}>
           <div className="who"><span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · secret</div>
           <div className="what">requests {request.service}</div>
-          <div className="notification-message">For {request.origin}</div>
+          <div className="notification-message">For {request.usage === 'file' ? request.path : request.origin}</div>
           <div className="acts"><button className="btn-approve" onClick={(e) => { e.stopPropagation(); setSecretEntry({ sessionId, request }); }}>Enter securely…</button></div>
         </div>
       ))}
@@ -220,11 +220,13 @@ function SecretEntryModal({ entry, onClose }: { entry: { sessionId: string; requ
     <div className="modal secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
       <div className="secret-body">
         <div className="adv-section" id="secret-title">Secure secret request</div>
-        <p><strong>{entry.request.service}</strong> credential for <code>{entry.request.origin}</code></p>
+        <p><strong>{entry.request.service}</strong> credential for <code>{entry.request.usage === 'file' ? entry.request.path : entry.request.origin}</code></p>
         <p className="sub">Agent-provided reason (untrusted): {entry.request.reason}</p>
         <p className="secret-assurance">The value is sent directly to Tandem’s in-memory broker. It is not added to the prompt, transcript, event log, or agent tool result.</p>
         <label>Secret value<input autoFocus type="password" autoComplete="off" spellCheck={false} value={value} onChange={(e) => setValue(e.target.value)} /></label>
-        <div className="sub">Injected only as <code>{entry.request.headerName}</code> when calling the approved origin.</div>
+        <div className="sub">{entry.request.usage === 'file'
+          ? <>Written only to the approved workspace file. A cooperative agent can edit it through redacted Tandem file tools without putting the value in its transcript.</>
+          : <>Injected only as <code>{entry.request.headerName}</code> when calling the approved origin.</>}</div>
       </div>
       {error && <div className="modal-err">{error}</div>}
       <div className="foot"><button className="btn-deny" disabled={busy} onClick={() => void resolve(true)}>Deny</button><span style={{ flex: 1 }} /><button disabled={busy || !value} className="btn-approve" onClick={() => void resolve(false)}>{busy ? 'Submitting…' : 'Grant for session'}</button></div>

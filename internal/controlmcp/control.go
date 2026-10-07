@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	ToolName          = "browser_request_takeover"
-	SecretRequestTool = "secret_request"
-	SecretHTTPTool    = "secret_http_request"
+	ToolName              = "browser_request_takeover"
+	SecretRequestTool     = "secret_request"
+	SecretHTTPTool        = "secret_http_request"
+	SecretFileRequestTool = "secret_file_request"
+	SecretFileReadTool    = "secret_file_read"
+	SecretFileWriteTool   = "secret_file_write"
 )
 
 type Config struct {
@@ -90,7 +93,7 @@ func (s *server) handle(ctx context.Context, line []byte) {
 	case "ping":
 		s.result(req.ID, map[string]any{})
 	case "tools/list":
-		tools := []any{secretRequestDeclaration(), secretHTTPDeclaration()}
+		tools := []any{secretRequestDeclaration(), secretHTTPDeclaration(), secretFileRequestDeclaration(), secretFileReadDeclaration(), secretFileWriteDeclaration()}
 		if s.cfg.BrowserEnabled {
 			tools = append([]any{toolDeclaration()}, tools...)
 		}
@@ -143,6 +146,42 @@ func (s *server) handle(ctx context.Context, line []byte) {
 			}
 			encoded, _ := json.Marshal(result)
 			s.result(req.ID, toolText(string(encoded)))
+		case SecretFileRequestTool:
+			var args secretFileRequestArgs
+			if json.Unmarshal(p.Arguments, &args) != nil {
+				s.rpcError(req.ID, -32602, "invalid secret file request")
+				return
+			}
+			grantID, err := s.requestFileSecret(ctx, args)
+			if err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			s.result(req.ID, toolText("Secret approved for "+args.Path+". Use marker {{TANDEM_SECRET:"+grantID+"}} with secret_file_write. The value was not disclosed."))
+		case SecretFileReadTool:
+			var args secretFileReadArgs
+			if json.Unmarshal(p.Arguments, &args) != nil {
+				s.rpcError(req.ID, -32602, "invalid secret file read")
+				return
+			}
+			result, err := s.secretFileRead(ctx, args)
+			if err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			encoded, _ := json.Marshal(result)
+			s.result(req.ID, toolText(string(encoded)))
+		case SecretFileWriteTool:
+			var args secretFileWriteArgs
+			if json.Unmarshal(p.Arguments, &args) != nil {
+				s.rpcError(req.ID, -32602, "invalid secret file write")
+				return
+			}
+			if err := s.secretFileWrite(ctx, args); err != nil {
+				s.rpcError(req.ID, -32603, err.Error())
+				return
+			}
+			s.result(req.ID, toolText("Secret file written. Its materialized contents were not returned."))
 		default:
 			s.rpcError(req.ID, -32602, "unknown tool: "+p.Name)
 		}
@@ -190,6 +229,20 @@ func secretHTTPDeclaration() map[string]any {
 	}
 }
 
+func secretFileRequestDeclaration() map[string]any {
+	return map[string]any{"name": SecretFileRequestTool, "description": "Ask the human for a secret scoped to one workspace file without exposing its value to the model. Returns an opaque grant marker.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+		"service": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}, "path": map[string]string{"type": "string", "description": "Workspace-relative file path, for example .env."},
+	}, "required": []string{"service", "reason", "path"}}}
+}
+func secretFileReadDeclaration() map[string]any {
+	return map[string]any{"name": SecretFileReadTool, "description": "Read a secret-bearing workspace file through Tandem. Active approved secret values are replaced with opaque {{TANDEM_SECRET:...}} markers.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}, "required": []string{"path"}}}
+}
+func secretFileWriteDeclaration() map[string]any {
+	return map[string]any{"name": SecretFileWriteTool, "description": "Atomically write a redacted document returned by secret_file_read. Tandem materializes approved secret markers and returns no file content.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+		"path": map[string]string{"type": "string"}, "revision": map[string]string{"type": "string", "description": "Revision from secret_file_read; use missing for a new file."}, "content": map[string]string{"type": "string", "description": "Complete redacted file content containing opaque secret markers."},
+	}, "required": []string{"path", "revision", "content"}}}
+}
+
 type secretRequestArgs struct {
 	Service    string `json:"service"`
 	Reason     string `json:"reason"`
@@ -203,6 +256,19 @@ type secretHTTPArgs struct {
 	URL     string            `json:"url"`
 	Body    string            `json:"body"`
 	Headers map[string]string `json:"headers"`
+}
+type secretFileRequestArgs struct {
+	Service string `json:"service"`
+	Reason  string `json:"reason"`
+	Path    string `json:"path"`
+}
+type secretFileReadArgs struct {
+	Path string `json:"path"`
+}
+type secretFileWriteArgs struct {
+	Path     string `json:"path"`
+	Revision string `json:"revision"`
+	Content  string `json:"content"`
 }
 
 func (s *server) requestSecret(ctx context.Context, args secretRequestArgs) (string, error) {
@@ -240,6 +306,57 @@ func (s *server) requestSecret(ctx context.Context, args secretRequestArgs) (str
 			}
 		}
 	}
+}
+
+func (s *server) requestFileSecret(ctx context.Context, args secretFileRequestArgs) (string, error) {
+	var registered struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := s.secretJSON(ctx, http.MethodPost, "/internal/secrets/request", "", map[string]string{
+		"sessionId": s.cfg.SessionID, "service": args.Service, "reason": args.Reason, "usage": "file", "path": args.Path,
+	}, &registered); err != nil {
+		return "", err
+	}
+	return s.waitForSecret(ctx, registered.RequestID)
+}
+
+func (s *server) waitForSecret(ctx context.Context, requestID string) (string, error) {
+	if requestID == "" {
+		return "", errors.New("secret request returned no requestId")
+	}
+	ticker := time.NewTicker(s.cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+			var status struct {
+				Done, Denied bool
+				GrantID      string `json:"grantId"`
+			}
+			query := "?sessionId=" + url.QueryEscape(s.cfg.SessionID) + "&requestId=" + url.QueryEscape(requestID)
+			if err := s.secretJSON(ctx, http.MethodGet, "/internal/secrets/status", query, nil, &status); err != nil {
+				continue
+			}
+			if status.Done {
+				if status.Denied {
+					return "", errors.New("human denied the secret request")
+				}
+				return status.GrantID, nil
+			}
+		}
+	}
+}
+
+func (s *server) secretFileRead(ctx context.Context, args secretFileReadArgs) (map[string]any, error) {
+	var result map[string]any
+	err := s.secretJSON(ctx, http.MethodPost, "/internal/secrets/file/read", "", map[string]string{"sessionId": s.cfg.SessionID, "path": args.Path}, &result)
+	return result, err
+}
+func (s *server) secretFileWrite(ctx context.Context, args secretFileWriteArgs) error {
+	var result map[string]any
+	return s.secretJSON(ctx, http.MethodPost, "/internal/secrets/file/write", "", map[string]string{"sessionId": s.cfg.SessionID, "path": args.Path, "revision": args.Revision, "content": args.Content}, &result)
 }
 
 func (s *server) secretHTTP(ctx context.Context, args secretHTTPArgs) (map[string]any, error) {

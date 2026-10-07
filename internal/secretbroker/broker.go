@@ -1,11 +1,12 @@
 // Package secretbroker keeps user-supplied credentials outside agent/model
-// transports and applies them only at a constrained network boundary.
+// transports and applies them only at constrained network or file boundaries.
 package secretbroker
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -27,9 +31,12 @@ const (
 	grantLifetime  = 8 * time.Hour
 )
 
+var secretMarkerPattern = regexp.MustCompile(`\{\{TANDEM_SECRET:(sg_[0-9a-f]{32})\}\}`)
+
 type Options struct {
 	Token       string
 	AgentExists func(string) bool
+	Workspace   func(string) string
 	OnRequest   func(Request)
 	OnResolved  func(sessionID, requestID string, granted bool)
 	HTTPClient  *http.Client
@@ -44,6 +51,8 @@ type Request struct {
 	Origin     string `json:"origin"`
 	HeaderName string `json:"headerName"`
 	Prefix     string `json:"prefix"`
+	Usage      string `json:"usage,omitempty"`
+	Path       string `json:"path,omitempty"`
 }
 
 type requestState struct {
@@ -55,9 +64,9 @@ type requestState struct {
 }
 
 type grant struct {
-	id, sessionID, origin, headerName, prefix string
-	secret                                    []byte
-	expires                                   time.Time
+	id, sessionID, usage, origin, path, headerName, prefix string
+	secret                                                 []byte
+	expires                                                time.Time
 }
 
 type Broker struct {
@@ -134,6 +143,170 @@ func normalizeOrigin(raw string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
+func normalizeFilePath(raw string) (string, error) {
+	if raw == "" || filepath.IsAbs(raw) || strings.ContainsRune(raw, '\x00') {
+		return "", errors.New("secret file path must be workspace-relative")
+	}
+	clean := filepath.Clean(raw)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("secret file path must stay inside the workspace")
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func pathInside(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (b *Broker) fileTarget(sessionID, rawPath string) (string, string, error) {
+	path, err := normalizeFilePath(rawPath)
+	if err != nil {
+		return "", "", err
+	}
+	if b.opts.Workspace == nil {
+		return "", "", errors.New("agent workspace is unavailable")
+	}
+	root, err := filepath.EvalSymlinks(b.opts.Workspace(sessionID))
+	if err != nil {
+		return "", "", errors.New("agent workspace is unavailable")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Join(root, filepath.Dir(filepath.FromSlash(path))))
+	if err != nil || !pathInside(root, parent) {
+		return "", "", errors.New("secret file parent must exist inside the workspace")
+	}
+	target := filepath.Join(parent, filepath.Base(filepath.FromSlash(path)))
+	if info, statErr := os.Lstat(target); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", "", errors.New("secret file must not be a symbolic link")
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return "", "", statErr
+	}
+	return path, target, nil
+}
+
+type FileReadRequest struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+}
+type FileReadResponse struct {
+	Path     string `json:"path"`
+	Revision string `json:"revision"`
+	Content  string `json:"content"`
+}
+type FileWriteRequest struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+	Revision  string `json:"revision"`
+	Content   string `json:"content"`
+}
+
+func fileRevision(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func (b *Broker) FileRead(in FileReadRequest) (FileReadResponse, error) {
+	path, target, err := b.fileTarget(in.SessionID, in.Path)
+	if err != nil {
+		return FileReadResponse{}, err
+	}
+	content, err := os.ReadFile(target)
+	if os.IsNotExist(err) {
+		return FileReadResponse{Path: path, Revision: "missing"}, nil
+	}
+	if err != nil {
+		return FileReadResponse{}, err
+	}
+	if len(content) > maxBodyBytes {
+		return FileReadResponse{}, errors.New("secret file exceeds 2 MiB")
+	}
+	b.mu.Lock()
+	redacted := append([]byte(nil), content...)
+	count := 0
+	for id, g := range b.grants {
+		if g.sessionID == in.SessionID && g.usage == "file" && g.path == path && b.opts.Now().Before(g.expires) {
+			marker := []byte("{{TANDEM_SECRET:" + id + "}}")
+			matches := bytes.Count(redacted, g.secret)
+			if matches > 0 {
+				redacted = bytes.ReplaceAll(redacted, g.secret, marker)
+				count += matches
+			}
+		}
+	}
+	b.mu.Unlock()
+	slog.Info("secret file read with redaction", "session", in.SessionID, "path", path, "redactions", count, "bytes", len(content))
+	return FileReadResponse{Path: path, Revision: fileRevision(content), Content: string(redacted)}, nil
+}
+
+func (b *Broker) FileWrite(in FileWriteRequest) error {
+	path, target, err := b.fileTarget(in.SessionID, in.Path)
+	if err != nil {
+		return err
+	}
+	if len(in.Content) > maxBodyBytes {
+		return errors.New("secret file exceeds 2 MiB")
+	}
+	current, readErr := os.ReadFile(target)
+	actualRevision := "missing"
+	if readErr == nil {
+		actualRevision = fileRevision(current)
+	} else if !os.IsNotExist(readErr) {
+		return readErr
+	}
+	if in.Revision != actualRevision {
+		return errors.New("secret file changed; read it again before writing")
+	}
+
+	materialized := []byte(in.Content)
+	matches := secretMarkerPattern.FindAllSubmatch(materialized, -1)
+	markerCheck := secretMarkerPattern.ReplaceAll(materialized, nil)
+	if bytes.Contains(markerCheck, []byte("{{TANDEM_SECRET:")) {
+		return errors.New("invalid secret marker")
+	}
+	b.mu.Lock()
+	used := 0
+	for _, match := range matches {
+		id := string(match[1])
+		g := b.grants[id]
+		if g == nil || g.sessionID != in.SessionID || g.usage != "file" || g.path != path || !b.opts.Now().Before(g.expires) {
+			b.mu.Unlock()
+			return errors.New("invalid, expired, or incorrectly scoped secret marker")
+		}
+		materialized = bytes.ReplaceAll(materialized, match[0], g.secret)
+		used++
+	}
+	b.mu.Unlock()
+	if bytes.Contains(materialized, []byte("{{TANDEM_SECRET:")) {
+		return errors.New("invalid secret marker")
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".tandem-secret-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0o600); err == nil {
+		_, err = tmp.Write(materialized)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, target)
+	}
+	for i := range materialized {
+		materialized[i] = 0
+	}
+	if err != nil {
+		return err
+	}
+	slog.Info("secret file written", "session", in.SessionID, "path", path, "markers", used, "bytes", len(in.Content))
+	return nil
+}
+
 func (b *Broker) Register(req Request) (string, error) {
 	if b.opts.AgentExists == nil || !b.opts.AgentExists(req.SessionID) {
 		return "", errors.New("no such agent")
@@ -141,16 +314,35 @@ func (b *Broker) Register(req Request) (string, error) {
 	if len(req.Service) == 0 || len(req.Service) > 80 || len(req.Reason) > 500 {
 		return "", errors.New("invalid service or reason")
 	}
-	origin, err := normalizeOrigin(req.Origin)
-	if err != nil {
-		return "", err
+	if req.Usage == "" {
+		req.Usage = "http"
+	}
+	var err error
+	if req.Usage == "file" {
+		req.Path, err = normalizeFilePath(req.Path)
+		if err != nil || b.opts.Workspace == nil || b.opts.Workspace(req.SessionID) == "" {
+			if err == nil {
+				err = errors.New("agent workspace is unavailable")
+			}
+			return "", err
+		}
+	} else if req.Usage == "http" {
+		req.Origin, err = normalizeOrigin(req.Origin)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		return "", errors.New("unsupported secret usage")
 	}
 	if req.HeaderName == "" {
 		req.HeaderName = "Authorization"
 	}
-	canonical := http.CanonicalHeaderKey(req.HeaderName)
-	if canonical == "" || canonical == "Host" || canonical == "Cookie" || strings.ContainsAny(req.HeaderName, "\r\n:") {
-		return "", errors.New("invalid credential header")
+	canonical := ""
+	if req.Usage == "http" {
+		canonical = http.CanonicalHeaderKey(req.HeaderName)
+		if canonical == "" || canonical == "Host" || canonical == "Cookie" || strings.ContainsAny(req.HeaderName, "\r\n:") {
+			return "", errors.New("invalid credential header")
+		}
 	}
 	if len(req.Prefix) > 80 || strings.ContainsAny(req.Prefix, "\r\n") {
 		return "", errors.New("invalid credential prefix")
@@ -159,11 +351,11 @@ func (b *Broker) Register(req Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.RequestID, req.Origin, req.HeaderName = id, origin, canonical
+	req.RequestID, req.HeaderName = id, canonical
 	b.mu.Lock()
 	b.requests[id] = &requestState{Request: req, created: b.opts.Now()}
 	b.mu.Unlock()
-	slog.Info("secret requested", "session", req.SessionID, "request_id", id, "service", req.Service, "origin", origin, "header", canonical)
+	slog.Info("secret requested", "session", req.SessionID, "request_id", id, "service", req.Service, "usage", req.Usage, "origin", req.Origin, "path", req.Path, "header", canonical)
 	if b.opts.OnRequest != nil {
 		b.opts.OnRequest(req)
 	}
@@ -199,7 +391,11 @@ func (b *Broker) Resolve(requestID string, secret []byte, deny bool) error {
 			return err
 		}
 		r.grantID = id
-		b.grants[id] = &grant{id: id, sessionID: r.SessionID, origin: r.Origin, headerName: r.HeaderName, prefix: r.Prefix, secret: append([]byte(nil), secret...), expires: b.opts.Now().Add(grantLifetime)}
+		usage := r.Usage
+		if usage == "" {
+			usage = "http"
+		}
+		b.grants[id] = &grant{id: id, sessionID: r.SessionID, usage: usage, origin: r.Origin, path: r.Path, headerName: r.HeaderName, prefix: r.Prefix, secret: append([]byte(nil), secret...), expires: b.opts.Now().Add(grantLifetime)}
 	}
 	sessionID := r.SessionID
 	b.mu.Unlock()
@@ -231,7 +427,7 @@ type ProxyResponse struct {
 func (b *Broker) Proxy(ctx context.Context, in ProxyRequest) (ProxyResponse, error) {
 	b.mu.Lock()
 	g := b.grants[in.GrantID]
-	if g == nil || g.sessionID != in.SessionID || !b.opts.Now().Before(g.expires) {
+	if g == nil || g.sessionID != in.SessionID || g.usage != "http" || !b.opts.Now().Before(g.expires) {
 		b.mu.Unlock()
 		return ProxyResponse{}, errors.New("invalid or expired secret grant")
 	}
@@ -311,6 +507,10 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.serveResolve(w, r)
 	case "/internal/secrets/proxy":
 		b.serveProxy(w, r)
+	case "/internal/secrets/file/read":
+		b.serveFileRead(w, r)
+	case "/internal/secrets/file/write":
+		b.serveFileWrite(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -383,6 +583,39 @@ func (b *Broker) serveProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, resp)
+}
+func (b *Broker) serveFileRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body FileReadRequest
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body) != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	resp, err := b.FileRead(body)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, resp)
+}
+func (b *Broker) serveFileWrite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body FileWriteRequest
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+64<<10)).Decode(&body) != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := b.FileWrite(body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (b *Broker) authorized(r *http.Request) bool {
 	want, got := "Bearer "+b.opts.Token, r.Header.Get("Authorization")
