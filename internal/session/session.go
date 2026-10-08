@@ -599,6 +599,7 @@ func (s *Session) EnqueueAside(ctx context.Context, text string) (PromptReceipt,
 	if startRunner {
 		go s.runPromptQueue()
 	}
+	slog.Info("agent aside accepted", "session_id", s.ID, "aside_id", prompt.ID, "disposition", disposition, "position", position)
 	return PromptReceipt{ID: prompt.ID, Disposition: disposition, Position: position, done: prompt.done}, nil
 }
 
@@ -645,6 +646,8 @@ func (s *Session) executeAside(ctx context.Context, id string, blocks []agentada
 		return "", errors.New("this agent does not support context-isolated asides")
 	}
 	question := blocks[0].Text
+	started := time.Now()
+	slog.Info("agent aside started", "session_id", s.ID, "aside_id", id)
 	payload, _ := json.Marshal(map[string]any{"kind": "aside_started", "asideId": id, "question": question})
 	s.emit(eventlog.Event{Kind: "aside_started", Payload: payload})
 	stopReason, err := asides.Aside(ctx, id, blocks)
@@ -654,6 +657,11 @@ func (s *Session) executeAside(ctx context.Context, id string, blocks []agentada
 	}
 	payload, _ = json.Marshal(completed)
 	s.emit(eventlog.Event{Kind: "aside_completed", Payload: payload})
+	if err != nil {
+		slog.Warn("agent aside failed", "session_id", s.ID, "aside_id", id, "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+	} else {
+		slog.Info("agent aside completed", "session_id", s.ID, "aside_id", id, "stop_reason", stopReason, "elapsed_ms", time.Since(started).Milliseconds())
+	}
 	return stopReason, err
 }
 

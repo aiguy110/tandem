@@ -36,6 +36,7 @@ let tick = 0;
 let inbuf = '';
 let pendingPromptId = null;
 let promptSessionId = null;
+const liveSessions = new Set([sessionId]);
 const PERM_REQ_ID = 1000; // high, to avoid colliding with the client's request ids
 
 // ---- client-request plumbing (agent -> client JSON-RPC calls) ----
@@ -125,6 +126,7 @@ function handle(msg) {
       send({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'expected playwright MCP server on session/new' } });
       return;
     }
+    liveSessions.add(sessionId);
     send({ jsonrpc: '2.0', id: msg.id, result: {
       sessionId,
       modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'auto', name: 'Automatic' }] },
@@ -141,6 +143,7 @@ function handle(msg) {
       return;
     }
     if (msg.params?.sessionId) sessionId = msg.params.sessionId;
+    liveSessions.add(sessionId);
     process.stderr.write(`MOCK_LOADSESSION ${sessionId}\n`);
     // Resume contract: re-stream the whole prior conversation as session/update
     // notifications BEFORE answering session/load. A session id asking for a
@@ -182,6 +185,10 @@ function handle(msg) {
     return;
   }
   if (msg.method === 'session/prompt') {
+    if (!liveSessions.has(msg.params?.sessionId)) {
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: 'Session not found' } });
+      return;
+    }
     pendingPromptId = msg.id;
     promptSessionId = msg.params?.sessionId ?? sessionId;
     const blocks = msg.params?.prompt ?? [];

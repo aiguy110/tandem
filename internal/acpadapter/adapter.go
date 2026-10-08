@@ -448,7 +448,8 @@ func (a *Adapter) Prompt(ctx context.Context, blocks []PromptBlock) (string, err
 // records so Tandem can persist and render them inline without treating them as
 // parent conversation history.
 func (a *Adapter) Aside(ctx context.Context, asideID string, blocks []PromptBlock) (string, error) {
-	if !a.Capabilities().ForkSession {
+	caps := a.Capabilities()
+	if !caps.ForkSession {
 		return "", errors.New("this agent does not support context-isolated asides")
 	}
 	if asideID == "" {
@@ -465,6 +466,7 @@ func (a *Adapter) Aside(ctx context.Context, asideID string, blocks []PromptBloc
 	if fork.SessionID == "" {
 		return "", errors.New("acp session/fork: response is missing sessionId")
 	}
+	slog.Info("acp aside fork created", "session", a.cfg.SessionID, "aside_id", asideID, "parent_session", a.ExternalSessionID(), "fork_session", fork.SessionID, "load_required", caps.LoadSession)
 	a.mu.Lock()
 	a.asideID, a.asideSessionID = asideID, fork.SessionID
 	a.mu.Unlock()
@@ -480,6 +482,28 @@ func (a *Adapter) Aside(ctx context.Context, asideID string, blocks []PromptBloc
 		defer cancel()
 		_ = a.tr.Call(closeCtx, "session/close", map[string]any{"sessionId": fork.SessionID}, nil)
 	}()
+	// Some bridges (notably claude-agent-acp) persist session/fork's transcript
+	// but do not register the returned ID as a live, promptable session. Adopt
+	// the fork with session/load before prompting it. Keep the parent's adapter
+	// state intact and suppress the history replay produced by the load.
+	if caps.LoadSession {
+		a.mu.Lock()
+		a.replaying = true
+		a.mu.Unlock()
+		started := time.Now()
+		var loaded struct {
+			SessionID string `json:"sessionId"`
+		}
+		err := a.tr.Call(ctx, "session/load", map[string]any{
+			"sessionId": fork.SessionID, "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers,
+		}, &loaded)
+		a.endReplay()
+		if err != nil {
+			slog.Warn("acp aside fork load failed", "session", a.cfg.SessionID, "aside_id", asideID, "fork_session", fork.SessionID, "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+			return "", fmt.Errorf("acp session/load fork: %w", err)
+		}
+		slog.Info("acp aside fork loaded", "session", a.cfg.SessionID, "aside_id", asideID, "fork_session", fork.SessionID, "elapsed_ms", time.Since(started).Milliseconds())
+	}
 	return a.promptSession(ctx, fork.SessionID, blocks, true)
 }
 
