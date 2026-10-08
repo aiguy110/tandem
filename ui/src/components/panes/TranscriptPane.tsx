@@ -1689,7 +1689,12 @@ function ToolCard({ item, enterClass, subagentActivity }: { item: Extract<Item, 
     <div className={`card${subagent ? ' subagent-card' : ''}${enterClass}${statusFlash ? ` ${statusFlash}` : ''}`}>
       <div className={`card-head${open ? ' open' : ''}`} onClick={() => hasBody && setOpen((o) => !o)}>
         <span>{hasBody ? (open ? '▾' : '▸') : '⚙'}</span>
-        {subagent && <span className="subagent-icon" role="img" aria-label="Sub-agent">🤖</span>}
+        {subagent && (
+          <svg className="subagent-icon" viewBox="0 0 24 24" role="img" aria-label="Sub-agent">
+            <rect x="7" y="3" width="10" height="7" rx="2" />
+            <path d="M12 10v4M6 21v-2a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v2M9.5 6.5h.01M14.5 6.5h.01" />
+          </svg>
+        )}
         {command != null ? (
           <span className="title tool-cmd-title">
             {description != null && <span className="tool-cmd-desc">{description}</span>}
