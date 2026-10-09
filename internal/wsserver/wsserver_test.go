@@ -77,6 +77,8 @@ func (f *testFederation) Call(ctx context.Context, hostID string, payload json.R
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
 	case "search_sessions":
 		return json.RawMessage(`{"t":"session_search","query":"work","results":[]}`), nil
+	case "list_host_metrics":
+		return json.RawMessage(`{"t":"host_metrics","metrics":[{"ts":123,"cpuPercent":42,"memoryUsed":10,"memoryTotal":20,"diskUsed":30,"diskTotal":40}]}`), nil
 	default:
 		return json.RawMessage(`{"t":"ack"}`), nil
 	}
@@ -766,6 +768,18 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	send(t, c, map[string]any{"t": "search_sessions", "hostId": "host-one", "query": "work", "corrId": "search"})
 	if got = recv(t, c); got["t"] != "session_search" || got["hostId"] != "host-one" || got["corrId"] != "search" {
 		t.Fatalf("remote history = %#v", got)
+	}
+
+	// Host metrics must cross the federation tunnel. Handling this command
+	// before the generic hostId dispatcher would accidentally return the
+	// parent's own resource history for every remote host.
+	send(t, c, map[string]any{"t": "list_host_metrics", "hostId": "host-one", "sinceSeq": 100, "corrId": "metrics"})
+	if got = recv(t, c); got["t"] != "host_metrics" || got["hostId"] != "host-one" || got["corrId"] != "metrics" {
+		t.Fatalf("remote host metrics = %#v", got)
+	}
+	metrics := got["metrics"].([]any)
+	if len(metrics) != 1 || metrics[0].(map[string]any)["cpuPercent"] != float64(42) {
+		t.Fatalf("remote host metric payload = %#v", got)
 	}
 }
 

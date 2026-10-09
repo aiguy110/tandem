@@ -1058,20 +1058,6 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()}, m.CorrID))
 		return
 	}
-	if m.T == "list_host_metrics" {
-		if c.server.opts.HostMetrics == nil {
-			c.commandError(m, errors.New("host metrics are unavailable"))
-			return
-		}
-		metrics, err := c.server.opts.HostMetrics.History(m.SinceSeq, m.Limit)
-		if err != nil {
-			c.commandError(m, err)
-			return
-		}
-		slog.Debug("served host metrics history", "samples", len(metrics), "since", m.SinceSeq)
-		c.send(withCorr(map[string]any{"t": "host_metrics", "metrics": metrics}, m.CorrID))
-		return
-	}
 	// A display name belongs to this daemon's view, so it is never relayed
 	// to the named host even though the message carries its hostId.
 	if m.T == "rename_host" {
@@ -1157,6 +1143,18 @@ func (c *connection) handle(m clientMessage) {
 		return
 	}
 	switch m.T {
+	case "list_host_metrics":
+		if c.server.opts.HostMetrics == nil {
+			c.commandError(m, errors.New("host metrics are unavailable"))
+			return
+		}
+		metrics, err := c.server.opts.HostMetrics.History(m.SinceSeq, m.Limit)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		slog.Debug("served local host metrics history", "samples", len(metrics), "since", m.SinceSeq)
+		c.send(withCorr(map[string]any{"t": "host_metrics", "metrics": metrics}, m.CorrID))
 	case "subscribe":
 		c.subscribe(m)
 	case "unsubscribe":
