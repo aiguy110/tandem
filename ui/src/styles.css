@@ -1159,6 +1159,16 @@ body.dock-resizing .app { transition: none; }
 .automation-toggle:disabled, .automation-foot button:disabled, .fleet-foot button:disabled { cursor: default; opacity: .5; }
 .automation-foot { justify-content: space-between; }
 .fleet-modal { width: min(920px, 94vw); }
+.fleet-metrics { fill: var(--text-dim); cursor: pointer; font-size: 15px; }
+.fleet-metrics:hover { fill: var(--accent); }
+.host-metrics-modal { width: min(760px, 94vw); }
+.host-metrics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px; }
+.host-metrics-grid section { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.metric-heading { display: flex; justify-content: space-between; font: var(--fs-sm) var(--font-mono); }
+.metric-detail { margin: 4px 0 8px; color: var(--text-faint); font: var(--fs-xs) var(--font-mono); }
+.metric-chart { display: block; width: 100%; height: 90px; border-bottom: 1px solid var(--border); }
+.host-metrics-empty { padding: 40px 16px; text-align: center; color: var(--text-faint); }
+@media (max-width: 600px) { .host-metrics-grid { grid-template-columns: 1fr; } }
 .fleet-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .fleet-header .primary { font-size: var(--fs-md); font-weight: 600; }
 .fleet-header .sub { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }

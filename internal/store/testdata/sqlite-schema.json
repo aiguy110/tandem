@@ -2,9 +2,111 @@
   "schema": [
     {
       "type": "index",
+      "name": "agent_msg_inbound_link",
+      "tableName": "agent_msg_inbound",
+      "sql": "CREATE INDEX agent_msg_inbound_link ON agent_msg_inbound(linkId, receivedAt)"
+    },
+    {
+      "type": "index",
+      "name": "agent_msg_links_to",
+      "tableName": "agent_msg_links",
+      "sql": "CREATE INDEX agent_msg_links_to ON agent_msg_links(toSession)"
+    },
+    {
+      "type": "index",
+      "name": "agent_msg_obligations_session",
+      "tableName": "agent_msg_obligations",
+      "sql": "CREATE INDEX agent_msg_obligations_session ON agent_msg_obligations(session, status)"
+    },
+    {
+      "type": "index",
+      "name": "agent_msg_outbox_status",
+      "tableName": "agent_msg_outbox",
+      "sql": "CREATE INDEX agent_msg_outbox_status ON agent_msg_outbox(status, createdAt)"
+    },
+    {
+      "type": "index",
+      "name": "agent_msg_requests_open",
+      "tableName": "agent_msg_requests",
+      "sql": "CREATE INDEX agent_msg_requests_open ON agent_msg_requests(status, deadline)"
+    },
+    {
+      "type": "index",
       "name": "annotations_session",
       "tableName": "annotations",
       "sql": "CREATE INDEX annotations_session ON annotations(sessionId)"
+    },
+    {
+      "type": "index",
+      "name": "host_metrics_ts",
+      "tableName": "host_metrics",
+      "sql": "CREATE INDEX host_metrics_ts ON host_metrics(ts)"
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_inbound_1",
+      "tableName": "agent_msg_inbound",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_link_requests_1",
+      "tableName": "agent_msg_link_requests",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_link_requests_2",
+      "tableName": "agent_msg_link_requests",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_links_1",
+      "tableName": "agent_msg_links",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_links_2",
+      "tableName": "agent_msg_links",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_meta_1",
+      "tableName": "agent_msg_meta",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_obligations_1",
+      "tableName": "agent_msg_obligations",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_outbox_1",
+      "tableName": "agent_msg_outbox",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_requests_1",
+      "tableName": "agent_msg_requests",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_settings_1",
+      "tableName": "agent_msg_settings",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_agent_msg_threads_1",
+      "tableName": "agent_msg_threads",
+      "sql": null
     },
     {
       "type": "index",
@@ -64,6 +166,18 @@
       "type": "index",
       "name": "sqlite_autoindex_events_1",
       "tableName": "events",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_federation_adoptions_1",
+      "tableName": "federation_adoptions",
+      "sql": null
+    },
+    {
+      "type": "index",
+      "name": "sqlite_autoindex_federation_host_names_1",
+      "tableName": "federation_host_names",
       "sql": null
     },
     {
@@ -134,6 +248,60 @@
     },
     {
       "type": "table",
+      "name": "agent_msg_inbound",
+      "tableName": "agent_msg_inbound",
+      "sql": "CREATE TABLE agent_msg_inbound (\n        id         TEXT PRIMARY KEY,\n        toSession  TEXT NOT NULL,\n        linkId     TEXT NOT NULL DEFAULT '',\n        fromHost   TEXT NOT NULL DEFAULT '',\n        fromAgent  TEXT NOT NULL DEFAULT '',\n        kind       TEXT NOT NULL,\n        status     TEXT NOT NULL,\n        receivedAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_link_requests",
+      "tableName": "agent_msg_link_requests",
+      "sql": "CREATE TABLE agent_msg_link_requests (\n        id        TEXT PRIMARY KEY,\n        role      TEXT NOT NULL,\n        session   TEXT NOT NULL,\n        peerHost  TEXT NOT NULL,\n        peerAgent TEXT NOT NULL,\n        peerName  TEXT NOT NULL DEFAULT '',\n        reason    TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL,\n        UNIQUE (role, session, peerHost, peerAgent)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_links",
+      "tableName": "agent_msg_links",
+      "sql": "CREATE TABLE agent_msg_links (\n        id            TEXT PRIMARY KEY,\n        fromHost      TEXT NOT NULL,\n        fromAgent     TEXT NOT NULL,\n        fromName      TEXT NOT NULL DEFAULT '',\n        toSession     TEXT NOT NULL,\n        delivery      TEXT NOT NULL DEFAULT 'steer',\n        budgetPerHour INTEGER NOT NULL DEFAULT 60,\n        maxHops       INTEGER NOT NULL DEFAULT 20,\n        paused        INTEGER NOT NULL DEFAULT 0,\n        source        TEXT NOT NULL DEFAULT 'user',\n        createdAt     INTEGER NOT NULL,\n        UNIQUE (fromHost, fromAgent, toSession)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_meta",
+      "tableName": "agent_msg_meta",
+      "sql": "CREATE TABLE agent_msg_meta (\n        key   TEXT PRIMARY KEY,\n        value TEXT NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_obligations",
+      "tableName": "agent_msg_obligations",
+      "sql": "CREATE TABLE agent_msg_obligations (\n        requestId      TEXT PRIMARY KEY,\n        session        TEXT NOT NULL,\n        askerHost      TEXT NOT NULL,\n        askerAgent     TEXT NOT NULL,\n        askerName      TEXT NOT NULL DEFAULT '',\n        threadId       TEXT NOT NULL DEFAULT '',\n        messageId      TEXT NOT NULL DEFAULT '',\n        hop            INTEGER NOT NULL DEFAULT 0,\n        armedPrompt    TEXT NOT NULL DEFAULT '',\n        reminded       INTEGER NOT NULL DEFAULT 0,\n        reminderPrompt TEXT NOT NULL DEFAULT '',\n        status         TEXT NOT NULL,\n        createdAt      INTEGER NOT NULL,\n        closedAt       INTEGER\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_outbox",
+      "tableName": "agent_msg_outbox",
+      "sql": "CREATE TABLE agent_msg_outbox (\n        id            TEXT PRIMARY KEY,\n        fromSession   TEXT NOT NULL DEFAULT '',\n        toHost        TEXT NOT NULL,\n        toAgent       TEXT NOT NULL,\n        kind          TEXT NOT NULL,\n        requestId     TEXT NOT NULL DEFAULT '',\n        envelope      TEXT NOT NULL,\n        status        TEXT NOT NULL,\n        result        TEXT NOT NULL DEFAULT '',\n        error         TEXT NOT NULL DEFAULT '',\n        attempts      INTEGER NOT NULL DEFAULT 0,\n        createdAt     INTEGER NOT NULL,\n        nextAttemptAt INTEGER NOT NULL,\n        updatedAt     INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_requests",
+      "tableName": "agent_msg_requests",
+      "sql": "CREATE TABLE agent_msg_requests (\n        requestId  TEXT PRIMARY KEY,\n        session    TEXT NOT NULL,\n        toHost     TEXT NOT NULL,\n        toAgent    TEXT NOT NULL,\n        toName     TEXT NOT NULL DEFAULT '',\n        threadId   TEXT NOT NULL DEFAULT '',\n        messageId  TEXT NOT NULL DEFAULT '',\n        status     TEXT NOT NULL,\n        timeoutSec INTEGER NOT NULL DEFAULT 0,\n        createdAt  INTEGER NOT NULL,\n        deadline   INTEGER NOT NULL,\n        closedAt   INTEGER\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_settings",
+      "tableName": "agent_msg_settings",
+      "sql": "CREATE TABLE agent_msg_settings (\n        sessionId TEXT PRIMARY KEY,\n        listed    INTEGER NOT NULL DEFAULT 1,\n        card      TEXT NOT NULL DEFAULT ''\n      )"
+    },
+    {
+      "type": "table",
+      "name": "agent_msg_threads",
+      "tableName": "agent_msg_threads",
+      "sql": "CREATE TABLE agent_msg_threads (\n        sessionId TEXT NOT NULL,\n        threadId  TEXT NOT NULL,\n        hop       INTEGER NOT NULL,\n        updatedAt INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, threadId)\n      )"
+    },
+    {
+      "type": "table",
       "name": "annotations",
       "tableName": "annotations",
       "sql": "CREATE TABLE annotations (\n        id        TEXT PRIMARY KEY,\n        sessionId   TEXT NOT NULL,\n        seq       INTEGER NOT NULL,\n        role      TEXT NOT NULL,\n        quote     TEXT NOT NULL,\n        comment   TEXT NOT NULL DEFAULT '',\n        createdAt INTEGER NOT NULL,\n        updatedAt INTEGER NOT NULL\n      )"
@@ -194,9 +362,27 @@
     },
     {
       "type": "table",
+      "name": "federation_adoptions",
+      "tableName": "federation_adoptions",
+      "sql": "CREATE TABLE federation_adoptions (\n        url        TEXT PRIMARY KEY,\n        credential TEXT NOT NULL,\n        hostId     TEXT NOT NULL DEFAULT '',\n        updatedAt  INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "federation_host_names",
+      "tableName": "federation_host_names",
+      "sql": "CREATE TABLE federation_host_names (\n        hostId    TEXT PRIMARY KEY,\n        name      TEXT NOT NULL,\n        updatedAt INTEGER NOT NULL\n      )"
+    },
+    {
+      "type": "table",
+      "name": "federation_identity",
+      "tableName": "federation_identity",
+      "sql": "CREATE TABLE federation_identity (\n        singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),\n        hostId     TEXT NOT NULL\n      )"
+    },
+    {
+      "type": "table",
       "name": "federation_master",
       "tableName": "federation_master",
-      "sql": "CREATE TABLE federation_master (\n        singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),\n        url         TEXT NOT NULL,\n        hostId      TEXT NOT NULL,\n        credential  TEXT NOT NULL,\n        updatedAt   INTEGER NOT NULL\n      )"
+      "sql": "CREATE TABLE federation_master (\n        singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),\n        url         TEXT NOT NULL,\n        hostId      TEXT NOT NULL,\n        credential  TEXT NOT NULL,\n        updatedAt   INTEGER NOT NULL\n      , adopted INTEGER NOT NULL DEFAULT 0)"
     },
     {
       "type": "table",
@@ -233,6 +419,12 @@
       "name": "history_sessions",
       "tableName": "history_sessions",
       "sql": "CREATE TABLE history_sessions (\n        id          INTEGER PRIMARY KEY,\n        source      TEXT NOT NULL,\n        agent       TEXT NOT NULL,\n        externalId  TEXT NOT NULL,\n        sessionId     TEXT NOT NULL DEFAULT '',\n        cwd         TEXT NOT NULL DEFAULT '',\n        title       TEXT NOT NULL DEFAULT '',\n        createdAt   INTEGER,\n        updatedAt   INTEGER,\n        indexedAt   INTEGER NOT NULL,\n        resumable   INTEGER NOT NULL DEFAULT 1,\n        sourceKey   TEXT NOT NULL,\n        sourceMeta  TEXT NOT NULL DEFAULT '{}',\n        importerId  TEXT NOT NULL DEFAULT '',\n        importerVersion INTEGER NOT NULL DEFAULT 0,\n        missingSince INTEGER,\n        UNIQUE (source, agent, externalId)\n      )"
+    },
+    {
+      "type": "table",
+      "name": "host_metrics",
+      "tableName": "host_metrics",
+      "sql": "CREATE TABLE host_metrics (\n        ts              INTEGER PRIMARY KEY,\n        cpuPercent      REAL NOT NULL,\n        memoryUsed      INTEGER NOT NULL,\n        memoryTotal     INTEGER NOT NULL,\n        diskUsed        INTEGER NOT NULL,\n        diskTotal       INTEGER NOT NULL,\n        vramUsed        INTEGER,\n        vramTotal       INTEGER\n      )"
     },
     {
       "type": "table",

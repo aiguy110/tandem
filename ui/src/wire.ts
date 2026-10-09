@@ -256,6 +256,17 @@ export interface FederationHost {
   dialer?: 'child' | 'parent';
 }
 
+export interface HostMetric {
+  ts: number;
+  cpuPercent: number;
+  memoryUsed: number;
+  memoryTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  vramUsed?: number;
+  vramTotal?: number;
+}
+
 export type GitRefKind = 'local-branch' | 'remote-branch' | 'tag' | 'detached';
 export interface GitRefInfo {
   ref: string;
@@ -610,6 +621,7 @@ export type ClientMsg =
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; hostId?: string; corrId?: string }
   | { t: 'list_hosts'; corrId?: string }
+  | { t: 'list_host_metrics'; hostId?: string; sinceSeq?: number; limit?: number; corrId?: string }
   | { t: 'list_sessions'; hostId?: string; corrId?: string }
   | { t: 'list_automation'; repositoryId?: string; corrId?: string }
   | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
@@ -665,6 +677,7 @@ export type ServerMsg =
   | { t: 'agents'; corrId?: string; sessions: SessionSummary[]; agentId?: string }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
+  | { t: 'host_metrics'; corrId?: string; hostId?: string; metrics: HostMetric[]; error?: string }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
   | { t: 'mcp_servers'; corrId?: string; servers?: McpServerStatus[]; error?: string }

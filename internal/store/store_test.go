@@ -72,7 +72,7 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if want := []string{"agent_msg_inbound", "agent_msg_link_requests", "agent_msg_links", "agent_msg_meta", "agent_msg_obligations", "agent_msg_outbox", "agent_msg_requests", "agent_msg_settings", "agent_msg_threads", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_adoptions", "federation_host_names", "federation_identity", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "message_audio", "profile_recent", "profiles", "repository_tool_grants", "session_assets", "session_audio_settings", "sessions"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"agent_msg_inbound", "agent_msg_link_requests", "agent_msg_links", "agent_msg_meta", "agent_msg_obligations", "agent_msg_outbox", "agent_msg_requests", "agent_msg_settings", "agent_msg_threads", "annotations", "assets", "audio_position", "automation_jobs", "automation_runs", "automation_tool_calls", "automation_wakeups", "browser_sessions", "browser_snapshots", "events", "federation_adoptions", "federation_host_names", "federation_identity", "federation_master", "federation_slaves", "history_entries", "history_entries_fts", "history_import_runs", "history_import_state", "history_sessions", "host_metrics", "message_audio", "profile_recent", "profiles", "repository_tool_grants", "session_assets", "session_audio_settings", "sessions"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables=%v want %v", tables, want)
 	}
 
@@ -126,6 +126,22 @@ func TestFreshSchemaPragmasAndAgentLifecycle(t *testing.T) {
 	max, err := s.MaxSessionSuffix()
 	if err != nil || max != 10 {
 		t.Fatalf("max=%d err=%v", max, err)
+	}
+}
+
+func TestHostMetricsHistoryAndRetention(t *testing.T) {
+	s, _ := openTestStore(t)
+	for i := int64(1); i <= 4; i++ {
+		if _, err := s.AddHostMetric(HostMetric{Timestamp: i, CPUPercent: float64(i), MemoryUsed: i, MemoryTotal: 10, DiskUsed: i, DiskTotal: 20}, 128*3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metrics, err := s.HostMetrics(0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 3 || metrics[0].Timestamp != 2 || metrics[2].Timestamp != 4 {
+		t.Fatalf("metrics=%#v", metrics)
 	}
 }
 

@@ -35,6 +35,7 @@ import type {
   ManagedAdapter,
   McpServerStatus,
   FederationHost,
+  HostMetric,
   Profile,
   RepoInfo,
   ResumableSession,
@@ -253,7 +254,7 @@ export interface DraftAttachment {
   error?: string;
 }
 
-export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'adapters' | 'mcp' | 'appearance';
+export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'host-metrics' | 'adapters' | 'mcp' | 'appearance';
 
 export interface AckResult {
   sessionId?: string;
@@ -291,6 +292,7 @@ interface StoreState {
   // the store so the modal can receive the selection on its first render.
   spawnHostId: string | null;
   fleetFocusHostId: string | null;
+  hostMetricsHostId: string | null;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
@@ -360,6 +362,8 @@ interface StoreState {
   setModal: (m: ModalKind) => void;
   openSpawnAtHost: (hostId: string) => void;
   openFleetAtHost: (hostId: string) => void;
+  openHostMetrics: (hostId: string) => void;
+  fetchHostMetrics: (hostId: string, since?: number) => Promise<HostMetric[]>;
   clearFleetFocusHost: () => void;
   // Open the spawn palette pre-selected to hand off from this agent.
   handOffAgent: (sessionId: string) => void;
@@ -518,6 +522,7 @@ const pendingAutomation = new Map<string, { resolve: () => void; reject: (error:
 const pendingAgentDistributions = new Map<string, { resolve: (adapters: ManagedAdapter[]) => void; reject: (error: Error) => void }>();
 const pendingMcpServers = new Map<string, { resolve: (servers: McpServerStatus[]) => void; reject: (error: Error) => void }>();
 const pendingMcpAuth = new Map<string, { resolve: (url: string) => void; reject: (error: Error) => void }>();
+const pendingHostMetrics = new Map<string, { resolve: (metrics: HostMetric[]) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
@@ -809,6 +814,14 @@ export const useStore = create<StoreState>((set, get) => {
         }
         return;
       }
+      case 'host_metrics': {
+		const pending = msg.corrId ? pendingHostMetrics.get(msg.corrId) : undefined;
+		if (pending && msg.corrId) {
+			pendingHostMetrics.delete(msg.corrId);
+			if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(msg.metrics ?? []);
+		}
+		return;
+      }
       case 'spawn_options': {
         const pending = msg.corrId ? pendingSpawnOptions.get(msg.corrId) : undefined;
         if (pending) {
@@ -982,6 +995,12 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'ack': {
+        const metricsPending = msg.corrId ? pendingHostMetrics.get(msg.corrId) : undefined;
+        if (metricsPending && msg.corrId) {
+          pendingHostMetrics.delete(msg.corrId);
+          metricsPending.reject(new Error(msg.error ?? 'host metrics unavailable'));
+          return;
+        }
         const dirsHost = msg.corrId ? pendingDirs.get(msg.corrId) : undefined;
         if (msg.corrId && dirsHost !== undefined) {
           pendingDirs.delete(msg.corrId);
@@ -1303,6 +1322,7 @@ export const useStore = create<StoreState>((set, get) => {
     spawnHandoffFrom: null,
     spawnHostId: null,
     fleetFocusHostId: null,
+    hostMetricsHostId: null,
     inspectorOpen: false,
     dirs: spawnCache.dirsByHost[LOCAL_HOST_ID] ?? [],
     agentCatalog: null,
@@ -1478,6 +1498,17 @@ export const useStore = create<StoreState>((set, get) => {
       get().refreshHosts();
       set({ modal: 'fleet', spawnHandoffFrom: null, spawnHostId: null, fleetFocusHostId: hostId });
     },
+    openHostMetrics: (hostId) => {
+      get().refreshHosts();
+      set({ modal: 'host-metrics', hostMetricsHostId: hostId });
+    },
+    fetchHostMetrics: (hostId, since = Date.now() - 24 * 60 * 60 * 1000) => new Promise((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingHostMetrics.set(corrId, { resolve, reject });
+      client.send(isLocalHost(hostId)
+        ? { t: 'list_host_metrics', sinceSeq: since, limit: 20000, corrId }
+        : { t: 'list_host_metrics', hostId, sinceSeq: since, limit: 20000, corrId });
+    }),
     clearFleetFocusHost: () => set({ fleetFocusHostId: null }),
     handOffAgent: (sessionId) => {
       get().setModal('spawn');

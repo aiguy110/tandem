@@ -172,6 +172,17 @@ CREATE TABLE IF NOT EXISTS repository_tool_grants (
         revokedAt    INTEGER,
         PRIMARY KEY (repositoryId, toolName)
       );
+CREATE TABLE IF NOT EXISTS host_metrics (
+        ts              INTEGER PRIMARY KEY,
+        cpuPercent      REAL NOT NULL,
+        memoryUsed      INTEGER NOT NULL,
+        memoryTotal     INTEGER NOT NULL,
+        diskUsed        INTEGER NOT NULL,
+        diskTotal       INTEGER NOT NULL,
+        vramUsed        INTEGER,
+        vramTotal       INTEGER
+      );
+CREATE INDEX IF NOT EXISTS host_metrics_ts ON host_metrics(ts);
 CREATE TABLE IF NOT EXISTS automation_jobs (
         id                  TEXT PRIMARY KEY,
         repositoryId        TEXT NOT NULL,

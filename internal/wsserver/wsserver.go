@@ -79,6 +79,7 @@ type Options struct {
 	WriteQueue               int
 	Browser                  *browser.Broker
 	History                  HistoryLifecycle
+	HostMetrics              HostMetrics
 	Automation               AutomationStore
 	Notifications            *notifications.Center
 	NotificationAction       func(context.Context, string, string) (string, error)
@@ -143,6 +144,10 @@ type HistoryLifecycle interface {
 	TriggerStale(string)
 	Refresh(string, bool) (bool, error)
 	Status(string) ([]historyimport.AgentStatus, error)
+}
+
+type HostMetrics interface {
+	History(int64, int) ([]store.HostMetric, error)
 }
 
 type Handler struct {
@@ -1053,6 +1058,20 @@ func (c *connection) handle(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()}, m.CorrID))
 		return
 	}
+	if m.T == "list_host_metrics" {
+		if c.server.opts.HostMetrics == nil {
+			c.commandError(m, errors.New("host metrics are unavailable"))
+			return
+		}
+		metrics, err := c.server.opts.HostMetrics.History(m.SinceSeq, m.Limit)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		slog.Debug("served host metrics history", "samples", len(metrics), "since", m.SinceSeq)
+		c.send(withCorr(map[string]any{"t": "host_metrics", "metrics": metrics}, m.CorrID))
+		return
+	}
 	// A display name belongs to this daemon's view, so it is never relayed
 	// to the named host even though the message carries its hostId.
 	if m.T == "rename_host" {
@@ -1916,6 +1935,7 @@ var asyncForwards = map[string]bool{
 	"list_sessions": true, "search_sessions": true, "history_status": true,
 	"get_messaging_state": true, "list_agent_links": true,
 	"list_system_notifications": true,
+	"list_host_metrics":         true,
 }
 
 func (c *connection) forwardFederation(m clientMessage) {

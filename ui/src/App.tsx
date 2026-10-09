@@ -15,6 +15,7 @@ import { McpServersModal } from './components/McpServersModal';
 import { ResumePalette } from './components/ResumePalette';
 import { AutomationModal } from './components/AutomationModal';
 import { FleetView } from './components/FleetView';
+import { HostMetricsModal } from './components/HostMetricsModal';
 import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { AppearanceModal } from './components/AppearanceModal';
 import { uiScale } from './appearance';
@@ -129,6 +130,7 @@ function ModalHost({ modal }: { modal: string }) {
       {rendered === 'resume' && <ResumePalette />}
       {rendered === 'automation' && <AutomationModal />}
       {rendered === 'fleet' && <FleetView />}
+      {rendered === 'host-metrics' && <HostMetricsModal />}
       {rendered === 'adapters' && <AdapterManagerModal />}
       {rendered === 'mcp' && <McpServersModal />}
       {rendered === 'appearance' && <AppearanceModal />}

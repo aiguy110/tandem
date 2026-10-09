@@ -33,6 +33,7 @@ import (
 	"github.com/aiguy110/tandem/internal/federation"
 	"github.com/aiguy110/tandem/internal/historyimport"
 	"github.com/aiguy110/tandem/internal/homebase"
+	"github.com/aiguy110/tandem/internal/hostmetrics"
 	"github.com/aiguy110/tandem/internal/httpserver"
 	"github.com/aiguy110/tandem/internal/languagemodel"
 	"github.com/aiguy110/tandem/internal/mcpauth"
@@ -99,6 +100,16 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return err
 	}
 	boot.phase("store_open")
+	metricsMaxBytes := hostmetrics.DefaultMaxBytes
+	if raw := strings.TrimSpace(os.Getenv("TANDEM_HOST_METRICS_MAX_BYTES")); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			return fmt.Errorf("TANDEM_HOST_METRICS_MAX_BYTES must be a positive integer")
+		}
+		metricsMaxBytes = parsed
+	}
+	metricsService := hostmetrics.New(db, cfg.Home, metricsMaxBytes)
+	metricsService.Start(ctx)
 	var voiceRenderer voice.Renderer
 	if cfg.Voice.Enabled {
 		languageModel, languageErr := languagemodel.New(cfg.LanguageModel)
@@ -516,7 +527,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a

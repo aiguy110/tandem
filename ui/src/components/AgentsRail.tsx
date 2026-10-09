@@ -39,6 +39,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const restartHarness = useStore((s) => s.restartHarness);
 	const openSpawnAtHost = useStore((s) => s.openSpawnAtHost);
 	const openFleetAtHost = useStore((s) => s.openFleetAtHost);
+	const openHostMetrics = useStore((s) => s.openHostMetrics);
 	const collapsed = useStore((s) => s.sessionsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleSessionsRail);
   // Keep the familiar uninterrupted rail until federation has at least one
@@ -278,6 +279,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   group={group}
                   onSpawn={() => openSpawnAtHost(group.hostId)}
                   onDetails={() => openFleetAtHost(group.hostId)}
+                  onMetrics={() => openHostMetrics(group.hostId)}
                 />
               )}
               {group.ids.map((id) => (
@@ -475,7 +477,7 @@ function hostLinkBadge(status: FederationHost['status']): HostLink {
 type HostLink = { label: string; tone: string; title: string };
 type HostGroup = { hostId: string; label: string; link: HostLink | null; ids: string[] };
 
-function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: () => void; onDetails: () => void }) {
+function HostHeader({ group, onSpawn, onDetails, onMetrics }: { group: HostGroup; onSpawn: () => void; onDetails: () => void; onMetrics: () => void }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (!menu) return;
@@ -514,6 +516,7 @@ function HostHeader({ group, onSpawn, onDetails }: { group: HostGroup; onSpawn: 
         >
           <button type="button" role="menuitem" onClick={() => { onSpawn(); setMenu(null); }}>Spawn agent here</button>
           <button type="button" role="menuitem" onClick={() => { onDetails(); setMenu(null); }}>Details</button>
+          <button type="button" role="menuitem" onClick={() => { onMetrics(); setMenu(null); }}>Resource utilization</button>
         </div>,
         document.body,
       )}

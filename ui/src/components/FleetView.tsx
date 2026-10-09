@@ -145,6 +145,7 @@ export function FleetView() {
   const refreshHosts = useStore((state) => state.refreshHosts);
   const focusHostId = useStore((state) => state.fleetFocusHostId);
   const clearFocusHost = useStore((state) => state.clearFleetFocusHost);
+  const openHostMetrics = useStore((state) => state.openHostMetrics);
   const fleet = useMemo(() => projectFleet(hosts), [hosts]);
   const nodeByID = useMemo(() => new Map(fleet.nodes.map((node) => [node.host.id, node])), [fleet.nodes]);
   const panStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
@@ -375,6 +376,10 @@ export function FleetView() {
                       }}
                     >✎</text>
                   )}
+                  <text className="fleet-metrics" x={NODE_WIDTH - 38} y="58" role="button" tabIndex={0}
+                    aria-label={`Resource utilization for ${hostName(node.host)}`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => openHostMetrics(node.host.id)}>▥</text>
                 </g>
               ))}
             </g>
