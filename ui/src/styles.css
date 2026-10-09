@@ -1168,6 +1168,9 @@ body.dock-resizing .app { transition: none; }
 .metric-detail { margin: 4px 0 8px; color: var(--text-faint); font: var(--fs-xs) var(--font-mono); }
 .metric-chart { display: block; width: 100%; height: 90px; border-bottom: 1px solid var(--border); }
 .host-metrics-empty { padding: 40px 16px; text-align: center; color: var(--text-faint); }
+.host-metrics-foot { justify-content: space-between; }
+.host-metrics-foot button { flex: 0 0 auto; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); cursor: pointer; }
+.host-metrics-foot button:hover { border-color: var(--agent); background: var(--agent-soft); }
 @media (max-width: 600px) { .host-metrics-grid { grid-template-columns: 1fr; } }
 .fleet-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .fleet-header .primary { font-size: var(--fs-md); font-weight: 600; }

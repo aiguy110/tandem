@@ -31,12 +31,12 @@ export function HostMetricsModal() {
     ...(latest.vramTotal ? [{ name: 'vRAM', value: pct(latest.vramUsed ?? 0, latest.vramTotal), detail: `${bytes(latest.vramUsed ?? 0)} / ${bytes(latest.vramTotal)}`, series: metrics.map((m) => pct(m.vramUsed ?? 0, m.vramTotal ?? 0)), color: '#c084fc' }] : []),
   ] : [], [latest, metrics]);
   return <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setModal('none')}>
-    <div className="modal host-metrics-modal" role="dialog" aria-modal="true" aria-labelledby="host-metrics-title">
-      <div className="head"><div><div className="primary" id="host-metrics-title">{host?.name ?? hostId} utilization</div><div className="sub">Live and historical host resources · last 24 hours</div></div><button onClick={() => setModal('none')} aria-label="Close">×</button></div>
+    <div className="modal host-metrics-modal" role="dialog" aria-modal="true" aria-labelledby="host-metrics-title" onKeyDown={(event) => event.key === 'Escape' && setModal('none')}>
+      <div className="fleet-header"><div><div className="primary" id="host-metrics-title">{host?.name ?? hostId} utilization</div><div className="sub">Live and historical host resources · last 24 hours</div></div><button type="button" className="fleet-close" onClick={() => setModal('none')} aria-label="Close host utilization">×</button></div>
       {error && <div className="modal-err">{error}</div>}
       <div className="host-metrics-grid">{rows.map((row) => <section key={row.name}><div className="metric-heading"><strong>{row.name}</strong><span>{row.value.toFixed(1)}%</span></div><div className="metric-detail">{row.detail}</div><Sparkline values={row.series} color={row.color} /></section>)}</div>
       {!error && !latest && <div className="host-metrics-empty">Waiting for the first sample…</div>}
-      <div className="foot"><span>{metrics.length} samples{latest ? ` · updated ${new Date(latest.ts).toLocaleTimeString()}` : ''}</span><button onClick={() => setModal('none')}>Close</button></div>
+      <div className="foot host-metrics-foot"><span>{metrics.length} samples{latest ? ` · updated ${new Date(latest.ts).toLocaleTimeString()}` : ''}</span><button type="button" onClick={() => setModal('none')}>Close</button></div>
     </div>
   </div>;
 }
