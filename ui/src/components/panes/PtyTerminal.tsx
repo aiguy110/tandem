@@ -35,6 +35,17 @@ function rectSnapshot(rect: DOMRect | DOMRectReadOnly | undefined) {
   };
 }
 
+const URL_PATTERN = /https?:\/\/[^\s\x00-\x1f\x7f]+/g;
+const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+
+export function latestTerminalURL(text: string): string | null {
+  const matches = text.replace(ANSI_PATTERN, '').match(URL_PATTERN);
+  if (!matches?.length) return null;
+  // Sentence punctuation is not part of a plain terminal URL. Parentheses are
+  // intentionally retained because they are valid in paths and query values.
+  return matches[matches.length - 1].replace(/[.,;:!?]+$/, '');
+}
+
 const MOBILE_KEYS = [
   { label: 'Esc', data: '\x1b' },
   { label: 'Tab', data: '\t' },
@@ -55,6 +66,8 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [modifiers, setModifiers] = useState<Set<MobileModifier>>(() => new Set());
+  const [latestUrl, setLatestUrl] = useState<string | null>(null);
+  const [linkCopyState, setLinkCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [debugCopyState, setDebugCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const debugEnabled = useRef(new URLSearchParams(window.location.search).get('termDebug') === '1').current;
   const debugLog = useRef<Record<string, unknown>[]>([]);
@@ -71,6 +84,8 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
   fontSizeRef.current = termFontSize;
   const rendererRefLive = useRef<TerminalRenderer | null>(null);
   const refitRef = useRef<(() => void) | null>(null);
+  const urlDecoder = useRef(new TextDecoder());
+  const urlScanBuffer = useRef('');
 
   // Canvas/WASM terminal renderers cannot summon a phone's soft keyboard. Keep
   // a real, invisible textarea in the terminal and translate its mobile IME
@@ -324,6 +339,11 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       // Feed buffered scrollback + live bytes into the emulator.
       unsub = cbs.current.subscribe((bytes) => {
         renderer?.write(bytes);
+        if (bytes.length) {
+          urlScanBuffer.current = (urlScanBuffer.current + urlDecoder.current.decode(bytes, { stream: true })).slice(-32_768);
+          const found = latestTerminalURL(urlScanBuffer.current);
+          if (found) setLatestUrl((current) => current === found ? current : found);
+        }
         if (bytes.length) cbs.current.onFirstData?.();
       });
 
@@ -386,6 +406,19 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
     }
   };
 
+  const copyLatestLink = async () => {
+    if (!latestUrl) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+      await navigator.clipboard.writeText(latestUrl);
+      setLinkCopyState('copied');
+      window.setTimeout(() => setLinkCopyState('idle'), 1500);
+    } catch {
+      setLinkCopyState('failed');
+      window.prompt('Copy this link:', latestUrl);
+    }
+  };
+
   return (
     <div
       ref={mountRef}
@@ -399,6 +432,14 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       <button type="button" className="term-kbd-btn" onClick={focusKeyboard} title="Show keyboard to type in the terminal">
         ⌨ Keyboard
       </button>
+      {latestUrl && (
+        <div className="term-link-actions" role="group" aria-label="Latest terminal link">
+          <a href={latestUrl} target="_blank" rel="noreferrer">Open link</a>
+          <button type="button" onClick={() => void copyLatestLink()}>
+            {linkCopyState === 'copied' ? '✓ Copied' : linkCopyState === 'failed' ? 'Copy failed' : 'Copy link'}
+          </button>
+        </div>
+      )}
       {debugEnabled && (
         <button type="button" className="term-debug-btn" onClick={() => void copyDiagnostics()}>
           {debugCopyState === 'copied' ? '✓ Copied diagnostics' : debugCopyState === 'failed' ? 'Copy failed — tap again' : 'Copy diagnostics'}

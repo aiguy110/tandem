@@ -19,7 +19,7 @@ vi.mock('../../terminal/TerminalRenderer', () => ({
   selectedEngine: vi.fn().mockReturnValue('ghostty'),
 }));
 
-import { PtyTerminal } from './PtyTerminal';
+import { latestTerminalURL, PtyTerminal } from './PtyTerminal';
 
 afterEach(() => {
   cleanup();
@@ -28,6 +28,12 @@ afterEach(() => {
 });
 
 describe('PtyTerminal', () => {
+  it('finds the latest URL in terminal output without ANSI styling or prose punctuation', () => {
+    expect(latestTerminalURL('\u001b[4mhttps://first.test/a\u001b[0m then https://last.test/oauth?code=a+b.')).toBe(
+      'https://last.test/oauth?code=a+b',
+    );
+  });
+
   it('forwards plain-text paste to the terminal input once', async () => {
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
