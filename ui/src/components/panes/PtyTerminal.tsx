@@ -37,8 +37,16 @@ function rectSnapshot(rect: DOMRect | DOMRectReadOnly | undefined) {
 
 const URL_PATTERN = /https?:\/\/[^\s\x00-\x1f\x7f]+/g;
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+const OSC8_LINK_PATTERN = /\x1b\]8;[^;]*;([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 
 export function latestTerminalURL(text: string): string | null {
+  // Modern CLIs use OSC 8 hyperlinks. Their target is complete even when the
+  // visible label is hard-wrapped with newlines, so prefer it over scanning
+  // the rendered label (which may only yield the first row of a long URL).
+  const hyperlinkTargets = [...text.matchAll(OSC8_LINK_PATTERN)]
+    .map((match) => match[1])
+    .filter((target) => /^https?:\/\//.test(target));
+  if (hyperlinkTargets.length) return hyperlinkTargets[hyperlinkTargets.length - 1];
   const matches = text.replace(ANSI_PATTERN, '').match(URL_PATTERN);
   if (!matches?.length) return null;
   // Sentence punctuation is not part of a plain terminal URL. Parentheses are

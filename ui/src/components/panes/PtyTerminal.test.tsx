@@ -34,6 +34,12 @@ describe('PtyTerminal', () => {
     );
   });
 
+  it('prefers a complete OSC 8 target over its hard-wrapped visible label', () => {
+    const target = 'https://claude.com/cai/oauth/authorize?code=true&client_id=complete';
+    const output = `\u001b]8;;${target}\u001b\\https://claude.com/cai/oauth/authorize?code=tr\r\nue&client_id=complete\u001b]8;;\u001b\\`;
+    expect(latestTerminalURL(output)).toBe(target);
+  });
+
   it('forwards plain-text paste to the terminal input once', async () => {
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
