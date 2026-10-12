@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiguy110/tandem/internal/acpadapter"
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -107,6 +108,9 @@ func (a *regAdapter) Close(context.Context) error {
 }
 func (a *regAdapter) ExternalSessionID() string { return a.sid }
 func (a *regAdapter) PID() int                  { return 1 }
+func (a *regAdapter) SessionState() acpadapter.SessionState {
+	return acpadapter.SessionState{}
+}
 
 func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config) {
 	t.Helper()
@@ -125,6 +129,27 @@ func setup(t *testing.T, f *fakeFactory) (*Registry, *store.Store, config.Config
 }
 func existing(dir string) agentadapter.Spec {
 	return agentadapter.Spec{Adapter: "acp", Workspace: workspace.Workspace{Kind: workspace.KindExisting, CWD: dir}}
+}
+
+func TestSpawnOptionsUsesSelectedManagedDistribution(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, cfg := setup(t, f)
+	r.config.Agents["pi"] = config.Agent{ACP: &config.Launch{Cmd: "node", Args: []string{"legacy-entry"}}}
+	entry := writePiDist(t, cfg.RuntimeRoot, "0.0.33", nil)
+
+	if _, err := r.SpawnOptions(context.Background(), "pi", "", nil, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	req := f.requests["spawn-options-pi"]
+	if req.Spec.ResolvedLaunch == nil || req.Spec.ResolvedLaunch.Distribution == nil {
+		t.Fatalf("spawn-options request did not pin a managed distribution: %+v", req.Spec)
+	}
+	if got := req.Spec.ResolvedLaunch.Distribution.Version; got != "0.0.33" {
+		t.Errorf("distribution version=%q want 0.0.33", got)
+	}
+	if got := req.Spec.ResolvedLaunch.ACP.Args[0]; got != entry {
+		t.Errorf("ACP entry=%q want %q", got, entry)
+	}
 }
 
 func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {

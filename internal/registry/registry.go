@@ -809,6 +809,9 @@ func (r *Registry) SpawnOptions(ctx context.Context, agent, harness string, acpA
 	if err != nil {
 		return SpawnOptions{}, err
 	}
+	if err := r.resolveManagedDistribution(ctx, &spec); err != nil {
+		return SpawnOptions{}, fmt.Errorf("provision agent %s for spawn options: %w", spec.Agent, err)
+	}
 	a, err := r.factory.Start(ctx, agentadapter.StartRequest{SessionID: "spawn-options-" + agent, CWD: cwd, Spec: spec})
 	if err != nil {
 		return SpawnOptions{}, err
@@ -947,15 +950,8 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 	}
 	if spec.Adapter == "acp" && spec.ResolvedLaunch.Distribution == nil {
 		progress.Report(ctx, "Checking "+spec.Agent+" agent runtime install…")
-		distribution, provisionErr := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
-		if provisionErr != nil {
-			return nil, fmt.Errorf("provision agent %s: %w", spec.Agent, provisionErr)
-		}
-		if distribution != nil {
-			spec.ResolvedLaunch.Distribution = distribution
-			if entry, ok := runtimeinstall.EntryPoint(spec.Agent, distribution); ok && spec.ResolvedLaunch.ACP != nil && len(spec.ResolvedLaunch.ACP.Args) > 0 {
-				spec.ResolvedLaunch.ACP.Args[0] = entry
-			}
+		if err := r.resolveManagedDistribution(ctx, &spec); err != nil {
+			return nil, fmt.Errorf("provision agent %s: %w", spec.Agent, err)
 		}
 	}
 	// Rendered before anything is provisioned so a bad source id fails the
@@ -1041,6 +1037,33 @@ func (r *Registry) Spawn(ctx context.Context, spec agentadapter.Spec) (*session.
 		go s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: prompt}})
 	}
 	return s, nil
+}
+
+// resolveManagedDistribution makes every new ACP process use the distribution
+// currently selected in the managed-adapter lockfile. This includes ephemeral
+// spawn-option probes: querying a legacy shared node_modules tree can otherwise
+// show a stale model/mode list even though the subsequent session launches on
+// the adapter installed by the updater.
+func (r *Registry) resolveManagedDistribution(ctx context.Context, spec *agentadapter.Spec) error {
+	if spec.Adapter != "acp" || spec.ResolvedLaunch == nil || spec.ResolvedLaunch.Distribution != nil {
+		return nil
+	}
+	distribution, err := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if distribution == nil {
+		return nil
+	}
+	entry, ok := runtimeinstall.EntryPoint(spec.Agent, distribution)
+	if !ok || spec.ResolvedLaunch.ACP == nil || len(spec.ResolvedLaunch.ACP.Args) == 0 {
+		return fmt.Errorf("managed agent %s has no replaceable ACP entry point", spec.Agent)
+	}
+	slog.Info("resolved managed ACP distribution", "agent", spec.Agent,
+		"version", distribution.Version, "source", distribution.Source, "path", distribution.Path)
+	spec.ResolvedLaunch.Distribution = distribution
+	spec.ResolvedLaunch.ACP.Args[0] = entry
+	return nil
 }
 
 const tandemSessionPreamble = "## Tandem session\n\n" +
