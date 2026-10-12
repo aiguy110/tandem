@@ -256,7 +256,7 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 	if enabled, after, err := s.SessionAudioEnabled("audio-1"); err != nil || !enabled || after != 6 {
 		t.Fatalf("saved enabled=%v after=%d err=%v", enabled, after, err)
 	}
-	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip")}); err != nil {
+	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-1", Seq: 7, MIMEType: "audio/mpeg", Data: []byte("clip"), SourceText: "displayed", PreparationInstructions: "speak exactly", PreparedText: "spoken"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PutMessageAudio(MessageAudio{SessionID: "audio-1", Seq: 9, MIMEType: "audio/mpeg", Data: []byte("later")}); err != nil {
@@ -266,7 +266,7 @@ func TestMessageAudioPersistsUntilAgentDeletion(t *testing.T) {
 		t.Fatalf("audio seqs=%v err=%v", seqs, err)
 	}
 	got, err := s.MessageAudio("audio-1", 7)
-	if err != nil || got == nil || string(got.Data) != "clip" {
+	if err != nil || got == nil || string(got.Data) != "clip" || got.SourceText != "displayed" || got.PreparationInstructions != "speak exactly" || got.PreparedText != "spoken" {
 		t.Fatalf("audio=%#v err=%v", got, err)
 	}
 	if err := s.DeleteSession("audio-1"); err != nil {

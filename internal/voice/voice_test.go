@@ -64,6 +64,12 @@ func TestRenderUsesSharedLanguageModelAndSpeechRequests(t *testing.T) {
 	if !languageModelSeen || !speechSeen || string(audio.Data) != "audio-data" || audio.MIMEType != "audio/mpeg" {
 		t.Fatalf("render = %+v, languageModel=%v speech=%v", audio, languageModelSeen, speechSeen)
 	}
+	if audio.PreparedText != "Hello, world." {
+		t.Fatalf("prepared text = %q", audio.PreparedText)
+	}
+	if !strings.Contains(audio.PreparationInstructions, "clean it") {
+		t.Fatalf("preparation instructions = %q", audio.PreparationInstructions)
+	}
 }
 
 func TestRenderSplitsPreparedSpeechAtDelimiter(t *testing.T) {
@@ -114,6 +120,9 @@ func TestRenderSplitsPreparedSpeechAtDelimiter(t *testing.T) {
 	}
 	if got, want := string(audio.Data), "First part.Second part."; got != want {
 		t.Fatalf("audio data = %q, want %q", got, want)
+	}
+	if got, want := audio.PreparedText, "First part."+speechChunkDelimiter+"Second part."; got != want {
+		t.Fatalf("prepared text = %q, want %q", got, want)
 	}
 }
 

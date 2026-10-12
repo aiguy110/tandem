@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS message_audio (
         mimeType   TEXT NOT NULL,
         data       BLOB NOT NULL,
         durationMs INTEGER NOT NULL DEFAULT 0,
+        sourceText TEXT NOT NULL DEFAULT '',
+        preparationInstructions TEXT NOT NULL DEFAULT '',
+        preparedText TEXT NOT NULL DEFAULT '',
         createdAt  INTEGER NOT NULL,
         PRIMARY KEY (sessionId, seq)
       );
@@ -364,12 +367,15 @@ type Store struct {
 // computation and has not yet been read (see MessageAudio's lazy backfill
 // note below).
 type MessageAudio struct {
-	SessionID  string
-	Seq        int64
-	MIMEType   string
-	Data       []byte
-	DurationMs int64
-	CreatedAt  int64
+	SessionID               string
+	Seq                     int64
+	MIMEType                string
+	Data                    []byte
+	DurationMs              int64
+	SourceText              string
+	PreparationInstructions string
+	PreparedText            string
+	CreatedAt               int64
 }
 
 // MessageAudioClip is the lightweight (no audio bytes) metadata for one
@@ -407,15 +413,15 @@ func (s *Store) PutMessageAudio(audio MessageAudio) error {
 	if audio.CreatedAt == 0 {
 		audio.CreatedAt = s.now().UnixMilli()
 	}
-	_, err := s.db.Exec(`INSERT INTO message_audio (sessionId, seq, mimeType, data, durationMs, createdAt) VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(sessionId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, createdAt=excluded.createdAt`, audio.SessionID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.CreatedAt)
+	_, err := s.db.Exec(`INSERT INTO message_audio (sessionId, seq, mimeType, data, durationMs, sourceText, preparationInstructions, preparedText, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(sessionId, seq) DO UPDATE SET mimeType=excluded.mimeType, data=excluded.data, durationMs=excluded.durationMs, sourceText=excluded.sourceText, preparationInstructions=excluded.preparationInstructions, preparedText=excluded.preparedText, createdAt=excluded.createdAt`, audio.SessionID, audio.Seq, audio.MIMEType, audio.Data, audio.DurationMs, audio.SourceText, audio.PreparationInstructions, audio.PreparedText, audio.CreatedAt)
 	return err
 }
 
 func (s *Store) MessageAudio(sessionID string, seq int64) (*MessageAudio, error) {
 	var audio MessageAudio
-	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, createdAt FROM message_audio WHERE sessionId = ? AND seq = ?`, sessionID, seq).
-		Scan(&audio.MIMEType, &audio.Data, &audio.DurationMs, &audio.CreatedAt)
+	err := s.db.QueryRow(`SELECT mimeType, data, durationMs, sourceText, preparationInstructions, preparedText, createdAt FROM message_audio WHERE sessionId = ? AND seq = ?`, sessionID, seq).
+		Scan(&audio.MIMEType, &audio.Data, &audio.DurationMs, &audio.SourceText, &audio.PreparationInstructions, &audio.PreparedText, &audio.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -644,6 +650,9 @@ func Open(path string) (*Store, error) {
 		{"ALTER TABLE history_sessions ADD COLUMN missingSince INTEGER", "history_sessions.missingSince"},
 		{"ALTER TABLE automation_jobs ADD COLUMN wakeSuppression TEXT NOT NULL DEFAULT 'until_closed'", "automation_jobs.wakeSuppression"},
 		{"ALTER TABLE message_audio ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0", "message_audio.durationMs"},
+		{"ALTER TABLE message_audio ADD COLUMN sourceText TEXT NOT NULL DEFAULT ''", "message_audio.sourceText"},
+		{"ALTER TABLE message_audio ADD COLUMN preparationInstructions TEXT NOT NULL DEFAULT ''", "message_audio.preparationInstructions"},
+		{"ALTER TABLE message_audio ADD COLUMN preparedText TEXT NOT NULL DEFAULT ''", "message_audio.preparedText"},
 		{`CREATE TABLE IF NOT EXISTS annotations (
         id        TEXT PRIMARY KEY,
         sessionId   TEXT NOT NULL,
