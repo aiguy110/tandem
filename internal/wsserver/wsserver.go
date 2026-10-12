@@ -1862,8 +1862,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.server.broadcastAnnotations(sess.ID)
-		c.commandAck(m, sess.ID)
+		c.commandAnnotationAck(m, sess.ID)
 	case "update_annotation":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -1891,8 +1890,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.server.broadcastAnnotations(sess.ID)
-		c.commandAck(m, sess.ID)
+		c.commandAnnotationAck(m, sess.ID)
 	case "delete_annotation":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -1902,8 +1900,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.server.broadcastAnnotations(sess.ID)
-		c.commandAck(m, sess.ID)
+		c.commandAnnotationAck(m, sess.ID)
 	case "clear_annotations":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -1913,8 +1910,7 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		c.server.broadcastAnnotations(sess.ID)
-		c.commandAck(m, sess.ID)
+		c.commandAnnotationAck(m, sess.ID)
 	case "merge_back":
 		c.send(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID, "error": "merge_back not implemented yet"}, m.CorrID))
 	default:
@@ -2038,6 +2034,24 @@ func (c *connection) forwardFederation(m clientMessage) {
 		envelope["agentId"] = envelope["sessionId"]
 	}
 	envelope["hostId"] = hostID
+	// Annotation mutations return the authoritative list as part of their
+	// correlated reply. Live broadcasts normally carry the same state, but a
+	// federation event and command result travel on independent paths and the
+	// result may overtake (or outlive) the event. Project the returned state as
+	// an ordinary annotations message so the requesting parent UI cannot remain
+	// stale while the child UI has already updated.
+	if strings.HasSuffix(m.T, "_annotation") || m.T == "clear_annotations" {
+		if annotations, ok := envelope["annotations"]; ok {
+			c.send(map[string]any{
+				"t":           "annotations",
+				"sessionId":   envelope["sessionId"],
+				"agentId":     envelope["agentId"],
+				"hostId":      hostID,
+				"annotations": annotations,
+			})
+			slog.Debug("projected remote annotation mutation result", "type", m.T, "host_id", hostID, "session_id", m.SessionID)
+		}
+	}
 	if m.T == "unsubscribe" && remoteID != "" {
 		c.mu.Lock()
 		delete(c.remoteSubs, remoteID)
@@ -2261,6 +2275,21 @@ func (h *Handler) broadcastSystemNotifications([]notifications.Notification) {
 func (c *connection) commandAck(m clientMessage, sessionID string) {
 	c.send(withCorr(map[string]any{"t": "ack", "sessionId": sessionID}, m.CorrID))
 }
+
+// commandAnnotationAck broadcasts a mutation to every local subscriber and
+// also returns the resulting snapshot in the correlated reply. The latter is
+// required across federation, where live events and command results use
+// independent delivery paths.
+func (c *connection) commandAnnotationAck(m clientMessage, sessionID string) {
+	annotations, err := c.server.annotationSnapshot(sessionID)
+	if err != nil {
+		slog.Error("annotation mutation persisted but snapshot could not be loaded", "type", m.T, "session_id", sessionID, "error", err)
+		c.commandError(m, err)
+		return
+	}
+	c.server.broadcastAnnotationSnapshot(sessionID, annotations)
+	c.send(withCorr(map[string]any{"t": "ack", "sessionId": sessionID, "annotations": annotations}, m.CorrID))
+}
 func (c *connection) commandError(m clientMessage, err error) {
 	value := map[string]any{"t": "ack", "error": err.Error()}
 	if m.SessionID != "" {
@@ -2308,17 +2337,18 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// broadcastAnnotations sends the current annotation list for sessionID to every
-// connection subscribed to it, for cross-device tray sync after a mutation.
-// Modeled on broadcastClosed.
-func (h *Handler) broadcastAnnotations(sessionID string) {
+func (h *Handler) annotationSnapshot(sessionID string) ([]store.Annotation, error) {
 	annotations, err := h.opts.Registry.ListAnnotations(sessionID)
 	if err != nil {
-		return
+		return nil, err
 	}
 	if annotations == nil {
 		annotations = []store.Annotation{}
 	}
+	return annotations, nil
+}
+
+func (h *Handler) broadcastAnnotationSnapshot(sessionID string, annotations []store.Annotation) {
 	h.mu.Lock()
 	connections := make([]*connection, 0, len(h.connections))
 	for c := range h.connections {

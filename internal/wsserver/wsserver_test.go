@@ -63,6 +63,8 @@ func (f *testFederation) Call(ctx context.Context, hostID string, payload json.R
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
 	case "close_agent":
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent"}`), nil
+	case "add_annotation":
+		return json.RawMessage(`{"t":"ack","agentId":"remote-agent","annotations":[{"id":"ann-remote","agentId":"remote-agent","seq":5,"role":"assistant","quote":"hello","comment":"clarify"}]}`), nil
 	case "subscribe":
 		if f.subscribeGate != nil {
 			select {
@@ -763,6 +765,21 @@ func TestFederationRoutesNamespacesAndRelaysRemoteProtocol(t *testing.T) {
 	}
 	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != remoteID || got["corrId"] != "sub" {
 		t.Fatalf("subscribe ack = %#v", got)
+	}
+
+	// Mutation results carry an authoritative annotation snapshot. This keeps
+	// the parent UI current even if the child's uncorrelated live broadcast is
+	// delayed or lost on the independent federation event path.
+	send(t, c, map[string]any{"t": "add_annotation", "agentId": remoteID, "seq": 5, "role": "assistant", "quote": "hello", "comment": "clarify", "corrId": "annotation"})
+	if got = recv(t, c); got["t"] != "annotations" || got["agentId"] != remoteID || got["hostId"] != "host-one" {
+		t.Fatalf("remote annotation projection = %#v", got)
+	}
+	annotations, _ := got["annotations"].([]any)
+	if len(annotations) != 1 || annotations[0].(map[string]any)["comment"] != "clarify" {
+		t.Fatalf("remote annotations = %#v", got)
+	}
+	if got = recv(t, c); got["t"] != "ack" || got["agentId"] != remoteID || got["corrId"] != "annotation" {
+		t.Fatalf("remote annotation ack = %#v", got)
 	}
 
 	send(t, c, map[string]any{"t": "search_sessions", "hostId": "host-one", "query": "work", "corrId": "search"})
