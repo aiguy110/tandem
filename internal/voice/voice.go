@@ -28,8 +28,10 @@ const (
 )
 
 type Audio struct {
-	Data     []byte
-	MIMEType string
+	Data                    []byte
+	MIMEType                string
+	PreparationInstructions string
+	PreparedText            string
 }
 
 type Renderer interface {
@@ -73,7 +75,8 @@ func (s *Service) Render(ctx context.Context, source string) (Audio, error) {
 	if source == "" {
 		return Audio{}, errors.New("message has no text to render")
 	}
-	spoken, err := s.completer.Complete(ctx, speechPreparationInstructions(s.config.Instructions), source)
+	instructions := speechPreparationInstructions(s.config.Instructions)
+	spoken, err := s.completer.Complete(ctx, instructions, source)
 	if err != nil {
 		return Audio{}, fmt.Errorf("prepare message for speech: %w", err)
 	}
@@ -81,7 +84,13 @@ func (s *Service) Render(ctx context.Context, source string) (Audio, error) {
 	if err != nil {
 		return Audio{}, err
 	}
-	return s.speakChunks(ctx, chunks)
+	audio, err := s.speakChunks(ctx, chunks)
+	if err != nil {
+		return Audio{}, err
+	}
+	audio.PreparationInstructions = instructions
+	audio.PreparedText = spoken
+	return audio, nil
 }
 
 // speechPreparationInstructions makes the language model's output safe for

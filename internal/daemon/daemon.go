@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -959,7 +960,8 @@ func (c *messageAudioCache) render(ctx context.Context, sessionID string, seq in
 		return voice.Audio{}, err
 	} else if cached != nil {
 		c.backfillDuration(sessionID, seq, cached)
-		return voice.Audio{Data: cached.Data, MIMEType: cached.MIMEType}, nil
+		slog.Info("voice clip cache hit", "session_id", sessionID, "seq", seq, "source_chars", len([]rune(cached.SourceText)), "prepared_chars", len([]rune(cached.PreparedText)), "source_sha256", voiceTextDigest(cached.SourceText), "prepared_sha256", voiceTextDigest(cached.PreparedText))
+		return voice.Audio{Data: cached.Data, MIMEType: cached.MIMEType, PreparationInstructions: cached.PreparationInstructions, PreparedText: cached.PreparedText}, nil
 	}
 	key := audioKey(sessionID, seq)
 	c.mu.Lock()
@@ -980,15 +982,27 @@ func (c *messageAudioCache) render(ctx context.Context, sessionID string, seq in
 	if err != nil {
 		return voice.Audio{}, err
 	}
+	slog.Info("voice preparation started", "session_id", sessionID, "seq", seq, "source_chars", len([]rune(text)), "source_sha256", voiceTextDigest(text))
 	audio, err := c.renderer.Render(ctx, text)
 	if err != nil {
+		slog.Error("voice preparation failed", "session_id", sessionID, "seq", seq, "source_sha256", voiceTextDigest(text), "error", err)
 		return voice.Audio{}, err
 	}
+	slog.Info("voice preparation completed", "session_id", sessionID, "seq", seq, "source_chars", len([]rune(text)), "prepared_chars", len([]rune(audio.PreparedText)), "source_sha256", voiceTextDigest(text), "prepared_sha256", voiceTextDigest(audio.PreparedText))
 	durationMs, _ := voice.Duration(audio.MIMEType, audio.Data) // best effort; 0 means unknown
-	if err := c.db.PutMessageAudio(store.MessageAudio{SessionID: sessionID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data, DurationMs: durationMs}); err != nil {
+	if err := c.db.PutMessageAudio(store.MessageAudio{SessionID: sessionID, Seq: seq, MIMEType: audio.MIMEType, Data: audio.Data, DurationMs: durationMs, SourceText: text, PreparationInstructions: audio.PreparationInstructions, PreparedText: audio.PreparedText}); err != nil {
 		return voice.Audio{}, err
 	}
+	slog.Info("voice clip persisted", "session_id", sessionID, "seq", seq, "audio_bytes", len(audio.Data), "duration_ms", durationMs, "prepared_sha256", voiceTextDigest(audio.PreparedText))
 	return audio, nil
+}
+
+func voiceTextDigest(text string) string {
+	if text == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(text))
+	return fmt.Sprintf("%x", sum)
 }
 
 // backfillDuration computes and persists duration for a cached clip that
