@@ -65,8 +65,11 @@ interface SpawnSpec {
 
 Tandem loads its shipped catalog from the repository's `config.yml.example`, then overlays
 an optional `$TANDEM_HOME/config.yml` (normally `~/.tandem/config.yml`). The shipped file
-declares Claude, Codex, and Pi using the same schema available to users; there are no
-agent-specific definitions in daemon code. User definitions with the same id override their
+declares Claude, Codex, Pi, Oh My Pi, and OpenCode using the same schema available to
+users; there are no agent-specific definitions in daemon code. Oh My Pi (`omp`) is
+launched directly through its built-in `omp acp` server, which consumes session
+`mcpServers` natively, so it is not a Tandem-managed bridge package: install it yourself
+(`bun install -g @oh-my-pi/pi-coding-agent`) and configure its models in `~/.omp/agent`. User definitions with the same id override their
 fields, and environment-variable launch overrides remain supported for backwards
 compatibility. Copy `config.yml.example` to `~/.tandem/config.yml` to start from a fully
 editable catalog, or keep the home file small and override only selected fields.

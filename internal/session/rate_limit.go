@@ -48,6 +48,7 @@ var harnessLimitParsers = map[string][]limitParser{
 	"codex":  {parseCodexLimit, parseDurationLimit},
 	"gemini": {parseDurationLimit},
 	"pi":     {parseDurationLimit},
+	"omp":    {parseDurationLimit},
 }
 
 func (s *Session) observeRateLimitEvent(ev eventlog.Event) {

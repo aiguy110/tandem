@@ -75,6 +75,28 @@ test("Pi imports all branch nodes, summaries, and ignores corrupt/base64 records
   assert.deepEqual((unchanged[1].sourceKeys as string[]), [path]);
 });
 
+test("oh-my-pi uses Pi's session format, its header title, and skips nested subagent sessions", async () => {
+  const root = await fixture("omp");
+  const project = join(root, "-work");
+  const artifacts = join(project, "2026-05-06_omp-session");
+  await mkdir(artifacts, { recursive: true });
+  await writeFile(`${artifacts}.jsonl`, [
+    JSON.stringify({ type: "session", version: 3, id: "omp-session", cwd: "/work", timestamp: "2026-05-06T14:44:36Z", title: "Interpret Slash Command" }),
+    JSON.stringify({ type: "model_change", id: "m1", parentId: null, model: "anthropic/claude-opus-5-5" }),
+    JSON.stringify({ type: "message", id: "u1", parentId: "m1", timestamp: "2026-05-06T14:44:46Z", message: { role: "user", content: [{ type: "text", text: "explain the command" }] } }),
+  ].join("\n"));
+  await writeFile(join(artifacts, "0-explore.jsonl"), [
+    JSON.stringify({ type: "session", version: 3, id: "subagent", cwd: "/work" }),
+    JSON.stringify({ type: "message", id: "s1", message: { role: "user", content: "subagent task" } }),
+  ].join("\n"));
+
+  const records = await run("omp.ts", ["--root", root]);
+  const sessions = records.filter((v) => v.type === "begin_session").map((v) => v.session as RecordValue);
+  assert.deepEqual(sessions.map((v) => [v.id, v.title]), [["omp-session", "Interpret Slash Command"]]);
+  const entries = records.filter((v) => v.type === "entry").map((v) => (v.entry as RecordValue).text);
+  assert.ok(entries.includes("explain the command"));
+});
+
 test("Claude normalizes messages and reads only session-local spilled tool results", async () => {
   const root = await fixture("claude");
   const transcript = join(root, "projects", "-work", "claude-id.jsonl");
