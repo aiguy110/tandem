@@ -115,6 +115,24 @@ describe('TranscriptPane rate-limit widget', () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  it('lets "Send now" cancel the wake-up and prompt the agent directly', async () => {
+    const limited = agent();
+    limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: true, state: 'pending' } }];
+    const setRateLimitAutoContinue = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    const prompt = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': limited }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+      drafts: { 'session-1': 'continue' }, setRateLimitAutoContinue, prompt,
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    fireEvent.click(view.getByRole('button', { name: 'Send now' }));
+    expect(setRateLimitAutoContinue).toHaveBeenCalledWith('session-1', false, '');
+    fireEvent.click(await view.findByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(prompt).toHaveBeenCalled());
+  });
+
   it('restores a wake-up message into the existing queue and edits it in the composer', async () => {
     const limited = agent();
     limited.events = [{ seq: 2, event: { kind: 'rate_limit', id: 'claude-1', harness: 'claude', resetAt: Date.now() + 3_600_000, detectedAt: Date.now(), enabled: true, queuedMessage: 'Resume the deployment notes.\nThen notify me.', state: 'pending' } }];

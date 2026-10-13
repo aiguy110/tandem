@@ -2196,7 +2196,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
   const setDraft = useStore((s) => s.setDraft);
   // The most recent rate-limit event is authoritative. While it is pending,
   // the ordinary composer becomes the multiline message for its wake-up.
-  const scheduledRateLimit = useStore((s) => {
+  const scheduledRateLimitEvent = useStore((s) => {
     const events = s.sessions[sessionId]?.events ?? [];
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i].event;
@@ -2204,6 +2204,10 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     }
     return null;
   });
+  // Escape hatch: the limit may have been lifted early (e.g. a raised spend
+  // cap), so let the user abandon the wake-up and prompt the agent directly.
+  const [bypassedLimitId, setBypassedLimitId] = useState<string | null>(null);
+  const scheduledRateLimit = scheduledRateLimitEvent && scheduledRateLimitEvent.id !== bypassedLimitId ? scheduledRateLimitEvent : null;
   const commands = useStore((s) => s.sessions[sessionId]?.commands ?? []);
   const listWorkspaceEntries = useStore((s) => s.listWorkspaceEntries);
   const imageSupport = useStore((s) => s.sessions[sessionId]?.imagePromptSupport ?? null);
@@ -2857,6 +2861,18 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
                 <circle cx="12" cy="12" r="2" />
                 <path d="M6.3 6.3 10.6 10.6M17.7 6.3l-4.3 4.3M12 14v6" />
               </svg>
+            </button>
+          )}
+          {scheduledRateLimit && (
+            <button
+              className="btn"
+              title="Cancel the scheduled wake-up and prompt the agent directly (e.g. after raising your spend limit)"
+              onClick={() => {
+                if (scheduledRateLimit.enabled) void setRateLimitAutoContinue(sessionId, false, '');
+                setBypassedLimitId(scheduledRateLimit.id);
+              }}
+            >
+              Send now
             </button>
           )}
           <button
