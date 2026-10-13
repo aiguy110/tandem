@@ -34,6 +34,11 @@ type MCPEnvVariable struct{ Name, Value string }
 // which would silently hide Tandem's browser tools.
 const PlaywrightMCPName = "tandem-playwright"
 
+// BrowserMCPName is the agent-facing browser server (tandem mcp-browser). It
+// re-exports Playwright's tools with a browserId argument and adds the
+// browser-instance tools, routing each call to the targeted instance.
+const BrowserMCPName = "tandem-browser"
+
 type MCPWiring struct {
 	Broker           *Broker
 	NodeRuntime      string
@@ -42,6 +47,10 @@ type MCPWiring struct {
 	ControlURL       string
 	Token            string
 	BrowserEnabled   bool
+	// DirectPlaywright wires a plain single-browser Playwright MCP instead of
+	// the multi-instance router. Automation runs use it: their scripts call
+	// tandem-playwright tools and own exactly one browser.
+	DirectPlaywright bool
 }
 
 // BuildMCPServers returns the external Playwright MCP and Tandem's internal
@@ -49,7 +58,20 @@ type MCPWiring struct {
 // tolerated; tandem-control remains available.
 func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 	servers := make([]MCPServer, 0, 3)
-	if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
+	if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) && !w.DirectPlaywright && w.TandemExecutable != "" {
+		servers = append(servers, MCPServer{
+			Name: BrowserMCPName, Command: w.TandemExecutable, Args: []string{"mcp-browser"},
+			Env: []MCPEnvVariable{
+				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
+				{Name: "TANDEM_TOKEN", Value: w.Token},
+				{Name: "TANDEM_AGENT_ID", Value: sessionID},
+				{Name: "TANDEM_NODE_RUNTIME", Value: w.NodeRuntime},
+				{Name: "TANDEM_PLAYWRIGHT_MCP_CLI", Value: w.PlaywrightCLI},
+				{Name: "TANDEM_BROWSER_CDP_BASE", Value: w.Broker.CDPBase()},
+				{Name: "TANDEM_BROWSER_OUTPUT_DIR", Value: filepath.Join(os.TempDir(), sanitizeAgentSlug(sessionID))},
+			},
+		})
+	} else if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
 		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(sessionID))
 		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{

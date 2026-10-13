@@ -41,6 +41,8 @@ clients of **one** browser; the token serializes them.
   browser is actually used.
 - Playwright MCP runs in **snapshot mode** (deterministic accessibility tree) — the agent
   acts on structure, the human on pixels; same page, two lenses.
+- Agents reach it through `tandem-browser`, a router that adds a `browserId` argument to
+  every Playwright tool (see *Multiple browser instances* below).
 - Alongside it, Tandem exposes a small **Tandem-control MCP** with
   `browser.request_takeover(reason)` (see Attention).
 - Isolation: **one Steel session per agent** (own cookies/auth/state), matching the
@@ -277,6 +279,61 @@ client requests `browser_pages` every 1.5 seconds (with no overlapping polls).
 `pages`, `selectedTargetId`, `canGoBack`, and `canGoForward`. Navigation uses the
 ordered `browser_input` queue with kinds `navigate` (and `url`), `back`, `forward`,
 and `reload`.
+
+## Multiple browser instances and saved browser profiles
+
+Terminology:
+
+- **Saved browser profile** — Tandem's reusable starting state: a copy of a browser's
+  user data (cookies, logins, local storage, IndexedDB, history, preferences). Captured
+  from the Browser pane ("Save profile"). The store and wire protocol still call these
+  *snapshots* (`BrowserSnapshot`, `capture_snapshot`, `snapshotId`).
+- **Browser instance** — a running working copy owned by one agent session. Each instance
+  has its own Chromium process and profile, tabs and control owner. Every session has the
+  `default` instance (seeded from the spawn-time saved profile, if any); additional
+  instances exist only after a human approved them. A working copy never writes back to
+  its source profile, and opening the same saved profile twice yields two independent
+  instances.
+- **Page snapshot** — Playwright's accessibility-tree observation (`browser_snapshot`).
+
+Agents get browser tools from `tandem-browser` (`tandem mcp-browser`,
+`internal/browsermcp`). It re-exports every Playwright MCP tool with a **required
+`browserId`** argument (`"default"` for the original browser) and routes each call to a
+Playwright MCP child connected to that instance's broker endpoint; calls to one instance
+are serialized. Element references from an additional instance are prefixed with its ID
+(`[ref=b2:e7]`); a reference whose prefix names another browser — or a bare reference
+sent to an additional browser — is rejected rather than resolved against the wrong page.
+It adds:
+
+- `browser_list_saved_profiles()` — IDs, names, capture time, driver compatibility. Never
+  storage paths; listing grants nothing.
+- `browser_list_instances()` — the session's open browsers.
+- `browser_request_instance(source, savedProfileId?, reason, name?)` — `source` is
+  `fresh`, `saved_profile` or `user_choice` (the human picks a saved profile or fresh).
+  Blocks until the human approves or denies in the attention rail; approval launches the
+  instance and returns its `browserId`.
+- `browser_close_instance(browserId)` — discards an additional instance.
+
+`browser_request_takeover(reason, browserId?)` in tandem-control targets one instance.
+Automation runs keep the plain single-browser `tandem-playwright` server.
+
+Enforcement lives in the daemon: the broker's `Authorize` hook refuses to provision any
+non-default broker key (`<sessionId>~<browserId>`) that is not in its live session's
+approved list, whichever path asks first. Approval is per request and independent of the
+agent's permission mode; it covers the instance's lifetime, and closing it ends the grant.
+
+The instance list is durable: every change appends a `browser_instances` event holding
+the full list (newest wins), which the daemon reloads after a restart and the UI projects
+from the transcript. Requests are `browser_instance_request` / `browser_instance_resolved`
+events; requests orphaned by a daemon restart are resolved as denied. Instance IDs are
+never reused within a session.
+
+In the UI, a selector above the Browser pane appears once a session has more than one
+instance. Choosing one only changes which screencast this client watches (`browser_view`);
+it never redirects the agent. Grab/Release, tabs, navigation, restart and "Save profile"
+act on the viewed instance. Browser commands (`browser_control`, `browser_input`,
+`browser_pages`, `browser_select_page`, `restart_browser`, `capture_snapshot`) accept an
+optional `browserId`; `browser_state` and `browser_frame` carry one.
 
 ## Deferred
 

@@ -166,6 +166,16 @@ func (c *MCPClient) Tools() []Tool {
 	return tools
 }
 
+// ToolDeclarations returns the server's tools under their own, unqualified
+// names, for callers that re-export them.
+func (c *MCPClient) ToolDeclarations() []Declaration {
+	out := make([]Declaration, 0, len(c.tools))
+	for _, declared := range c.tools {
+		out = append(out, Declaration{Name: declared.Name, Description: declared.Description, InputSchema: cloneRaw(declared.InputSchema), OutputSchema: cloneRaw(declared.OutputSchema)})
+	}
+	return out
+}
+
 func (c *MCPClient) Availability(context.Context) error {
 	select {
 	case <-c.done:

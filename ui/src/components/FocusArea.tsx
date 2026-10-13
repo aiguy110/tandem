@@ -119,7 +119,7 @@ export function FocusArea() {
           {PANES.map((p, i) => {
             // The Browser tab is enabled only once a browser exists for the agent
             // (docs/browser.md: the pane appears/enables when browser_state active).
-            const disabled = p === 'browser' && !agent.browserActive;
+            const disabled = p === 'browser' && !agent.browserAnyActive;
             if (p === 'chat' && pane === 'chat' && agent.canHandoff) {
               const mode = agent.controlMode;
               return (

@@ -587,7 +587,7 @@ export function SpawnPalette() {
   const resolvedProfile = trimmedProfileName
     ? profiles.find((p) => !p.autoNamed && p.name === trimmedProfileName && matchesForm(p))
     : baseUnchanged ? baseProfile : profiles.find((p) => p.autoNamed && matchesForm(p));
-  const snapshotLabel = snapshot ? (snapshots.find((s) => s.id === snapshot)?.name ?? 'snapshot') : 'Fresh';
+  const snapshotLabel = snapshot ? (snapshots.find((s) => s.id === snapshot)?.name ?? 'saved profile') : 'Fresh';
   const autoName = [selectedHarness?.name ?? agentSlug, tuple.model, tuple.effort, tuple.permission, snapshotLabel]
     .filter((part) => part).join(' · ');
   // Profiles offered by default in the picker: this repo's most-recent 3.
@@ -889,9 +889,9 @@ export function SpawnPalette() {
               </label>
             )}
             <label>
-              Browser snapshot <span className="sub">(seed state)</span>
+              Saved browser profile <span className="sub">(starting state)</span>
               <select value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
-                <option value="">Fresh state</option>
+                <option value="">Fresh profile</option>
                 {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>

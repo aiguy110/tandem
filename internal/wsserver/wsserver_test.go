@@ -339,12 +339,16 @@ func (b *testBackend) AudioPosition(sessionID string) (*store.AudioPosition, err
 	return &pos, nil
 }
 
-func (b *testBackend) CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error) {
+func (b *testBackend) CaptureSnapshot(context.Context, string, string, string) (store.BrowserSnapshot, error) {
 	return store.BrowserSnapshot{}, nil
 }
-func (b *testBackend) ListSnapshots() ([]store.BrowserSnapshot, error)        { return nil, nil }
-func (b *testBackend) DeleteSnapshot(string) error                            { return nil }
-func (b *testBackend) RestartBrowser(context.Context, string, string) error   { return nil }
+func (b *testBackend) ListSnapshots() ([]store.BrowserSnapshot, error)              { return nil, nil }
+func (b *testBackend) DeleteSnapshot(string) error                                  { return nil }
+func (b *testBackend) RestartBrowser(context.Context, string, string, string) error { return nil }
+func (b *testBackend) HasBrowserInstance(sessionID, browserID string) bool {
+	return browserID == "default" && b.Get(sessionID) != nil
+}
+func (b *testBackend) CloseInstance(context.Context, string, string) error    { return nil }
 func (b *testBackend) RestartHarness(context.Context, string) error           { return nil }
 func (b *testBackend) ListProfiles(string) ([]store.Profile, []string, error) { return nil, nil, nil }
 func (b *testBackend) ListAllProfiles() ([]store.Profile, map[string][]string, error) {

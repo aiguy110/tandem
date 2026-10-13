@@ -1329,6 +1329,15 @@ body.dock-resizing .app { transition: none; }
 /* ---- browser pane (Phase 5) ---- */
 .browser-pane { background: #0b0f14; }
 .browser-navigation { background: var(--surface); border-bottom: 1px solid var(--border); }
+.browser-instances { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.browser-instance { flex: 0 0 auto; display: inline-flex; align-items: stretch; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.browser-instance.selected { border-color: var(--agent); background: var(--agent-soft); }
+.browser-instance button { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 10px; border: 0; background: none; color: var(--text-dim); font: inherit; font-size: var(--fs-sm); }
+.browser-instance.selected button { color: var(--text); }
+.browser-instance .browser-instance-close { padding: 0 8px; border-left: 1px solid var(--border); color: var(--text-faint); }
+.browser-instance .browser-instance-close:hover { color: var(--text); }
+.browser-instance .dot.off { background: var(--text-faint); }
+.browser-request-profile { width: 100%; margin-top: 6px; height: 28px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--fs-sm); }
 .browser-page-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 6px 10px 0; }
 .browser-page-tabs button { flex: 0 0 auto; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-dim); font: inherit; font-size: var(--fs-sm); }
 .browser-page-tabs button[aria-selected="true"] { color: var(--text); border-color: var(--agent); }

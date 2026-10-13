@@ -222,6 +222,8 @@ type localHandle struct {
 	cmd             *exec.Cmd
 	xvfb            *exec.Cmd
 	cdpURL, profile string
+	// exited closes once Chromium has been reaped.
+	exited chan struct{}
 }
 type LocalDriver struct {
 	cfg     LocalConfig
@@ -322,8 +324,10 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 	}
 	slog.Info("browser: launched local chromium", "session_id", id, "pid", cmd.Process.Pid, "executable", exe, "headless", headless, "display", display, "cdp_port", port)
 	done := make(chan error, 1)
+	exited := make(chan struct{})
 	go func() {
 		err := cmd.Wait()
+		close(exited)
 		// The X server exists only for this browser; reap it with Chrome.
 		killXvfb()
 		done <- err
@@ -351,7 +355,7 @@ func (d *LocalDriver) Provision(ctx context.Context, id string) (ProvisionResult
 			if err == nil {
 				_ = r.Body.Close()
 				if r.StatusCode >= 200 && r.StatusCode < 300 {
-					d.handles[id] = &localHandle{cmd: cmd, xvfb: xvfb, cdpURL: cdp, profile: profile}
+					d.handles[id] = &localHandle{cmd: cmd, xvfb: xvfb, cdpURL: cdp, profile: profile, exited: exited}
 					return ProvisionResult{CDPURL: cdp}, nil
 				}
 			}
@@ -370,10 +374,31 @@ func (d *LocalDriver) Teardown(_ context.Context, id string) error {
 	if h != nil && h.xvfb != nil {
 		_ = h.xvfb.Process.Kill()
 	}
+	if h != nil && h.exited != nil {
+		select {
+		case <-h.exited:
+		case <-time.After(5 * time.Second):
+			slog.Warn("browser: chromium did not exit after kill", "session_id", id)
+		}
+	}
 	// Remove the known profile path even when there is no live handle. An
 	// explicit fresh restart after a daemon/process crash must not silently
-	// inherit the previous Chromium user-data directory.
-	return os.RemoveAll(d.ProfileDir(id))
+	// inherit the previous Chromium user-data directory. Chromium's helper
+	// processes can still be flushing files briefly after the browser exits,
+	// so retry a removal that races with them.
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err = os.RemoveAll(d.ProfileDir(id)); err == nil {
+			if _, statErr := os.Stat(d.ProfileDir(id)); os.IsNotExist(statErr) {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		slog.Warn("browser: remove profile failed", "session_id", id, "error", err)
+	}
+	return err
 }
 
 // SessionStore persists externalized (Steel) browser sessions so they can be

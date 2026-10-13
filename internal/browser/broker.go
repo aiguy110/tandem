@@ -28,7 +28,13 @@ type BrokerConfig struct {
 	Host                          string
 	MaxPayloadBytes, MaxHeldBytes int64
 	HTTPClient                    *http.Client
-	OnRelease                     func(sessionID string)
+	// OnRelease receives the broker key (see InstanceKey) whose control was
+	// handed back to the agent.
+	OnRelease func(key string)
+	// Authorize, when set, gates provisioning of a broker key. It is the
+	// enforcement point that keeps an unapproved browser instance from ever
+	// launching, whichever path (agent CDP proxy or human view) asks first.
+	Authorize func(key string) error
 }
 type heldFrame struct {
 	kind int
@@ -72,6 +78,14 @@ type BrowserState struct {
 	Active       bool         `json:"active"`
 	ControlOwner ControlOwner `json:"controlOwner"`
 }
+
+// sessionStateListener observes every browser instance of one session. Like
+// browserStateListener, its lock orders the initial snapshot before changes.
+type sessionStateListener struct {
+	mu       sync.Mutex
+	callback func(browserID string, state BrowserState)
+}
+
 type Broker struct {
 	driver   Driver
 	cfg      BrokerConfig
@@ -79,6 +93,9 @@ type Broker struct {
 	listener net.Listener
 	mu       sync.Mutex
 	agents   map[string]*agentBrowser
+	// sessionListeners is keyed by session ID, then listener ID.
+	sessionListeners map[string]map[uint64]*sessionStateListener
+	nextListener     uint64
 }
 
 func NewBroker(driver Driver, cfg BrokerConfig) *Broker {
@@ -94,7 +111,7 @@ func NewBroker(driver Driver, cfg BrokerConfig) *Broker {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{}
 	}
-	return &Broker{driver: driver, cfg: cfg, agents: make(map[string]*agentBrowser)}
+	return &Broker{driver: driver, cfg: cfg, agents: make(map[string]*agentBrowser), sessionListeners: make(map[string]map[uint64]*sessionStateListener)}
 }
 func (b *Broker) Start() error {
 	ln, err := net.Listen("tcp", net.JoinHostPort(b.cfg.Host, "0"))
@@ -107,7 +124,13 @@ func (b *Broker) Start() error {
 	return nil
 }
 func (b *Broker) EndpointFor(id string) string {
-	return "http://" + b.listener.Addr().String() + "/cdp/" + url.PathEscape(id)
+	return b.CDPBase() + url.PathEscape(id)
+}
+
+// CDPBase is the prefix of every agent CDP endpoint; appending a path-escaped
+// broker key yields that instance's endpoint.
+func (b *Broker) CDPBase() string {
+	return "http://" + b.listener.Addr().String() + "/cdp/"
 }
 func (b *Broker) DriverKind() string           { return b.driver.Kind() }
 func (b *Broker) IsProvisioned(id string) bool { return b.driver.IsProvisioned(id) }
@@ -195,6 +218,62 @@ func (b *Broker) emitState(id string) {
 		listener.callback(state)
 		listener.mu.Unlock()
 	}
+	b.emitSessionState(id, state)
+}
+
+func (b *Broker) emitSessionState(id string, state BrowserState) {
+	sessionID, browserID := SplitInstanceKey(id)
+	b.mu.Lock()
+	listeners := make([]*sessionStateListener, 0, len(b.sessionListeners[sessionID]))
+	for _, listener := range b.sessionListeners[sessionID] {
+		listeners = append(listeners, listener)
+	}
+	b.mu.Unlock()
+	for _, listener := range listeners {
+		listener.mu.Lock()
+		listener.callback(browserID, state)
+		listener.mu.Unlock()
+	}
+}
+
+// OnSessionState reports the state of every browser instance belonging to
+// sessionID: first a snapshot (always including the default instance), then
+// each change, including instances created later.
+func (b *Broker) OnSessionState(sessionID string, callback func(browserID string, state BrowserState)) func() {
+	listener := &sessionStateListener{callback: callback}
+	listener.mu.Lock()
+	b.mu.Lock()
+	b.nextListener++
+	listenerID := b.nextListener
+	if b.sessionListeners[sessionID] == nil {
+		b.sessionListeners[sessionID] = make(map[uint64]*sessionStateListener)
+	}
+	b.sessionListeners[sessionID][listenerID] = listener
+	records := make(map[string]*agentBrowser)
+	for key, a := range b.agents {
+		if owner, browserID := SplitInstanceKey(key); owner == sessionID {
+			records[browserID] = a
+		}
+	}
+	b.mu.Unlock()
+	if records[DefaultBrowserID] == nil {
+		callback(DefaultBrowserID, BrowserState{ControlOwner: ControlAgent})
+	}
+	for browserID, a := range records {
+		a.mu.Lock()
+		state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+		a.mu.Unlock()
+		callback(browserID, state)
+	}
+	listener.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		delete(b.sessionListeners[sessionID], listenerID)
+		if len(b.sessionListeners[sessionID]) == 0 {
+			delete(b.sessionListeners, sessionID)
+		}
+		b.mu.Unlock()
+	}
 }
 
 func (b *Broker) emitFrame(id string, frame ScreencastFrame) {
@@ -262,6 +341,13 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 			return err
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+	}
+	if b.cfg.Authorize != nil {
+		if err := b.cfg.Authorize(id); err != nil {
+			a.mu.Unlock()
+			slog.Warn("browser provision refused", "browser_key", id, "error", err)
+			return err
 		}
 	}
 	wait := make(chan struct{})
@@ -718,6 +804,7 @@ func (b *Broker) detach(id string) {
 		_ = l.agent.Close()
 		_ = l.upstream.Close()
 	}
+	b.emitSessionState(id, BrowserState{ControlOwner: ControlAgent})
 }
 
 // Detach releases only the daemon-local resources, keeping the underlying

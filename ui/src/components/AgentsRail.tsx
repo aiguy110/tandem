@@ -1003,7 +1003,7 @@ function AgentDetails({
         )}
         <Detail label="Profile" value={profileBits.join(' · ') || (profile?.id ? 'Saved profile' : 'No profile settings')} />
         {profile?.id && <Detail label="Profile ID" value={profile.id} mono />}
-        {profile?.snapshot && <Detail label="Browser snapshot" value={profile.snapshot} mono />}
+        {profile?.snapshot && <Detail label="Saved browser profile" value={profile.snapshot} mono />}
         <Detail label="Adapter" value={`${agent.adapter.toUpperCase()}${agent.canHandoff ? ' · CLI handoff available' : ''}`} />
         <Detail label="Workspace" value={ws.kind === 'worktree' ? 'Isolated worktree' : 'Existing directory'} />
         <Detail label="Worktree path" value={ws.cwd} mono />
@@ -1013,6 +1013,7 @@ function AgentDetails({
         <Detail label="Git status" value={`${gitState}${typeof ws.ahead === 'number' || typeof ws.behind === 'number' ? ` · ${ws.ahead ?? 0} ahead, ${ws.behind ?? 0} behind` : ''}`} />
         {ws.startCommit && <Detail label="Starting commit" value={ws.startCommit} mono />}
         <Detail label="Browser" value={agent.browserActive ? `${agent.browserOwner} has control` : 'Not started'} />
+        {agent.browserInstances.length > 1 && <Detail label="Browser instances" value={agent.browserInstances.map((instance) => instance.name).join(', ')} />}
         {agent.pendingApprovals.length > 0 && <Detail label="Pending approvals" value={String(agent.pendingApprovals.length)} />}
       </div>
     </section>

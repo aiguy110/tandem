@@ -1,16 +1,22 @@
-// Browser pane (D7/D13, docs/browser.md) — the shared, per-agent browser: a CDP
+// Browser pane (D7/D13, docs/browser.md) — a session's shared browsers: a CDP
 // screencast painted into a <canvas>, a control-owner wheel (grab/release), user
 // input forwarding when the user holds the wheel, and the session-initiated
-// takeover banner. Frames arrive via browserHub (out of the reactive store).
+// takeover banner. A session may own several browser instances; the selector
+// picks which one this client watches without changing the agent's target.
+// Frames arrive via browserHub (out of the reactive store).
 //
 // Focus/bandwidth rule: mounting opts this agent's browser channel in
 // (setBrowserSub) so the daemon streams only the focused, viewing client;
 // unmounting opts back out and the screencast stops.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useStore } from '../../store';
+import { DEFAULT_BROWSER_ID, useStore, type BrowserInstanceState, type Takeover } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
-import type { BrowserInputWire, BrowserPages } from '../../wire';
+import type { BrowserInputWire, BrowserInstance, BrowserPages } from '../../wire';
+
+const NO_TAKEOVERS: Takeover[] = [];
+const NO_INSTANCES: BrowserInstance[] = [];
+const NO_STATES: Record<string, BrowserInstanceState> = {};
 
 type BrowserIconName = 'agent' | 'user' | 'play' | 'restart' | 'keyboard' | 'wheel' | 'save' | 'close';
 
@@ -33,7 +39,15 @@ export function BrowserPane() {
   const active = useStore((s) => s.sessions[sessionId]?.browserActive ?? false);
   const owner = useStore((s) => s.sessions[sessionId]?.browserOwner ?? 'agent');
   const takeoverHeld = useStore((s) => s.sessions[sessionId]?.browserTakeoverHeld ?? false);
-  const takeovers = useStore((s) => s.sessions[sessionId]?.takeovers ?? []);
+  const allTakeovers = useStore((s) => s.sessions[sessionId]?.takeovers ?? NO_TAKEOVERS);
+  const instances = useStore((s) => s.sessions[sessionId]?.browserInstances ?? NO_INSTANCES);
+  const browserStates = useStore((s) => s.sessions[sessionId]?.browserStates ?? NO_STATES);
+  const viewId = useStore((s) => s.sessions[sessionId]?.browserViewId ?? DEFAULT_BROWSER_ID);
+  const setBrowserView = useStore((s) => s.setBrowserView);
+  const closeBrowserInstance = useStore((s) => s.closeBrowserInstance);
+  const takeovers = allTakeovers.filter((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === viewId);
+  const otherTakeover = allTakeovers.find((t) => (t.browserId ?? DEFAULT_BROWSER_ID) !== viewId);
+  const viewed = instances.find((instance) => instance.id === viewId);
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
@@ -68,7 +82,7 @@ export function BrowserPane() {
     };
     void refresh();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [sessionId, active, browserPages]);
+  }, [sessionId, viewId, active, browserPages]);
 
   const navigate = async (event: BrowserInputWire) => {
     if (navBusy || owner !== 'user') return;
@@ -121,7 +135,7 @@ export function BrowserPane() {
     setSnapMsg('');
     try {
       await captureSnapshot(sessionId, name);
-      setSnapMsg(`Saved “${name}”`);
+      setSnapMsg(`Saved profile “${name}”`);
       setSnapName('');
       setCapturing(false);
     } catch (e) {
@@ -238,7 +252,7 @@ export function BrowserPane() {
     };
     // `active` is a dep: the <canvas> only exists once the browser is active, so
     // the effect must re-run when it appears to attach the frame subscription.
-  }, [sessionId, active]);
+  }, [sessionId, viewId, active]);
 
   // Map a client (clientX/clientY) point on the canvas to device (page) coords.
   const clientToPage = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -524,8 +538,37 @@ export function BrowserPane() {
     emit({ kind: 'keyup', key: k, code: e.code, keyCode: VK_CODES[k] || e.keyCode });
   };
 
+  const [closeMsg, setCloseMsg] = useState('');
+  const closeInstance = async (browserId: string, name: string) => {
+    if (!window.confirm(`Close browser “${name}”? Its tabs and any changes since it opened are discarded.`)) return;
+    const result = await closeBrowserInstance(sessionId, browserId);
+    setCloseMsg(result.error ?? '');
+  };
+
   return (
     <div className="pane browser-pane">
+      {instances.length > 1 && (
+        <div className="browser-instances" role="tablist" aria-label="Browser instances">
+          {instances.map((instance) => {
+            const state = browserStates[instance.id];
+            const waiting = allTakeovers.some((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === instance.id);
+            return (
+              <span key={instance.id} className={`browser-instance${instance.id === viewId ? ' selected' : ''}`}>
+                <button role="tab" aria-selected={instance.id === viewId} onClick={() => setBrowserView(sessionId, instance.id)}
+                  title={`${instance.name} · ${instance.sourceProfileName ? `from saved profile “${instance.sourceProfileName}”` : 'fresh profile'} · ${instance.id}`}>
+                  <span className={`dot ${waiting ? 'blocked' : state?.active ? (state.owner === 'user' ? 'working' : 'idle') : 'off'}`} />
+                  {instance.name}
+                  {instance.sourceProfileName && instance.sourceProfileName !== instance.name && <span className="sub"> · {instance.sourceProfileName}</span>}
+                </button>
+                {instance.id !== DEFAULT_BROWSER_ID && (
+                  <button className="browser-instance-close" aria-label={`Close browser ${instance.name}`} title="Close this browser" onClick={() => void closeInstance(instance.id, instance.name)}>×</button>
+                )}
+              </span>
+            );
+          })}
+          {closeMsg && <span role="status" className="browser-bar-message">{closeMsg}</span>}
+        </div>
+      )}
       <div className="browser-bar">
         <div className="browser-status-group">
           <span className={`owner-badge ${owner}`}>
@@ -536,9 +579,9 @@ export function BrowserPane() {
         </div>
 
         <div className="browser-seed-group">
-          <label htmlFor="browser-state-seed">New session</label>
-          <select id="browser-state-seed" value={seed} onChange={(e) => setSeed(e.target.value)} title="Browser state for the new session">
-            <option value="">Fresh state</option>
+          <label htmlFor="browser-state-seed">{instances.length > 1 ? `Restart ${viewed?.name ?? 'browser'} from` : 'Start from'}</label>
+          <select id="browser-state-seed" value={seed} onChange={(e) => setSeed(e.target.value)} title="Saved browser profile to start this browser from">
+            <option value="">Fresh profile</option>
             {snapshots.map((snapshot) => (
               <option key={snapshot.id} value={snapshot.id}>{snapshot.name}</option>
             ))}
@@ -560,9 +603,9 @@ export function BrowserPane() {
             {owner === 'user' ? (takeoverHeld ? 'Return control' : 'Release control') : 'Take control'} <kbd>w</kbd>
           </button>
           {active && !capturing && (
-            <button className="browser-action-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save the current browser state as a reusable snapshot">
+            <button className="browser-action-btn" onClick={() => { setCapturing(true); setSnapMsg(''); }} title="Save this browser's cookies, logins and site data as a reusable saved browser profile">
               <BrowserIcon name="save" />
-              Save snapshot
+              Save profile
             </button>
           )}
           {active && capturing && (
@@ -570,7 +613,7 @@ export function BrowserPane() {
             <input
               autoFocus
               value={snapName}
-              placeholder="Snapshot name…"
+              placeholder="Saved profile name…"
               onChange={(e) => setSnapName(e.target.value)}
               onKeyDown={(e) => {
                 e.stopPropagation();
@@ -581,7 +624,7 @@ export function BrowserPane() {
             <button className="browser-action-btn primary" disabled={!snapName.trim() || snapBusy} onClick={() => void doCapture()}>
               <BrowserIcon name="save" /> {snapBusy ? 'Saving…' : 'Save'}
             </button>
-            <button className="browser-action-btn icon-only" title="Cancel" aria-label="Cancel snapshot" onClick={() => { setCapturing(false); setSnapName(''); }}>
+            <button className="browser-action-btn icon-only" title="Cancel" aria-label="Cancel saving profile" onClick={() => { setCapturing(false); setSnapName(''); }}>
               <BrowserIcon name="close" />
             </button>
           </span>
@@ -617,10 +660,21 @@ export function BrowserPane() {
         </div>
       )}
 
+      {takeovers.length === 0 && otherTakeover && (
+        <div className="takeover-banner">
+          <span>
+            The agent needs you in browser <b>{instances.find((i) => i.id === (otherTakeover.browserId ?? DEFAULT_BROWSER_ID))?.name ?? otherTakeover.browserId}</b> — {otherTakeover.reason}
+          </span>
+          <button className="wheel-btn hot" onClick={() => setBrowserView(sessionId, otherTakeover.browserId ?? DEFAULT_BROWSER_ID)}>
+            Show it
+          </button>
+        </div>
+      )}
+
       {takeovers.length > 0 && (
         <div className="takeover-banner">
           <span>
-            <b>{sessionId}</b> needs you — {takeovers[takeovers.length - 1].reason}
+            <b>{sessionId}</b> needs you{instances.length > 1 ? ` in ${viewed?.name ?? viewId}` : ''} — {takeovers[takeovers.length - 1].reason}
           </span>
           {owner !== 'user' && (
             <button className="wheel-btn hot" onClick={() => toggleWheel(sessionId)}>
