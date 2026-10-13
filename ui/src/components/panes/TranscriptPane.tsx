@@ -2200,6 +2200,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     const events = s.sessions[sessionId]?.events ?? [];
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i].event;
+      // A prompt sent after the limit was detected (e.g. via "Send now") ends the wake-up flow.
+      if (event.kind === 'user_message') return null;
       if (event.kind === 'rate_limit') return event.state === 'pending' ? event : null;
     }
     return null;
@@ -2866,10 +2868,24 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
           {scheduledRateLimit && (
             <button
               className="btn"
-              title="Cancel the scheduled wake-up and prompt the agent directly (e.g. after raising your spend limit)"
+              title="Cancel the scheduled wake-up and send the prompt (or 'continue') to the agent now, e.g. after raising your spend limit"
+              disabled={sending}
               onClick={() => {
-                if (scheduledRateLimit.enabled) void setRateLimitAutoContinue(sessionId, false, '');
+                const message = text.trim() || scheduledRateLimit.queuedMessage?.trim() || 'continue';
                 setBypassedLimitId(scheduledRateLimit.id);
+                setSending(true);
+                void (async () => {
+                  try {
+                    if (scheduledRateLimit.enabled) await setRateLimitAutoContinue(sessionId, false, '');
+                    const result = await prompt(sessionId, message);
+                    if (result.error) setAttachmentError(result.error);
+                    else setAttachmentError(null);
+                  } catch (error) {
+                    setAttachmentError(error instanceof Error ? error.message : 'Could not send prompt.');
+                  } finally {
+                    setSending(false);
+                  }
+                })();
               }}
             >
               Send now
