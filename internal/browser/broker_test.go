@@ -128,6 +128,8 @@ func newRawCDP(t *testing.T) *rawCDP {
 					result["targetInfos"] = []map[string]any{{"targetId": "page", "type": "page", "url": "about:blank"}}
 				case "Target.attachToTarget":
 					result["sessionId"] = "direct-session"
+				case "Page.enable":
+					// Viewer initialization, before user input.
 				default:
 					r.direct <- string(data)
 				}

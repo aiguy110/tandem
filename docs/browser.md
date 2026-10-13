@@ -261,6 +261,23 @@ It POSTs to the daemon's internal HTTP surface (bearer-token authed); the daemon
 the human **releases** the wheel, then returns and the agent resumes (`working`). The UI shows
 the Browser-pane banner and an attention card in the approvals rail.
 
+## Human navigation and page tabs
+
+The Browser pane lists live page targets, including pages opened by the agent.
+Selecting a tab changes the daemon's screencast/input attachment without activating
+the target or changing Playwright's selected page. The viewer retains its selected
+target across CDP reconnects, and selects a remaining page if its tab closes.
+
+The URL bar and Back, Forward, and Reload controls operate on the viewed page.
+Navigation requires human control, enforced by the broker as well as the UI;
+viewing other tabs does not require taking control. Navigation history comes from
+CDP, so the buttons reflect the page's real history. While the pane is open, the
+client requests `browser_pages` every 1.5 seconds (with no overlapping polls).
+`browser_select_page` accepts `event.targetId`; both replies contain `data` with
+`pages`, `selectedTargetId`, `canGoBack`, and `canGoForward`. Navigation uses the
+ordered `browser_input` queue with kinds `navigate` (and `url`), `back`, `forward`,
+and `reload`.
+
 ## Deferred
 
 - **VNC/desktop fallback** for OS-level needs (native file pickers, dialogs, extensions,

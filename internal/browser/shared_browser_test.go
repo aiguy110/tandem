@@ -3,8 +3,11 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +24,7 @@ type directCDPFake struct {
 	writers  map[*websocket.Conn]*sync.Mutex
 	commands []cdpTestCommand
 	created  int
+	pages    []BrowserPage
 }
 
 type cdpTestCommand struct {
@@ -33,6 +37,104 @@ type cdpTestCommand struct {
 type fakeWriteTarget struct {
 	conn *websocket.Conn
 	mu   *sync.Mutex
+}
+
+func TestSharedBrowserRealChromiumTabs(t *testing.T) {
+	executable := os.Getenv("TANDEM_TEST_CHROMIUM")
+	if executable == "" {
+		t.Skip("set TANDEM_TEST_CHROMIUM to exercise real browser navigation and tab screencasts")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	args := append([]string{"--headless=new", "--disable-extensions", "--no-sandbox"}, localLaunchArgs(port, t.TempDir(), false, "")...)
+	// Isolated data URLs keep this test independent of network and desktop
+	// configuration. These launch flags apply only to the test browser.
+	command := exec.CommandContext(ctx, executable, args...)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
+	waitFor(t, "Chrome CDP endpoint", func() bool {
+		response, err := http.Get("http://" + address + "/json/version")
+		if err != nil {
+			return false
+		}
+		defer response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	})
+	driver := &fakeDriver{cdp: "http://" + address, provisions: map[string]int{}, teardowns: map[string]int{}}
+	broker := NewBroker(driver, BrokerConfig{})
+	if err := broker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Stop(context.Background())
+	defer broker.Teardown(context.Background(), "test")
+	shared, err := broker.SharedBrowser(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"navigate", "back", "forward", "reload"} {
+		if err := broker.DispatchUserInput(ctx, "test", BrowserInputEvent{Kind: kind}); err == nil {
+			t.Fatalf("%s allowed without human control", kind)
+		}
+	}
+	broker.Grab("test")
+	for _, targetURL := range []string{"data:text/html,first", "data:text/html,second"} {
+		if err := broker.DispatchUserInput(ctx, "test", BrowserInputEvent{Kind: "navigate", URL: targetURL}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "navigation committed", func() bool {
+			pages, err := shared.Pages(ctx)
+			return err == nil && len(pages.Pages) == 1 && pages.Pages[0].URL == targetURL
+		})
+	}
+	if err := broker.DispatchUserInput(ctx, "test", BrowserInputEvent{Kind: "back"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "back navigation", func() bool {
+		pages, err := shared.Pages(ctx)
+		return err == nil && len(pages.Pages) == 1 && pages.Pages[0].URL == "data:text/html,first" && pages.CanGoForward
+	})
+	shared.mu.Lock()
+	conn := shared.conn
+	shared.mu.Unlock()
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := shared.callOn(ctx, conn, "", "Target.createTarget", map[string]any{"url": "data:text/html,tab"}, &created); err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SelectPage(ctx, created.TargetID); err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan ScreencastFrame, 1)
+	if err := shared.StartScreencast(ctx, func(frame ScreencastFrame) {
+		select {
+		case frames <- frame:
+		default:
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-frames:
+	case <-ctx.Done():
+		t.Fatal("selected page did not produce a screencast frame")
+	}
+	pages, err := shared.Pages(ctx)
+	if err != nil || len(pages.Pages) != 2 || pages.SelectedTargetID != created.TargetID {
+		t.Fatalf("tabs=%+v, %v", pages, err)
+	}
+	// Let Chromium flush and reap its children before TempDir cleanup.
+	_ = shared.callOn(ctx, conn, "", "Browser.close", map[string]any{}, nil)
+	_ = command.Wait()
 }
 
 func newDirectCDPFake(t *testing.T, pageExists bool) *directCDPFake {
@@ -71,7 +173,12 @@ func newDirectCDPFake(t *testing.T, pageExists bool) *directCDPFake {
 			result := map[string]any{}
 			switch command.Method {
 			case "Target.getTargets":
-				if pageExists {
+				f.mu.Lock()
+				pages := f.pages
+				f.mu.Unlock()
+				if pages != nil {
+					result["targetInfos"] = pages
+				} else if pageExists {
 					result["targetInfos"] = []map[string]any{{"targetId": "page-1", "type": "page", "url": "about:blank"}}
 				} else {
 					result["targetInfos"] = []map[string]any{{"targetId": "worker", "type": "service_worker"}}
@@ -83,6 +190,12 @@ func newDirectCDPFake(t *testing.T, pageExists bool) *directCDPFake {
 				result["targetId"] = "created-page"
 			case "Target.attachToTarget":
 				result["sessionId"] = "human-session"
+				if command.Params["targetId"] == "page-2" {
+					result["sessionId"] = "second-session"
+				}
+			case "Page.getNavigationHistory":
+				result["currentIndex"] = 1
+				result["entries"] = []map[string]any{{"id": 11}, {"id": 22}, {"id": 33}}
 			}
 			response, _ := json.Marshal(map[string]any{"id": command.ID, "result": result})
 			writeMu.Lock()
@@ -95,6 +208,68 @@ func newDirectCDPFake(t *testing.T, pageExists bool) *directCDPFake {
 	}))
 	f.wsURL = "ws" + f.server.URL[len("http"):]
 	return f
+}
+
+func TestSharedBrowserPagesHistoryAndSelection(t *testing.T) {
+	fake := newDirectCDPFake(t, true)
+	defer fake.close()
+	fake.mu.Lock()
+	fake.pages = []BrowserPage{
+		{TargetID: "page-1", Type: "page", Title: "First", URL: "https://example.test/first"},
+		{TargetID: "page-2", Type: "page", Title: "Second", URL: "https://example.test/second"},
+		{TargetID: "worker", Type: "service_worker"},
+	}
+	fake.mu.Unlock()
+	shared := NewSharedBrowser(fake.wsURL)
+	defer shared.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pages, err := shared.Pages(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages.Pages) != 2 || pages.SelectedTargetID != "page-1" || !pages.CanGoBack || !pages.CanGoForward {
+		t.Fatalf("pages=%+v", pages)
+	}
+	if err := shared.StartScreencast(ctx, func(ScreencastFrame) {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := shared.SelectPage(ctx, "worker"); err == nil {
+		t.Fatal("selected non-page target")
+	}
+	if err := shared.SelectPage(ctx, "page-2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"back", "forward", "reload", "navigate"} {
+		if err := shared.Dispatch(ctx, BrowserInputEvent{Kind: kind, URL: "https://example.test/new"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commands := fake.commandsFor("Page.navigateToHistoryEntry")
+	if len(commands) != 2 || commands[0].Params["entryId"] != float64(11) || commands[1].Params["entryId"] != float64(33) || commands[0].SessionID != "second-session" {
+		t.Fatalf("history=%+v", commands)
+	}
+	casts := fake.commandsFor("Page.startScreencast")
+	if len(casts) != 2 || casts[1].SessionID != "second-session" {
+		t.Fatalf("casts=%+v", casts)
+	}
+	if len(fake.commandsFor("Target.activateTarget")) != 0 {
+		t.Fatal("viewer selection changed agent focus")
+	}
+	// A reconnect keeps the selected tab instead of reverting to the first.
+	fake.closeConnections()
+	waitFor(t, "reconnect to selected page", func() bool {
+		attached := fake.commandsFor("Target.attachToTarget")
+		return len(attached) > 2 && attached[len(attached)-1].Params["targetId"] == "page-2"
+	})
+	// Closing that tab elsewhere selects a remaining page for the viewer.
+	fake.mu.Lock()
+	fake.pages = fake.pages[:1]
+	fake.mu.Unlock()
+	pages, err = shared.Pages(ctx)
+	if err != nil || pages.SelectedTargetID != "page-1" {
+		t.Fatalf("closed tab recovery=%+v, %v", pages, err)
+	}
 }
 
 func (f *directCDPFake) close() {

@@ -328,13 +328,20 @@ func (b *Broker) DevNavigate(ctx context.Context, id, targetURL string) error {
 
 func (b *Broker) DispatchUserInput(ctx context.Context, id string, event BrowserInputEvent) error {
 	if b.Owner(id) != ControlUser {
+		if event.Kind == "navigate" || event.Kind == "back" || event.Kind == "forward" || event.Kind == "reload" {
+			return errors.New("take browser control before navigating")
+		}
 		return nil
 	}
 	shared, err := b.SharedBrowser(ctx, id)
 	if err != nil {
 		return err
 	}
-	return shared.Dispatch(ctx, event)
+	err = shared.Dispatch(ctx, event)
+	if event.Kind == "navigate" || event.Kind == "back" || event.Kind == "forward" || event.Kind == "reload" {
+		slog.Info("browser user navigation", "session_id", id, "action", event.Kind, "error", err)
+	}
+	return err
 }
 func (b *Broker) resolveBrowserWS(ctx context.Context, cdp string) (string, error) {
 	if strings.HasPrefix(cdp, "ws://") || strings.HasPrefix(cdp, "wss://") {

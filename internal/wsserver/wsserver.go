@@ -522,7 +522,7 @@ func (c *connection) run() {
 			default:
 				c.commandError(m, errors.New("subscription queue full"))
 			}
-		case "browser_input", "browser_control", "restart_browser":
+		case "browser_input", "browser_control", "restart_browser", "browser_pages", "browser_select_page":
 			c.enqueueBrowser(m)
 		default:
 			c.handle(m)
@@ -1822,6 +1822,30 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.server.broadcastAgents()
 		c.commandAck(m, m.SessionID)
+	case "browser_pages", "browser_select_page":
+		if c.server.opts.Browser == nil {
+			c.send(withCorr(map[string]any{"t": "browser_pages", "sessionId": m.SessionID, "error": "browser subsystem disabled"}, m.CorrID))
+			return
+		}
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+		defer cancel()
+		var pages browser.BrowserPages
+		shared, err := c.server.opts.Browser.SharedBrowser(ctx, m.SessionID)
+		if err == nil && m.T == "browser_select_page" {
+			err = shared.SelectPage(ctx, m.Event.TargetID)
+		}
+		if err == nil {
+			pages, err = shared.Pages(ctx)
+		}
+		reply := map[string]any{"t": "browser_pages", "sessionId": m.SessionID, "data": pages}
+		if err != nil {
+			slog.Warn("browser viewer command failed", "session_id", m.SessionID, "command", m.T, "error", err)
+			reply["error"] = err.Error()
+		}
+		c.send(withCorr(reply, m.CorrID))
 	case "browser_input":
 		if c.server.opts.Browser == nil {
 			c.commandError(m, errors.New("browser subsystem disabled"))
@@ -1832,7 +1856,11 @@ func (c *connection) handle(m clientMessage) {
 		}
 		// Preserve input order. In particular, a release must never overtake a
 		// press or race a synthetic click on separate goroutines.
-		ctx, cancel := context.WithTimeout(c.ctx, 2*time.Second)
+		timeout := 2 * time.Second
+		if m.Event.Kind == "navigate" || m.Event.Kind == "back" || m.Event.Kind == "forward" || m.Event.Kind == "reload" {
+			timeout = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(c.ctx, timeout)
 		err := c.server.opts.Browser.DispatchUserInput(ctx, m.SessionID, m.Event)
 		cancel()
 		if err != nil {

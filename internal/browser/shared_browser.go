@@ -28,6 +28,8 @@ type ScreencastMetadata struct {
 // BrowserInputEvent is the normalized browser_input.event wire shape.
 type BrowserInputEvent struct {
 	Kind       string
+	URL        string
+	TargetID   string
 	X, Y       float64
 	Button     string
 	Buttons    int
@@ -84,6 +86,7 @@ type SharedBrowser struct {
 	mu            sync.Mutex
 	conn          *websocket.Conn
 	sessionID     string
+	targetID      string
 	pending       map[int64]chan cdpResponse
 	nextID        int64
 	closed        bool
@@ -145,11 +148,18 @@ func (s *SharedBrowser) Connect(ctx context.Context) error {
 		s.disconnect(conn, err)
 		return err
 	}
+	s.mu.Lock()
+	preferredTarget := s.targetID
+	s.mu.Unlock()
 	targetID := ""
 	for _, target := range targets.TargetInfos {
 		if target.Type == "page" {
-			targetID = target.TargetID
-			break
+			if targetID == "" || target.TargetID == preferredTarget {
+				targetID = target.TargetID
+			}
+			if target.TargetID == preferredTarget {
+				break
+			}
 		}
 	}
 	if targetID == "" {
@@ -173,8 +183,13 @@ func (s *SharedBrowser) Connect(ctx context.Context) error {
 		s.disconnect(conn, errors.New("CDP attach returned no session"))
 		return errors.New("CDP attach returned no session")
 	}
+	if err := s.callOn(ctx, conn, attached.SessionID, "Page.enable", map[string]any{}, nil); err != nil {
+		s.disconnect(conn, err)
+		return err
+	}
 	s.mu.Lock()
 	s.sessionID = attached.SessionID
+	s.targetID = targetID
 	desired := s.desiredCast
 	s.mu.Unlock()
 	if desired {
@@ -258,6 +273,23 @@ func (s *SharedBrowser) Dispatch(ctx context.Context, event BrowserInputEvent) e
 	method := "Input.dispatchMouseEvent"
 	params := map[string]any{"x": event.X, "y": event.Y}
 	switch event.Kind {
+	case "navigate":
+		return s.Navigate(ctx, event.URL)
+	case "back", "forward":
+		var history navigationHistory
+		if err := s.sessionCall(ctx, "Page.getNavigationHistory", map[string]any{}, &history); err != nil {
+			return err
+		}
+		index := history.CurrentIndex - 1
+		if event.Kind == "forward" {
+			index = history.CurrentIndex + 1
+		}
+		if index < 0 || index >= len(history.Entries) {
+			return nil
+		}
+		return s.sessionCall(ctx, "Page.navigateToHistoryEntry", map[string]any{"entryId": history.Entries[index].ID}, nil)
+	case "reload":
+		return s.sessionCall(ctx, "Page.reload", map[string]any{}, nil)
 	case "mousemove":
 		params["type"], params["buttons"] = "mouseMoved", event.Buttons
 	case "mousedown":
@@ -301,7 +333,139 @@ func (s *SharedBrowser) Navigate(ctx context.Context, targetURL string) error {
 	if err := s.Connect(ctx); err != nil {
 		return err
 	}
-	return s.sessionCall(ctx, "Page.navigate", map[string]any{"url": targetURL}, nil)
+	var result struct {
+		ErrorText string `json:"errorText"`
+	}
+	if err := s.sessionCall(ctx, "Page.navigate", map[string]any{"url": targetURL}, &result); err != nil {
+		return err
+	}
+	if result.ErrorText != "" {
+		return fmt.Errorf("browser navigation failed: %s", result.ErrorText)
+	}
+	return nil
+}
+
+type BrowserPage struct {
+	TargetID string `json:"targetId"`
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+}
+
+type BrowserPages struct {
+	Pages            []BrowserPage `json:"pages"`
+	SelectedTargetID string        `json:"selectedTargetId"`
+	CanGoBack        bool          `json:"canGoBack"`
+	CanGoForward     bool          `json:"canGoForward"`
+}
+
+type navigationHistory struct {
+	CurrentIndex int `json:"currentIndex"`
+	Entries      []struct {
+		ID int `json:"id"`
+	} `json:"entries"`
+}
+
+// Pages derives the viewer's tabs and history from the live browser, including
+// pages opened by the agent. It does not change the agent's selected page.
+func (s *SharedBrowser) Pages(ctx context.Context) (BrowserPages, error) {
+	if err := s.Connect(ctx); err != nil {
+		return BrowserPages{}, err
+	}
+	s.mu.Lock()
+	conn, targetID := s.conn, s.targetID
+	s.mu.Unlock()
+	var targets struct {
+		TargetInfos []BrowserPage `json:"targetInfos"`
+	}
+	if err := s.callOn(ctx, conn, "", "Target.getTargets", map[string]any{}, &targets); err != nil {
+		return BrowserPages{}, err
+	}
+	result := BrowserPages{Pages: []BrowserPage{}, SelectedTargetID: targetID}
+	found := false
+	for _, target := range targets.TargetInfos {
+		if target.Type == "page" {
+			result.Pages = append(result.Pages, target)
+			found = found || target.TargetID == targetID
+		}
+	}
+	// Recover when the agent closes the page the human was viewing.
+	if !found && len(result.Pages) > 0 {
+		if err := s.SelectPage(ctx, result.Pages[0].TargetID); err != nil {
+			return BrowserPages{}, err
+		}
+		result.SelectedTargetID = result.Pages[0].TargetID
+	}
+	if len(result.Pages) > 0 {
+		var history navigationHistory
+		if err := s.sessionCall(ctx, "Page.getNavigationHistory", map[string]any{}, &history); err != nil {
+			return BrowserPages{}, err
+		}
+		result.CanGoBack = history.CurrentIndex > 0
+		result.CanGoForward = history.CurrentIndex+1 < len(history.Entries)
+	}
+	return result, nil
+}
+
+// SelectPage changes only the daemon's viewer attachment. It never activates
+// a target or changes the Playwright client's selected tab.
+func (s *SharedBrowser) SelectPage(ctx context.Context, targetID string) error {
+	if err := s.Connect(ctx); err != nil {
+		return err
+	}
+	if err := s.connectMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.connectMu.unlock()
+	s.mu.Lock()
+	conn, oldSession, current, cast := s.conn, s.sessionID, s.targetID, s.desiredCast
+	s.mu.Unlock()
+	if current == targetID {
+		return nil
+	}
+	var targets struct {
+		TargetInfos []BrowserPage `json:"targetInfos"`
+	}
+	if err := s.callOn(ctx, conn, "", "Target.getTargets", map[string]any{}, &targets); err != nil {
+		return err
+	}
+	valid := false
+	for _, target := range targets.TargetInfos {
+		if target.TargetID == targetID && target.Type == "page" {
+			valid = true
+		}
+	}
+	if !valid {
+		return errors.New("browser page no longer exists")
+	}
+	var attached struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := s.callOn(ctx, conn, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
+		return err
+	}
+	if attached.SessionID == "" {
+		return errors.New("CDP attach returned no session")
+	}
+	if err := s.callOn(ctx, conn, attached.SessionID, "Page.enable", map[string]any{}, nil); err != nil {
+		_ = s.callOn(ctx, conn, "", "Target.detachFromTarget", map[string]any{"sessionId": attached.SessionID}, nil)
+		return err
+	}
+	if cast {
+		if err := s.startRemoteCast(ctx, conn, attached.SessionID); err != nil {
+			_ = s.callOn(ctx, conn, "", "Target.detachFromTarget", map[string]any{"sessionId": attached.SessionID}, nil)
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.sessionID, s.targetID, s.casting = attached.SessionID, targetID, cast
+	s.lastFrameSent = time.Time{}
+	s.mu.Unlock()
+	if oldSession != "" {
+		_ = s.callOn(ctx, conn, "", "Target.detachFromTarget", map[string]any{"sessionId": oldSession}, nil)
+	}
+	slog.Info("browser viewer selected page", "session_id", s.ownerID, "target_id", targetID)
+	return nil
 }
 
 func (s *SharedBrowser) sessionCall(ctx context.Context, method string, params any, out any) error {
@@ -414,7 +578,10 @@ func (s *SharedBrowser) readLoop(conn *websocket.Conn) {
 				continue
 			}
 			s.mu.Lock()
-			callback, session := s.frameCallback, s.sessionID
+			callback, session := s.frameCallback, message.SessionID
+			if session != s.sessionID {
+				callback = nil
+			}
 			now := time.Now()
 			if callback != nil && !s.lastFrameSent.IsZero() && now.Sub(s.lastFrameSent) < time.Second/15 {
 				callback = nil

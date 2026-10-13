@@ -615,6 +615,7 @@ export type ClientMsg =
   // that message with blocks instead of keeping its turn.
   | { t: 'fork_session'; sessionId: string; seq?: number; edit?: boolean; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'browser_input'; sessionId: string; event: BrowserInputWire; corrId?: string }
+  | { t: 'browser_pages' | 'browser_select_page'; sessionId: string; event?: { targetId: string }; corrId?: string }
   | { t: 'list_dirs'; hostId?: string; corrId?: string }
   | { t: 'list_workspace_entries'; sessionId: string; path: string; corrId?: string }
   | { t: 'list_git_refs'; repo: string; hostId?: string; corrId?: string }
@@ -645,7 +646,8 @@ export type ClientMsg =
   | { t: 'set_messaging_paused'; paused: boolean; hostId?: string; corrId?: string };
 
 export interface BrowserInputWire {
-  kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text';
+  kind: 'mousemove' | 'mousedown' | 'mouseup' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'text' | 'navigate' | 'back' | 'forward' | 'reload';
+  url?: string;
   x?: number;
   y?: number;
   button?: 'left' | 'middle' | 'right';
@@ -662,7 +664,15 @@ export interface BrowserInputWire {
   text?: string;
 }
 
+export interface BrowserPages {
+  pages: { targetId: string; title: string; url: string }[];
+  selectedTargetId: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
 export type ServerMsg =
+  | { t: 'browser_pages'; sessionId: string; data: BrowserPages; error?: string; corrId?: string }
   | { t: 'pong'; corrId?: string }
   | { t: 'snapshot_start' | 'snapshot_end'; sessionId: string; replayId: string }
   | { t: 'snapshot_chunk'; sessionId: string; replayId: string; data: string }

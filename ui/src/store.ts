@@ -27,6 +27,7 @@ import type {
   AutomationJob,
   AutomationRun,
   BrowserInputWire,
+  BrowserPages,
   BrowserSnapshot,
   Channel,
   ClosePreview,
@@ -452,6 +453,8 @@ interface StoreState {
   restartHarness: (sessionId: string) => Promise<AckResult>;
   forkSession: (sessionId: string, at?: { seq: number; edit?: PromptBlock[] }) => Promise<AckResult>;
   browserInput: (sessionId: string, event: BrowserInputWire) => void;
+  browserPages: (sessionId: string, targetId?: string) => Promise<BrowserPages>;
+  browserNavigate: (sessionId: string, event: BrowserInputWire) => Promise<AckResult>;
   toggleWheel: (sessionId: string) => void;
 }
 
@@ -509,6 +512,7 @@ const pendingWorkspaceEntries = new Map<string, { resolve: (entries: WorkspaceEn
 const pendingClosePreviews = new Map<string, { resolve: (preview: ClosePreview) => void; reject: (error: Error) => void }>();
 const pendingDiffs = new Map<string, { resolve: (diff: WorkspaceDiff) => void; reject: (error: Error) => void }>();
 const pendingSnapshots = new Map<string, { resolve: (snaps: BrowserSnapshot[]) => void; reject: (error: Error) => void }>();
+const pendingBrowserPages = new Map<string, { resolve: (pages: BrowserPages) => void; reject: (error: Error) => void }>();
 // list_dirs / batch list_profiles requests in flight, by corrId → host.
 const pendingDirs = new Map<string, string>();
 const pendingAllProfiles = new Map<string, string>();
@@ -969,6 +973,13 @@ export const useStore = create<StoreState>((set, get) => {
         }
         return;
       }
+      case 'browser_pages': {
+        const pending = msg.corrId ? pendingBrowserPages.get(msg.corrId) : undefined;
+        if (msg.corrId) pendingBrowserPages.delete(msg.corrId);
+        if (msg.error) pending?.reject(new Error(msg.error));
+        else pending?.resolve(msg.data);
+        return;
+      }
       case 'browser_frame':
         // Frames bypass the reactive store (browserHub) to avoid re-render storms.
         browserHub.push(msg.sessionId, { dataB64: msg.dataB64, meta: msg.meta });
@@ -995,6 +1006,12 @@ export const useStore = create<StoreState>((set, get) => {
         return;
       }
       case 'ack': {
+        const pagesPending = msg.corrId ? pendingBrowserPages.get(msg.corrId) : undefined;
+        if (pagesPending && msg.corrId) {
+          pendingBrowserPages.delete(msg.corrId);
+          pagesPending.reject(new Error(msg.error ?? 'browser tabs unavailable'));
+          return;
+        }
         const metricsPending = msg.corrId ? pendingHostMetrics.get(msg.corrId) : undefined;
         if (metricsPending && msg.corrId) {
           pendingHostMetrics.delete(msg.corrId);
@@ -2032,6 +2049,21 @@ export const useStore = create<StoreState>((set, get) => {
         });
       }),
     browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, event }),
+    browserPages: (sessionId, targetId) => new Promise<BrowserPages>((resolve, reject) => {
+      const corrId = nextCorr();
+      const timer = setTimeout(() => { pendingBrowserPages.delete(corrId); reject(new Error('Browser tabs request timed out')); }, 7000);
+      pendingBrowserPages.set(corrId, {
+        resolve: (pages) => { clearTimeout(timer); resolve(pages); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+      client.send({ t: targetId ? 'browser_select_page' : 'browser_pages', sessionId, ...(targetId ? { event: { targetId } } : {}), corrId });
+    }),
+    browserNavigate: (sessionId, event) => new Promise<AckResult>((resolve) => {
+      const corrId = nextCorr();
+      const timer = setTimeout(() => { pendingAcks.delete(corrId); resolve({ error: 'Browser navigation timed out' }); }, 20000);
+      pendingAcks.set(corrId, (result) => { clearTimeout(timer); resolve(result); });
+      client.send({ t: 'browser_input', sessionId, event, corrId });
+    }),
     toggleWheel: (sessionId) => {
       const a = get().sessions[sessionId];
       if (!a || !a.browserActive) return;

@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
-import type { BrowserInputWire } from '../../wire';
+import type { BrowserInputWire, BrowserPages } from '../../wire';
 
 type BrowserIconName = 'agent' | 'user' | 'play' | 'restart' | 'keyboard' | 'wheel' | 'save' | 'close';
 
@@ -37,6 +37,52 @@ export function BrowserPane() {
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
+  const browserPages = useStore((s) => s.browserPages);
+  const browserNavigate = useStore((s) => s.browserNavigate);
+  const [pages, setPages] = useState<BrowserPages | null>(null);
+  const [address, setAddress] = useState('');
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [navMsg, setNavMsg] = useState('');
+  const [navBusy, setNavBusy] = useState(false);
+  const pageURL = pages?.pages.find((page) => page.targetId === pages.selectedTargetId)?.url ?? '';
+
+  useEffect(() => { if (!editingAddress) setAddress(pageURL); }, [pageURL, editingAddress]);
+  useEffect(() => { setEditingAddress(false); }, [pages?.selectedTargetId]);
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setPages(null);
+    setAddress('');
+    setEditingAddress(false);
+    setNavMsg('');
+    if (!active) return;
+    const refresh = async () => {
+      try {
+        const result = await browserPages(sessionId);
+        if (!disposed) setPages(result);
+      } catch (error) {
+        if (!disposed) setNavMsg((error as Error).message);
+      } finally {
+        if (!disposed) timer = setTimeout(() => void refresh(), 1500);
+      }
+    };
+    void refresh();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [sessionId, active, browserPages]);
+
+  const navigate = async (event: BrowserInputWire) => {
+    if (navBusy || owner !== 'user') return;
+    setNavBusy(true);
+    setNavMsg('');
+    try {
+      const result = await browserNavigate(sessionId, event);
+      if (result.error) throw new Error(result.error);
+      setPages(await browserPages(sessionId));
+      setEditingAddress(false);
+    } catch (error) {
+      setNavMsg((error as Error).message);
+    } finally { setNavBusy(false); }
+  };
   const captureSnapshot = useStore((s) => s.captureSnapshot);
   const snapshots = useStore((s) => s.snapshots);
   const listSnapshots = useStore((s) => s.listSnapshots);
@@ -486,7 +532,7 @@ export function BrowserPane() {
             <BrowserIcon name={owner === 'user' ? 'user' : 'agent'} />
             {owner === 'user' ? 'You have control' : 'Agent has control'}
           </span>
-          {(restartMsg || snapMsg) && <span className="browser-bar-message">{restartMsg || snapMsg}</span>}
+          {(restartMsg || snapMsg || navMsg) && <span role="status" className="browser-bar-message" title={restartMsg || snapMsg || navMsg}>{restartMsg || snapMsg || navMsg}</span>}
         </div>
 
         <div className="browser-seed-group">
@@ -542,6 +588,34 @@ export function BrowserPane() {
           )}
         </div>
       </div>
+
+      {active && (
+        <div className="browser-navigation" onKeyDown={(event) => event.stopPropagation()}>
+          <div className="browser-page-tabs" role="tablist" aria-label="Browser pages">
+            {pages?.pages.map((page) => (
+              <button key={page.targetId} role="tab" aria-selected={page.targetId === pages.selectedTargetId} title={page.url}
+                onClick={() => { void browserPages(sessionId, page.targetId).then(setPages).catch((error: Error) => setNavMsg(error.message)); }}>
+                {page.title || page.url || 'New tab'}
+              </button>
+            ))}
+          </div>
+          <form className="browser-address-bar" onSubmit={(event) => {
+            event.preventDefault();
+            const value = address.trim();
+            if (!value) return;
+            const url = /^[a-z][a-z\d+.-]*:/i.test(value) && !/^[^/]+:\d+(\/|$)/.test(value) ? value : `${/^(localhost|127\.|\[::1\])/.test(value) ? 'http' : 'https'}://${value}`;
+            void navigate({ kind: 'navigate', url });
+          }}>
+            <button type="button" className="browser-action-btn icon-only" aria-label="Back" title="Back" disabled={!userOwns || navBusy || !pages?.canGoBack} onClick={() => void navigate({ kind: 'back' })}>←</button>
+            <button type="button" className="browser-action-btn icon-only" aria-label="Forward" title="Forward" disabled={!userOwns || navBusy || !pages?.canGoForward} onClick={() => void navigate({ kind: 'forward' })}>→</button>
+            <button type="button" className="browser-action-btn icon-only" aria-label="Reload page" title="Reload page" disabled={!userOwns || navBusy} onClick={() => void navigate({ kind: 'reload' })}><BrowserIcon name="restart" /></button>
+            <input aria-label="Browser URL" value={address} readOnly={!userOwns} placeholder="Enter URL" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+              onChange={(event) => { setEditingAddress(true); setAddress(event.target.value); }}
+              onKeyDown={(event) => { if (event.key === 'Escape') { setEditingAddress(false); event.currentTarget.blur(); } }} />
+            <button className="browser-action-btn" type="submit" disabled={!userOwns || navBusy || !address.trim()}>Go</button>
+          </form>
+        </div>
+      )}
 
       {takeovers.length > 0 && (
         <div className="takeover-banner">

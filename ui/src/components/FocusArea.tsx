@@ -183,7 +183,7 @@ export function FocusArea() {
       )}
       {pane === 'shell' && <ShellPane key={focusedId} />}
       {pane === 'diff' && <DiffPane key={focusedId} />}
-      {pane === 'browser' && <BrowserPane />}
+      {pane === 'browser' && <BrowserPane key={focusedId} />}
     </div>
   );
 }

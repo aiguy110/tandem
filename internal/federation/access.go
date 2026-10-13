@@ -215,6 +215,8 @@ var commandLevels = map[string]Level{
 	"restart_browser":           LevelOperate,
 	"restart_harness":           LevelOperate,
 	"browser_input":             LevelOperate,
+	"browser_pages":             LevelView,
+	"browser_select_page":       LevelView,
 	"add_annotation":            LevelOperate,
 	"update_annotation":         LevelOperate,
 	"delete_annotation":         LevelOperate,
