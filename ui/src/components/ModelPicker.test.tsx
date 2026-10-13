@@ -35,4 +35,12 @@ describe('ModelPicker', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Agent default' }));
     expect(onChange).toHaveBeenCalledWith('');
   });
+
+  it('opens above the input when there is no room below', () => {
+    render(<ModelPicker value="" options={options} onChange={vi.fn()} />);
+    const input = screen.getByRole('combobox', { name: 'Model' });
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue({ top: window.innerHeight - 40, bottom: window.innerHeight - 16 } as DOMRect);
+    fireEvent.focus(input);
+    expect(screen.getByRole('listbox').className).toContain('model-picker-menu-up');
+  });
 });

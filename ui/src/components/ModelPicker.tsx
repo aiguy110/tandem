@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 export interface ModelOption {
   value: string;
@@ -37,6 +37,7 @@ export function ModelPicker({
   const input = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [placement, setPlacement] = useState<{ up: boolean; maxHeight: number }>({ up: false, maxHeight: 440 });
   const selected = options.find((option) => option.value === value);
   const shownValue = selected?.name ?? (value || defaultLabel || 'Select model');
 
@@ -50,6 +51,24 @@ export function ModelPicker({
 
   useEffect(() => {
     if (!open) setQuery('');
+  }, [open]);
+
+  // The session config bar sits at the bottom of the pane, so a menu that
+  // always drops down runs off-screen. Open toward whichever side has room,
+  // preferring below, and cap the height to the space actually available.
+  useLayoutEffect(() => {
+    if (!open || !input.current) return;
+    const place = () => {
+      const rect = input.current!.getBoundingClientRect();
+      const wanted = Math.min(440, window.innerHeight * 0.6);
+      const below = window.innerHeight - rect.bottom - 12;
+      const above = rect.top - 12;
+      const up = below < wanted && above > below;
+      setPlacement({ up, maxHeight: Math.max(120, Math.min(wanted, up ? above : below)) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
   }, [open]);
 
   const grouped = useMemo(() => {
@@ -97,7 +116,7 @@ export function ModelPicker({
         }}
       />
       {open && (
-        <div id={`${id}-models`} className="model-picker-menu" role="listbox" aria-label="Available models">
+        <div id={`${id}-models`} className={`model-picker-menu${placement.up ? ' model-picker-menu-up' : ''}`} style={{ maxHeight: placement.maxHeight }} role="listbox" aria-label="Available models">
           {defaultLabel && (
             <button type="button" role="option" aria-selected={!value} className="model-picker-option model-picker-default" onMouseDown={(event) => event.preventDefault()} onClick={() => choose('')}>
               {defaultLabel}
