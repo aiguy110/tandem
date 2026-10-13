@@ -156,7 +156,11 @@ export type SessionEvent =
   // An HTTP MCP server was withheld from this session because it needs a
   // sign-in Tandem does not hold yet (docs/mcp-auth.md).
   | { kind: 'mcp_auth_required'; server: string; serverKey: string }
-  | { kind: 'takeover_request'; reqId: string; reason: string }
+  | { kind: 'takeover_request'; reqId: string; reason: string; browserId?: string }
+  // Durable full list of the session's browser instances (newest wins).
+  | { kind: 'browser_instances'; instances: BrowserInstance[] }
+  | { kind: 'browser_instance_request'; requestId: string; source: BrowserInstanceSource; reason: string; name?: string }
+  | { kind: 'browser_instance_resolved'; requestId: string; granted: boolean; browserId?: string }
   | { kind: 'takeover_resolved'; reqId: string }
   | { kind: 'secret_request'; requestId: string; service: string; reason: string; usage?: 'http' | 'file'; origin: string; path?: string; headerName: string }
   | { kind: 'secret_resolved'; requestId: string; granted: boolean }
@@ -434,14 +438,32 @@ export interface SpawnSpec {
   hostId?: string;
 }
 
-// BrowserSnapshot is a captured, named browser user-data snapshot used to seed a
-// new agent's browser at spawn.
+// BrowserSnapshot is a saved browser profile: a captured, named copy of a
+// browser's user data used to start a browser from (at spawn, on restart, or
+// as an additional approved browser instance). The wire keeps the older
+// "snapshot" name; user-facing text says "saved browser profile".
 export interface BrowserSnapshot {
   id: string;
   name: string;
   kind: string;
   ref: string;
   createdAt: number;
+}
+
+// One of a session's browsers. "default" is the browser every session starts
+// with; others were approved by the human on the agent's request.
+export interface BrowserInstance {
+  id: string;
+  name: string;
+  sourceProfileId?: string;
+  sourceProfileName?: string;
+  createdAt?: number;
+}
+
+export interface BrowserInstanceSource {
+  kind: 'fresh' | 'saved_profile' | 'user_choice';
+  profileId?: string;
+  profileName?: string;
 }
 
 export interface AutomationJob {
@@ -560,7 +582,7 @@ export interface WorkspaceEntry {
 
 export type ClientMsg =
   | { t: 'ping'; corrId: string }
-  | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean }
+  | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean; browserId?: string }
   | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
   | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
@@ -592,7 +614,7 @@ export type ClientMsg =
   | { t: 'sign_out_mcp_server'; id: string; corrId?: string }
   | { t: 'recheck_mcp_server'; id: string; corrId?: string }
   | { t: 'get_spawn_options'; agent: string; harness?: string; acpArgs?: string[]; cwd: string; hostId?: string; corrId?: string }
-  | { t: 'capture_snapshot'; sessionId: string; name: string; corrId?: string }
+  | { t: 'capture_snapshot'; sessionId: string; browserId?: string; name: string; corrId?: string }
   | { t: 'list_snapshots'; hostId?: string; corrId?: string }
   | { t: 'delete_snapshot'; id: string; corrId?: string }
   | { t: 'list_profiles'; project?: string; all?: boolean; hostId?: string; corrId?: string }
@@ -607,15 +629,19 @@ export type ClientMsg =
   | { t: 'get_diff'; sessionId: string; corrId?: string }
   | { t: 'close_agent'; sessionId: string; force?: boolean; deleteWorktree?: boolean; deinitSubmodules?: boolean; corrId?: string }
   | { t: 'merge_back'; sessionId: string; mode: 'merge' | 'pr'; corrId?: string }
-  | { t: 'browser_control'; sessionId: string; action: 'grab' | 'release'; corrId?: string }
-  | { t: 'restart_browser'; sessionId: string; snapshotId?: string; corrId?: string }
+  | { t: 'browser_control'; sessionId: string; browserId?: string; action: 'grab' | 'release'; corrId?: string }
+  | { t: 'restart_browser'; sessionId: string; browserId?: string; snapshotId?: string; corrId?: string }
+  // Which browser instance this client watches; independent of the agent's target.
+  | { t: 'browser_view'; sessionId: string; browserId: string; corrId?: string }
+  | { t: 'close_browser_instance'; sessionId: string; browserId: string; corrId?: string }
+  | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve' | 'deny'; snapshotId?: string; corrId?: string }
   | { t: 'restart_harness'; sessionId: string; corrId?: string }
   // Starts a new agent on a conversation-only fork of sessionId (workspace is
   // shared, not rolled back). seq anchors it to a user message; edit replaces
   // that message with blocks instead of keeping its turn.
   | { t: 'fork_session'; sessionId: string; seq?: number; edit?: boolean; blocks?: PromptBlock[]; corrId?: string }
-  | { t: 'browser_input'; sessionId: string; event: BrowserInputWire; corrId?: string }
-  | { t: 'browser_pages' | 'browser_select_page'; sessionId: string; event?: { targetId: string }; corrId?: string }
+  | { t: 'browser_input'; sessionId: string; browserId?: string; event: BrowserInputWire; corrId?: string }
+  | { t: 'browser_pages' | 'browser_select_page'; sessionId: string; browserId?: string; event?: { targetId: string }; corrId?: string }
   | { t: 'list_dirs'; hostId?: string; corrId?: string }
   | { t: 'list_workspace_entries'; sessionId: string; path: string; corrId?: string }
   | { t: 'list_git_refs'; repo: string; hostId?: string; corrId?: string }
@@ -672,7 +698,7 @@ export interface BrowserPages {
 }
 
 export type ServerMsg =
-  | { t: 'browser_pages'; sessionId: string; data: BrowserPages; error?: string; corrId?: string }
+  | { t: 'browser_pages'; sessionId: string; browserId?: string; data: BrowserPages; error?: string; corrId?: string }
   | { t: 'pong'; corrId?: string }
   | { t: 'snapshot_start' | 'snapshot_end'; sessionId: string; replayId: string }
   | { t: 'snapshot_chunk'; sessionId: string; replayId: string; data: string }
@@ -703,8 +729,8 @@ export type ServerMsg =
   | { t: 'sessions'; corrId?: string; catalog: ResumeCatalog; hostId?: string }
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
-  | { t: 'browser_frame'; sessionId: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; active: boolean; controlOwner: 'agent' | 'user' }
+  | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
+  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user' }
   // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
   | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
   | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };

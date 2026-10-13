@@ -152,6 +152,39 @@ describe('thread audio preference', () => {
     expect(useStore.getState().sessions['session-2'].audioOnTurnEnd).toBe(false);
   });
 
+  it('tracks browser instances, per-instance state and pending instance requests', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 2, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+      transcript: [
+        { seq: 1, event: { kind: 'browser_instance_request', requestId: 'r1', source: { kind: 'user_choice' }, reason: 'review' } },
+        { seq: 2, event: { kind: 'browser_instances', instances: [{ id: 'default', name: 'Default' }, { id: 'b2', name: 'Work', sourceProfileName: 'Work' }] } },
+      ],
+    });
+    let view = useStore.getState().sessions['session-1'];
+    expect(view.browserInstances.map((i) => i.id)).toEqual(['default', 'b2']);
+    expect(view.browserInstanceRequests).toHaveLength(1);
+    expect(notificationsSummary(useStore.getState()).total).toBe(1);
+
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', browserId: 'b2', active: true, controlOwner: 'user' });
+    view = useStore.getState().sessions['session-1'];
+    expect(view.browserAnyActive).toBe(true);
+    expect(view.browserActive).toBe(false);
+
+    useStore.getState().setBrowserView('session-1', 'b2');
+    view = useStore.getState().sessions['session-1'];
+    expect(view.browserViewId).toBe('b2');
+    expect(view.browserActive).toBe(true);
+    expect(view.browserOwner).toBe('user');
+
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 3, event: { kind: 'browser_instance_resolved', requestId: 'r1', granted: true, browserId: 'b2' } });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 4, event: { kind: 'browser_instances', instances: [{ id: 'default', name: 'Default' }] } });
+    view = useStore.getState().sessions['session-1'];
+    expect(view.browserInstanceRequests).toHaveLength(0);
+    expect(view.browserViewId).toBe('default');
+    expect(view.browserStates.b2).toBeUndefined();
+    expect(view.browserAnyActive).toBe(false);
+  });
+
   it('does not notify when a focused agent completes its turn', () => {
     __testApplyServerMsg({
       t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],

@@ -28,6 +28,11 @@ class BrowserHub {
     return () => ls.delete(cb);
   }
 
+  // Drops the cached frame (the watched browser changed) but keeps listeners.
+  forget(sessionId: string): void {
+    this.last.delete(sessionId);
+  }
+
   clear(sessionId: string): void {
     this.last.delete(sessionId);
     this.listeners.delete(sessionId);

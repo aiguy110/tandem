@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aiguy110/tandem/internal/automationmcp"
+	"github.com/aiguy110/tandem/internal/browsermcp"
 	"github.com/aiguy110/tandem/internal/buildinfo"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/controlmcp"
@@ -47,6 +48,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-messages: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	// mcp-browser is the internal agent-facing browser MCP (see browsermcp).
+	if len(args) == 1 && args[0] == "mcp-browser" {
+		err := browsermcp.Run(context.Background(), os.Stdin, stdout, browsermcp.Config{
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"),
+			NodeRuntime: os.Getenv("TANDEM_NODE_RUNTIME"), PlaywrightCLI: os.Getenv("TANDEM_PLAYWRIGHT_MCP_CLI"),
+			CDPBase: os.Getenv("TANDEM_BROWSER_CDP_BASE"), OutputDir: os.Getenv("TANDEM_BROWSER_OUTPUT_DIR"), Stderr: stderr,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "run mcp-browser: %v\n", err)
 			return 1
 		}
 		return 0

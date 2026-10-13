@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/store"
 )
 
@@ -118,19 +119,23 @@ func (r *Registry) launchLabel(agent, harness string) string {
 	return "Agent"
 }
 
-// CaptureSnapshot copies the agent's current browser state into a new, named
-// snapshot and records it.
-func (r *Registry) CaptureSnapshot(ctx context.Context, sessionID, name string) (store.BrowserSnapshot, error) {
+// CaptureSnapshot copies one of the agent's browsers into a new, named saved
+// browser profile and records it. The store and wire still call these
+// "snapshots"; user- and agent-facing text calls them saved browser profiles.
+func (r *Registry) CaptureSnapshot(ctx context.Context, sessionID, browserID, name string) (store.BrowserSnapshot, error) {
 	if r.browser == nil {
 		return store.BrowserSnapshot{}, errors.New("browser is disabled")
 	}
+	if !r.HasBrowserInstance(sessionID, browserID) {
+		return store.BrowserSnapshot{}, fmt.Errorf("no such browser instance: %s", browserID)
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "Snapshot"
+		name = "Saved profile"
 	}
 	id := "snap-" + randHex(8)
 	destDir := filepath.Join(r.config.Browser.SnapshotRoot, id)
-	kind, ref, err := r.browser.CaptureSnapshot(ctx, sessionID, destDir)
+	kind, ref, err := r.browser.CaptureSnapshot(ctx, browser.InstanceKey(sessionID, browserID), destDir)
 	if err != nil {
 		_ = os.RemoveAll(destDir)
 		return store.BrowserSnapshot{}, err
@@ -170,30 +175,38 @@ func (r *Registry) DeleteSnapshot(id string) error {
 	return nil
 }
 
-// RestartBrowser starts a new browser session for an existing agent, optionally
-// seeded from a saved snapshot. An empty snapshotID requests fresh state.
-func (r *Registry) RestartBrowser(ctx context.Context, sessionID, snapshotID string) error {
+// RestartBrowser replaces one of an agent's browsers, optionally seeded from a
+// saved browser profile. An empty snapshotID requests fresh state.
+func (r *Registry) RestartBrowser(ctx context.Context, sessionID, browserID, snapshotID string) error {
 	if r.Get(sessionID) == nil {
 		return fmt.Errorf("no such agent: %s", sessionID)
 	}
 	if r.browser == nil {
 		return errors.New("browser subsystem disabled")
 	}
-	var kind, ref string
+	if browserID == "" {
+		browserID = browser.DefaultBrowserID
+	}
+	if !r.HasBrowserInstance(sessionID, browserID) {
+		return fmt.Errorf("no such browser instance: %s", browserID)
+	}
+	var kind, ref, name string
 	if snapshotID != "" {
 		snap, err := r.store.BrowserSnapshot(snapshotID)
 		if err != nil {
 			return err
 		}
 		if snap == nil {
-			return fmt.Errorf("no such browser snapshot: %s", snapshotID)
+			return fmt.Errorf("no such saved browser profile: %s", snapshotID)
 		}
 		if snap.Kind != "" && snap.Kind != r.browser.DriverKind() {
-			return fmt.Errorf("browser snapshot %q is for the %s driver, not %s", snap.Name, snap.Kind, r.browser.DriverKind())
+			return fmt.Errorf("saved browser profile %q is for the %s driver, not %s", snap.Name, snap.Kind, r.browser.DriverKind())
 		}
-		kind, ref = snap.Kind, snap.Ref
+		kind, ref, name = snap.Kind, snap.Ref, snap.Name
 	}
-	return r.browser.Restart(ctx, sessionID, kind, ref)
+	r.setInstanceSource(sessionID, browserID, snapshotID, name)
+	slog.Info("browser restart requested", "session_id", sessionID, "browser_id", browserID, "saved_profile_id", snapshotID)
+	return r.browser.Restart(ctx, browser.InstanceKey(sessionID, browserID), kind, ref)
 }
 
 // ListProfiles returns all profiles and, for the given project, the profile ids

@@ -110,13 +110,14 @@ func (s *server) handle(ctx context.Context, line []byte) {
 		switch p.Name {
 		case ToolName:
 			var args struct {
-				Reason string `json:"reason"`
+				Reason    string `json:"reason"`
+				BrowserID string `json:"browserId"`
 			}
 			_ = json.Unmarshal(p.Arguments, &args)
 			if args.Reason == "" {
 				args.Reason = "the agent needs you"
 			}
-			if err := s.takeover(ctx, args.Reason); err != nil {
+			if err := s.takeover(ctx, args.Reason, args.BrowserID); err != nil {
 				s.rpcError(req.ID, -32603, err.Error())
 				return
 			}
@@ -199,8 +200,11 @@ func toolText(value string) map[string]any {
 func toolDeclaration() map[string]any {
 	return map[string]any{
 		"name":        ToolName,
-		"description": "Ask the human to take control of the shared browser to complete a step you cannot. Blocks until the human hands control back.",
-		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"reason": map[string]string{"type": "string", "description": "Short reason shown to the human."}}, "required": []string{"reason"}},
+		"description": "Ask the human to take control of one of your shared browsers to complete a step you cannot. Blocks until the human hands control back.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"reason":    map[string]string{"type": "string", "description": "Short reason shown to the human."},
+			"browserId": map[string]string{"type": "string", "description": "Browser instance the human should take over; defaults to \"default\", the session's original browser."},
+		}, "required": []string{"reason"}},
 	}
 }
 
@@ -400,7 +404,7 @@ func (s *server) secretJSON(ctx context.Context, method, path, query string, bod
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (s *server) takeover(ctx context.Context, reason string) error {
+func (s *server) takeover(ctx context.Context, reason, browserID string) error {
 	if s.cfg.ControlURL == "" {
 		return errors.New("TANDEM_CONTROL_URL not set")
 	}
@@ -412,7 +416,7 @@ func (s *server) takeover(ctx context.Context, reason string) error {
 	q := u.Query()
 	q.Set("sessionId", s.cfg.SessionID)
 	u.RawQuery = q.Encode()
-	body, _ := json.Marshal(map[string]string{"reason": reason})
+	body, _ := json.Marshal(map[string]string{"reason": reason, "browserId": browserID})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return err

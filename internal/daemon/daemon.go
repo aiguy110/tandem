@@ -144,11 +144,21 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if driverErr != nil {
 		return driverErr
 	}
-	broker = browser.NewBroker(driver, browser.BrokerConfig{OnRelease: func(id string) {
-		if takeovers != nil {
-			takeovers.Release(id)
-		}
-	}})
+	broker = browser.NewBroker(driver, browser.BrokerConfig{
+		OnRelease: func(key string) {
+			if takeovers != nil {
+				takeovers.Release(key)
+			}
+		},
+		// Additional browser instances launch only once approved; the
+		// registry's instance list is the grant.
+		Authorize: func(key string) error {
+			if agents == nil {
+				return errors.New("agents are not ready")
+			}
+			return agents.AuthorizeBrowserKey(key)
+		},
+	})
 	if err = broker.Start(); err != nil {
 		return err
 	}
@@ -162,9 +172,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	takeovers = browser.NewTakeovers(browser.TakeoverOptions{
 		Token:       token,
 		AgentExists: func(id string) bool { return agents != nil && agents.Get(id) != nil },
-		OnRequest: func(id, reqID, reason string) {
+		OnRequest: func(id, browserID, reqID, reason string) {
 			takeoverReconcile.track(id, reqID)
-			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_request", "reqId": reqID, "reason": reason})
+			pushAgentEvent(agents, id, map[string]any{"kind": "takeover_request", "reqId": reqID, "reason": reason, "browserId": browserID})
 			pushAgentEvent(agents, id, map[string]any{"kind": "status", "status": "blocked"})
 		},
 		OnResolved: func(id, reqID string) {
@@ -243,6 +253,20 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return err
 	}
 	boot.phase("registry_init")
+	browserInstances := browser.NewInstanceRequests(browser.InstanceRequestOptions{
+		Token: token, Service: agents,
+		AgentExists: func(id string) bool { return agents.Get(id) != nil },
+		OnRequest: func(req browser.InstanceRequest) {
+			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "browser_instance_request", "requestId": req.RequestID, "source": req.Source, "reason": req.Reason, "name": req.Name})
+			pushAgentEvent(agents, req.SessionID, map[string]any{"kind": "status", "status": "blocked"})
+		},
+		OnResolved: func(sessionID, requestID string, granted bool, browserID string) {
+			pushAgentEvent(agents, sessionID, map[string]any{"kind": "browser_instance_resolved", "requestId": requestID, "granted": granted, "browserId": browserID})
+			if s := agents.Get(sessionID); s != nil && s.ActiveTurn() {
+				pushAgentEvent(agents, sessionID, map[string]any{"kind": "status", "status": "working"})
+			}
+		},
+	})
 	automationService := &automation.Service{
 		Store: db, Agents: agents, Token: token,
 		Runner: automation.Runner{NodeCommand: cfg.Node.Command},
@@ -284,7 +308,11 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			}
 			broker.SeedSnapshot(runID, selected.Kind, selected.Ref)
 		}
-		servers, serversErr := configuredMCPServers(wiring, mcpAuth, cfg.Home, runID, repoRoot)
+		// Automation scripts drive exactly one browser through the plain
+		// tandem-playwright tools.
+		automationWiring := wiring
+		automationWiring.DirectPlaywright = true
+		servers, serversErr := configuredMCPServers(automationWiring, mcpAuth, cfg.Home, runID, repoRoot)
 		if serversErr != nil {
 			return nil, serversErr
 		}
@@ -467,6 +495,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		case "/internal/shutdown-after-turns":
 			deferred.ServeHTTP(w, r)
 			return
+		case browser.InstanceRequestsPath, browser.InstanceRequestsPath + "/request", browser.InstanceRequestsPath + "/status", browser.InstanceRequestsPath + "/close", browser.InstanceRequestsPath + "/saved-profiles":
+			browserInstances.ServeHTTP(w, r)
+			return
 		case "/internal/browser/takeover":
 			if takeovers != nil {
 				takeovers.ServeHTTP(w, r)
@@ -528,7 +559,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, ResolveBrowserInstance: func(resolveCtx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error {
+		_, resolveErr := browserInstances.Resolve(resolveCtx, sessionID, requestID, granted, savedProfileID)
+		return resolveErr
+	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a
@@ -571,6 +605,12 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		for _, summary := range agents.List() {
 			reconcileOrphanedSecrets(summary.ID, db.EventsOfKinds, func(sessionID, requestID string) {
 				pushAgentEvent(agents, sessionID, map[string]any{"kind": "secret_resolved", "requestId": requestID, "granted": false})
+			})
+			reconcileOrphanedRequests(summary.ID, "browser_instance_request", "browser_instance_resolved", db.EventsOfKinds, func(sessionID, requestID string) {
+				if browserInstances.Pending(requestID) {
+					return
+				}
+				pushAgentEvent(agents, sessionID, map[string]any{"kind": "browser_instance_resolved", "requestId": requestID, "granted": false})
 			})
 		}
 	}()

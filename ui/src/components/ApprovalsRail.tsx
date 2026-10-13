@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { useStore, allApprovals, allSecretRequests, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
-import type { NotifSeverity } from '../store';
+import { useEffect, useState } from 'react';
+import { useStore, allApprovals, allBrowserInstanceRequests, allSecretRequests, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
+import type { BrowserInstanceRequest, NotifSeverity } from '../store';
+import type { BrowserSnapshot } from '../wire';
 import type { SecretRequest } from '../store';
 import { storedToken } from '../ws/client';
 import { PermissionRequestDetails } from './PermissionRequest';
@@ -36,6 +37,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
   const secretRequests = useStore(allSecretRequests);
+  const browserRequests = useStore(allBrowserInstanceRequests);
   const notifications = useStore(allTurnNotifications);
   const systemNotifications = useStore((s) => s.systemNotifications);
   const agents = useStore((s) => s.sessions);
@@ -43,6 +45,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const focus = useStore((s) => s.focus);
   const setPane = useStore((s) => s.setPane);
   const toggleWheel = useStore((s) => s.toggleWheel);
+  const setBrowserView = useStore((s) => s.setBrowserView);
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
   const { mounted: expandedMounted, closing: railClosing } = usePresence(!collapsed, 225);
@@ -149,10 +152,11 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           onClick={() => {
             focus(sessionId);
             setPane('browser');
+            setBrowserView(sessionId, takeover.browserId ?? 'default');
           }}
         >
           <div className="who">
-            <span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · browser
+            <span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · browser{takeover.browserId && takeover.browserId !== 'default' ? ` · ${agents[sessionId]?.browserInstances.find((i) => i.id === takeover.browserId)?.name ?? takeover.browserId}` : ''}
           </div>
           <div className="what">needs you — {takeover.reason}</div>
           <div className="acts">
@@ -162,7 +166,9 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                 e.stopPropagation();
                 focus(sessionId);
                 setPane('browser');
-                if (agents[sessionId]?.browserOwner !== 'user') toggleWheel(sessionId);
+                const browserId = takeover.browserId ?? 'default';
+                setBrowserView(sessionId, browserId);
+                if (useStore.getState().sessions[sessionId]?.browserStates[browserId]?.owner !== 'user') toggleWheel(sessionId);
               }}
             >
               🖐 Take the wheel
@@ -178,7 +184,10 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           <div className="acts"><button className="btn-approve" onClick={(e) => { e.stopPropagation(); setSecretEntry({ sessionId, request }); }}>Enter securely…</button></div>
         </div>
       ))}
-      {items.length === 0 && takeovers.length === 0 && secretRequests.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
+      {browserRequests.map(({ sessionId, request }) => (
+        <BrowserRequestCard key={request.requestId} sessionId={sessionId} request={request} agentName={agents[sessionId]?.name ?? sessionId} />
+      ))}
+      {items.length === 0 && takeovers.length === 0 && secretRequests.length === 0 && browserRequests.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
         <div className="empty">No notifications. Completed session turns and requests for attention appear here.</div>
       ) : (
         items.map(({ sessionId, approval }) => {
@@ -218,6 +227,58 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
       </div>
       )}
       {secretEntry && <SecretEntryModal entry={secretEntry} onClose={() => setSecretEntry(null)} />}
+    </div>
+  );
+}
+
+// An agent's request for an additional browser instance. Nothing launches
+// and no saved profile is exposed until the human approves here.
+function BrowserRequestCard({ sessionId, request, agentName }: { sessionId: string; request: BrowserInstanceRequest; agentName: string }) {
+  const resolveBrowserInstance = useStore((s) => s.resolveBrowserInstance);
+  const listSnapshots = useStore((s) => s.listSnapshots);
+  const hostId = useStore((s) => s.sessions[sessionId]?.hostId);
+  const [profiles, setProfiles] = useState<BrowserSnapshot[] | null>(null);
+  const [choice, setChoice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const userChoice = request.source.kind === 'user_choice';
+  useEffect(() => {
+    if (!userChoice) return;
+    void listSnapshots(hostId).then(setProfiles).catch(() => setProfiles([]));
+  }, [userChoice, hostId, listSnapshots]);
+  const decide = async (approve: boolean) => {
+    setBusy(true);
+    setError('');
+    const result = await resolveBrowserInstance(sessionId, request.requestId, approve, approve && userChoice ? choice : undefined);
+    if (result.error) {
+      setError(result.error);
+      setBusy(false);
+    }
+  };
+  const what = request.source.kind === 'saved_profile'
+    ? <>wants a new browser from saved profile <b>{request.source.profileName ?? request.source.profileId}</b></>
+    : request.source.kind === 'fresh'
+      ? <>wants a new browser with a fresh profile</>
+      : <>wants a new browser — you choose its starting state</>;
+  return (
+    <div className="appr browser-request" onClick={(e) => e.stopPropagation()}>
+      <div className="who"><span className="dot blocked" /> {agentName} · browser</div>
+      <div className="what">{what}{request.name ? <> (“{request.name}”)</> : null}</div>
+      <div className="notification-message">Agent-provided reason (untrusted): {request.reason}</div>
+      {userChoice && (
+        <select className="browser-request-profile" value={choice} disabled={busy} onChange={(e) => setChoice(e.target.value)} aria-label="Starting state">
+          <option value="">Fresh profile</option>
+          {(profiles ?? []).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+        </select>
+      )}
+      {(request.source.kind === 'saved_profile' || (userChoice && choice)) && (
+        <div className="notification-message">Grants this agent the accounts and site data stored in that saved profile. Its existing browsers are unaffected.</div>
+      )}
+      {error && <div className="modal-err">{error}</div>}
+      <div className="acts">
+        <button className="btn-approve" disabled={busy} onClick={() => void decide(true)}>{busy ? 'Opening…' : 'Open browser'}</button>
+        <button className="btn-deny" disabled={busy} onClick={() => void decide(false)}>Deny</button>
+      </div>
     </div>
   );
 }

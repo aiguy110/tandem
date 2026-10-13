@@ -22,12 +22,13 @@ type TakeoverOptions struct {
 	// Now overrides the clock for tests.
 	Now         func() time.Time
 	AgentExists func(string) bool
-	OnRequest   func(sessionID, reqID, reason string)
+	OnRequest   func(sessionID, browserID, reqID, reason string)
 	OnResolved  func(sessionID, reqID string)
 }
 
 type takeover struct {
 	sessionID string
+	browserID string
 	resolved  bool
 	lastSeen  time.Time
 }
@@ -68,20 +69,28 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Reason string `json:"reason"`
+			Reason    string `json:"reason"`
+			BrowserID string `json:"browserId"`
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
 		if body.Reason == "" {
 			body.Reason = "the agent needs you"
 		}
+		if body.BrowserID == "" {
+			body.BrowserID = DefaultBrowserID
+		}
+		if !ValidBrowserID(body.BrowserID) {
+			takeoverJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid browserId"})
+			return
+		}
 		t.mu.Lock()
 		t.seq++
 		reqID := fmt.Sprintf("tk_%s_%d", t.nonce, t.seq)
-		t.requests[reqID] = &takeover{sessionID: sessionID, lastSeen: t.opts.Now()}
+		t.requests[reqID] = &takeover{sessionID: sessionID, browserID: body.BrowserID, lastSeen: t.opts.Now()}
 		t.mu.Unlock()
-		slog.Info("browser takeover requested", "session", sessionID, "reqId", reqID)
+		slog.Info("browser takeover requested", "session", sessionID, "browser_id", body.BrowserID, "reqId", reqID)
 		if t.opts.OnRequest != nil {
-			t.opts.OnRequest(sessionID, reqID, body.Reason)
+			t.opts.OnRequest(sessionID, body.BrowserID, reqID, body.Reason)
 		}
 		takeoverJSON(w, http.StatusOK, map[string]string{"reqId": reqID})
 	case http.MethodGet:
@@ -103,11 +112,18 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (t *Takeovers) Release(sessionID string) {
+// Release resolves the takeovers waiting on one browser instance, identified
+// by its broker key (see InstanceKey).
+func (t *Takeovers) Release(key string) {
+	sessionID, browserID := SplitInstanceKey(key)
 	var resolved []string
 	t.mu.Lock()
 	for reqID, request := range t.requests {
-		if request.sessionID == sessionID && !request.resolved {
+		requestBrowser := request.browserID
+		if requestBrowser == "" {
+			requestBrowser = DefaultBrowserID
+		}
+		if request.sessionID == sessionID && requestBrowser == browserID && !request.resolved {
 			request.resolved = true
 			resolved = append(resolved, reqID)
 		}

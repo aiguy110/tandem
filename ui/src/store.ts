@@ -27,6 +27,8 @@ import type {
   AutomationJob,
   AutomationRun,
   BrowserInputWire,
+  BrowserInstance,
+  BrowserInstanceSource,
   BrowserPages,
   BrowserSnapshot,
   Channel,
@@ -66,7 +68,25 @@ const BASE_CHANNELS: Channel[] = ['transcript', 'terminals', 'status'];
 export interface Takeover {
   reqId: string;
   reason: string;
+  browserId?: string;
 }
+// A pending agent request for an additional browser instance; nothing opens
+// until the human approves it.
+export interface BrowserInstanceRequest {
+  requestId: string;
+  source: BrowserInstanceSource;
+  reason: string;
+  name?: string;
+}
+// Live state of one browser instance (from browser_state).
+export interface BrowserInstanceState {
+  active: boolean;
+  owner: 'agent' | 'user';
+  // The user grabbed this browser to satisfy an agent's takeover request.
+  takeoverHeld: boolean;
+}
+export const DEFAULT_BROWSER_ID = 'default';
+const DEFAULT_BROWSER_INSTANCES: BrowserInstance[] = [{ id: DEFAULT_BROWSER_ID, name: 'Default' }];
 export interface SecretRequest {
   requestId: string;
   service: string;
@@ -119,7 +139,7 @@ function turnNotificationSeverity(prev: SessionStatus, next: SessionStatus): Not
 // green.
 export function agentBadge(agent: SessionView): { count: number; severity: NotifSeverity | null } {
   const severities = agent.turnNotifications.map((n) => n.severity);
-  const attention = agent.pendingApprovals.length + agent.takeovers.length + (agent.secretRequests?.length ?? 0);
+  const attention = agent.pendingApprovals.length + agent.takeovers.length + (agent.secretRequests?.length ?? 0) + (agent.browserInstanceRequests?.length ?? 0);
   for (let i = 0; i < attention; i++) severities.push('attention');
   return { count: severities.length, severity: maxSeverity(severities) };
 }
@@ -181,11 +201,20 @@ export interface SessionView {
   historyLoaded: boolean;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
   // holds the wheel, plus any pending session-initiated takeover requests.
+  // browserActive/browserOwner/browserTakeoverHeld describe the browser
+  // instance this client is viewing (browserViewId); browserAnyActive enables
+  // the Browser tab when any of the session's browsers is running.
   browserActive: boolean;
   browserOwner: 'agent' | 'user';
   // True while the user is satisfying an session-requested takeover. This keeps
   // the hand-back action visually distinct from an unsolicited manual grab.
   browserTakeoverHeld: boolean;
+  browserAnyActive: boolean;
+  browserInstances: BrowserInstance[];
+  browserStates: Record<string, BrowserInstanceState>;
+  // Browser-local choice of which instance to watch; never redirects the agent.
+  browserViewId: string;
+  browserInstanceRequests: BrowserInstanceRequest[];
   takeovers: Takeover[];
   secretRequests: SecretRequest[];
   // Permission-mode + config-option (incl. model selector) state, from the last
@@ -404,7 +433,7 @@ interface StoreState {
   listGitRefs: (repo: string, hostId?: string) => Promise<GitRefInfo[]>;
   listWorkspaceEntries: (sessionId: string, path: string) => Promise<WorkspaceEntry[]>;
   // Browser snapshots + agent profiles.
-  captureSnapshot: (sessionId: string, name: string) => Promise<BrowserSnapshot[]>;
+  captureSnapshot: (sessionId: string, name: string) => Promise<BrowserSnapshot[]>; // captures the viewed browser
   // hostId scopes to a federated host; only this daemon's list feeds `snapshots`.
   listSnapshots: (hostId?: string) => Promise<BrowserSnapshot[]>;
   deleteSnapshot: (id: string) => Promise<BrowserSnapshot[]>;
@@ -456,6 +485,10 @@ interface StoreState {
   browserPages: (sessionId: string, targetId?: string) => Promise<BrowserPages>;
   browserNavigate: (sessionId: string, event: BrowserInputWire) => Promise<AckResult>;
   toggleWheel: (sessionId: string) => void;
+  // Browser instances. Commands above act on the session's viewed instance.
+  setBrowserView: (sessionId: string, browserId: string) => void;
+  closeBrowserInstance: (sessionId: string, browserId: string) => Promise<AckResult>;
+  resolveBrowserInstance: (sessionId: string, requestId: string, approve: boolean, savedProfileId?: string) => Promise<AckResult>;
 }
 
 // ---- ack correlation (spawn/close want structured results) ----
@@ -690,6 +723,7 @@ export const useStore = create<StoreState>((set, get) => {
     const agent = state.sessions[id];
     return state.pane === 'chat' && !!agent && (agent.adapter === 'pty' || agent.controlMode === 'terminal');
   };
+  const viewedBrowser = (id: string): string => get().sessions[id]?.browserViewId ?? DEFAULT_BROWSER_ID;
   const channelsFor = (id: string): Channel[] => {
     const channels = [...BASE_CHANNELS];
     if (wantsPty(id)) channels.push('pty');
@@ -701,7 +735,8 @@ export const useStore = create<StoreState>((set, get) => {
     // background. Request its full channel history only on the first visit to
     // a terminal surface; normal re-subscriptions continue incrementally.
     const sinceSeq = replayPty ? 0 : get().sessions[id]?.lastSeq ?? 0;
-    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq, pagedReplay: true });
+    const browserId = get().sessions[id]?.browserViewId;
+    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq, pagedReplay: true, ...(browserId && browserId !== DEFAULT_BROWSER_ID ? { browserId } : {}) });
   }
   function replayPtyFor(id: string): void {
     if (!get().sessions[id]) return;
@@ -982,6 +1017,8 @@ export const useStore = create<StoreState>((set, get) => {
       }
       case 'browser_frame':
         // Frames bypass the reactive store (browserHub) to avoid re-render storms.
+        // A switch of the watched browser can race a frame from the old one.
+        if ((msg.browserId ?? DEFAULT_BROWSER_ID) !== (get().sessions[msg.sessionId]?.browserViewId ?? DEFAULT_BROWSER_ID)) return;
         browserHub.push(msg.sessionId, { dataB64: msg.dataB64, meta: msg.meta });
         return;
       case 'browser_state': {
@@ -992,14 +1029,18 @@ export const useStore = create<StoreState>((set, get) => {
           // while changing panes can refresh agent ownership and must not dismiss
           // a takeover the user has not acted on. The daemon keeps the tool call
           // pending until release, when takeover_resolved clears it durably.
-          const userJustGrabbed = msg.controlOwner === 'user' && a.browserOwner !== 'user';
-          const takeoverGrab = userJustGrabbed && a.takeovers.length > 0;
-          const takeovers = takeoverGrab ? [] : a.takeovers;
-          const browserTakeoverHeld = msg.controlOwner === 'user' && (a.browserTakeoverHeld || takeoverGrab);
+          const browserId = msg.browserId ?? DEFAULT_BROWSER_ID;
+          const previous = a.browserStates[browserId];
+          const userJustGrabbed = msg.controlOwner === 'user' && previous?.owner !== 'user';
+          const waiting = a.takeovers.filter((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === browserId);
+          const takeoverGrab = userJustGrabbed && waiting.length > 0;
+          const takeovers = takeoverGrab ? a.takeovers.filter((t) => !waiting.includes(t)) : a.takeovers;
+          const takeoverHeld = msg.controlOwner === 'user' && ((previous?.takeoverHeld ?? false) || takeoverGrab);
+          const browserStates = { ...a.browserStates, [browserId]: { active: msg.active, owner: msg.controlOwner, takeoverHeld } };
           return {
             sessions: {
               ...st.sessions,
-              [msg.sessionId]: { ...a, browserActive: msg.active, browserOwner: msg.controlOwner, browserTakeoverHeld, takeovers },
+              [msg.sessionId]: projectBrowserView({ ...a, browserStates, takeovers }),
             },
           };
         });
@@ -1123,10 +1164,19 @@ export const useStore = create<StoreState>((set, get) => {
           // remains blocked.
           const replayedTakeovers: Takeover[] = [];
           const replayedSecrets: SecretRequest[] = [];
+          const replayedInstanceRequests: BrowserInstanceRequest[] = [];
+          let replayedInstances: BrowserInstance[] | null = null;
           for (const entry of transcript) {
             const event = entry.event;
-            if (event.kind === 'takeover_request' && !replayedTakeovers.some((t) => t.reqId === event.reqId)) {
-              replayedTakeovers.push({ reqId: event.reqId, reason: event.reason });
+            if (event.kind === 'browser_instances') {
+              replayedInstances = event.instances;
+            } else if (event.kind === 'browser_instance_request' && !replayedInstanceRequests.some((r) => r.requestId === event.requestId)) {
+              replayedInstanceRequests.push({ requestId: event.requestId, source: event.source, reason: event.reason, name: event.name });
+            } else if (event.kind === 'browser_instance_resolved') {
+              const index = replayedInstanceRequests.findIndex((r) => r.requestId === event.requestId);
+              if (index !== -1) replayedInstanceRequests.splice(index, 1);
+            } else if (event.kind === 'takeover_request' && !replayedTakeovers.some((t) => t.reqId === event.reqId)) {
+              replayedTakeovers.push({ reqId: event.reqId, reason: event.reason, browserId: event.browserId });
             } else if (event.kind === 'takeover_resolved') {
               const index = replayedTakeovers.findIndex((t) => t.reqId === event.reqId);
               if (index !== -1) replayedTakeovers.splice(index, 1);
@@ -1168,8 +1218,10 @@ export const useStore = create<StoreState>((set, get) => {
                 : prev.usage,
             // Pane-change subscriptions replay the still-pending request while
             // the user holds the wheel. Keep it acknowledged in that case.
-            takeovers: prev.browserOwner === 'user' && prev.browserTakeoverHeld ? [] : replayedTakeovers,
+            takeovers: replayedTakeovers.filter((t) => !prev.browserStates[t.browserId ?? DEFAULT_BROWSER_ID]?.takeoverHeld),
             secretRequests: replayedSecrets,
+            browserInstanceRequests: replayedInstanceRequests,
+            ...(replayedInstances ? browserInstancesPatch(prev, replayedInstances) : {}),
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
@@ -1790,7 +1842,7 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
         const corrId = nextCorr();
         pendingSnapshots.set(corrId, { resolve, reject });
-        client.send({ t: 'capture_snapshot', sessionId, name, corrId });
+        client.send({ t: 'capture_snapshot', sessionId, browserId: viewedBrowser(sessionId), name, corrId });
       }),
     listSnapshots: (hostId) =>
       new Promise<BrowserSnapshot[]>((resolve, reject) => {
@@ -2012,12 +2064,12 @@ export const useStore = create<StoreState>((set, get) => {
       if (prev && get().sessions[prev]) subscribeAgent(prev);
       if (sessionId && get().sessions[sessionId]) subscribeAgent(sessionId);
     },
-    browserControl: (sessionId, action) => client.send({ t: 'browser_control', sessionId, action }),
+    browserControl: (sessionId, action) => client.send({ t: 'browser_control', sessionId, browserId: viewedBrowser(sessionId), action }),
     restartBrowser: (sessionId, snapshotId) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
-        client.send({ t: 'restart_browser', sessionId, snapshotId, corrId });
+        client.send({ t: 'restart_browser', sessionId, browserId: viewedBrowser(sessionId), snapshotId, corrId });
       }),
     restartHarness: (sessionId) =>
       new Promise<AckResult>((resolve) => {
@@ -2048,7 +2100,7 @@ export const useStore = create<StoreState>((set, get) => {
           corrId,
         });
       }),
-    browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, event }),
+    browserInput: (sessionId, event) => client.send({ t: 'browser_input', sessionId, browserId: viewedBrowser(sessionId), event }),
     browserPages: (sessionId, targetId) => new Promise<BrowserPages>((resolve, reject) => {
       const corrId = nextCorr();
       const timer = setTimeout(() => { pendingBrowserPages.delete(corrId); reject(new Error('Browser tabs request timed out')); }, 7000);
@@ -2056,19 +2108,40 @@ export const useStore = create<StoreState>((set, get) => {
         resolve: (pages) => { clearTimeout(timer); resolve(pages); },
         reject: (error) => { clearTimeout(timer); reject(error); },
       });
-      client.send({ t: targetId ? 'browser_select_page' : 'browser_pages', sessionId, ...(targetId ? { event: { targetId } } : {}), corrId });
+      client.send({ t: targetId ? 'browser_select_page' : 'browser_pages', sessionId, browserId: viewedBrowser(sessionId), ...(targetId ? { event: { targetId } } : {}), corrId });
     }),
     browserNavigate: (sessionId, event) => new Promise<AckResult>((resolve) => {
       const corrId = nextCorr();
       const timer = setTimeout(() => { pendingAcks.delete(corrId); resolve({ error: 'Browser navigation timed out' }); }, 20000);
       pendingAcks.set(corrId, (result) => { clearTimeout(timer); resolve(result); });
-      client.send({ t: 'browser_input', sessionId, event, corrId });
+      client.send({ t: 'browser_input', sessionId, browserId: viewedBrowser(sessionId), event, corrId });
     }),
     toggleWheel: (sessionId) => {
       const a = get().sessions[sessionId];
       if (!a || !a.browserActive) return;
-      client.send({ t: 'browser_control', sessionId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
+      client.send({ t: 'browser_control', sessionId, browserId: a.browserViewId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
     },
+    setBrowserView: (sessionId, browserId) => {
+      const a = get().sessions[sessionId];
+      if (!a || a.browserViewId === browserId || !a.browserInstances.some((i) => i.id === browserId)) return;
+      browserHub.forget(sessionId);
+      set((st) => ({ sessions: { ...st.sessions, [sessionId]: projectBrowserView({ ...st.sessions[sessionId], browserViewId: browserId }) } }));
+      client.send({ t: 'browser_view', sessionId, browserId });
+    },
+    closeBrowserInstance: (sessionId, browserId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'close_browser_instance', sessionId, browserId, corrId });
+      }),
+    resolveBrowserInstance: (sessionId, requestId, approve, savedProfileId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        // Approval launches the browser before the daemon acknowledges.
+        const timer = setTimeout(() => { pendingAcks.delete(corrId); resolve({ error: 'Opening the browser timed out' }); }, 60000);
+        pendingAcks.set(corrId, (result) => { clearTimeout(timer); resolve(result); });
+        client.send({ t: 'resolve_browser_instance', sessionId, id: requestId, action: approve ? 'approve' : 'deny', ...(savedProfileId ? { snapshotId: savedProfileId } : {}), corrId });
+      }),
     nav: (dir) => {
       const previous = get().focusedId;
       const previousHadPty = previous ? wantsPty(previous) : false;
@@ -2162,6 +2235,11 @@ function shell(id: string): SessionView {
     browserActive: false,
     browserOwner: 'agent',
     browserTakeoverHeld: false,
+    browserAnyActive: false,
+    browserInstances: DEFAULT_BROWSER_INSTANCES,
+    browserStates: {},
+    browserViewId: DEFAULT_BROWSER_ID,
+    browserInstanceRequests: [],
     takeovers: [],
     secretRequests: [],
     sessionConfig: null,
@@ -2212,8 +2290,16 @@ function applyEventToView(v: SessionView, event: WireEvent): void {
   if (event.kind === 'error') v.status = 'error';
   if (event.kind === 'takeover_request') {
     v.status = 'blocked';
-    if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason }];
+    if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason, browserId: event.browserId }];
   }
+  if (event.kind === 'browser_instances') Object.assign(v, browserInstancesPatch(v, event.instances));
+  if (event.kind === 'browser_instance_request') {
+    v.status = 'blocked';
+    if (!v.browserInstanceRequests.some((r) => r.requestId === event.requestId)) {
+      v.browserInstanceRequests = [...v.browserInstanceRequests, { requestId: event.requestId, source: event.source, reason: event.reason, name: event.name }];
+    }
+  }
+  if (event.kind === 'browser_instance_resolved') v.browserInstanceRequests = v.browserInstanceRequests.filter((r) => r.requestId !== event.requestId);
   if (event.kind === 'takeover_resolved') {
     v.takeovers = v.takeovers.filter((t) => t.reqId !== event.reqId);
   }
@@ -2244,6 +2330,38 @@ function applyEventToView(v: SessionView, event: WireEvent): void {
   if (event.kind === 'prompt_started' || event.kind === 'prompt_removed') {
     v.queuedPrompts = v.queuedPrompts.filter((prompt) => prompt.id !== event.promptId);
   }
+}
+
+// Recomputes the viewed-browser projections from per-instance state.
+function projectBrowserView(v: SessionView): SessionView {
+  const viewed = v.browserStates[v.browserViewId];
+  return {
+    ...v,
+    browserActive: viewed?.active ?? false,
+    browserOwner: viewed?.owner ?? 'agent',
+    browserTakeoverHeld: viewed?.takeoverHeld ?? false,
+    browserAnyActive: Object.values(v.browserStates).some((state) => state.active),
+  };
+}
+
+// Applies a new instance list, falling back to the default browser when the
+// viewed one was closed. Closed instances also drop their state.
+function browserInstancesPatch(v: SessionView, instances: BrowserInstance[]): Partial<SessionView> {
+  const list = instances.length > 0 ? instances : DEFAULT_BROWSER_INSTANCES;
+  const ids = new Set(list.map((instance) => instance.id));
+  const browserStates = Object.fromEntries(Object.entries(v.browserStates).filter(([id]) => ids.has(id)));
+  const browserViewId = ids.has(v.browserViewId) ? v.browserViewId : DEFAULT_BROWSER_ID;
+  const { browserActive, browserOwner, browserTakeoverHeld, browserAnyActive } = projectBrowserView({ ...v, browserStates, browserViewId });
+  return { browserInstances: list, browserStates, browserViewId, browserActive, browserOwner, browserTakeoverHeld, browserAnyActive };
+}
+
+// All pending browser-instance requests across sessions, for the attention rail.
+export function allBrowserInstanceRequests(st: StoreState): { sessionId: string; request: BrowserInstanceRequest }[] {
+  const out: { sessionId: string; request: BrowserInstanceRequest }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    for (const request of st.sessions[id].browserInstanceRequests ?? []) out.push({ sessionId: id, request });
+  }
+  return out;
 }
 
 // All pending browser takeovers across sessions, for the attention rail.

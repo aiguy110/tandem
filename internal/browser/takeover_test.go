@@ -50,7 +50,7 @@ func TestTakeoverEndpointAuthenticatesAndResolvesOnRelease(t *testing.T) {
 	requested := false
 	resolved := false
 	requestedID := ""
-	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(id string) bool { return id == "one" }, OnRequest: func(sessionID, reqID, reason string) {
+	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(id string) bool { return id == "one" }, OnRequest: func(sessionID, browserID, reqID, reason string) {
 		requested = sessionID == "one" && strings.HasPrefix(reqID, "tk_") && reason == "login"
 		requestedID = reqID
 	}, OnResolved: func(sessionID, reqID string) {

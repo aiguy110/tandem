@@ -51,10 +51,12 @@ type Backend interface {
 	AgentCatalog() registry.Catalog
 	SetMode(context.Context, string, string) error
 	SetConfigOption(context.Context, string, string, any) error
-	CaptureSnapshot(context.Context, string, string) (store.BrowserSnapshot, error)
+	CaptureSnapshot(context.Context, string, string, string) (store.BrowserSnapshot, error)
 	ListSnapshots() ([]store.BrowserSnapshot, error)
 	DeleteSnapshot(string) error
-	RestartBrowser(context.Context, string, string) error
+	RestartBrowser(context.Context, string, string, string) error
+	HasBrowserInstance(string, string) bool
+	CloseInstance(context.Context, string, string) error
 	RestartHarness(context.Context, string) error
 	ListProfiles(string) ([]store.Profile, []string, error)
 	RenameProfile(string, string) error
@@ -73,11 +75,14 @@ type Backend interface {
 }
 
 type Options struct {
-	Token                    string
-	Registry                 Backend
-	Fallback                 http.Handler
-	WriteQueue               int
-	Browser                  *browser.Broker
+	Token      string
+	Registry   Backend
+	Fallback   http.Handler
+	WriteQueue int
+	Browser    *browser.Broker
+	// ResolveBrowserInstance records the human's decision on an agent's
+	// request for an additional browser instance.
+	ResolveBrowserInstance   func(ctx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error
 	History                  HistoryLifecycle
 	HostMetrics              HostMetrics
 	Automation               AutomationStore
@@ -391,6 +396,7 @@ type clientMessage struct {
 	Name              string                     `json:"name"`
 	ID                string                     `json:"id"`
 	SnapshotID        string                     `json:"snapshotId"`
+	BrowserID         string                     `json:"browserId"`
 	Project           string                     `json:"project"`
 	RepositoryID      string                     `json:"repositoryId"`
 	Enabled           bool                       `json:"enabled"`
@@ -514,7 +520,7 @@ func (c *connection) run() {
 			continue
 		}
 		switch m.T {
-		case "subscribe", "unsubscribe":
+		case "subscribe", "unsubscribe", "browser_view":
 			select {
 			case c.subscriptionQueue <- m:
 			case <-c.done:
@@ -552,7 +558,7 @@ func (c *connection) enqueueBrowser(m clientMessage) {
 	n := len(c.browserQueue)
 	if n > 0 && m.T == "browser_input" && m.Event.Kind == "mousemove" && len(m.CorrID) == 0 {
 		previous := c.browserQueue[n-1]
-		if previous.T == m.T && previous.SessionID == m.SessionID && previous.Event.Kind == m.Event.Kind && len(previous.CorrID) == 0 {
+		if previous.T == m.T && previous.SessionID == m.SessionID && previous.BrowserID == m.BrowserID && previous.Event.Kind == m.Event.Kind && len(previous.CorrID) == 0 {
 			c.browserQueue[n-1] = m
 			c.browserMu.Unlock()
 			return
@@ -1096,7 +1102,7 @@ func (c *connection) handle(m clientMessage) {
 		m.TargetSessionID = targetID
 	}
 	if m.HostID != "" {
-		if m.T == "subscribe" || m.T == "unsubscribe" {
+		if m.T == "subscribe" || m.T == "unsubscribe" || m.T == "browser_view" {
 			// Fleet reconnects must not hold local commands behind an offline
 			// host's timeout. Chain each remote session's subscription changes
 			// so subscribe/unsubscribe still execute in browser order.
@@ -1159,6 +1165,8 @@ func (c *connection) handle(m clientMessage) {
 		c.subscribe(m)
 	case "unsubscribe":
 		c.unsubscribe(m)
+	case "browser_view":
+		c.browserView(m)
 	case "list_agents":
 		go func() {
 			started := time.Now()
@@ -1627,7 +1635,7 @@ func (c *connection) handle(m clientMessage) {
 		}
 		c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
 	case "capture_snapshot":
-		snap, err := c.server.opts.Registry.CaptureSnapshot(context.Background(), m.SessionID, m.Name)
+		snap, err := c.server.opts.Registry.CaptureSnapshot(context.Background(), m.SessionID, browserIDOf(m), m.Name)
 		if err != nil {
 			c.send(withCorr(map[string]any{"t": "snapshots", "error": err.Error()}, m.CorrID))
 			return
@@ -1785,12 +1793,16 @@ func (c *connection) handle(m clientMessage) {
 		if _, ok := c.requireSession(m); !ok {
 			return
 		}
+		key, ok := c.browserKey(m)
+		if !ok {
+			return
+		}
 		switch m.Action {
 		case "grab":
-			c.server.opts.Browser.Grab(m.SessionID)
+			c.server.opts.Browser.Grab(key)
 		case "release":
 			ctx, cancel := context.WithTimeout(c.ctx, 2*time.Second)
-			err := c.server.opts.Browser.ReleaseContext(ctx, m.SessionID)
+			err := c.server.opts.Browser.ReleaseContext(ctx, key)
 			cancel()
 			if err != nil {
 				c.commandError(m, err)
@@ -1805,9 +1817,41 @@ func (c *connection) handle(m clientMessage) {
 		if _, ok := c.requireSession(m); !ok {
 			return
 		}
+		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
+		if err := c.server.opts.Registry.RestartBrowser(ctx, m.SessionID, browserIDOf(m), m.SnapshotID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, m.SessionID)
+	case "close_browser_instance":
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.ctx, 15*time.Second)
 		defer cancel()
-		if err := c.server.opts.Registry.RestartBrowser(ctx, m.SessionID, m.SnapshotID); err != nil {
+		if err := c.server.opts.Registry.CloseInstance(ctx, m.SessionID, m.BrowserID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, m.SessionID)
+	case "resolve_browser_instance":
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		if c.server.opts.ResolveBrowserInstance == nil {
+			c.commandError(m, errors.New("browser subsystem disabled"))
+			return
+		}
+		if m.Action != "approve" && m.Action != "deny" {
+			c.commandError(m, errors.New("action must be approve or deny"))
+			return
+		}
+		// Approval launches Chromium before acknowledging, which can take a
+		// while on a cold profile copy.
+		ctx, cancel := context.WithTimeout(c.ctx, 45*time.Second)
+		defer cancel()
+		if err := c.server.opts.ResolveBrowserInstance(ctx, m.SessionID, m.ID, m.Action == "approve", m.SnapshotID); err != nil {
 			c.commandError(m, err)
 			return
 		}
@@ -1830,19 +1874,23 @@ func (c *connection) handle(m clientMessage) {
 		if _, ok := c.requireSession(m); !ok {
 			return
 		}
+		key, ok := c.browserKey(m)
+		if !ok {
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 		defer cancel()
 		var pages browser.BrowserPages
-		shared, err := c.server.opts.Browser.SharedBrowser(ctx, m.SessionID)
+		shared, err := c.server.opts.Browser.SharedBrowser(ctx, key)
 		if err == nil && m.T == "browser_select_page" {
 			err = shared.SelectPage(ctx, m.Event.TargetID)
 		}
 		if err == nil {
 			pages, err = shared.Pages(ctx)
 		}
-		reply := map[string]any{"t": "browser_pages", "sessionId": m.SessionID, "data": pages}
+		reply := map[string]any{"t": "browser_pages", "sessionId": m.SessionID, "browserId": browserIDOf(m), "data": pages}
 		if err != nil {
-			slog.Warn("browser viewer command failed", "session_id", m.SessionID, "command", m.T, "error", err)
+			slog.Warn("browser viewer command failed", "session_id", m.SessionID, "browser_id", browserIDOf(m), "command", m.T, "error", err)
 			reply["error"] = err.Error()
 		}
 		c.send(withCorr(reply, m.CorrID))
@@ -1860,8 +1908,12 @@ func (c *connection) handle(m clientMessage) {
 		if m.Event.Kind == "navigate" || m.Event.Kind == "back" || m.Event.Kind == "forward" || m.Event.Kind == "reload" {
 			timeout = 15 * time.Second
 		}
+		key, ok := c.browserKey(m)
+		if !ok {
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.ctx, timeout)
-		err := c.server.opts.Browser.DispatchUserInput(ctx, m.SessionID, m.Event)
+		err := c.server.opts.Browser.DispatchUserInput(ctx, key, m.Event)
 		cancel()
 		if err != nil {
 			c.commandError(m, err)
@@ -2325,6 +2377,81 @@ func (c *connection) commandError(m clientMessage, err error) {
 	}
 	c.send(withCorr(value, m.CorrID))
 }
+
+// browserIDOf returns the browser instance a command targets, defaulting to
+// the session's original browser for clients that predate instances.
+func browserIDOf(m clientMessage) string {
+	if m.BrowserID == "" {
+		return browser.DefaultBrowserID
+	}
+	return m.BrowserID
+}
+
+// browserKey resolves a command's broker key, rejecting instances that do not
+// belong to the session.
+func (c *connection) browserKey(m clientMessage) (string, bool) {
+	browserID := browserIDOf(m)
+	if !c.server.opts.Registry.HasBrowserInstance(m.SessionID, browserID) {
+		c.commandError(m, fmt.Errorf("no such browser instance: %s", browserID))
+		return "", false
+	}
+	return browser.InstanceKey(m.SessionID, browserID), true
+}
+
+// addFrameListener streams one browser instance's screencast to this client.
+func (c *connection) addFrameListener(sessionID, browserID string) func() {
+	return c.server.opts.Browser.AddFrameListener(browser.InstanceKey(sessionID, browserID), func(frame browser.ScreencastFrame) {
+		c.sendFrame(sessionID, map[string]any{"t": "browser_frame", "sessionId": sessionID, "browserId": browserID, "dataB64": frame.DataB64, "meta": frame.Meta})
+	})
+}
+
+// browserView switches which of a session's browsers this client watches.
+// Viewing is independent of which browser the agent targets.
+func (c *connection) browserView(m clientMessage) {
+	if c.server.opts.Browser == nil {
+		c.commandError(m, errors.New("browser subsystem disabled"))
+		return
+	}
+	browserID := browserIDOf(m)
+	if !c.server.opts.Registry.HasBrowserInstance(m.SessionID, browserID) {
+		c.commandError(m, fmt.Errorf("no such browser instance: %s", browserID))
+		return
+	}
+	c.mu.Lock()
+	sub := c.subs[m.SessionID]
+	c.mu.Unlock()
+	if sub == nil {
+		c.commandError(m, errors.New("not subscribed to "+m.SessionID))
+		return
+	}
+	sub.mu.Lock()
+	previous := sub.browserID
+	sub.browserID = browserID
+	streaming := sub.channels["browser"] && sub.active.Load()
+	oldFrames := sub.browserFrameOff
+	if streaming && previous != browserID {
+		sub.browserFrameOff = nil
+	}
+	sub.mu.Unlock()
+	if streaming && previous != browserID {
+		if oldFrames != nil {
+			oldFrames()
+		}
+		frames := c.addFrameListener(m.SessionID, browserID)
+		sub.mu.Lock()
+		if sub.active.Load() && sub.browserFrameOff == nil {
+			sub.browserFrameOff = frames
+			frames = nil
+		}
+		sub.mu.Unlock()
+		if frames != nil {
+			frames()
+		}
+	}
+	slog.Debug("browser view changed", "connection_id", c.id, "session_id", m.SessionID, "browser_id", browserID, "previous", previous)
+	c.commandAck(m, m.SessionID)
+}
+
 func (c *connection) requireSession(m clientMessage) (*session.Session, bool) {
 	sess := c.server.opts.Registry.Get(m.SessionID)
 	if sess == nil {
@@ -2480,6 +2607,8 @@ type subscription struct {
 	// screencast, gated on the 'browser' channel (the focus/bandwidth rule).
 	browserStateOff func()
 	browserFrameOff func()
+	// browserID is the instance whose screencast this subscription streams.
+	browserID string
 }
 
 func (s *subscription) wants(ev eventlog.Event) bool {
@@ -2512,7 +2641,11 @@ func (c *connection) subscribe(m clientMessage) {
 		c.send(withCorr(map[string]any{"t": "ack", "error": "no such agent: " + m.SessionID}, m.CorrID))
 		return
 	}
-	sub := &subscription{c: c, s: sess, channels: makeChannels(m.Channels), initializing: true}
+	viewID := browserIDOf(m)
+	if !c.server.opts.Registry.HasBrowserInstance(sess.ID, viewID) {
+		viewID = browser.DefaultBrowserID
+	}
+	sub := &subscription{c: c, s: sess, channels: makeChannels(m.Channels), initializing: true, browserID: viewID}
 	sub.active.Store(true)
 	sub.unlisten = sess.OnEvent(func(le eventlog.LoggedEvent) {
 		if !sub.active.Load() {
@@ -2643,8 +2776,8 @@ func (c *connection) subscribe(m clientMessage) {
 		// Browser active/owner state flows to every subscription so the Browser
 		// tab enables (and survives a page refresh) as soon as the agent has a
 		// browser, independent of whether this client is viewing the pane.
-		offState := c.server.opts.Browser.OnState(sess.ID, func(state browser.BrowserState) {
-			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "active": state.Active, "controlOwner": state.ControlOwner})
+		offState := c.server.opts.Browser.OnSessionState(sess.ID, func(browserID string, state browser.BrowserState) {
+			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "browserId": browserID, "active": state.Active, "controlOwner": state.ControlOwner})
 		})
 		sub.mu.Lock()
 		active := sub.active.Load()
@@ -2659,9 +2792,7 @@ func (c *connection) subscribe(m clientMessage) {
 		// The screencast itself stays gated on the 'browser' channel (only the
 		// focused, browser-viewing client streams frames).
 		if sub.channels["browser"] {
-			offFrames := c.server.opts.Browser.AddFrameListener(sess.ID, func(frame browser.ScreencastFrame) {
-				c.sendFrame(sess.ID, map[string]any{"t": "browser_frame", "sessionId": sess.ID, "dataB64": frame.DataB64, "meta": frame.Meta})
-			})
+			offFrames := c.addFrameListener(sess.ID, viewID)
 			sub.mu.Lock()
 			active := sub.active.Load()
 			if active {

@@ -111,6 +111,11 @@ type Registry struct {
 	// by session ID. restored is closed once the whole restore pass ends.
 	restoring map[string]restoringAgent
 	restored  chan struct{}
+	// instMu guards the per-session additional browser instances (loaded
+	// lazily from the event log) and restarted default-browser sources.
+	instMu           sync.Mutex
+	browserInstances map[string]*browserInstanceList
+	defaultSources   map[string]*browser.Instance
 }
 
 type restoringAgent struct {
@@ -350,7 +355,7 @@ func New(o Options) (*Registry, error) {
 	if cap == 0 {
 		cap = 1000
 	}
-	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, restoring: map[string]restoringAgent{}, ranks: ranks, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
+	return &Registry{store: o.Store, config: o.Config, workspace: o.Workspace, factory: o.Factory, browser: o.Browser, ring: cap, sessions: map[string]*session.Session{}, cwds: map[string]string{}, known: known, counter: max, handoffs: map[string]*sync.Mutex{}, restoring: map[string]restoringAgent{}, ranks: ranks, browserInstances: map[string]*browserInstanceList{}, defaultSources: map[string]*browser.Instance{}, onSession: o.OnSession, onAudioPreference: o.OnAudioPreference, onAudioFocus: o.OnAudioFocus}, nil
 }
 
 // initialRailRanks loads persisted rail positions and places live sessions
@@ -2330,6 +2335,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 		if r.browser != nil {
 			_ = r.browser.Teardown(ctx, id)
 		}
+		r.teardownInstances(ctx, id)
 		if err := r.store.CloseSession(id); err != nil {
 			return false, err
 		}
@@ -2354,6 +2360,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 	if r.browser != nil {
 		_ = r.browser.Teardown(ctx, id)
 	}
+	r.teardownInstances(ctx, id)
 	if err := disposeSession(ctx, s); err != nil {
 		return false, err
 	}

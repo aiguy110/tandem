@@ -308,7 +308,12 @@ type ClientMsg =
   | { t: 'close_agent'; sessionId: string; force?: boolean }             // teardown: keep branch, drop checkout
   | { t: 'merge_back';  sessionId: string; mode: 'merge'|'pr' }          // error ack for now (no diff/merge UI yet)
   | { t: 'browser_control'; sessionId: string; action: 'grab'|'release' } // Phase 5: flips the control-owner token
-  | { t: 'restart_browser'; sessionId: string; snapshotId?: string } // starts/replaces the browser; omitted snapshotId means fresh state
+  | { t: 'restart_browser'; sessionId: string; browserId?: string; snapshotId?: string } // starts/replaces one browser instance; omitted snapshotId means fresh state
+  // Browser instances (docs/browser.md). Browser commands take an optional browserId
+  // (default "default"); browser_view picks which instance's screencast this client gets.
+  | { t: 'browser_view'; sessionId: string; browserId: string }
+  | { t: 'close_browser_instance'; sessionId: string; browserId: string }
+  | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve'|'deny'; snapshotId?: string } // snapshotId: the human's pick for a user_choice request
   | { t: 'list_system_notifications' }
   | { t: 'system_notification_action'; notificationId: string; action: string }
   | { t: 'list_agent_distributions' }
@@ -385,9 +390,9 @@ type ServerMsg =
   | { t: 'sessions'; catalog: ResumeCatalog }                           // reply to list_sessions
   | { t: 'session_search'; query?: string; results?: SessionSearchResult[]; error?: string }
   // Phase 5 browser channel (only sent to subscribers of that agent's 'browser' channel):
-  | { t: 'browser_frame'; sessionId: string; dataB64: string;             // CDP screencast JPEG
+  | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; // CDP screencast JPEG of the viewed instance
       meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; active: boolean;             // lifecycle + wheel
+  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; // lifecycle + wheel, per instance
       controlOwner: 'agent'|'user' }
   | { t: 'message_audio'; sessionId: string; seq: number;                 // reply to render_message_audio
       mimeType?: string; data?: string; error?: string }                // data: base64 clip bytes
