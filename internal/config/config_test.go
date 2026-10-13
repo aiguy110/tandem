@@ -46,12 +46,15 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	if c.Host != "0.0.0.0" || c.Port != 8123 || c.DirScanDepth != 3 || c.UIDir != "/ui" {
 		t.Fatalf("environment not applied: %+v", c)
 	}
-	if c.ACP.Default != "claude" || len(c.Agents) != 4 || c.Agents["claude"].Name != "Claude" ||
-		c.Agents["opencode"].Name != "OpenCode" {
+	if c.ACP.Default != "claude" || len(c.Agents) != 5 || c.Agents["claude"].Name != "Claude" ||
+		c.Agents["opencode"].Name != "OpenCode" || c.Agents["omp"].Name != "Oh My Pi" {
 		t.Fatalf("shipped catalog not loaded: %+v", c.Agents)
 	}
 	if c.Agents["claude"].ACP.Cmd != "/fixtures/bin/node" {
 		t.Fatalf("explicit node launcher = %q", c.Agents["claude"].ACP.Cmd)
+	}
+	if omp := c.Agents["omp"]; omp.ACP == nil || omp.ACP.Cmd != "omp" || len(omp.ACP.Args) != 1 || omp.ACP.Args[0] != "acp" {
+		t.Fatalf("omp launches its built-in ACP server: %+v", omp.ACP)
 	}
 	if c.Agents["codex"].ACP.Cmd != "codex-custom" || c.Agents["pi"].Terminal.Cmd != "pi-custom" {
 		t.Fatalf("legacy overrides missing: %+v", c.Agents)

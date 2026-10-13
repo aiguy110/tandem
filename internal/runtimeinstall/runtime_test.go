@@ -45,6 +45,7 @@ func TestEnsureHistoryStagesEmbeddedRuntimeAndUsesExistingTSX(t *testing.T) {
 		filepath.Join("history", "importers", "claude.ts"):   tandem.RuntimeHistoryImporterClaude,
 		filepath.Join("history", "importers", "codex.ts"):    tandem.RuntimeHistoryImporterCodex,
 		filepath.Join("history", "importers", "pi.ts"):       tandem.RuntimeHistoryImporterPi,
+		filepath.Join("history", "importers", "omp.ts"):      tandem.RuntimeHistoryImporterOMP,
 		filepath.Join("history", "importers", "opencode.ts"): tandem.RuntimeHistoryImporterOpenCode,
 		"tsconfig.json": tandem.RuntimeTSConfig,
 	} {
