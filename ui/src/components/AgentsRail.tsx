@@ -849,6 +849,7 @@ function Row({
           </span>
         </div>
       </div>
+      {!editing && (
       <div className={`session-actions${showTouchActions ? ' touch-visible' : ''}`}>
         <button
           className="rename-btn"
@@ -872,6 +873,7 @@ function Row({
           🗑
         </button>
       </div>
+      )}
       {contextMenu && (
         <div
           className={`session-context-menu${menuClosing ? ' closing' : ''}`}
