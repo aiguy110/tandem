@@ -379,6 +379,9 @@ type ServerMsg =
   | { t: 'event';    sessionId: string; seq: number; event: WireEvent }  // live tail (monotonic)
   | { t: 'ack';      corrId?: string; sessionId?: string; error?: string }
   | { t: 'agent_closed'; sessionId: string }
+  // A remote host's tunnel reconnected and its subscriptions were dropped;
+  // the client re-sends `subscribe` (from its lastSeq) for each listed session.
+  | { t: 'resubscribe'; hostId: string; sessionIds: string[] }
   | { t: 'agents';   sessions: SessionSummary[] }                         // Phase 4: reply to list_agents
   | { t: 'agent_catalog'; catalog: AgentCatalog }                       // reply to list_agent_catalog
   | { t: 'system_notifications'; notifications: SystemNotification[] }  // daemon-owned operational notifications

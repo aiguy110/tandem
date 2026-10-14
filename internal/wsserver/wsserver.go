@@ -276,6 +276,13 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		h.broadcastAgents()
 		return
 	}
+	// A reconnected host lost every subscription its previous tunnel carried.
+	// A relayed "resubscribe" is an intermediate reporting the same for one
+	// of its descendants, which this daemon reaches as hostID.
+	if envelope["t"] == "federation_host_connected" || envelope["t"] == "resubscribe" {
+		h.requestRemoteResubscribe(hostID)
+		return
+	}
 	remoteID := ""
 	if sessionID, ok := envelope["sessionId"].(string); ok && sessionID != "" {
 		remoteID = remoteSessionID(hostID, sessionID)
@@ -307,6 +314,36 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		}
 		c.send(envelope)
 	}
+}
+
+// requestRemoteResubscribe asks every connection subscribed to a session on
+// hostID to subscribe again. Only the client knows its channels and last
+// seen seq, so it re-sends the subscribe and replays whatever it missed.
+func (h *Handler) requestRemoteResubscribe(hostID string) {
+	h.mu.Lock()
+	connections := make([]*connection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
+	h.mu.Unlock()
+	notified := 0
+	for _, c := range connections {
+		var sessionIDs []string
+		c.mu.Lock()
+		for remoteID := range c.remoteSubs {
+			if owner, _, ok := SplitRemoteSessionID(remoteID); ok && owner == hostID {
+				sessionIDs = append(sessionIDs, remoteID)
+			}
+		}
+		c.mu.Unlock()
+		if len(sessionIDs) == 0 {
+			continue
+		}
+		sort.Strings(sessionIDs)
+		c.send(map[string]any{"t": "resubscribe", "hostId": hostID, "sessionIds": sessionIDs})
+		notified++
+	}
+	slog.Info("requested resubscribe after remote host reconnect", "host_id", hostID, "connections", notified)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

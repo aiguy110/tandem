@@ -1093,6 +1093,10 @@ export const useStore = create<StoreState>((set, get) => {
           : st));
         return;
       }
+      case 'resubscribe':
+        // Resubscribing from lastSeq replays whatever the dropped stream missed.
+        for (const id of msg.sessionIds) if (get().sessions[id]) subscribeAgent(id);
+        return;
       case 'agent_closed': {
         set((st) => {
           if (!st.sessions[msg.sessionId]) return st;

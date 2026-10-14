@@ -710,6 +710,8 @@ export type ServerMsg =
   | { t: 'ack'; corrId?: string; sessionId?: string; error?: string; promptId?: string; disposition?: 'started' | 'queued' | 'steered'; position?: number; cleared?: number }
   | { t: 'spawn_progress'; corrId?: string; phase: string }
   | { t: 'agent_closed'; sessionId: string }
+  // A remote host reconnected and dropped these subscriptions; subscribe again.
+  | { t: 'resubscribe'; hostId: string; sessionIds: string[] }
   | { t: 'agents'; corrId?: string; sessions: SessionSummary[]; agentId?: string }
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }

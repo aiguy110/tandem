@@ -1734,3 +1734,41 @@ func TestStaleDirsAnswerFromCacheThenBroadcastRefresh(t *testing.T) {
 		t.Fatalf("scans=%d, want 2", n)
 	}
 }
+
+func TestRemoteHostReconnectRequestsResubscribe(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	fed := &testFederation{hosts: []federation.Host{{
+		ID: "host-one", Name: "builder", Status: "connected",
+		Snapshot: json.RawMessage(`{"t":"agents","agents":[{"id":"remote-agent","name":"Remote","adapter":"acp","status":"idle","controlMode":"transcript"}]}`),
+	}}}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	remoteID := "fed~host-one~remote-agent"
+	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript"}, "corrId": "sub"})
+	if got := recv(t, c); got["t"] != "snapshot" {
+		t.Fatalf("remote snapshot = %#v", got)
+	}
+	if got := recv(t, c); got["t"] != "ack" || got["corrId"] != "sub" {
+		t.Fatalf("subscribe ack = %#v", got)
+	}
+
+	// The child drops its subscriptions with a superseded tunnel; the browser
+	// must be told which sessions to subscribe to again.
+	fed.mu.Lock()
+	publish := fed.subscriber
+	fed.mu.Unlock()
+	publish("host-other", json.RawMessage(`{"t":"federation_host_connected"}`))
+	publish("host-one", json.RawMessage(`{"t":"federation_host_connected"}`))
+	got := recv(t, c)
+	if got["t"] != "resubscribe" || got["hostId"] != "host-one" {
+		t.Fatalf("resubscribe = %#v", got)
+	}
+	ids, _ := got["sessionIds"].([]any)
+	if len(ids) != 1 || ids[0] != remoteID {
+		t.Fatalf("resubscribe sessions = %#v", got)
+	}
+}

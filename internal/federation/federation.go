@@ -1121,6 +1121,10 @@ func (s *Service) serveChild(conn *websocket.Conn, hello tunnelMessage, peer *st
 		s.startChildLink(hello.HostID, t)
 	}
 	s.publish(hello.HostID, json.RawMessage(`{"t":"federation_hosts_changed"}`))
+	// The child releases every subscription when its previous tunnel ends
+	// (LoopbackLocal.Reset), including one superseded by this reconnect, so
+	// subscribers must re-establish theirs or that host's sessions go silent.
+	s.publish(hello.HostID, json.RawMessage(`{"t":"federation_host_connected"}`))
 	for _, cmd := range queued {
 		if t.send(tunnelMessage{T: "command", ID: cmd.ID, Payload: cmd.Payload, Origin: cmd.Origin}) != nil {
 			break
