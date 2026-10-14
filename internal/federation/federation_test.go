@@ -302,14 +302,16 @@ func TestProtocolVersionExchangeAndSkewNotice(t *testing.T) {
 	}
 
 	// A host one version off is reported, not refused, and the notice can be
-	// dismissed.
+	// dismissed. It gets its own host ID: the closed tunnel's asynchronous
+	// teardown clears hostID's protocol notice and would race this one.
 	skewed := *peer
+	skewed.ID = hostID + "-skewed"
 	skewed.ProtocolVersion = ProtocolVersion + 1
 	skewed.BuildVersion = "v10.0.0"
 	parent.checkProtocol(skewed)
 	notice := notifications.Notification{}
 	for _, item := range parentCenter.List() {
-		if item.ID == protocolNotificationPrefix+hostID {
+		if item.ID == protocolNotificationPrefix+skewed.ID {
 			notice = item
 		}
 	}

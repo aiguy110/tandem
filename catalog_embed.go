@@ -38,6 +38,9 @@ var RuntimeHistoryImporterCodex []byte
 //go:embed runtime/history/importers/pi.ts
 var RuntimeHistoryImporterPi []byte
 
+//go:embed runtime/history/importers/omp.ts
+var RuntimeHistoryImporterOMP []byte
+
 //go:embed runtime/history/importers/opencode.ts
 var RuntimeHistoryImporterOpenCode []byte
 

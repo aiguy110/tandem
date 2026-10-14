@@ -16,6 +16,7 @@ const FALLBACK_HARNESSES = [
   { id: 'agent:claude', name: 'Claude', agent: 'claude', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
   { id: 'agent:codex', name: 'Codex', agent: 'codex', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
   { id: 'agent:pi', name: 'Pi', agent: 'pi', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
+  { id: 'agent:omp', name: 'Oh My Pi', agent: 'omp', harness: undefined as string | undefined, hasAcp: true, hasTerminal: true },
 ];
 
 export interface DelegatedWorkPreview {

@@ -59,6 +59,27 @@
         }
       }
     },
+    "omp": {
+      "name": "Oh My Pi",
+      "acp": {
+        "cmd": "omp",
+        "args": [
+          "acp"
+        ]
+      },
+      "terminal": {
+        "cmd": "omp",
+        "args": [
+          "--resume",
+          "{sessionId}"
+        ]
+      },
+      "history": {
+        "parser": "/fixtures/tandem/runtime/history/importers/omp.ts",
+        "resume": "auto",
+        "enabled": true
+      }
+    },
     "opencode": {
       "name": "OpenCode",
       "terminal": {

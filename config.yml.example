@@ -59,6 +59,23 @@ agents:
       startArgs: []
       resumeArgs: [--session, "{sessionId}"]
 
+  omp:
+    name: Oh My Pi
+    history:
+      parser: "{runtimeRoot}/history/importers/omp.ts"
+      resume: auto
+    acp:
+      # oh-my-pi ships its own ACP server (`omp acp`) with a native MCP client,
+      # so unlike pi it needs no bridge package or MCP wrapper. Install it with
+      # `bun install -g @oh-my-pi/pi-coding-agent`; models/providers come from
+      # ~/.omp/agent (config.yml, models.yml).
+      command: omp
+      args: [acp]
+    terminal:
+      command: omp
+      startArgs: []
+      resumeArgs: [--resume, "{sessionId}"]
+
   opencode:
     name: OpenCode
     history:
