@@ -36,6 +36,9 @@ type testFederation struct {
 	calls         []json.RawMessage
 	subscriber    func(string, json.RawMessage)
 	subscribeGate <-chan struct{}
+	// subscribeTimeout makes a forwarded subscribe time out before the child
+	// answers, as a slow child does while restoring its agents.
+	subscribeTimeout bool
 }
 
 func (f *testFederation) Hosts() []federation.Host { return f.hosts }
@@ -66,6 +69,9 @@ func (f *testFederation) Call(ctx context.Context, hostID string, payload json.R
 	case "add_annotation":
 		return json.RawMessage(`{"t":"ack","agentId":"remote-agent","annotations":[{"id":"ann-remote","agentId":"remote-agent","seq":5,"role":"assistant","quote":"hello","comment":"clarify"}]}`), nil
 	case "subscribe":
+		if f.subscribeTimeout {
+			return nil, context.DeadlineExceeded
+		}
 		if f.subscribeGate != nil {
 			select {
 			case <-f.subscribeGate:
@@ -1732,6 +1738,55 @@ func TestStaleDirsAnswerFromCacheThenBroadcastRefresh(t *testing.T) {
 	}
 	if n := b.dirsCalls.Load(); n != 2 {
 		t.Fatalf("scans=%d, want 2", n)
+	}
+}
+
+func TestRemoteSubscribeTimeoutKeepsLiveEvents(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	fed := &testFederation{subscribeTimeout: true, hosts: []federation.Host{{
+		ID: "host-one", Name: "builder", Status: "connected",
+		Snapshot: json.RawMessage(`{"t":"agents","agents":[{"id":"remote-agent","name":"Remote","adapter":"acp","status":"idle","controlMode":"transcript"}]}`),
+	}}}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Federation: fed})
+	t.Cleanup(handler.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	remoteID := "fed~host-one~remote-agent"
+	send(t, c, map[string]any{"t": "subscribe", "agentId": remoteID, "channels": []string{"transcript"}})
+	// Wait until the forwarded subscribe has finished (timed out).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		handler.mu.Lock()
+		pending := 0
+		for conn := range handler.connections {
+			conn.mu.Lock()
+			pending += len(conn.remoteSubscriptionTails)
+			conn.mu.Unlock()
+		}
+		handler.mu.Unlock()
+		fed.mu.Lock()
+		called := len(fed.calls) > 0
+		fed.mu.Unlock()
+		if called && pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("forwarded subscribe never finished")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The child finishes the queued subscribe after the parent gave up; its
+	// replay and live events must still reach the browser.
+	fed.mu.Lock()
+	publish := fed.subscriber
+	fed.mu.Unlock()
+	publish("host-one", json.RawMessage(`{"t":"event","agentId":"remote-agent","seq":7,"event":{"kind":"status","status":"idle"}}`))
+	got := recv(t, c)
+	if got["t"] != "event" || got["sessionId"] != remoteID {
+		t.Fatalf("late remote event = %#v", got)
 	}
 }
 

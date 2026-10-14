@@ -2098,9 +2098,15 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	callTimeout := 30 * time.Second
-	if m.T == "spawn_agent" || m.T == "fork_session" {
+	switch m.T {
+	case "spawn_agent", "fork_session":
 		// A remote spawn may install the agent runtime before acknowledging.
 		callTimeout = 10 * time.Minute
+	case "subscribe":
+		// The child serves every forwarded subscription on one loopback
+		// socket, one at a time. A resubscribe burst after it restarts queues
+		// behind replays slowed by agent restore, well past 30s in practice.
+		callTimeout = 3 * time.Minute
 	}
 	callCtx, cancel := context.WithTimeout(federation.WithOrigin(context.Background(), origin), callTimeout)
 	defer cancel()
@@ -2122,6 +2128,15 @@ func (c *connection) forwardFederation(m clientMessage) {
 	}
 	response, err := c.server.opts.Federation.Call(callCtx, hostID, payload)
 	if err != nil {
+		if m.T == "subscribe" && remoteID != "" && errors.Is(err, context.DeadlineExceeded) {
+			// The command reached a connected tunnel and is still queued on
+			// the child, which will finish it and stream the replay and live
+			// events as ordinary events. Dropping the filter here would discard
+			// them, leaving this view frozen while commands keep working. A
+			// lost tunnel instead fails fast and triggers a resubscribe.
+			slog.Warn("remote subscribe timed out; keeping live filter for the child's late replay", "host_id", hostID, "session_id", m.SessionID, "timeout", callTimeout)
+			return
+		}
 		slog.Warn("remote browser command failed", "type", m.T, "host_id", hostID, "session_id", m.SessionID, "error", err)
 		if m.T == "subscribe" && remoteID != "" {
 			c.mu.Lock()
