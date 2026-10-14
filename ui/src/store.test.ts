@@ -185,6 +185,25 @@ describe('thread audio preference', () => {
     expect(view.browserAnyActive).toBe(false);
   });
 
+  it('dismisses a takeover request when the user already has browser control', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 0, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [], transcript: [],
+    });
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user' });
+    __testApplyServerMsg({
+      t: 'event', sessionId: 'session-1', seq: 1,
+      event: { kind: 'takeover_request', reqId: 'takeover-1', reason: 'complete sign-in' },
+    });
+
+    expect(useStore.getState().sessions['session-1'].takeovers).toHaveLength(1);
+    useStore.getState().acknowledgeTakeover('session-1', 'default');
+
+    const view = useStore.getState().sessions['session-1'];
+    expect(view.takeovers).toHaveLength(0);
+    expect(view.browserTakeoverHeld).toBe(true);
+    expect(notificationsSummary(useStore.getState()).total).toBe(0);
+  });
+
   it('does not notify when a focused agent completes its turn', () => {
     __testApplyServerMsg({
       t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],

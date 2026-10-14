@@ -45,6 +45,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const focus = useStore((s) => s.focus);
   const setPane = useStore((s) => s.setPane);
   const toggleWheel = useStore((s) => s.toggleWheel);
+  const acknowledgeTakeover = useStore((s) => s.acknowledgeTakeover);
   const setBrowserView = useStore((s) => s.setBrowserView);
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
@@ -168,7 +169,11 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                 setPane('browser');
                 const browserId = takeover.browserId ?? 'default';
                 setBrowserView(sessionId, browserId);
-                if (useStore.getState().sessions[sessionId]?.browserStates[browserId]?.owner !== 'user') toggleWheel(sessionId);
+                if (useStore.getState().sessions[sessionId]?.browserStates[browserId]?.owner === 'user') {
+                  acknowledgeTakeover(sessionId, browserId);
+                } else {
+                  toggleWheel(sessionId);
+                }
               }}
             >
               🖐 Take the wheel

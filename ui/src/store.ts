@@ -485,6 +485,9 @@ interface StoreState {
   browserPages: (sessionId: string, targetId?: string) => Promise<BrowserPages>;
   browserNavigate: (sessionId: string, event: BrowserInputWire) => Promise<AckResult>;
   toggleWheel: (sessionId: string) => void;
+  // Acknowledge an agent's request when the user already owns this browser.
+  // The request remains live in the daemon until the user returns control.
+  acknowledgeTakeover: (sessionId: string, browserId: string) => void;
   // Browser instances. Commands above act on the session's viewed instance.
   setBrowserView: (sessionId: string, browserId: string) => void;
   closeBrowserInstance: (sessionId: string, browserId: string) => Promise<AckResult>;
@@ -2125,6 +2128,22 @@ export const useStore = create<StoreState>((set, get) => {
       if (!a || !a.browserActive) return;
       client.send({ t: 'browser_control', sessionId, browserId: a.browserViewId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
     },
+    acknowledgeTakeover: (sessionId, browserId) => set((st) => {
+      const agent = st.sessions[sessionId];
+      const browser = agent?.browserStates[browserId];
+      // A request can only be acknowledged locally once this client holds the
+      // wheel. The daemon resolves the pending MCP call when control returns.
+      if (!agent || browser?.owner !== 'user') return st;
+      const waiting = agent.takeovers.filter((takeover) => (takeover.browserId ?? DEFAULT_BROWSER_ID) === browserId);
+      if (waiting.length === 0) return st;
+      const browserStates = { ...agent.browserStates, [browserId]: { ...browser, takeoverHeld: true } };
+      return {
+        sessions: {
+          ...st.sessions,
+          [sessionId]: projectBrowserView({ ...agent, browserStates, takeovers: agent.takeovers.filter((takeover) => !waiting.includes(takeover)) }),
+        },
+      };
+    }),
     setBrowserView: (sessionId, browserId) => {
       const a = get().sessions[sessionId];
       if (!a || a.browserViewId === browserId || !a.browserInstances.some((i) => i.id === browserId)) return;
@@ -2294,7 +2313,12 @@ function applyEventToView(v: SessionView, event: WireEvent): void {
   if (event.kind === 'error') v.status = 'error';
   if (event.kind === 'takeover_request') {
     v.status = 'blocked';
-    if (!v.takeovers.some((t) => t.reqId === event.reqId)) v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason, browserId: event.browserId }];
+    const browserID = event.browserId ?? DEFAULT_BROWSER_ID;
+    // A replayed/live request for a browser the user has already acknowledged
+    // must stay hidden until handing control back resolves it at the daemon.
+    if (!v.browserStates[browserID]?.takeoverHeld && !v.takeovers.some((t) => t.reqId === event.reqId)) {
+      v.takeovers = [...v.takeovers, { reqId: event.reqId, reason: event.reason, browserId: event.browserId }];
+    }
   }
   if (event.kind === 'browser_instances') Object.assign(v, browserInstancesPatch(v, event.instances));
   if (event.kind === 'browser_instance_request') {
