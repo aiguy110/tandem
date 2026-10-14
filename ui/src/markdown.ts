@@ -96,6 +96,11 @@ marked.use({
   ],
 });
 
+// A rejected `$` is emitted as literal text so a later `$` can't pair with it.
+function literalDollar() {
+  return { type: 'inlineMath', raw: '$', text: '$', literal: true };
+}
+
 marked.use({
   extensions: [
     {
@@ -119,18 +124,25 @@ marked.use({
       start(src: string) {
         return src.search(/(?:\\\(|\$)/);
       },
-      tokenizer(src: string) {
+      tokenizer(src: string, tokens: Token[]) {
         const paren = /^\\\((.+?)\\\)/s.exec(src);
         if (paren) return { type: 'inlineMath', raw: paren[0], text: paren[1] };
 
-        // Do not consume `$$` (the block tokenizer owns that syntax), and
-        // require non-whitespace content to avoid treating currency as math.
-        const dollar = /^\$(?!\$)([^\n$]*?\S[^\n$]*?)\$(?!\$)/.exec(src);
+        if (!src.startsWith('$')) return undefined;
+        // Do not consume `$$` (the block tokenizer owns that syntax). Single
+        // dollars are usually currency ("$0.35–0.70/hr ... **$10–20**"), so
+        // follow Pandoc's tex_math_dollars rules: the opener must not follow a
+        // word character and must hug non-whitespace, the closer must hug
+        // non-whitespace and must not be followed by a digit.
+        if (/[\p{L}\p{N}]$/u.test(tokens[tokens.length - 1]?.raw ?? '')) return literalDollar();
+        const dollar = /^\$(?![\s$])([^\n$]*?[^\s$\\])\$(?![\d$])/.exec(src);
         if (dollar) return { type: 'inlineMath', raw: dollar[0], text: dollar[1] };
-        return undefined;
+        return literalDollar();
       },
       renderer(token: unknown) {
-        return renderMath((token as { text: string }).text, false);
+        const tok = token as { text: string; literal?: boolean };
+        if (tok.literal) return escapeHtml(tok.text);
+        return renderMath(tok.text, false);
       },
     },
   ],

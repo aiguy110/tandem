@@ -15,6 +15,26 @@ describe('renderMarkdown math', () => {
     expect(html).toContain('katex-display');
   });
 
+  it('leaves currency dollars literal', () => {
+    for (const src of [
+      '**4090** (24 GB, about $0.35–0.70/hr): roughly 1.3× the speed. That\'s about 20–25 hours, or **$10–20**.',
+      'costs $5 and $10',
+      'from $5 to $ 10',
+      'pay US$5 or US$9 today',
+      'between $5, then $x',
+    ]) {
+      const html = renderMarkdown(src);
+      expect(html).not.toContain('class="katex"');
+      expect(html).toContain('$');
+    }
+    expect(renderMarkdown('or **$10–20**.')).toContain('<strong>$10–20</strong>');
+  });
+
+  it('still renders dollar math next to punctuation', () => {
+    expect(renderMarkdown('($x^2$), and $y$.')).toContain('class="katex"');
+    expect(renderMarkdown('($x^2$), and $y$.').match(/class="katex"/g)).toHaveLength(2);
+  });
+
   it('does not interpret math delimiters inside code', () => {
     const html = renderMarkdown('`$not_math$`\n\n```text\n\\[not_math\\]\n```');
     expect(html).not.toContain('class="katex"');
