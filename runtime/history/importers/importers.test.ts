@@ -108,6 +108,8 @@ test("Claude normalizes messages and reads only session-local spilled tool resul
     JSON.stringify({ type: "assistant", uuid: "a", timestamp: "2025-02-02", message: { role: "assistant", content: [{ type: "text", text: "done" }, { type: "image", data: "ignored" }] } }),
     JSON.stringify({ type: "tool_result", uuid: "t", toolResultFile: "tool.txt" }),
     JSON.stringify({ type: "tool_result", uuid: "evil", toolResultFile: "../secret" }),
+    // A resumed session re-appends an earlier record verbatim.
+    JSON.stringify({ type: "user", uuid: "u", timestamp: "2025-02-01", message: { role: "user", content: "find this phrase" } }),
     "{\"partial\":",
   ].join("\n"));
   const records = await run("claude.ts", ["--root", root]);
