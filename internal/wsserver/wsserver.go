@@ -2099,8 +2099,11 @@ func (c *connection) forwardFederation(m clientMessage) {
 	}
 	callTimeout := 30 * time.Second
 	switch m.T {
-	case "spawn_agent", "fork_session":
+	case "spawn_agent", "fork_session", "system_notification_action":
 		// A remote spawn may install the agent runtime before acknowledging.
+		// Notification actions can spawn too (the updater's setup agent) or
+		// download and verify a release, so they get the same budget rather
+		// than reporting a timeout for work the child goes on to finish.
 		callTimeout = 10 * time.Minute
 	case "subscribe":
 		// The child serves every forwarded subscription on one loopback
