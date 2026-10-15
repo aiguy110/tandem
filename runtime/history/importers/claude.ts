@@ -30,9 +30,15 @@ export default defineHistoryImporter({
       const entries: HistoryEntry[] = [];
       let cwd: string | undefined;
       let sessionId: string | undefined;
+      // Resuming or rewinding a session can re-append records Claude already
+      // wrote, with their original uuid. The first copy is kept.
+      const seen = new Set<string>();
       for (const { value, line } of records) {
         const row = object(value);
         if (!row) continue;
+        const id = string(row.uuid) ?? string(row.id) ?? `${line}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
         cwd ??= string(row.cwd);
         sessionId ??= string(row.sessionId) ?? string(row.session_id);
         const message = object(row.message);
@@ -46,7 +52,7 @@ export default defineHistoryImporter({
           content = await readTextFileSafely(join(spillRoot, ref));
         }
         const parsed = entry(
-          string(row.uuid) ?? string(row.id) ?? `${line}`, line, role, type,
+          id, line, role, type,
           content, row.timestamp ?? message?.timestamp,
         );
         if (parsed) entries.push(parsed);

@@ -86,6 +86,31 @@ printf '%s\n' \
 	}
 }
 
+func TestRepeatedEntryIDsKeepTheFirstInsteadOfFailingTheSession(t *testing.T) {
+	runner, db, root := testRunner(t, `
+printf '%s\n' \
+'{"type":"hello","protocolVersion":1,"importer":{"id":"fixture","version":1}}' \
+'{"type":"begin_session","mode":"replace","sourceKey":"s","session":{"id":"s1"}}' \
+'{"type":"entry","entry":{"id":"m1","ordinal":1,"text":"original amber text"}}' \
+'{"type":"entry","entry":{"id":"m2","ordinal":2,"text":"second"}}' \
+'{"type":"entry","entry":{"id":"m1","ordinal":3,"text":"replayed copy"}}' \
+'{"type":"end_session","sourceKey":"s","checkpoint":{"offset":1}}' \
+'{"type":"complete","sourceKeys":["s"]}'
+`)
+	result, err := runner.Import(context.Background(), "custom", config.History{
+		Parser: filepath.Join(root, "parser.ts"), Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sessions != 1 || result.Entries != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	if hits, err := db.SearchHistory("amber", 10); err != nil || len(hits) != 1 {
+		t.Fatalf("first copy not kept: hits=%#v err=%v", hits, err)
+	}
+}
+
 func TestIncompleteSessionPreservesPreviousTranscriptAndRecordsDiagnostic(t *testing.T) {
 	runner, db, root := testRunner(t, `
 printf '%s\n' \

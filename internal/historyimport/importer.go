@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,6 +250,10 @@ func (r *Runner) consume(reader io.Reader, agent string, importerID *string, res
 	helloSeen := false
 	var active *beginRecord
 	var entries []store.HistoryEntry
+	// entryIDs and duplicates track repeated entry IDs within the active
+	// session; the store requires them to be unique, so repeats are dropped.
+	var entryIDs map[string]struct{}
+	duplicates := 0
 	importerVersion := 0
 	completeSeen := false
 	for {
@@ -301,6 +306,7 @@ func (r *Runner) consume(reader io.Reader, agent string, importerID *string, res
 					return fmt.Errorf("history importer line %d has invalid begin_session", lineNumber)
 				}
 				active, entries = &record, nil
+				entryIDs, duplicates = map[string]struct{}{}, 0
 			case "entry":
 				if active == nil {
 					return fmt.Errorf("history importer line %d has entry outside a session", lineNumber)
@@ -312,6 +318,11 @@ func (r *Runner) consume(reader io.Reader, agent string, importerID *string, res
 				if record.Entry.ID == "" || strings.TrimSpace(record.Entry.Text) == "" {
 					return fmt.Errorf("history importer line %d has invalid entry", lineNumber)
 				}
+				if _, seen := entryIDs[record.Entry.ID]; seen {
+					duplicates++
+					continue
+				}
+				entryIDs[record.Entry.ID] = struct{}{}
 				if len(entries) >= maxEntriesPerSession {
 					return errors.New("history importer session exceeds entry limit")
 				}
@@ -344,6 +355,10 @@ func (r *Runner) consume(reader io.Reader, agent string, importerID *string, res
 					CWD: active.Session.CWD, Title: active.Session.Title,
 					CreatedAt: active.Session.CreatedAt, UpdatedAt: active.Session.UpdatedAt,
 					Resumable: resumable, SourceKey: active.SourceKey, SourceMeta: meta,
+				}
+				if duplicates > 0 {
+					slog.Warn("history importer repeated entry IDs; kept the first of each",
+						"agent", agent, "importer", *importerID, "session", active.Session.ID, "duplicates", duplicates)
 				}
 				if err := r.store.ImportHistorySession(session, entries, *importerID, importerVersion, record.Checkpoint); err != nil {
 					return fmt.Errorf("store imported session %q: %w", active.Session.ID, err)
