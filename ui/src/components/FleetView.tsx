@@ -281,7 +281,7 @@ export function FleetView() {
                 <path d="M 0 0 L 8 4 L 0 8 z" className="fleet-arrowhead fleet-arrowhead-tcp" />
               </marker>
               {fleet.nodes.map((node, index) => (
-                <clipPath id={`fleet-node-content-${index}`} key={node.host.id}><rect x="8" y="4" width={NODE_WIDTH - 32} height={NODE_HEIGHT - 8} /></clipPath>
+                <clipPath id={`fleet-node-content-${index}`} key={node.host.id}><rect x="8" y="4" width={NODE_WIDTH - 16} height={NODE_HEIGHT - 8} /></clipPath>
               ))}
             </defs>
             <g className="fleet-edges">

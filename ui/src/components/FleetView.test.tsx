@@ -122,9 +122,14 @@ describe('FleetView', () => {
       renameHost,
     });
 
-    render(<FleetView />);
+    const view = render(<FleetView />);
     fireEvent.click(screen.getByRole('button', { name: 'Rename Worker' }));
     const input = screen.getByLabelText('Display name for Worker');
+    const clip = view.container.querySelector<SVGRectElement>('clipPath rect')!;
+    const inputContainer = input.parentElement as unknown as SVGForeignObjectElement;
+    expect(Number(clip.getAttribute('x')) + Number(clip.getAttribute('width'))).toBeGreaterThanOrEqual(
+      Number(inputContainer.getAttribute('x')) + Number(inputContainer.getAttribute('width')),
+    );
     fireEvent.change(input, { target: { value: '  GPU box ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(renameHost).toHaveBeenCalledOnce();
