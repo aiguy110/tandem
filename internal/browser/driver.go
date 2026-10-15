@@ -90,6 +90,16 @@ var localNetworkAccessArgs = []string{"--disable-features=LocalNetworkAccessChec
 // "Chrome is being controlled by automated test software" infobar.
 var stealthArgs = []string{"--disable-blink-features=AutomationControlled", "--disable-infobars", "--test-type"}
 
+// basicPasswordStoreArgs keep Chrome's cookie/password encryption key out of
+// the desktop keyring. On Linux Chrome otherwise fetches the key through the
+// Secret Service (now via xdg-desktop-portal, which hands it over a pipe) and
+// blocks every cookie-bearing request until it arrives; a wedged keyring,
+// portal, or session bus (e.g. a stalled D-Bus monitor pinning the pipe's write
+// end) then hangs all navigations forever. A daemon-owned profile gains little
+// from the keyring anyway: the key is released to any same-user process without
+// a prompt, and basic-store profiles stay portable across hosts. Ignored off Linux.
+var basicPasswordStoreArgs = []string{"--password-store=basic"}
+
 // localLaunchArgs builds the Chromium command line for a daemon-owned browser
 // listening for CDP on port and using profile as its user-data-dir. When
 // userAgent is non-empty it overrides the browser's default (used in headless
@@ -115,6 +125,7 @@ func localLaunchArgs(port int, profile string, headless bool, userAgent string) 
 	}
 	args = append(args, stealthArgs...)
 	args = append(args, localNetworkAccessArgs...)
+	args = append(args, basicPasswordStoreArgs...)
 	return append(args, "about:blank")
 }
 

@@ -182,6 +182,15 @@ func TestLocalLaunchArgsDisableLocalNetworkAccessChecks(t *testing.T) {
 	}
 }
 
+// Chrome must not depend on the desktop keyring for its cookie key: a wedged
+// Secret Service/portal/D-Bus path otherwise hangs every navigation.
+func TestLocalLaunchArgsUseBasicPasswordStore(t *testing.T) {
+	t.Parallel()
+	if args := localLaunchArgs(9222, "/tmp/profile", false, ""); !slices.Contains(args, "--password-store=basic") {
+		t.Fatalf("launch args missing basic password store: %v", args)
+	}
+}
+
 // Headless mode and the AutomationControlled blink feature are the most common
 // bot-detection signals, so the headful launch line must carry neither, and the
 // headless fallback must override the "HeadlessChrome" user agent.
