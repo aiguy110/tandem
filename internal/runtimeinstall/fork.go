@@ -2,9 +2,11 @@ package runtimeinstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +66,7 @@ func ForkFor(cfg config.Config, agent string) (config.ACPFork, bool, error) {
 
 // installFork provisions a fork-pinned distribution and returns its lock entry.
 // Callers must hold installMu.
-func installFork(ctx context.Context, cfg config.Config, npm, agent string, fork config.ACPFork, log io.Writer) (LockedAgent, error) {
+func installFork(ctx context.Context, cfg config.Config, bun, agent string, fork config.ACPFork, log io.Writer) (LockedAgent, error) {
 	p := agentPins[agent]
 	version := fork.DistributionVersion()
 	root := filepath.Join(cfg.RuntimeRoot, "agents", agent, version)
@@ -72,14 +74,18 @@ func installFork(ctx context.Context, cfg config.Config, npm, agent string, fork
 		if err := ensureRuntimeRoot(root); err != nil {
 			return LockedAgent{}, err
 		}
-		if err := installAt(ctx, cfg, npm, root, fork.InstallSpec(), log); err != nil {
+		tarball, err := buildFork(ctx, cfg, bun, root, fork, log)
+		if err != nil {
+			return LockedAgent{}, fmt.Errorf("provision agent %s from fork %s#%s: %w", agent, fork.Repo, fork.ShortCommit(), err)
+		}
+		if err := installAt(ctx, cfg, bun, root, tarball, log); err != nil {
 			return LockedAgent{}, err
 		}
 	}
 	if !distExists(root, p.dist) {
-		// Most likely the fork renamed the package or stopped building dist/ on
-		// `prepare`; npm reports success either way, so say what to check.
-		return LockedAgent{}, fmt.Errorf("provision agent %s from fork %s#%s: %s is missing after install (the fork must keep package name %q and build %s during `prepare`)",
+		// Most likely the fork renamed the package or stopped building dist/;
+		// the install reports success either way, so say what to check.
+		return LockedAgent{}, fmt.Errorf("provision agent %s from fork %s#%s: %s is missing after install (the fork must keep package name %q and build %s with its `build` or `prepare` script)",
 			agent, fork.Repo, fork.ShortCommit(), p.dist, p.packageName, p.dist)
 	}
 	return LockedAgent{
@@ -89,6 +95,85 @@ func installFork(ctx context.Context, cfg config.Config, npm, agent string, fork
 		Path:       root,
 		Fork:       &LockedFork{Repo: fork.Repo, Ref: fork.Ref, Commit: fork.Commit, UpstreamVersion: fork.UpstreamVersion},
 	}, nil
+}
+
+// buildFork checks out the fork's pinned commit, builds it, and packs it into a
+// tarball kept beside the distribution in root, returning the tarball's path.
+// Bun (unlike npm) neither installs a git dependency's devDependencies nor runs
+// its `prepare` script, so installing the git URL directly would yield an
+// unbuilt package; building here reproduces what npm did implicitly.
+func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork config.ACPFork, log io.Writer) (string, error) {
+	src := filepath.Join(root, ".fork-src")
+	if err := os.RemoveAll(src); err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(src)
+	slog.Info("building ACP fork", "repo", fork.Repo, "commit", fork.Commit, "dir", src)
+	fmt.Fprintf(log, "tandem: building ACP fork %s#%s\n", fork.Repo, fork.ShortCommit())
+	if err := runGit(ctx, root, log, "clone", "--quiet", fork.Repo, src); err != nil {
+		return "", err
+	}
+	if err := runGit(ctx, src, log, "checkout", "--quiet", "--detach", fork.Commit); err != nil {
+		return "", err
+	}
+	run := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, bun, args...)
+		cmd.Dir = src
+		cmd.Stdout = log
+		cmd.Stderr = log
+		cmd.Env = buildEnv(cfg, bun)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("bun %s: %w", strings.Join(args, " "), err)
+		}
+		return nil
+	}
+	if err := run("install"); err != nil {
+		return "", err
+	}
+	// A fork's `prepare` is often `npm run build`, which fails on a host with
+	// only Bun, so prefer the build script it delegates to.
+	scripts, err := packageScripts(filepath.Join(src, "package.json"))
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case scripts["build"] != "":
+		err = run("run", "build")
+	case scripts["prepare"] != "":
+		err = run("run", "prepare")
+	}
+	if err != nil {
+		return "", err
+	}
+	packDir := filepath.Join(root, ".fork-pack")
+	if err := os.RemoveAll(packDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(packDir, 0o755); err != nil {
+		return "", err
+	}
+	if err := run("pm", "pack", "--quiet", "--destination", packDir); err != nil {
+		return "", err
+	}
+	tarballs, _ := filepath.Glob(filepath.Join(packDir, "*.tgz"))
+	if len(tarballs) != 1 {
+		return "", fmt.Errorf("bun pm pack produced %d tarballs in %s", len(tarballs), packDir)
+	}
+	return tarballs[0], nil
+}
+
+func packageScripts(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var manifest struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return manifest.Scripts, nil
 }
 
 // forkLockCurrent reports whether locked already satisfies fork.
@@ -189,13 +274,8 @@ func ReturnToUpstream(ctx context.Context, cfg config.Config, agent, version str
 	}
 
 	installMu.Lock()
-	npm, err := resolveNpm(cfg)
-	if err != nil {
-		installMu.Unlock()
-		return LockedAgent{}, err
-	}
 	if version == "" {
-		published, listErr := publishedVersions(ctx, cfg, npm, p.packageName)
+		published, listErr := publishedVersions(ctx, p.packageName)
 		if listErr != nil {
 			installMu.Unlock()
 			return LockedAgent{}, listErr
@@ -229,7 +309,7 @@ func ReturnToUpstream(ctx context.Context, cfg config.Config, agent, version str
 	return locked, nil
 }
 
-// ResolveVersion asks npm which concrete version a range selects for a managed
+// ResolveVersion asks the registry which concrete version a range selects for a managed
 // agent's package. `tandem acp upstream` uses it so an operator or agent can say
 // "the release that has the change" as a range rather than pinning a version by
 // hand.
@@ -240,11 +320,7 @@ func ResolveVersion(ctx context.Context, cfg config.Config, agent, constraint st
 	}
 	installMu.Lock()
 	defer installMu.Unlock()
-	npm, err := resolveNpm(cfg)
-	if err != nil {
-		return "", err
-	}
-	published, err := publishedVersions(ctx, cfg, npm, p.packageName)
+	published, err := publishedVersions(ctx, p.packageName)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s@%s: %w", p.packageName, constraint, err)
 	}

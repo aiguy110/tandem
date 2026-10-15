@@ -32,7 +32,8 @@ cd ui && npm install && npm run build   # tsc --noEmit && vite build
 cd ui && npm run typecheck              # tsc --noEmit only
 cd ui && npm run dev                    # vite dev server
 
-# External ACP bridges and Playwright MCP (no Tandem backend code)
+# External ACP bridges and Playwright MCP for source checkouts (no Tandem backend code).
+# Release installs provision these on demand with Tandem's managed Bun.
 cd runtime && npm install
 ```
 
@@ -48,7 +49,7 @@ For Go changes, run the relevant package tests or `go test ./...`.
 | `TANDEM_PARENT_PROXY` | — | SOCKS5 URL for a child's outbound dials to its `--parent` (e.g. `socks5://127.0.0.1:1080`) |
 | `TANDEM_JOIN_TOKEN` | — | Lets a parent presenting this token adopt this host (see `docs/federation.md`) |
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
-| `TANDEM_NODE_CMD` | `node` | Node launcher for external ACP and browser adapters |
+| `TANDEM_BUN_CMD` | managed Bun under `$TANDEM_HOME/bun` | Bun executable for ACP bridges, Playwright MCP, history importers, and automation scripts (forces system mode) |
 | `TANDEM_ACP_CMD` | — | JSON array overriding how **every** ACP agent launches (primarily compatibility tests) |
 | `TANDEM_ACP_CMD_CLAUDE` / `_CODEX` / `_PI` | bundled `claude-agent-acp` / `codex-acp` / `pi-acp` | Per-agent launch override, selected by `SpawnSpec.agent` |
 | `TANDEM_RESUME_CMD_CLAUDE` / `_CODEX` / `_PI` | agent-specific CLI command | JSON array or command template for Terminal handoff; `{sessionId}` is substituted |

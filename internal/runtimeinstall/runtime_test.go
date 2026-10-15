@@ -23,15 +23,10 @@ func TestEnsureAgentUnknownAgentIsNoop(t *testing.T) {
 	}
 }
 
-func TestEnsureHistoryStagesEmbeddedRuntimeAndUsesExistingTSX(t *testing.T) {
+func TestEnsureHistoryStagesEmbeddedRuntimeWithoutInstalling(t *testing.T) {
 	root := t.TempDir()
-	distPath := filepath.Join(root, historyPin.dist)
-	if err := os.MkdirAll(filepath.Dir(distPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(distPath, []byte("stub"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// PATH is empty: staging must not need any package manager, since Bun runs
+	// the importer TypeScript directly.
 	t.Setenv("PATH", "")
 	cfg := config.Config{RuntimeRoot: root}
 	var log bytes.Buffer
@@ -73,7 +68,7 @@ func TestEnsureAgentFastPathSkipsInstallWhenAlreadyPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// PATH is empty so any attempt to shell out to npm would fail loudly,
+	// PATH is empty so any attempt to shell out to bun would fail loudly,
 	// proving the fast path never calls it.
 	t.Setenv("PATH", "")
 	cfg := config.Config{RuntimeRoot: root, Browser: config.BrowserConfig{MCPEnabled: false}}
@@ -150,5 +145,25 @@ func TestStageAgentSupportWritesEmbeddedFilesIdempotently(t *testing.T) {
 	}
 	if len(entries) != 2 {
 		t.Fatalf("pi support dir has leftover temp files: %v", entries)
+	}
+}
+
+func TestManagedLaunchOnlyMatchesManagedEntryPoints(t *testing.T) {
+	entry := filepath.Join("/runtime", "agents", "omp", "18.11.1", agentPins["omp"].dist)
+	for _, c := range []struct {
+		agent string
+		args  []string
+		want  bool
+	}{
+		{"omp", []string{entry, "acp"}, true},
+		{"omp", []string{"/fixtures/runtime/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", "acp"}, true},
+		{"omp", []string{"acp"}, false},
+		{"omp", nil, false},
+		{"claude", []string{"/custom/claude-wrapper.js"}, false},
+		{"custom", []string{entry}, false},
+	} {
+		if got := ManagedLaunch(c.agent, c.args); got != c.want {
+			t.Errorf("ManagedLaunch(%s, %v) = %v, want %v", c.agent, c.args, got, c.want)
+		}
 	}
 }

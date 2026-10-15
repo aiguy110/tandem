@@ -10,7 +10,7 @@ agents:
       parser: "{runtimeRoot}/history/importers/claude.ts"
       resume: auto
     acp:
-      command: "{node}"
+      command: "{bun}"
       args:
         - "{runtimeRoot}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
       # The Claude ACP bridge stamps the spawning Task/Agent tool call's id onto
@@ -31,7 +31,7 @@ agents:
       parser: "{runtimeRoot}/history/importers/codex.ts"
       resume: auto
     acp:
-      command: "{node}"
+      command: "{bun}"
       args:
         - "{runtimeRoot}/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
     terminal:
@@ -45,7 +45,7 @@ agents:
       parser: "{runtimeRoot}/history/importers/pi.ts"
       resume: auto
     acp:
-      command: "{node}"
+      command: "{bun}"
       args:
         - "{runtimeRoot}/node_modules/pi-acp/dist/index.js"
       env:
@@ -66,11 +66,15 @@ agents:
       resume: auto
     acp:
       # oh-my-pi ships its own ACP server (`omp acp`) with a native MCP client,
-      # so unlike pi it needs no bridge package or MCP wrapper. Install it with
-      # `bun install -g @oh-my-pi/pi-coding-agent`; models/providers come from
-      # ~/.omp/agent (config.yml, models.yml).
-      command: omp
-      args: [acp]
+      # so unlike pi it needs no bridge package or MCP wrapper. Tandem installs
+      # and version-manages @oh-my-pi/pi-coding-agent like the other ACP
+      # packages and runs it on its Bun runtime; models/providers come from
+      # ~/.omp/agent (config.yml, models.yml). The terminal launch below still
+      # uses an `omp` on PATH.
+      command: "{bun}"
+      args:
+        - "{runtimeRoot}/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"
+        - acp
     terminal:
       command: omp
       startArgs: []
@@ -87,7 +91,7 @@ agents:
       resumeArgs: [--session, "{sessionId}"]
 
 # Agent definitions may attach a vendor-neutral transcript importer. Tandem
-# runs the TypeScript module with its configured Node runtime and owns all
+# runs the TypeScript module with its Bun runtime and owns all
 # validation, checkpoints, SQLite writes, and FTS indexing. Importer env values
 # are treated as secrets in config diagnostics.
 #
@@ -151,7 +155,7 @@ harnesses: {}
 # the agent catalog above. It is never present in this shipped example file;
 # it's documented here only so the schema is discoverable. All fields are
 # optional — env vars (TANDEM_PROJECT_ROOTS, TANDEM_BIND, TANDEM_PORT,
-# TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_NODE_CMD,
+# TANDEM_BROWSER_DRIVER, STEEL_BASE_URL, STEEL_API_KEY, TANDEM_BUN_CMD,
 # TANDEM_ACP_FORK_REBASE_PROFILE, and TANDEM_LANGUAGE_MODEL_*, and TANDEM_VOICE_*)
 # override it, and built-in defaults fill any gaps.
 #
@@ -167,10 +171,10 @@ harnesses: {}
 #                             # rebase offer informational rather than one-click
 #   steelBaseUrl: http://localhost:3000  # required when browserDriver is "steel"
 #   steelApiKey: ""         # optional; config.yml is written owner-only
-#   node:
-#     mode: system           # "system" (use command/PATH) or "managed" (Tandem-downloaded)
-#     command: node          # only used when mode is "system"
-#     version: 22.11.0       # pinned version downloaded when mode is "managed"
+#   bun:                     # JS runtime + package manager for agent bridges and scripts
+#     mode: managed          # "managed" (default; Tandem-downloaded) or "system" (command/PATH)
+#     command: bun           # only used when mode is "system"
+#     version: 1.4.3         # pinned version downloaded when mode is "managed"
 #   languageModel:             # shared Chat Completions model (voice, summaries, titles)
 #     endpoint: https://api.openai.com/v1/chat/completions
 #     apiKey: ""               # optional for local services; stored owner-only

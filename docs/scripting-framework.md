@@ -4,7 +4,7 @@
 
 Give agents a durable TypeScript automation surface, inspired by Hermes, for
 repository-owned scripts, scheduled checks, and intentional agent handoffs.
-Scripts may use ordinary Node.js APIs and may also call explicitly granted MCP
+Scripts run on Bun, may use ordinary Node.js-compatible APIs, and may also call explicitly granted MCP
 tools through Tandem. Tandem records each run and exposes its stdout, stderr,
 exit code, reports, tool-call audit trail, and any agent it wakes.
 
@@ -77,8 +77,8 @@ JSON schema, availability predicate, authorization rules, and invocation
 handler. Direct MCP calls and script-originated MCP calls share the same
 registry, validation, implementations, and audit path.
 
-For every invocation, Tandem starts a short-lived Node.js process using its
-bundled TypeScript loader. The child inherits the normal process environment,
+For every invocation, Tandem starts a short-lived Bun process, which runs the
+TypeScript directly; a preload plugin resolves the `tandem:runtime` import. The child inherits the normal process environment,
 uses the repository root as its working directory, and receives a per-run local
 RPC endpoint plus a short-lived token restricted to that repository, run, and
 approved MCP tool set. The token is not a reusable daemon credential.

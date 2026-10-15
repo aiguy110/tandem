@@ -22,7 +22,7 @@ import (
 // context to rebase onto it or to retire the fork once the change is upstreamed.
 type ACPFork struct {
 	// Repo is the fork's git remote, e.g. https://github.com/me/pi-acp. Tandem
-	// installs from it with `npm install git+<Repo>#<Commit>`.
+	// clones it at Commit, builds it with Bun, and installs the packed result.
 	Repo string `yaml:"repo" json:"repo"`
 	// Ref is the branch carrying the fork's commits. It is what a rebase agent
 	// checks out and force-pushes; Commit is what the daemon actually installs.
@@ -68,12 +68,6 @@ func ForkCloneDir(runtimeRoot, agent string, fork ACPFork) string {
 	return filepath.Join(runtimeRoot, "forks", agent)
 }
 
-// InstallSpec is the npm argument that installs this fork's pinned commit.
-func (f ACPFork) InstallSpec() string {
-	repo := strings.TrimSuffix(strings.TrimSuffix(f.Repo, "/"), ".git")
-	return "git+" + repo + ".git#" + f.Commit
-}
-
 // ShortCommit is the commit abbreviation used in distribution directory names
 // and in operator-facing output.
 func (f ACPFork) ShortCommit() string {
@@ -102,7 +96,7 @@ func (f ACPFork) Validate() error {
 	}
 	if !strings.HasPrefix(f.Repo, "https://") && !strings.HasPrefix(f.Repo, "http://") {
 		// git+ssh would need credentials the daemon may not have; an https
-		// remote is what `npm install` can always reach unattended.
+		// remote is what the daemon's clone can always reach unattended.
 		return fmt.Errorf("fork repo must be an http(s) git URL, got %q", f.Repo)
 	}
 	if strings.TrimSpace(f.Ref) == "" {

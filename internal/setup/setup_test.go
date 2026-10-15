@@ -14,12 +14,12 @@ import (
 )
 
 func TestUnitFile(t *testing.T) {
-	unit := unitFile("/path/to/tandem", "/home/op/.tandem", "/home/op/.tandem/node/bin")
+	unit := unitFile("/path/to/tandem", "/home/op/.tandem", "/home/op/.tandem/bun")
 
 	if !strings.Contains(unit, "ExecStart=/path/to/tandem\n") {
 		t.Errorf("unit file missing ExecStart line:\n%s", unit)
 	}
-	if !strings.Contains(unit, "Environment=PATH=/home/op/.tandem/node/bin:/usr/local/bin:/usr/bin:/bin") {
+	if !strings.Contains(unit, "Environment=PATH=/home/op/.tandem/bun:/usr/local/bin:/usr/bin:/bin") {
 		t.Errorf("unit file missing PATH line:\n%s", unit)
 	}
 	if !strings.Contains(unit, "WantedBy=default.target") {
@@ -27,7 +27,7 @@ func TestUnitFile(t *testing.T) {
 	}
 }
 
-func TestUnitFileNoNodeBinDir(t *testing.T) {
+func TestUnitFileNoBunBinDir(t *testing.T) {
 	unit := unitFile("/path/to/tandem", "/home/op/.tandem", "")
 
 	if !strings.Contains(unit, "Environment=PATH=/usr/local/bin:/usr/bin:/bin") {
@@ -44,7 +44,7 @@ func TestRunEndToEnd(t *testing.T) {
 	defer steel.Close()
 
 	// Answers in prompt order: continue manually, project roots, bind, port, Steel, existing
-	// service, URL, blank API key, managed Node, decline shared language-model
+	// service, URL, blank API key, managed Bun, decline shared language-model
 	// setup, then accept the
 	// default systemd answer at EOF.
 	answers := strings.Join([]string{
@@ -56,7 +56,7 @@ func TestRunEndToEnd(t *testing.T) {
 		"2",
 		steel.URL,
 		"",
-		"2",
+		"1",
 		"n",
 	}, "\n") + "\n"
 
@@ -91,11 +91,11 @@ func TestRunEndToEnd(t *testing.T) {
 	if settings.SteelBaseURL != steel.URL {
 		t.Errorf("SteelBaseURL = %q, want %q", settings.SteelBaseURL, steel.URL)
 	}
-	if settings.Node.Mode != "managed" {
-		t.Errorf("Node.Mode = %q, want managed", settings.Node.Mode)
+	if settings.Bun.Mode != "managed" {
+		t.Errorf("Bun.Mode = %q, want managed", settings.Bun.Mode)
 	}
-	if settings.Node.Version != config.DefaultManagedNodeVersion {
-		t.Errorf("Node.Version = %q, want %q", settings.Node.Version, config.DefaultManagedNodeVersion)
+	if settings.Bun.Version != config.DefaultManagedBunVersion {
+		t.Errorf("Bun.Version = %q, want %q", settings.Bun.Version, config.DefaultManagedBunVersion)
 	}
 
 	if !strings.Contains(out.String(), config.ConfigFilePath(home)) {

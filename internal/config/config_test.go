@@ -31,7 +31,7 @@ func options(t *testing.T, env map[string]string) Options {
 
 func TestDefaultsAndEnvironment(t *testing.T) {
 	o := options(t, map[string]string{
-		"TANDEM_NODE_CMD": "/fixtures/bin/node", "TANDEM_BIND": "0.0.0.0", "TANDEM_PORT": "8123",
+		"TANDEM_BUN_CMD": "/fixtures/bin/bun", "TANDEM_BIND": "0.0.0.0", "TANDEM_PORT": "8123",
 		"TANDEM_UI_DIR": "/ui", "TANDEM_PROJECT_ROOTS": filepath.Join("", "one") + string(os.PathListSeparator) + filepath.Join("", "two"),
 		"TANDEM_DIR_SCAN_DEPTH": "3", "TANDEM_BROWSER_DRIVER": "steel", "TANDEM_BROWSER_MCP": "off",
 		"TANDEM_CHROMIUM_EXECUTABLE": "/fixtures/bin/chromium",
@@ -50,11 +50,11 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 		c.Agents["opencode"].Name != "OpenCode" || c.Agents["omp"].Name != "Oh My Pi" {
 		t.Fatalf("shipped catalog not loaded: %+v", c.Agents)
 	}
-	if c.Agents["claude"].ACP.Cmd != "/fixtures/bin/node" {
-		t.Fatalf("explicit node launcher = %q", c.Agents["claude"].ACP.Cmd)
+	if c.Agents["claude"].ACP.Cmd != "/fixtures/bin/bun" {
+		t.Fatalf("explicit bun launcher = %q", c.Agents["claude"].ACP.Cmd)
 	}
-	if omp := c.Agents["omp"]; omp.ACP == nil || omp.ACP.Cmd != "omp" || len(omp.ACP.Args) != 1 || omp.ACP.Args[0] != "acp" {
-		t.Fatalf("omp launches its built-in ACP server: %+v", omp.ACP)
+	if omp := c.Agents["omp"]; omp.ACP == nil || omp.ACP.Cmd != "/fixtures/bin/bun" || len(omp.ACP.Args) != 2 || omp.ACP.Args[1] != "acp" {
+		t.Fatalf("omp launches its built-in ACP server on bun: %+v", omp.ACP)
 	}
 	if c.Agents["codex"].ACP.Cmd != "codex-custom" || c.Agents["pi"].Terminal.Cmd != "pi-custom" {
 		t.Fatalf("legacy overrides missing: %+v", c.Agents)
@@ -68,7 +68,7 @@ func TestDefaultsAndEnvironment(t *testing.T) {
 	if c.Browser.ChromiumExecutable != "/fixtures/bin/chromium" {
 		t.Fatalf("explicit chromium executable missing: %+v", c.Browser)
 	}
-	if c.Browser.NodeRuntime != "/fixtures/bin/node" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/runtime/node_modules/@playwright/mcp/cli.js" {
+	if c.Browser.JSRuntime != "/fixtures/bin/bun" || c.Browser.PlaywrightMCPCLI != "/fixtures/tandem/runtime/node_modules/@playwright/mcp/cli.js" {
 		t.Fatalf("browser MCP tool runtime missing: %+v", c.Browser)
 	}
 	if c.DBPath != filepath.Join(c.Home, "tandem.db") || c.TokenPath != filepath.Join(c.Home, "token") {
@@ -104,7 +104,7 @@ func TestSettingsFilePrecedence(t *testing.T) {
 		BrowserDriver: "steel",
 		SteelBaseURL:  "https://steel.example",
 		SteelAPIKey:   "file-secret",
-		Node:          NodeSettings{Mode: "managed", Version: "20.10.0"},
+		Bun:           BunSettings{Mode: "managed", Version: "1.3.20"},
 		LanguageModel: LanguageModelSettings{Endpoint: "http://clean/v1/chat/completions", APIKey: "clean-secret", Model: "cleaner"},
 		Voice:         VoiceSettings{Enabled: true, TTSEndpoint: "http://speak/v1/audio/speech", TTSAPIKey: "tts-secret", TTSModel: "speaker", TTSVoice: "voice", TTSFormat: "wav"},
 	}
@@ -142,12 +142,12 @@ func TestSettingsFilePrecedence(t *testing.T) {
 	if redacted.LanguageModel.APIKey != "[REDACTED]" || redacted.Voice.TTSAPIKey != "[REDACTED]" {
 		t.Fatalf("language/voice credentials not redacted: language=%+v voice=%+v", redacted.LanguageModel, redacted.Voice)
 	}
-	wantNode, wantNpm := ManagedNodePaths(filepath.Join(home, "node"))
-	if !c.Node.Managed || c.Node.Version != "20.10.0" || c.Node.Command != wantNode || c.Node.Npm != wantNpm {
-		t.Fatalf("managed node not resolved: %+v", c.Node)
+	wantBun := ManagedBunPath(filepath.Join(home, "bun"))
+	if !c.Bun.Managed || c.Bun.Version != "1.3.20" || c.Bun.Command != wantBun {
+		t.Fatalf("managed bun not resolved: %+v", c.Bun)
 	}
-	if c.Agents["claude"].ACP.Cmd != wantNode {
-		t.Fatalf("managed node not fed into acp {node}: %q", c.Agents["claude"].ACP.Cmd)
+	if c.Agents["claude"].ACP.Cmd != wantBun {
+		t.Fatalf("managed bun not fed into acp {bun}: %q", c.Agents["claude"].ACP.Cmd)
 	}
 }
 
@@ -192,13 +192,13 @@ func TestHomeBaseRootDeduped(t *testing.T) {
 func TestEnvOverridesSettings(t *testing.T) {
 	o := options(t, map[string]string{
 		"TANDEM_PORT": "7000", "TANDEM_BIND": "10.0.0.1",
-		"TANDEM_PROJECT_ROOTS": "/env/root", "TANDEM_NODE_CMD": "/env/bin/node",
+		"TANDEM_PROJECT_ROOTS": "/env/root", "TANDEM_BUN_CMD": "/env/bin/bun",
 		"TANDEM_VOICE_ENABLED": "true", "TANDEM_LANGUAGE_MODEL_ENDPOINT": "http://env/clean",
 		"TANDEM_LANGUAGE_MODEL_MODEL": "env-cleaner", "TANDEM_VOICE_TTS_ENDPOINT": "http://env/speak",
 		"TANDEM_VOICE_TTS_MODEL": "env-tts", "TANDEM_VOICE_TTS_VOICE": "env-voice",
 	})
 	home := o.Env["TANDEM_HOME"]
-	if err := SaveSettings(home, Settings{Port: 9000, Bind: "0.0.0.0", ProjectRoots: []string{"/file/root"}, Node: NodeSettings{Mode: "managed"}}); err != nil {
+	if err := SaveSettings(home, Settings{Port: 9000, Bind: "0.0.0.0", ProjectRoots: []string{"/file/root"}, Bun: BunSettings{Mode: "managed"}}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := LoadWithOptions(o)
@@ -211,8 +211,8 @@ func TestEnvOverridesSettings(t *testing.T) {
 	if !reflect.DeepEqual(c.ProjectRoots, []string{"/env/root", c.HomeBaseDir}) {
 		t.Fatalf("env roots not applied: %v", c.ProjectRoots)
 	}
-	if c.Node.Managed || c.Node.Command != "/env/bin/node" {
-		t.Fatalf("TANDEM_NODE_CMD should force system node: %+v", c.Node)
+	if c.Bun.Managed || c.Bun.Command != "/env/bin/bun" {
+		t.Fatalf("TANDEM_BUN_CMD should force system bun: %+v", c.Bun)
 	}
 	if !c.Voice.Enabled || c.LanguageModel.Model != "env-cleaner" || c.Voice.TTSModel != "env-tts" || c.Voice.TTSVoice != "env-voice" {
 		t.Fatalf("language/voice environment overrides missing: language=%+v voice=%+v", c.LanguageModel, c.Voice)
@@ -238,7 +238,7 @@ func TestLegacyVoiceCleanupSettingsMigrateToSharedLanguageModel(t *testing.T) {
 }
 
 func TestOverlayExpansionProfilesAndPartialAgentMerge(t *testing.T) {
-	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
+	o := options(t, map[string]string{"TANDEM_BUN_CMD": "/fixtures/bin/bun"})
 	config := `
 defaults: {agent: custom, harness: custom-fast}
 agents:
@@ -276,7 +276,7 @@ harnesses:
 		t.Fatalf("partial overlay did not inherit: %+v", c.Agents["claude"])
 	}
 	custom := c.Agents["custom"].ACP
-	if custom.Cmd != "/fixtures/bin/node" || custom.Args[0] != "/fixtures/tandem/runtime/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
+	if custom.Cmd != "/fixtures/bin/bun" || custom.Args[0] != "/fixtures/tandem/runtime/mock.mjs" || custom.Env["HOME_PATH"] != c.Home {
 		t.Fatalf("placeholders not expanded: %+v", custom)
 	}
 	history := c.Agents["custom"].History
@@ -335,7 +335,7 @@ func TestExecutableResolution(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	o := options(t, map[string]string{"PATH": bin, "TANDEM_NODE_CMD": "agent-cli"})
+	o := options(t, map[string]string{"PATH": bin, "TANDEM_BUN_CMD": "agent-cli"})
 	c, err := LoadWithOptions(o)
 	if err != nil {
 		t.Fatal(err)
@@ -415,7 +415,7 @@ func TestCatalogMatchesPhaseZeroGolden(t *testing.T) {
 	if err := json.Unmarshal(raw, &examples); err != nil {
 		t.Fatal(err)
 	}
-	o := options(t, map[string]string{"TANDEM_NODE_CMD": "/fixtures/bin/node"})
+	o := options(t, map[string]string{"TANDEM_BUN_CMD": "/fixtures/bin/bun"})
 	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), examples.Overlay, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -456,16 +456,17 @@ func TestCheckCompatibilityAt(t *testing.T) {
 	}
 }
 
-// A recorded system-node path can go stale (fnm's per-shell shim directory is
-// deleted when that shell exits). Spawns must fall back to PATH, not fail.
-func TestStaleSystemNodePathFallsBackToPath(t *testing.T) {
+// A recorded system-bun path can go stale (a version manager's per-shell shim
+// directory is deleted when that shell exits). Spawns must fall back to PATH,
+// not fail.
+func TestStaleSystemBunPathFallsBackToPath(t *testing.T) {
 	bin := t.TempDir()
-	nodePath := filepath.Join(bin, "node")
-	if err := os.WriteFile(nodePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	bunPath := filepath.Join(bin, "bun")
+	if err := os.WriteFile(bunPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	o := options(t, map[string]string{"PATH": bin})
-	settings := "version: 1\nsettings:\n  node:\n    mode: system\n    command: /run/user/1000/fnm_multishells/gone/bin/node\n"
+	settings := "version: 1\nsettings:\n  bun:\n    mode: system\n    command: /run/user/1000/shims/gone/bin/bun\n"
 	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -473,8 +474,25 @@ func TestStaleSystemNodePathFallsBackToPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Node.Command != nodePath {
-		t.Fatalf("stale node path should fall back to PATH node, got %q", c.Node.Command)
+	if c.Bun.Command != bunPath {
+		t.Fatalf("stale bun path should fall back to PATH bun, got %q", c.Bun.Command)
+	}
+}
+
+// Configs written before Bun replaced Node still parse; their node block is
+// ignored and the managed Bun runtime is used.
+func TestLegacyNodeSettingsIgnored(t *testing.T) {
+	o := options(t, nil)
+	settings := "version: 1\nsettings:\n  node:\n    mode: system\n    command: /usr/bin/node\n"
+	if err := os.WriteFile(filepath.Join(o.Env["TANDEM_HOME"], "config.yml"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithOptions(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Bun.Managed || c.Bun.Command != ManagedBunPath(filepath.Join(c.Home, "bun")) {
+		t.Fatalf("legacy node settings should leave the managed bun default: %+v", c.Bun)
 	}
 }
 

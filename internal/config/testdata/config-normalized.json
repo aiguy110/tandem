@@ -5,7 +5,7 @@
     "claude": {
       "name": "Claude",
       "acp": {
-        "cmd": "/fixtures/bin/node",
+        "cmd": "/fixtures/bin/bun",
         "args": [
           "/fixtures/tandem/runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
         ],
@@ -29,7 +29,7 @@
     "codex": {
       "name": "Codex",
       "acp": {
-        "cmd": "/fixtures/bin/node",
+        "cmd": "/fixtures/bin/bun",
         "args": [
           "/fixtures/tandem/runtime/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
         ]
@@ -50,7 +50,7 @@
     "custom": {
       "name": "Custom Agent",
       "acp": {
-        "cmd": "/fixtures/bin/node",
+        "cmd": "/fixtures/bin/bun",
         "args": [
           "/fixtures/tandem/runtime/mock-acp-agent.mjs"
         ],
@@ -62,8 +62,9 @@
     "omp": {
       "name": "Oh My Pi",
       "acp": {
-        "cmd": "omp",
+        "cmd": "/fixtures/bin/bun",
         "args": [
+          "/fixtures/tandem/runtime/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
           "acp"
         ]
       },
@@ -98,7 +99,7 @@
     "pi": {
       "name": "Pi",
       "acp": {
-        "cmd": "/fixtures/bin/node",
+        "cmd": "/fixtures/bin/bun",
         "args": [
           "/fixtures/tandem/runtime/node_modules/pi-acp/dist/index.js"
         ],

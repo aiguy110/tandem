@@ -49,9 +49,12 @@ SQLite, registry/session state, ACP and PTY adapters, HTTP/WebSocket serving, an
 browser control. `scripts/stage-go-ui.sh` builds `ui/` into `internal/ui/dist`; `go build`
 then embeds that directory so production does not need a loose `ui/dist` tree.
 
-Node remains an external runtime dependency only for configured ACP bridges and
-`@playwright/mcp`; their locked dependencies live under `runtime/`. No Tandem backend code
-runs under Node. See [deployment](deployment.md).
+Bun is the JavaScript runtime and package manager for configured ACP bridges (and Oh My Pi,
+which requires Bun), `@playwright/mcp`, history importers, and automation scripts. Tandem
+downloads a pinned, checksum-verified Bun into `$TANDEM_HOME/bun` by default
+(`settings.bun.mode: system` uses one from the host instead) and installs managed agent
+packages with `bun add` under `runtime/`. No Tandem backend code runs under Bun. See
+[deployment](deployment.md).
 
 ## Subsystems
 

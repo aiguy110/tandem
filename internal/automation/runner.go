@@ -52,14 +52,17 @@ type Result struct {
 // granted for this run; the runner deliberately makes no approval decisions.
 type ToolHandler func(ctx context.Context, name string, arguments json.RawMessage) (any, error)
 
-// Runner executes trusted TypeScript with ordinary host access. NodeCommand
-// and NodeArgs are configurable for managed runtimes and tests. A nil Env
-// inherits the daemon environment.
+// Runner executes trusted TypeScript on Bun with ordinary host access.
+// BunCommand and BunArgs are configurable for managed runtimes and tests. A nil
+// Env inherits the daemon environment.
 type Runner struct {
-	NodeCommand string
-	NodeArgs    []string
+	BunCommand  string
+	BunArgs     []string
 	Env         []string
 	ToolHandler ToolHandler
+	// Prepare, when set, runs before each script so a managed runtime can be
+	// provisioned on first use.
+	Prepare func(context.Context) error
 }
 
 func (r Runner) Run(ctx context.Context, repoRoot, scriptPath string, args []string) (Result, error) {
@@ -71,7 +74,7 @@ func (r Runner) Run(ctx context.Context, repoRoot, scriptPath string, args []str
 }
 
 // Evaluate runs ephemeral TypeScript as though it were a top-level file in the
-// repository, preserving normal Node package resolution and host access.
+// repository, preserving normal package resolution and host access.
 func (r Runner) Evaluate(ctx context.Context, repoRoot string, source []byte, args []string) (Result, error) {
 	realRoot, err := filepath.EvalSymlinks(repoRoot)
 	if err != nil {
@@ -94,6 +97,11 @@ func (r Runner) Evaluate(ctx context.Context, repoRoot string, source []byte, ar
 }
 
 func (r Runner) runFile(ctx context.Context, repoRoot, script string, scriptArgs []string) (Result, error) {
+	if r.Prepare != nil {
+		if err := r.Prepare(ctx); err != nil {
+			return Result{}, fmt.Errorf("prepare automation runtime: %w", err)
+		}
+	}
 	tempDir, err := os.MkdirTemp("", "tandem-automation-runtime-*")
 	if err != nil {
 		return Result{}, fmt.Errorf("create automation runtime: %w", err)
@@ -110,19 +118,19 @@ func (r Runner) runFile(ctx context.Context, repoRoot, script string, scriptArgs
 	}
 	defer closeTools()
 	runtimePath := filepath.Join(tempDir, "runtime.mjs")
-	loaderPath := filepath.Join(tempDir, "loader.mjs")
+	preloadPath := filepath.Join(tempDir, "preload.mjs")
 	if err := os.WriteFile(runtimePath, []byte(runtimeModule(marker, toolURL, toolToken)), 0o600); err != nil {
 		return Result{}, fmt.Errorf("write automation runtime: %w", err)
 	}
-	if err := os.WriteFile(loaderPath, []byte(loaderModule(runtimePath)), 0o600); err != nil {
-		return Result{}, fmt.Errorf("write automation loader: %w", err)
+	if err := os.WriteFile(preloadPath, []byte(preloadModule(runtimePath)), 0o600); err != nil {
+		return Result{}, fmt.Errorf("write automation preload: %w", err)
 	}
-	command := r.NodeCommand
+	command := r.BunCommand
 	if command == "" {
-		command = "node"
+		command = "bun"
 	}
-	argv := append([]string{}, r.NodeArgs...)
-	argv = append(argv, "--experimental-transform-types", "--no-warnings", "--experimental-loader", loaderPath, script)
+	argv := append([]string{}, r.BunArgs...)
+	argv = append(argv, "--preload", preloadPath, script)
 	argv = append(argv, scriptArgs...)
 	cmd := exec.CommandContext(ctx, command, argv...)
 	cmd.Dir = repoRoot
@@ -258,16 +266,17 @@ func startToolBridge(ctx context.Context, handler ToolHandler) (url, token strin
 	}, nil
 }
 
-func loaderModule(runtimePath string) string {
-	runtimeURL := "file://" + filepath.ToSlash(runtimePath)
-	if filepath.VolumeName(runtimePath) != "" {
-		runtimeURL = "file:///" + filepath.ToSlash(runtimePath)
-	}
-	urlJSON, _ := json.Marshal(runtimeURL)
-	return fmt.Sprintf(`const runtimeURL = %s;
-export async function resolve(specifier, context, nextResolve) {
-  if (specifier === "tandem:runtime") return { url: runtimeURL, shortCircuit: true };
-  return nextResolve(specifier, context);
-}
-`, urlJSON)
+// preloadModule registers a Bun plugin that resolves the `tandem:runtime`
+// import to the generated runtime module. Bun parses "tandem:" as a plugin
+// namespace, so the plugin matches the path within it.
+func preloadModule(runtimePath string) string {
+	pathJSON, _ := json.Marshal(runtimePath)
+	return fmt.Sprintf(`const runtimePath = %s;
+Bun.plugin({
+  name: "tandem-runtime",
+  setup(build) {
+    build.onResolve({ filter: /^runtime$/, namespace: "tandem" }, () => ({ path: runtimePath }));
+  },
+});
+`, pathJSON)
 }

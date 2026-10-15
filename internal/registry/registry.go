@@ -1053,6 +1053,9 @@ func (r *Registry) resolveManagedDistribution(ctx context.Context, spec *agentad
 	if spec.Adapter != "acp" || spec.ResolvedLaunch == nil || spec.ResolvedLaunch.Distribution != nil {
 		return nil
 	}
+	if spec.ResolvedLaunch.ACP == nil || !runtimeinstall.ManagedLaunch(spec.Agent, spec.ResolvedLaunch.ACP.Args) {
+		return nil
+	}
 	distribution, err := runtimeinstall.EnsureManaged(ctx, r.config, spec.Agent, os.Stderr)
 	if err != nil {
 		return err
@@ -2234,6 +2237,11 @@ func (r *Registry) RestartHarness(ctx context.Context, id string) error {
 // network is unavailable.
 func (r *Registry) refreshDistribution(ctx context.Context, id string, spec *agentadapter.Spec) string {
 	if spec.ResolvedLaunch == nil || spec.ResolvedLaunch.ACP == nil || len(spec.ResolvedLaunch.ACP.Args) == 0 {
+		return ""
+	}
+	// A session persisted with a non-managed launch (e.g. omp from PATH before
+	// Tandem managed it) keeps that launch; repinning would rewrite its args.
+	if !runtimeinstall.ManagedLaunch(spec.Agent, spec.ResolvedLaunch.ACP.Args) {
 		return ""
 	}
 	current := spec.ResolvedLaunch.Distribution

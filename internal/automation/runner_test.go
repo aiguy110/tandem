@@ -11,15 +11,15 @@ import (
 	"time"
 )
 
-func requireNode(t *testing.T) {
+func requireBun(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is not installed")
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("bun is not installed")
 	}
 }
 
 func TestRunnerRunsTypeScriptWithImportsArgsAndReports(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/lib.ts", `export const answer: number = 42;`)
 	path := repo + "/.tandem/scripts/main.ts"
 	source := `/** @tandem
@@ -57,7 +57,7 @@ report({wakeAgent: true, agentProfile: "override-profile", context: {answer}});
 }
 
 func TestRunnerReturnsNonZeroWithoutInfrastructureError(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/fail.ts", `process.stderr.write("bad news\n"); process.exit(7);`)
 	result, err := (Runner{}).Run(context.Background(), repo, ".tandem/scripts/fail.ts", nil)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestRunnerReturnsNonZeroWithoutInfrastructureError(t *testing.T) {
 }
 
 func TestRunnerEvaluateHasHostAccess(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := t.TempDir()
 	result, err := (Runner{}).Evaluate(context.Background(), repo, []byte(`
 import { writeFileSync, readFileSync } from "node:fs";
@@ -85,7 +85,7 @@ console.log(readFileSync("host-access.txt", "utf8"));
 }
 
 func TestRunnerBridgesGrantedTools(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/tool.ts", `
 import { tools } from "tandem:runtime";
 const value = await tools.example.echo({message: "hello"});
@@ -112,7 +112,7 @@ console.log(value.reply);
 }
 
 func TestRunnerToolErrorsRejectPromise(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/tool.ts", `
 import { tools } from "tandem:runtime";
 await tools.call("example.denied");
@@ -130,7 +130,7 @@ await tools.call("example.denied");
 }
 
 func TestRunnerRejectsInvalidReportAtRuntime(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/bad.ts", `import { report } from "tandem:runtime"; report({wakeAgent: true, agentProfile: ""});`)
 	result, err := (Runner{}).Run(context.Background(), repo, ".tandem/scripts/bad.ts", nil)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestReportEffectiveAgentProfile(t *testing.T) {
 }
 
 func TestRunnerCancellation(t *testing.T) {
-	requireNode(t)
+	requireBun(t)
 	repo := makeRepoScript(t, ".tandem/scripts/wait.ts", `await new Promise(resolve => setTimeout(resolve, 60_000));`)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -171,7 +171,7 @@ func TestRunnerCancellation(t *testing.T) {
 
 func TestRunnerConfigurableCommand(t *testing.T) {
 	repo := makeRepoScript(t, ".tandem/scripts/test.ts", ``)
-	_, err := (Runner{NodeCommand: "definitely-not-a-real-tandem-node"}).Run(context.Background(), repo, ".tandem/scripts/test.ts", nil)
+	_, err := (Runner{BunCommand: "definitely-not-a-real-tandem-bun"}).Run(context.Background(), repo, ".tandem/scripts/test.ts", nil)
 	if err == nil || !strings.Contains(err.Error(), "start automation script") {
 		t.Fatalf("unexpected error: %v", err)
 	}

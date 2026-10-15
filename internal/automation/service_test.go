@@ -25,15 +25,15 @@ func testAutomationService(t *testing.T) (*Service, repository) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	node, err := exec.LookPath("node")
+	bun, err := exec.LookPath("bun")
 	if err != nil {
-		t.Skip("node is required for automation service tests")
+		t.Skip("bun is required for automation service tests")
 	}
 	identity, err := resolveRepository(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Service{Store: db, Runner: Runner{NodeCommand: node}, Token: "secret"}, identity
+	return &Service{Store: db, Runner: Runner{BunCommand: bun}, Token: "secret"}, identity
 }
 
 func TestServiceExecutePersistsQuietAndFailedOutcomes(t *testing.T) {

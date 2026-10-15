@@ -69,7 +69,7 @@ const manifest = {
   externalDependencies: [
     { name: "Git", requiredWhen: "creating or managing Git worktree workspaces" },
     { name: "agent CLI", requiredWhen: "launching the corresponding configured Claude, Codex, or Pi agent" },
-    { name: "Node.js and npm", requiredWhen: "provisioning or launching the managed ACP and browser runtime" },
+    { name: "Bun", requiredWhen: "settings.bun.mode is system; otherwise Tandem downloads a pinned Bun on first use" },
     { name: "Chromium or Chrome", requiredWhen: "TANDEM_BROWSER_DRIVER=local and a browser session is provisioned" },
     { name: "Steel service", requiredWhen: "TANDEM_BROWSER_DRIVER=steel" }
   ]

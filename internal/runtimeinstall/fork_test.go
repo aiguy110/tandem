@@ -93,7 +93,7 @@ func TestInstallUpdateRefusesToOverwriteTrackedFork(t *testing.T) {
 	if err := writeLock(cfg.RuntimeRoot, l); err != nil {
 		t.Fatal(err)
 	}
-	// PATH is empty so reaching npm at all would fail differently; the guard must
+	// PATH is empty so reaching bun at all would fail differently; the guard must
 	// trip before any install work.
 	t.Setenv("PATH", "")
 	_, err := InstallUpdate(context.Background(), cfg, "pi", "0.0.34", os.Stderr)
@@ -118,7 +118,7 @@ func TestReturnToUpstreamRequiresTracking(t *testing.T) {
 
 func TestReturnToUpstreamRestoresForkWhenInstallFails(t *testing.T) {
 	cfg := forkedHome(t, "pi", piForkConfig)
-	// No npm on PATH, so the install inside ReturnToUpstream cannot succeed.
+	// No bun on PATH, so the install inside ReturnToUpstream cannot succeed.
 	t.Setenv("PATH", "")
 	if _, err := ReturnToUpstream(context.Background(), cfg, "pi", "0.0.33", os.Stderr); err == nil {
 		t.Fatal("expected the install to fail")
