@@ -54,6 +54,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      # The automation runner and history importer tests execute TypeScript on
+      # Bun, Tandem's JS runtime; they skip when it is absent.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
       - name: Stage embedded UI
         run: scripts/stage-go-ui.sh
       - run: go test ./...

@@ -134,7 +134,10 @@ func existing(dir string) agentadapter.Spec {
 func TestSpawnOptionsUsesSelectedManagedDistribution(t *testing.T) {
 	f := &fakeFactory{}
 	r, _, cfg := setup(t, f)
-	r.config.Agents["pi"] = config.Agent{ACP: &config.Launch{Cmd: "node", Args: []string{"legacy-entry"}}}
+	// The shipped launch names the legacy shared node_modules tree; spawning
+	// replaces it with the distribution the lockfile selects.
+	legacy := filepath.Join(cfg.RuntimeRoot, "node_modules", "pi-acp", "dist", "index.js")
+	r.config.Agents["pi"] = config.Agent{ACP: &config.Launch{Cmd: "bun", Args: []string{legacy}}}
 	entry := writePiDist(t, cfg.RuntimeRoot, "0.0.33", nil)
 
 	if _, err := r.SpawnOptions(context.Background(), "pi", "", nil, t.TempDir()); err != nil {
@@ -149,6 +152,22 @@ func TestSpawnOptionsUsesSelectedManagedDistribution(t *testing.T) {
 	}
 	if got := req.Spec.ResolvedLaunch.ACP.Args[0]; got != entry {
 		t.Errorf("ACP entry=%q want %q", got, entry)
+	}
+}
+
+// An operator override that launches a managed agent some other way (here omp
+// from PATH) must not be rewritten onto a managed distribution.
+func TestSpawnOptionsLeavesOverriddenLaunchAlone(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	r.config.Agents["omp"] = config.Agent{ACP: &config.Launch{Cmd: "omp", Args: []string{"acp"}}}
+
+	if _, err := r.SpawnOptions(context.Background(), "omp", "", nil, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	launch := f.requests["spawn-options-omp"].Spec.ResolvedLaunch
+	if launch == nil || launch.Distribution != nil || launch.ACP.Cmd != "omp" || len(launch.ACP.Args) != 1 || launch.ACP.Args[0] != "acp" {
+		t.Fatalf("overridden launch was rewritten: %+v", launch)
 	}
 }
 

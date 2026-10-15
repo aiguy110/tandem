@@ -41,7 +41,7 @@ const BrowserMCPName = "tandem-browser"
 
 type MCPWiring struct {
 	Broker           *Broker
-	NodeRuntime      string
+	JSRuntime        string
 	PlaywrightCLI    string
 	TandemExecutable string
 	ControlURL       string
@@ -58,24 +58,24 @@ type MCPWiring struct {
 // tolerated; tandem-control remains available.
 func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 	servers := make([]MCPServer, 0, 3)
-	if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) && !w.DirectPlaywright && w.TandemExecutable != "" {
+	if w.BrowserEnabled && w.Broker != nil && w.JSRuntime != "" && regularFile(w.PlaywrightCLI) && !w.DirectPlaywright && w.TandemExecutable != "" {
 		servers = append(servers, MCPServer{
 			Name: BrowserMCPName, Command: w.TandemExecutable, Args: []string{"mcp-browser"},
 			Env: []MCPEnvVariable{
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
 				{Name: "TANDEM_AGENT_ID", Value: sessionID},
-				{Name: "TANDEM_NODE_RUNTIME", Value: w.NodeRuntime},
+				{Name: "TANDEM_JS_RUNTIME", Value: w.JSRuntime},
 				{Name: "TANDEM_PLAYWRIGHT_MCP_CLI", Value: w.PlaywrightCLI},
 				{Name: "TANDEM_BROWSER_CDP_BASE", Value: w.Broker.CDPBase()},
 				{Name: "TANDEM_BROWSER_OUTPUT_DIR", Value: filepath.Join(os.TempDir(), sanitizeAgentSlug(sessionID))},
 			},
 		})
-	} else if w.BrowserEnabled && w.Broker != nil && w.NodeRuntime != "" && regularFile(w.PlaywrightCLI) {
+	} else if w.BrowserEnabled && w.Broker != nil && w.JSRuntime != "" && regularFile(w.PlaywrightCLI) {
 		outputDir := filepath.Join(os.TempDir(), sanitizeAgentSlug(sessionID))
 		_ = os.MkdirAll(outputDir, 0o755)
 		servers = append(servers, MCPServer{
-			Name: PlaywrightMCPName, Command: w.NodeRuntime,
+			Name: PlaywrightMCPName, Command: w.JSRuntime,
 			Args: []string{w.PlaywrightCLI, "--cdp-endpoint", w.Broker.EndpointFor(sessionID), "--output-dir", outputDir},
 			Env:  []MCPEnvVariable{},
 		})

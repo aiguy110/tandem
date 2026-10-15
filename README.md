@@ -100,7 +100,7 @@ Common configuration:
 | `TANDEM_PROJECT_ROOTS` | `~/Projects` | Directories scanned for repos in the spawn palette |
 | `TANDEM_HOME` | `~/.tandem` | Root for `tandem.db`, `token`, and `worktrees/` |
 | `TANDEM_PORT` / `TANDEM_BIND` | `7717` / `127.0.0.1` | HTTP + WS listen address |
-| `TANDEM_NODE_CMD` | `node` for the native daemon | Node launcher for Node-based ACP adapters |
+| `TANDEM_BUN_CMD` | managed Bun under `$TANDEM_HOME/bun` | Bun executable that runs and installs ACP adapters, Playwright MCP, history importers, and scripts (forces system mode) |
 | `TANDEM_BROWSER_DRIVER` | `local` | `local` (installed Chrome/Chromium, headful under Xvfb) or `steel` (needs `STEEL_BASE_URL`; see below) |
 | `TANDEM_LANGUAGE_MODEL_ENDPOINT` / `_API_KEY` / `_MODEL` | unset | Shared OpenAI-compatible Chat Completions configuration for voice preparation and future summaries/titles |
 | `TANDEM_VOICE_ENABLED` | `off` | Enables per-message spoken responses; `TANDEM_VOICE_TTS_*` selects the compatible Speech endpoint |

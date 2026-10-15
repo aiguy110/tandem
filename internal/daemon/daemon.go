@@ -29,6 +29,7 @@ import (
 	"github.com/aiguy110/tandem/internal/automation"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/buildinfo"
+	"github.com/aiguy110/tandem/internal/bunruntime"
 	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/eventlog"
 	"github.com/aiguy110/tandem/internal/federation"
@@ -219,7 +220,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if exeErr != nil {
 		return exeErr
 	}
-	wiring := browser.MCPWiring{Broker: broker, NodeRuntime: cfg.Browser.NodeRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
+	wiring := browser.MCPWiring{Broker: broker, JSRuntime: cfg.Browser.JSRuntime, PlaywrightCLI: cfg.Browser.PlaywrightMCPCLI, TandemExecutable: exe, ControlURL: origin, Token: token, BrowserEnabled: cfg.Browser.MCPEnabled}
 	// wsHandler is set once the browser handler exists; services created
 	// before it broadcast through it.
 	var wsHandler atomic.Pointer[wsserver.Handler]
@@ -269,7 +270,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	})
 	automationService := &automation.Service{
 		Store: db, Agents: agents, Token: token,
-		Runner: automation.Runner{NodeCommand: cfg.Node.Command},
+		Runner: automation.Runner{BunCommand: cfg.Bun.Command, Prepare: func(prepCtx context.Context) error {
+			return runtimeinstall.EnsureRuntime(prepCtx, cfg, stdout)
+		}},
 	}
 	automationService.CaptureBrowser = func(captureCtx context.Context, runID string) (string, string, func(), error) {
 		if !broker.IsProvisioned(runID) {
@@ -322,6 +325,15 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			_ = broker.Teardown(cleanupCtx, runID)
 		})
 	}
+	if cfg.Bun.Managed {
+		// Fetch the managed runtime in the background so the first spawn does
+		// not wait on the download. Spawns still ensure it themselves.
+		go func() {
+			if err := bunruntime.Ensure(ctx, cfg.Bun.Root, cfg.Bun.Version, stdout); err != nil {
+				slog.Warn("managed bun runtime warm-up failed; spawns will retry", "version", cfg.Bun.Version, "error", err)
+			}
+		}()
+	}
 	automationScheduler := &automation.Scheduler{Service: automationService}
 	automationScheduler.Start(ctx)
 	var historyLifecycle *historyimport.Lifecycle
@@ -330,7 +342,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			continue
 		}
 		historyRunner, runnerErr := historyimport.New(historyimport.Options{
-			Store: db, Node: cfg.Node.Command, RuntimeRoot: cfg.RuntimeRoot,
+			Store: db, Bun: cfg.Bun.Command, RuntimeRoot: cfg.RuntimeRoot,
 		})
 		if runnerErr != nil {
 			return fmt.Errorf("configure history importer: %w", runnerErr)

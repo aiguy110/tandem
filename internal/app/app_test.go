@@ -13,7 +13,7 @@ import (
 
 func TestDebugConfigCommand(t *testing.T) {
 	t.Setenv("TANDEM_HOME", t.TempDir())
-	t.Setenv("TANDEM_NODE_CMD", "node")
+	t.Setenv("TANDEM_BUN_CMD", "bun")
 	t.Setenv("STEEL_API_KEY", "must-not-appear")
 	t.Setenv("STEEL_SESSION_OPTIONS", "{}")
 

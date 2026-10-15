@@ -20,14 +20,11 @@ func testRunner(t *testing.T, script string) (*Runner, *store.Store, string) {
 		t.Skip("shell fixture is Unix-only")
 	}
 	root := t.TempDir()
-	node := filepath.Join(root, "fake-node")
-	if err := os.WriteFile(node, []byte("#!/bin/sh\nset -eu\nIFS= read -r request\n"+script), 0o755); err != nil {
+	bun := filepath.Join(root, "fake-bun")
+	if err := os.WriteFile(bun, []byte("#!/bin/sh\nset -eu\nIFS= read -r request\n"+script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "history"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "node_modules", "tsx", "dist"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	db, err := store.Open(filepath.Join(root, "test.db"))
@@ -36,7 +33,7 @@ func testRunner(t *testing.T, script string) (*Runner, *store.Store, string) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	runner, err := New(Options{
-		Store: db, Node: node, RuntimeRoot: root, Timeout: 2 * time.Second,
+		Store: db, Bun: bun, RuntimeRoot: root, Timeout: 2 * time.Second,
 		BaseEnv: []string{"HOME=/fixture/home", "PATH=/bin", "SECRET=must-not-leak"},
 	})
 	if err != nil {
@@ -124,7 +121,7 @@ printf 'vendor detail' >&2
 
 func TestStrictProtocolAndPerAgentFailureIsolation(t *testing.T) {
 	runner, db, root := testRunner(t, `
-case "$3" in
+case "$2" in
   *bad.ts)
     printf '%s\n' '{"type":"hello","protocolVersion":1,"importer":{"id":"bad","version":1,"extra":true}}'
     ;;
@@ -152,7 +149,7 @@ esac
 
 func TestCheckpointRequestAndTimeout(t *testing.T) {
 	runner, db, root := testRunner(t, `
-case "$3" in
+case "$2" in
   *seed.ts)
     printf '%s\n' \
     '{"type":"hello","protocolVersion":1,"importer":{"id":"fixture","version":3}}' \

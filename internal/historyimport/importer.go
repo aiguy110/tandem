@@ -34,7 +34,7 @@ const (
 
 type Options struct {
 	Store       *store.Store
-	Node        string
+	Bun         string
 	RuntimeRoot string
 	Timeout     time.Duration
 	BaseEnv     []string
@@ -42,9 +42,8 @@ type Options struct {
 
 type Runner struct {
 	store   *store.Store
-	node    string
+	bun     string
 	runner  string
-	tsx     string
 	timeout time.Duration
 	baseEnv []string
 }
@@ -59,16 +58,15 @@ type Result struct {
 }
 
 func New(options Options) (*Runner, error) {
-	if options.Store == nil || options.Node == "" || options.RuntimeRoot == "" {
-		return nil, errors.New("history importer requires store, Node, and runtime root")
+	if options.Store == nil || options.Bun == "" || options.RuntimeRoot == "" {
+		return nil, errors.New("history importer requires store, bun, and runtime root")
 	}
 	if options.Timeout <= 0 {
 		options.Timeout = defaultTimeout
 	}
 	return &Runner{
-		store: options.Store, node: options.Node, timeout: options.Timeout,
+		store: options.Store, bun: options.Bun, timeout: options.Timeout,
 		runner:  filepath.Join(options.RuntimeRoot, "history", "runner.ts"),
-		tsx:     filepath.Join(options.RuntimeRoot, "node_modules", "tsx", "dist", "cli.mjs"),
 		baseEnv: options.BaseEnv,
 	}, nil
 }
@@ -182,9 +180,10 @@ func (r *Runner) importWithOptions(ctx context.Context, agent string, history co
 
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	args := []string{r.tsx, r.runner, history.Parser}
+	// Bun executes the TypeScript runner and importer modules directly.
+	args := []string{r.runner, history.Parser}
 	args = append(args, history.Args...)
-	cmd := exec.CommandContext(runCtx, r.node, args...)
+	cmd := exec.CommandContext(runCtx, r.bun, args...)
 	cmd.Env = importerEnv(r.baseEnv, history.Env)
 	cmd.Dir = filepath.Dir(filepath.Dir(r.runner))
 	configureCommand(cmd)

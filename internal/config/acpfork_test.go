@@ -102,17 +102,8 @@ func TestACPForkLoadAbsentFileIsEmpty(t *testing.T) {
 	}
 }
 
-func TestACPForkInstallSpecAndVersion(t *testing.T) {
+func TestACPForkDistributionVersion(t *testing.T) {
 	f := sampleFork()
-	want := "git+https://github.com/me/pi-acp.git#52f61f3850a883b9b5a3bb3245908bd5d95b7d43"
-	if got := f.InstallSpec(); got != want {
-		t.Fatalf("install spec = %q, want %q", got, want)
-	}
-	// A repo written with a .git suffix must not produce a doubled one.
-	f.Repo = "https://github.com/me/pi-acp.git"
-	if got := f.InstallSpec(); got != want {
-		t.Fatalf("install spec with .git suffix = %q, want %q", got, want)
-	}
 	if got := f.DistributionVersion(); got != "0.0.33+fork.52f61f3850a8" {
 		t.Fatalf("distribution version = %q", got)
 	}

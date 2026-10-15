@@ -30,8 +30,9 @@ For a fresh installation, help the user choose only the settings they need:
   the user deliberately has a secure remote-access plan.
 - `browserDriver`: `local` uses installed Chrome/Chromium; `steel` needs a
   reachable Steel service and its URL/API key.
-- `node`: `managed` lets Tandem provision its pinned Node runtime; `system`
-  uses a user-supplied command or `node` on PATH.
+- `bun`: `managed` (the default) lets Tandem provision its pinned Bun runtime;
+  `system` uses a user-supplied command or `bun` on PATH. The older `node`
+  block is ignored and dropped the next time setup writes the file.
 - `languageModel` and `voice` are optional OpenAI-compatible endpoints for
   transcript-derived features and spoken responses.
 

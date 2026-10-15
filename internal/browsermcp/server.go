@@ -44,12 +44,12 @@ type Child interface {
 
 type Config struct {
 	ControlURL, Token, SessionID string
-	// NodeRuntime and PlaywrightCLI launch Playwright MCP; CDPBase is the
+	// JSRuntime (Bun) and PlaywrightCLI launch Playwright MCP; CDPBase is the
 	// broker's endpoint prefix (see browser.Broker.CDPBase).
-	NodeRuntime, PlaywrightCLI, CDPBase, OutputDir string
-	HTTPClient                                     *http.Client
-	PollInterval                                   time.Duration
-	Stderr                                         io.Writer
+	JSRuntime, PlaywrightCLI, CDPBase, OutputDir string
+	HTTPClient                                   *http.Client
+	PollInterval                                 time.Duration
+	Stderr                                       io.Writer
 	// StartChild overrides how a Playwright MCP child is launched (tests).
 	StartChild func(ctx context.Context, browserID, endpoint string) (Child, error)
 }
@@ -563,13 +563,13 @@ func (s *server) closeAll() {
 }
 
 func (s *server) startPlaywright(ctx context.Context, browserID, endpoint string) (Child, error) {
-	if s.cfg.NodeRuntime == "" || s.cfg.PlaywrightCLI == "" {
+	if s.cfg.JSRuntime == "" || s.cfg.PlaywrightCLI == "" {
 		return nil, errors.New("Playwright MCP is not installed")
 	}
 	outputDir := filepath.Join(s.cfg.OutputDir, browserID)
 	_ = os.MkdirAll(outputDir, 0o755)
 	server := browser.MCPServer{
-		Name: "playwright-" + browserID, Command: s.cfg.NodeRuntime,
+		Name: "playwright-" + browserID, Command: s.cfg.JSRuntime,
 		Args: []string{s.cfg.PlaywrightCLI, "--cdp-endpoint", endpoint, "--output-dir", outputDir},
 	}
 	return toolregistry.StartMCP(ctx, server, "", s.cfg.Stderr)

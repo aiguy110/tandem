@@ -31,7 +31,7 @@ agents:
 ```
 
 `parser` must resolve to an absolute path. It and every argument/environment
-value support `{home}`, `{runtimeRoot}`, `{tandemRoot}`, and `{node}`
+value support `{home}`, `{runtimeRoot}`, `{tandemRoot}`, and `{bun}` (alias `{node}`)
 substitutions. `enabled` defaults to true and `resume` defaults to `auto`.
 
 The process is launched directly, never through a shell. It receives a small
@@ -48,8 +48,8 @@ prevent a malicious parser from reading local files.
 
 ## Importer API
 
-Importers run through Tandem's pinned `tsx` dependency, so they do not depend
-on experimental Node type stripping. The runtime supplies the
+Importers run directly on Tandem's Bun runtime, which executes TypeScript
+without a transpiler package. The runtime supplies the
 `@tandem/history-importer` module:
 
 ```ts
@@ -129,4 +129,4 @@ explicit refresh or checkpoint-free reindex, and `history_status` reports the
 latest run. Search/list requests always return the existing index without
 waiting for this work. Callers invoke `historyimport.Runner.Import` or `ImportAll`;
 standalone deployments first call `runtimeinstall.EnsureHistory` to stage the
-embedded version-matched SDK/runner/importers and install `tsx`.
+embedded version-matched SDK/runner/importers (and the managed Bun runtime).

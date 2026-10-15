@@ -17,9 +17,9 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 	if err := os.WriteFile(cli, []byte("// fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := MCPWiring{Broker: b, NodeRuntime: "/tools/node", PlaywrightCLI: cli, TandemExecutable: "/bin/tandem", ControlURL: "http://127.0.0.1:7717", Token: "secret", BrowserEnabled: true}
+	w := MCPWiring{Broker: b, JSRuntime: "/tools/node", PlaywrightCLI: cli, TandemExecutable: "/bin/tandem", ControlURL: "http://127.0.0.1:7717", Token: "secret", BrowserEnabled: true}
 	routed := BuildMCPServers(w, "api/58", "/worktrees/api-58")
-	wantRouterEnv := []MCPEnvVariable{{Name: "TANDEM_CONTROL_URL", Value: "http://127.0.0.1:7717"}, {Name: "TANDEM_TOKEN", Value: "secret"}, {Name: "TANDEM_AGENT_ID", Value: "api/58"}, {Name: "TANDEM_NODE_RUNTIME", Value: "/tools/node"}, {Name: "TANDEM_PLAYWRIGHT_MCP_CLI", Value: cli}, {Name: "TANDEM_BROWSER_CDP_BASE", Value: b.CDPBase()}, {Name: "TANDEM_BROWSER_OUTPUT_DIR", Value: filepath.Join(os.TempDir(), "api-58")}}
+	wantRouterEnv := []MCPEnvVariable{{Name: "TANDEM_CONTROL_URL", Value: "http://127.0.0.1:7717"}, {Name: "TANDEM_TOKEN", Value: "secret"}, {Name: "TANDEM_AGENT_ID", Value: "api/58"}, {Name: "TANDEM_JS_RUNTIME", Value: "/tools/node"}, {Name: "TANDEM_PLAYWRIGHT_MCP_CLI", Value: cli}, {Name: "TANDEM_BROWSER_CDP_BASE", Value: b.CDPBase()}, {Name: "TANDEM_BROWSER_OUTPUT_DIR", Value: filepath.Join(os.TempDir(), "api-58")}}
 	if len(routed) != 4 || routed[0].Name != BrowserMCPName || routed[0].Command != "/bin/tandem" || !reflect.DeepEqual(routed[0].Args, []string{"mcp-browser"}) || !reflect.DeepEqual(routed[0].Env, wantRouterEnv) {
 		t.Fatalf("router declaration = %#v", routed)
 	}
@@ -49,7 +49,7 @@ func TestBuildMCPServersUsesConfiguredNodeAndPerAgentBrokerURL(t *testing.T) {
 }
 
 func TestBuildMCPServersSkipsMissingPlaywright(t *testing.T) {
-	got := BuildMCPServers(MCPWiring{NodeRuntime: "/tools/node", PlaywrightCLI: "/missing/cli.js", TandemExecutable: "/bin/tandem", BrowserEnabled: true}, "one", "/repo")
+	got := BuildMCPServers(MCPWiring{JSRuntime: "/tools/node", PlaywrightCLI: "/missing/cli.js", TandemExecutable: "/bin/tandem", BrowserEnabled: true}, "one", "/repo")
 	if len(got) != 3 || got[0].Name != "tandem-control" || got[1].Name != "tandem-scripts" || got[2].Name != "tandem-messages" {
 		t.Fatalf("servers = %#v", got)
 	}

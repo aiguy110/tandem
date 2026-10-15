@@ -11,7 +11,7 @@ import (
 
 // Importers may spawn helpers. Giving each invocation its own process group
 // makes timeout/cancellation release inherited stdout/stderr pipes as well as
-// stopping the top-level Node process.
+// stopping the top-level Bun process.
 func configureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

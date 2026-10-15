@@ -56,7 +56,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "mcp-browser" {
 		err := browsermcp.Run(context.Background(), os.Stdin, stdout, browsermcp.Config{
 			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"),
-			NodeRuntime: os.Getenv("TANDEM_NODE_RUNTIME"), PlaywrightCLI: os.Getenv("TANDEM_PLAYWRIGHT_MCP_CLI"),
+			JSRuntime: firstEnv("TANDEM_JS_RUNTIME", "TANDEM_NODE_RUNTIME"), PlaywrightCLI: os.Getenv("TANDEM_PLAYWRIGHT_MCP_CLI"),
 			CDPBase: os.Getenv("TANDEM_BROWSER_CDP_BASE"), OutputDir: os.Getenv("TANDEM_BROWSER_OUTPUT_DIR"), Stderr: stderr,
 		})
 		if err != nil {
@@ -286,4 +286,15 @@ func runDaemon(stdout, stderr io.Writer, parentURL string) int {
 		return 1
 	}
 	return 0
+}
+
+// firstEnv returns the first non-empty variable among keys. Later keys are
+// legacy names still set by agent processes launched before a rename.
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
 }

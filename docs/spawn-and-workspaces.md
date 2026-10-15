@@ -67,15 +67,16 @@ Tandem loads its shipped catalog from the repository's `config.yml.example`, the
 an optional `$TANDEM_HOME/config.yml` (normally `~/.tandem/config.yml`). The shipped file
 declares Claude, Codex, Pi, Oh My Pi, and OpenCode using the same schema available to
 users; there are no agent-specific definitions in daemon code. Oh My Pi (`omp`) is
-launched directly through its built-in `omp acp` server, which consumes session
-`mcpServers` natively, so it is not a Tandem-managed bridge package: install it yourself
-(`bun install -g @oh-my-pi/pi-coding-agent`) and configure its models in `~/.omp/agent`. User definitions with the same id override their
+launched through its built-in `omp acp` server, which consumes session `mcpServers`
+natively; Tandem installs and version-manages `@oh-my-pi/pi-coding-agent` like the ACP
+bridge packages and runs it on its Bun runtime. Configure its models in `~/.omp/agent`;
+the Terminal launch still expects an `omp` on PATH. User definitions with the same id override their
 fields, and environment-variable launch overrides remain supported for backwards
 compatibility. Copy `config.yml.example` to `~/.tandem/config.yml` to start from a fully
 editable catalog, or keep the home file small and override only selected fields.
-The `{node}` placeholder uses the explicitly configurable `TANDEM_NODE_CMD` launcher. This
-is important for the native daemon, which is not itself a Node executable; its default is
-the `node` executable resolved from `PATH`, `~/.local/bin`, or `~/bin`.
+The `{bun}` placeholder (with `{node}` kept as an alias for older definitions) expands to
+Tandem's Bun runtime: by default a pinned Bun Tandem downloads into `$TANDEM_HOME/bun`, or
+with `settings.bun.mode: system` / `TANDEM_BUN_CMD`, a Bun from the host.
 
 An **agent definition** describes how to start the same tool through ACP and directly in a
 terminal. A **profile** gives that definition a reusable set of extra arguments:
@@ -107,7 +108,7 @@ Commands and arguments are arrays rather than shell command strings, avoiding sh
 quoting and injection surprises. Profile arguments are appended to the selected launch
 mode's configured arguments. Direct Terminal launches use `terminal.startArgs`; ACP-to-CLI
 handoff uses `terminal.resumeArgs` and is offered only when that template is present.
-`{node}`, `{runtimeRoot}`, `{tandemRoot}`, and `{home}` are expanded while loading either
+`{bun}`, `{node}`, `{runtimeRoot}`, `{tandemRoot}`, and `{home}` are expanded while loading either
 catalog layer. Runtime terminal argument templates additionally substitute `{sessionId}`,
 `{cwd}`, `{agentId}`, and `{agentName}`. Environment entries are passed only to the
 configured child process.

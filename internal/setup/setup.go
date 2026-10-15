@@ -318,12 +318,14 @@ func promptSettings(r *bufio.Reader, out io.Writer, existing config.Settings) (c
 	settings.SteelAPIKey = browserSettings.SteelAPIKey
 	atEOF = browserEOF
 
-	// 5. Node runtime.
-	node, err := promptNode(r, out, existing.Node, atEOF)
+	// 5. Bun runtime. The retired `node` block is dropped here, so a setup run
+	// migrates an older config.yml.
+	bun, err := promptBun(r, out, existing.Bun, atEOF)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return settings, fmt.Errorf("read node runtime: %w", err)
+		return settings, fmt.Errorf("read bun runtime: %w", err)
 	}
-	settings.Node = node
+	settings.Bun = bun
+	settings.LegacyNode = config.NodeSettings{}
 
 	// 6. Shared language model for transcript-derived features.
 	languageModel, languageEOF, err := promptLanguageModel(r, out, existing.LanguageModel, existing.Voice, atEOF)
@@ -783,51 +785,47 @@ func splitRoots(answer string) []string {
 	return roots
 }
 
-// promptNode prompts for the Node runtime choice. If atEOF is already true
-// (a prior prompt hit EOF on stdin), it skips straight to the default choice
-// rather than attempting another read.
-func promptNode(r *bufio.Reader, out io.Writer, existing config.NodeSettings, atEOF bool) (config.NodeSettings, error) {
-	nodePath, lookErr := exec.LookPath("node")
+// promptBun prompts for the Bun runtime choice. If atEOF is already true (a
+// prior prompt hit EOF on stdin), it skips straight to the default choice rather
+// than attempting another read. The managed runtime is the default: it is the
+// version Tandem tests against and needs nothing preinstalled.
+func promptBun(r *bufio.Reader, out io.Writer, existing config.BunSettings, atEOF bool) (config.BunSettings, error) {
+	bunPath, lookErr := exec.LookPath("bun")
 	detected := lookErr == nil
-	nodePath = config.StableExecutablePath(nodePath)
+	bunPath = config.StableExecutablePath(bunPath)
 	var version string
 	if detected {
-		if v, err := exec.Command(nodePath, "--version").Output(); err == nil {
+		if v, err := exec.Command(bunPath, "--version").Output(); err == nil {
 			version = strings.TrimSpace(string(v))
 		}
 	}
 
-	fmt.Fprintln(out, "Node runtime:")
+	fmt.Fprintln(out, "JavaScript runtime (Bun; runs agent bridges, browser tools and scripts):")
+	fmt.Fprintf(out, "  1) Let Tandem download & manage Bun (v%s)\n", config.DefaultManagedBunVersion)
 	if detected {
 		if version != "" {
-			fmt.Fprintf(out, "  1) Use the detected Node at %s (%s)\n", nodePath, version)
+			fmt.Fprintf(out, "  2) Use the detected Bun at %s (v%s)\n", bunPath, version)
 		} else {
-			fmt.Fprintf(out, "  1) Use the detected Node at %s\n", nodePath)
+			fmt.Fprintf(out, "  2) Use the detected Bun at %s\n", bunPath)
 		}
 	} else {
-		fmt.Fprintln(out, "  1) Use `node` from PATH at runtime (none detected right now)")
+		fmt.Fprintln(out, "  2) Use `bun` from PATH at runtime (none detected right now)")
 	}
-	fmt.Fprintf(out, "  2) Let Tandem download & manage Node (v%s)\n", config.DefaultManagedNodeVersion)
 
 	def := "1"
-	if !detected {
+	if existing.Mode == "system" {
 		def = "2"
-	}
-	if existing.Mode == "managed" {
-		def = "2"
-	} else if existing.Mode == "system" {
-		def = "1"
 	}
 
-	choice := func(pick string) config.NodeSettings {
-		if pick == "2" {
-			return config.NodeSettings{Mode: "managed", Version: config.DefaultManagedNodeVersion}
+	choice := func(pick string) config.BunSettings {
+		if pick == "1" {
+			return config.BunSettings{Mode: "managed", Version: config.DefaultManagedBunVersion}
 		}
-		cmd := nodePath
+		cmd := bunPath
 		if cmd == "" {
-			cmd = "node"
+			cmd = "bun"
 		}
-		return config.NodeSettings{Mode: "system", Command: cmd}
+		return config.BunSettings{Mode: "system", Command: cmd}
 	}
 
 	if atEOF {
@@ -837,7 +835,7 @@ func promptNode(r *bufio.Reader, out io.Writer, existing config.NodeSettings, at
 	for {
 		answer, err := ask(r, out, "Choose", def)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return config.NodeSettings{}, err
+			return config.BunSettings{}, err
 		}
 		switch answer {
 		case "1", "2":
@@ -866,23 +864,23 @@ func offerServiceInstall(r *bufio.Reader, out io.Writer, home string, settings c
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	nodeBinDir := ""
-	switch settings.Node.Mode {
-	case "managed":
-		nodeBinDir = filepath.Join(home, "node", "bin")
-	default:
-		if cmd := settings.Node.Command; cmd != "" && cmd != "node" {
+	bunBinDir := ""
+	switch settings.Bun.Mode {
+	case "system":
+		if cmd := settings.Bun.Command; cmd != "" && cmd != "bun" {
 			if abs, lookErr := exec.LookPath(cmd); lookErr == nil {
-				nodeBinDir = filepath.Dir(abs)
+				bunBinDir = filepath.Dir(abs)
 			} else if filepath.IsAbs(cmd) {
-				nodeBinDir = filepath.Dir(cmd)
+				bunBinDir = filepath.Dir(cmd)
 			}
-		} else if abs, lookErr := exec.LookPath("node"); lookErr == nil {
-			nodeBinDir = filepath.Dir(abs)
+		} else if abs, lookErr := exec.LookPath("bun"); lookErr == nil {
+			bunBinDir = filepath.Dir(abs)
 		}
+	default:
+		bunBinDir = filepath.Join(home, "bun")
 	}
 
-	unit := unitFile(exePath, home, nodeBinDir)
+	unit := unitFile(exePath, home, bunBinDir)
 
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -923,11 +921,11 @@ func runSystemctl(out io.Writer, args ...string) error {
 // unitFile renders the tandem.service systemd unit for a Tandem executable at
 // exePath, running with workdir as its working directory (used as TANDEM_HOME
 // so relative state lands in the operator's chosen home), and with
-// nodeBinDir (if non-empty) prepended to PATH so ACP bridges can find Node.
-func unitFile(exePath, workdir, nodeBinDir string) string {
+// bunBinDir (if non-empty) prepended to PATH so agent processes find Bun.
+func unitFile(exePath, workdir, bunBinDir string) string {
 	path := "/usr/local/bin:/usr/bin:/bin"
-	if nodeBinDir != "" {
-		path = nodeBinDir + ":" + path
+	if bunBinDir != "" {
+		path = bunBinDir + ":" + path
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Tandem agent orchestration daemon

@@ -1,6 +1,6 @@
-// Package runtimeinstall lazily provisions the Node ACP server packages
+// Package runtimeinstall lazily provisions the JavaScript ACP server packages
 // Tandem launches per agent (and the Playwright MCP server), installing each
-// on first spawn rather than eagerly at daemon boot.
+// with Bun on first spawn rather than eagerly at daemon boot.
 package runtimeinstall
 
 import (
@@ -18,18 +18,19 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	tandem "github.com/aiguy110/tandem"
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/bunruntime"
 	"github.com/aiguy110/tandem/internal/config"
-	"github.com/aiguy110/tandem/internal/noderuntime"
 )
 
 // pin describes one npm package Tandem installs into Config.RuntimeRoot on
 // demand, and the file whose presence indicates it is already installed.
 type pin struct {
 	packageName string
-	spec        string // npm install argument, e.g. "pkg@^1.2.3"
+	spec        string // install argument, e.g. "pkg@^1.2.3"
 	dist        string // path relative to RuntimeRoot that must exist once installed
 }
 
@@ -42,16 +43,17 @@ var agentPins = map[string]pin{
 	// NOTE: tilde, not caret. npm reads ^0.0.x as exactly 0.0.x, so a caret here
 	// would make this range a single version and the update check inert.
 	"pi": {packageName: "pi-acp", spec: "pi-acp@~0.0.33", dist: filepath.Join("node_modules", "pi-acp", "dist", "index.js")},
+	// Oh My Pi is its own ACP server (`omp acp`), so the managed package is the
+	// agent itself. It requires Bun, which is why Tandem's runtime is Bun.
+	"omp": {packageName: "@oh-my-pi/pi-coding-agent", spec: "@oh-my-pi/pi-coding-agent@^18.11.0", dist: filepath.Join("node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js")},
 }
 
 // playwrightPin is the Playwright MCP server Tandem installs alongside an
 // agent's ACP package when browser MCP tools are enabled.
 var playwrightPin = pin{spec: "@playwright/mcp@^0.0.78", dist: filepath.Join("node_modules", "@playwright", "mcp", "cli.js")}
 
-var historyPin = pin{spec: "tsx@4.23.1", dist: filepath.Join("node_modules", "tsx", "dist", "cli.mjs")}
-
 // installMu serializes all installs into the shared RuntimeRoot node_modules;
-// concurrent `npm install`s into the same node_modules can corrupt it.
+// concurrent installs into the same node_modules can corrupt it.
 var installMu sync.Mutex
 
 const lockFileName = "agents.lock.json"
@@ -148,16 +150,11 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 	// record (or a stale upstream install left over from before tracking began)
 	// must provision the fork tree rather than reuse what the lockfile names.
 	if forked && !forkLockCurrent(locked, fork, p.dist) {
-		if cfg.Node.Managed {
-			if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
-				return nil, err
-			}
-		}
-		npm, err := resolveNpm(cfg)
+		bun, err := resolveBun(ctx, cfg, log)
 		if err != nil {
 			return nil, err
 		}
-		next, err := installFork(ctx, cfg, npm, agent, fork, log)
+		next, err := installFork(ctx, cfg, bun, agent, fork, log)
 		if err != nil {
 			return nil, err
 		}
@@ -172,32 +169,33 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 		return forkDistribution(locked), nil
 	}
 	if !ok || !distExists(locked.Path, p.dist) {
-		if cfg.Node.Managed {
-			if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
-				return nil, err
-			}
-		}
-		npm, err := resolveNpm(cfg)
+		bun, err := resolveBun(ctx, cfg, log)
 		if err != nil {
 			return nil, err
 		}
-		// Ask npm for the concrete version selected by Tandem's compatibility range.
-		version, err := npmView(ctx, cfg, npm, p.spec, "version")
+		// Pick the concrete version Tandem's compatibility range selects.
+		constraint := strings.TrimPrefix(p.spec, p.packageName+"@")
+		published, err := publishedVersions(ctx, p.packageName)
 		if err != nil {
 			return nil, err
 		}
-		integrity, _ := npmView(ctx, cfg, npm, p.packageName+"@"+version, "dist.integrity")
+		version, found := newestInRange(published, constraint)
+		if !found {
+			return nil, fmt.Errorf("provision agent %s: no published %s satisfies %s", agent, p.packageName, constraint)
+		}
+		integrity := publishedIntegrity(ctx, p.packageName, version)
+		slog.Info("provisioning managed ACP distribution", "agent", agent, "package", p.packageName, "version", version)
 		root := filepath.Join(cfg.RuntimeRoot, "agents", agent, version)
 		if !distExists(root, p.dist) {
 			if err := ensureRuntimeRoot(root); err != nil {
 				return nil, err
 			}
-			if err := installAt(ctx, cfg, npm, root, p.packageName+"@"+version, log); err != nil {
+			if err := installAt(ctx, cfg, bun, root, p.packageName+"@"+version, log); err != nil {
 				return nil, err
 			}
 		}
 		if !distExists(root, p.dist) {
-			return nil, fmt.Errorf("provision agent %s: npm completed without required ACP module", agent)
+			return nil, fmt.Errorf("provision agent %s: install completed without required ACP module %s", agent, p.dist)
 		}
 		locked = LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: version, Integrity: integrity, Path: root}
 		l.Agents[agent] = locked
@@ -208,67 +206,37 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 	return &agentadapter.Distribution{Source: "npm", Package: locked.Package, Version: locked.Version, Integrity: locked.Integrity, Path: locked.Path}, nil
 }
 
-func npmView(ctx context.Context, cfg config.Config, npm, spec, field string) (string, error) {
-	values, err := npmViewValues(ctx, cfg, npm, spec, field)
-	if err != nil {
-		return "", err
-	}
-	return values[len(values)-1], nil
-}
-
-// publishedVersions lists every version of a package, newest first. It asks for
-// the package's whole `versions` array rather than resolving a range, so Tandem
-// decides for itself what is newest and what is compatible; see semver.go for
-// why delegating that to `npm view <pkg>@<range>` is unsound.
-func publishedVersions(ctx context.Context, cfg config.Config, npm, pkg string) ([]string, error) {
-	values, err := npmViewValues(ctx, cfg, npm, pkg, "versions")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(values))
-	for _, v := range values {
-		if v = strings.TrimSpace(v); v != "" {
-			out = append(out, v)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("inspect %s: npm returned no versions", pkg)
-	}
-	sortVersions(out)
-	return out, nil
-}
-
-func npmViewValues(ctx context.Context, cfg config.Config, npm, spec, field string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, npm, "view", spec, field, "--json")
-	cmd.Env = buildEnv(cfg)
-	b, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("inspect %s: %w", spec, err)
-	}
-	var values []string
-	var value string
-	if json.Unmarshal(b, &value) == nil {
-		values = []string{value}
-	} else if json.Unmarshal(b, &values) != nil {
-		values = []string{strings.Trim(strings.TrimSpace(string(b)), "\"")}
-	}
-	if len(values) == 0 || values[len(values)-1] == "" {
-		return nil, fmt.Errorf("inspect %s: npm returned no %s", spec, field)
-	}
-	return values, nil
-}
-
-func installAt(ctx context.Context, cfg config.Config, npm, root, spec string, log io.Writer) error {
+func installAt(ctx context.Context, cfg config.Config, bun, root, spec string, log io.Writer) error {
 	fmt.Fprintf(log, "tandem: installing managed ACP distribution %s in %s\n", spec, root)
-	cmd := exec.CommandContext(ctx, npm, "install", spec, "--omit=dev", "--no-audit", "--no-fund", "--save-exact")
-	cmd.Dir = root
+	return bunAdd(ctx, cfg, bun, root, spec, log)
+}
+
+// bunAdd installs spec into the package at dir and records it (exactly) in
+// that package.json, so a later install there does not prune it. Bun does not
+// run dependencies' lifecycle scripts unless they are trusted; the packages
+// Tandem manages ship prebuilt.
+func bunAdd(ctx context.Context, cfg config.Config, bun, dir, spec string, log io.Writer) error {
+	started := time.Now()
+	cmd := exec.CommandContext(ctx, bun, "add", "--exact", spec)
+	cmd.Dir = dir
 	cmd.Stdout = log
 	cmd.Stderr = log
-	cmd.Env = buildEnv(cfg)
+	cmd.Env = buildEnv(cfg, bun)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("provision %s with npm install: %w", spec, err)
+		slog.Warn("bun add failed", "spec", spec, "dir", dir, "elapsed", time.Since(started), "error", err)
+		return fmt.Errorf("provision %s with bun add: %w", spec, err)
 	}
+	slog.Info("bun add completed", "spec", spec, "dir", dir, "elapsed", time.Since(started))
 	return nil
+}
+
+// ManagedLaunch reports whether an ACP launch's first argument is the managed
+// package entry point for agent. An operator override that launches something
+// else (a globally installed CLI, a custom script) must be left alone rather
+// than having its first argument replaced by a pinned distribution.
+func ManagedLaunch(agent string, args []string) bool {
+	p, ok := agentPins[agent]
+	return ok && len(args) > 0 && strings.HasSuffix(filepath.ToSlash(args[0]), "/"+filepath.ToSlash(p.dist))
 }
 
 func EntryPoint(agent string, d *agentadapter.Distribution) (string, bool) {
@@ -325,10 +293,6 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 	if err != nil {
 		return nil, err
 	}
-	npm, err := resolveNpm(cfg)
-	if err != nil {
-		return nil, err
-	}
 	forks, err := config.LoadACPForks(cfg.Home)
 	if err != nil {
 		return nil, err
@@ -342,7 +306,7 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 	for _, agent := range ids {
 		p := agentPins[agent]
 		constraint := strings.TrimPrefix(p.spec, p.packageName+"@")
-		versions, err := publishedVersions(ctx, cfg, npm, p.packageName)
+		versions, err := publishedVersions(ctx, p.packageName)
 		if err != nil {
 			return nil, fmt.Errorf("list %s versions: %w", agent, err)
 		}
@@ -418,10 +382,6 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 	if err != nil {
 		return nil, err
 	}
-	npm, err := resolveNpm(cfg)
-	if err != nil {
-		return nil, err
-	}
 	forks, err := config.LoadACPForks(cfg.Home)
 	if err != nil {
 		return nil, err
@@ -436,7 +396,7 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 			// A fork-tracked agent is compared against the release its fork sits
 			// on, not the installed distribution: the installed version is a fork
 			// build and is not a point on the published version line.
-			versions, err := publishedVersions(ctx, cfg, npm, fork.UpstreamPackage)
+			versions, err := publishedVersions(ctx, fork.UpstreamPackage)
 			if err != nil {
 				return nil, fmt.Errorf("check %s upstream release: %w", agent, err)
 			}
@@ -460,7 +420,7 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 				continue
 			}
 		}
-		versions, err := publishedVersions(ctx, cfg, npm, p.packageName)
+		versions, err := publishedVersions(ctx, p.packageName)
 		if err != nil {
 			return nil, fmt.Errorf("check %s update: %w", agent, err)
 		}
@@ -517,11 +477,11 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 			return LockedAgent{}, fmt.Errorf("agent %s is not installed", agent)
 		}
 	}
-	npm, err := resolveNpm(cfg)
+	bun, err := resolveBun(ctx, cfg, log)
 	if err != nil {
 		return LockedAgent{}, err
 	}
-	published, err := publishedVersions(ctx, cfg, npm, p.packageName)
+	published, err := publishedVersions(ctx, p.packageName)
 	if err != nil {
 		return LockedAgent{}, err
 	}
@@ -542,7 +502,7 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 			if err := ensureRuntimeRoot(oldRoot); err != nil {
 				return LockedAgent{}, err
 			}
-			if err := installAt(ctx, cfg, npm, oldRoot, p.packageName+"@"+current.Version, log); err != nil {
+			if err := installAt(ctx, cfg, bun, oldRoot, p.packageName+"@"+current.Version, log); err != nil {
 				return LockedAgent{}, err
 			}
 		}
@@ -553,14 +513,14 @@ func InstallUpdate(ctx context.Context, cfg config.Config, agent, version string
 		if err := ensureRuntimeRoot(root); err != nil {
 			return LockedAgent{}, err
 		}
-		if err := installAt(ctx, cfg, npm, root, p.packageName+"@"+version, log); err != nil {
+		if err := installAt(ctx, cfg, bun, root, p.packageName+"@"+version, log); err != nil {
 			return LockedAgent{}, err
 		}
 	}
 	if !distExists(root, p.dist) {
 		return LockedAgent{}, fmt.Errorf("update agent %s: required entry point is missing", agent)
 	}
-	integrity, _ := npmView(ctx, cfg, npm, p.packageName+"@"+version, "dist.integrity")
+	integrity := publishedIntegrity(ctx, p.packageName, version)
 	next := LockedAgent{Package: p.packageName, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"), Version: version, Integrity: integrity, Path: root, PreviousVersion: current.Version, PreviousPath: current.Path}
 	l.Agents[agent] = next
 	if err := writeLock(cfg.RuntimeRoot, l); err != nil {
@@ -634,13 +594,7 @@ func EnsureAgent(ctx context.Context, cfg config.Config, sessionID string, log i
 		return nil
 	}
 
-	if cfg.Node.Managed {
-		if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
-			return fmt.Errorf("provision managed node: %w", err)
-		}
-	}
-
-	npm, err := resolveNpm(cfg)
+	bun, err := resolveBun(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -648,35 +602,70 @@ func EnsureAgent(ctx context.Context, cfg config.Config, sessionID string, log i
 		return err
 	}
 
-	if err := install(ctx, cfg, npm, p.spec, log); err != nil {
-		return err
-	}
 	if !distExists(cfg.RuntimeRoot, p.dist) {
-		return fmt.Errorf("provision agent %s: npm completed without required ACP module", sessionID)
-	}
-
-	if cfg.Browser.MCPEnabled && !distExists(cfg.RuntimeRoot, playwrightPin.dist) {
-		if err := install(ctx, cfg, npm, playwrightPin.spec, log); err != nil {
+		if err := install(ctx, cfg, bun, p.spec, log); err != nil {
 			return err
 		}
-		if !distExists(cfg.RuntimeRoot, playwrightPin.dist) {
-			return fmt.Errorf("provision playwright mcp: npm completed without required module")
+		if !distExists(cfg.RuntimeRoot, p.dist) {
+			return fmt.Errorf("provision agent %s: install completed without required ACP module %s", sessionID, p.dist)
 		}
+	}
+	return ensureBrowserMCP(ctx, cfg, bun, log)
+}
+
+// EnsureRuntime makes the JS runtime every ACP launch, browser MCP, importer
+// and automation script runs on available, and installs the Playwright MCP
+// server when browser tools are enabled. Spawns call it even when the agent's
+// own distribution is already pinned, because the pinned distribution says
+// nothing about whether the runtime or the shared browser server is present.
+func EnsureRuntime(ctx context.Context, cfg config.Config, log io.Writer) error {
+	if cfg.Bun.Managed {
+		if err := bunruntime.Ensure(ctx, cfg.Bun.Root, cfg.Bun.Version, log); err != nil {
+			return fmt.Errorf("provision managed bun: %w", err)
+		}
+	}
+	if !cfg.Browser.MCPEnabled || distExists(cfg.RuntimeRoot, playwrightPin.dist) {
+		return nil
+	}
+	installMu.Lock()
+	defer installMu.Unlock()
+	bun, err := resolveBun(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	if err := ensureRuntimeRoot(cfg.RuntimeRoot); err != nil {
+		return err
+	}
+	return ensureBrowserMCP(ctx, cfg, bun, log)
+}
+
+// ensureBrowserMCP installs the shared Playwright MCP server when browser tools
+// are enabled and it is missing. Callers must hold installMu.
+func ensureBrowserMCP(ctx context.Context, cfg config.Config, bun string, log io.Writer) error {
+	if !cfg.Browser.MCPEnabled || distExists(cfg.RuntimeRoot, playwrightPin.dist) {
+		return nil
+	}
+	if err := install(ctx, cfg, bun, playwrightPin.spec, log); err != nil {
+		return err
+	}
+	if !distExists(cfg.RuntimeRoot, playwrightPin.dist) {
+		return fmt.Errorf("provision playwright mcp: install completed without required module")
 	}
 	return nil
 }
 
-// EnsureHistory provisions the TypeScript execution dependency and the
-// embedded, version-matched SDK/runner used by historyimport.Runner. It is
-// explicit rather than daemon-startup work; lifecycle callers decide when an
-// importer scan should incur provisioning.
+// EnsureHistory provisions the runtime and the embedded, version-matched
+// SDK/runner used by historyimport.Runner. Bun executes the TypeScript directly,
+// so no transpiler package is needed. It is explicit rather than daemon-startup
+// work; lifecycle callers decide when an importer scan should incur
+// provisioning.
 func EnsureHistory(ctx context.Context, cfg config.Config, log io.Writer) error {
 	installMu.Lock()
 	defer installMu.Unlock()
 
-	if cfg.Node.Managed {
-		if err := noderuntime.Ensure(ctx, cfg.Node.Root, cfg.Node.Version, log); err != nil {
-			return fmt.Errorf("provision managed node: %w", err)
+	if cfg.Bun.Managed {
+		if err := bunruntime.Ensure(ctx, cfg.Bun.Root, cfg.Bun.Version, log); err != nil {
+			return fmt.Errorf("provision managed bun: %w", err)
 		}
 	}
 	if err := ensureRuntimeRoot(cfg.RuntimeRoot); err != nil {
@@ -702,19 +691,6 @@ func EnsureHistory(ctx context.Context, cfg config.Config, log io.Writer) error 
 			return fmt.Errorf("provision history runtime: %w", err)
 		}
 	}
-	if distExists(cfg.RuntimeRoot, historyPin.dist) {
-		return nil
-	}
-	npm, err := resolveNpm(cfg)
-	if err != nil {
-		return err
-	}
-	if err := install(ctx, cfg, npm, historyPin.spec, log); err != nil {
-		return err
-	}
-	if !distExists(cfg.RuntimeRoot, historyPin.dist) {
-		return errors.New("provision history runtime: npm completed without tsx")
-	}
 	return nil
 }
 
@@ -735,17 +711,24 @@ func distExists(root, rel string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func resolveNpm(cfg config.Config) (string, error) {
-	if cfg.Node.Npm != "" {
-		if info, err := os.Stat(cfg.Node.Npm); err == nil && !info.IsDir() {
-			return cfg.Node.Npm, nil
+// resolveBun returns the bun executable installs run with, downloading the
+// managed runtime first when that is the configured mode.
+func resolveBun(ctx context.Context, cfg config.Config, log io.Writer) (string, error) {
+	if cfg.Bun.Managed {
+		if err := bunruntime.Ensure(ctx, cfg.Bun.Root, cfg.Bun.Version, log); err != nil {
+			return "", fmt.Errorf("provision managed bun: %w", err)
 		}
+		return cfg.Bun.Command, nil
 	}
-	npm, err := exec.LookPath("npm")
+	command := cfg.Bun.Command
+	if command == "" {
+		command = "bun"
+	}
+	bun, err := exec.LookPath(command)
 	if err != nil {
-		return "", fmt.Errorf("provision runtime: npm is required: %w", err)
+		return "", fmt.Errorf("provision runtime: bun is required (set settings.bun.mode to managed, or install bun): %w", err)
 	}
-	return npm, nil
+	return bun, nil
 }
 
 func ensureRuntimeRoot(root string) error {
@@ -763,47 +746,36 @@ func ensureRuntimeRoot(root string) error {
 	return nil
 }
 
-// buildEnv copies the daemon's environment for the npm subprocess, prepending
-// the managed Node's directory onto PATH when cfg.Node.Managed so npm's
-// shebang and the child `node` calls it makes resolve the managed Node
-// instead of whatever (if anything) is on the host PATH.
-func buildEnv(cfg config.Config) []string {
+// buildEnv copies the daemon's environment for a bun subprocess, prepending
+// bun's directory onto PATH so package scripts that invoke `bun` resolve the
+// runtime Tandem chose instead of whatever (if anything) is on the host PATH.
+func buildEnv(cfg config.Config, bun string) []string {
 	env := os.Environ()
-	if !cfg.Node.Managed || cfg.Node.Command == "" {
+	if !filepath.IsAbs(bun) {
 		return env
 	}
-	nodeDir := filepath.Dir(cfg.Node.Command)
+	bunDir := filepath.Dir(bun)
 	out := make([]string, 0, len(env)+1)
 	found := false
 	for _, entry := range env {
 		if len(entry) >= 5 && entry[:5] == "PATH=" {
-			out = append(out, "PATH="+nodeDir+string(os.PathListSeparator)+entry[5:])
+			out = append(out, "PATH="+bunDir+string(os.PathListSeparator)+entry[5:])
 			found = true
 			continue
 		}
 		out = append(out, entry)
 	}
 	if !found {
-		out = append(out, "PATH="+nodeDir)
+		out = append(out, "PATH="+bunDir)
 	}
 	return out
 }
 
-func install(ctx context.Context, cfg config.Config, npm, spec string, log io.Writer) error {
+func install(ctx context.Context, cfg config.Config, bun, spec string, log io.Writer) error {
 	fmt.Fprintf(log, "tandem: installing %s in %s\n", spec, cfg.RuntimeRoot)
-	// NOTE: deliberately no --no-save. Each package must be recorded in the
-	// RuntimeRoot package.json so a later `npm install <other-agent>` does not
-	// prune this agent's package as extraneous (verified: --no-save drops the
-	// previously installed package from node_modules).
-	cmd := exec.CommandContext(ctx, npm, "install", spec, "--omit=dev", "--no-audit", "--no-fund")
-	cmd.Dir = cfg.RuntimeRoot
-	cmd.Stdout = log
-	cmd.Stderr = log
-	cmd.Env = buildEnv(cfg)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("provision %s with npm install: %w", spec, err)
-	}
-	return nil
+	// Each package is recorded in the RuntimeRoot package.json so a later
+	// install of another agent's package does not prune this one.
+	return bunAdd(ctx, cfg, bun, cfg.RuntimeRoot, spec, log)
 }
 
 // agentSupportFiles are embedded helper files ACP agent launches reference

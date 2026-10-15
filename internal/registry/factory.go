@@ -52,10 +52,18 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	if launch.ACP == nil {
 		return nil, errors.New("ACP launch is missing")
 	}
+	// The pinned distribution says nothing about whether the JS runtime it runs
+	// on (or the shared browser MCP server) is present on this host yet.
+	progress.Report(ctx, "Checking JavaScript runtime…")
+	if err := runtimeinstall.EnsureRuntime(ctx, f.Config, os.Stderr); err != nil {
+		return nil, fmt.Errorf("provision runtime for %s: %w", req.Spec.Agent, err)
+	}
 	if launch.Distribution == nil {
-		progress.Report(ctx, "Checking "+req.Spec.Agent+" agent runtime install…")
-		if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
-			return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
+		if runtimeinstall.ManagedLaunch(req.Spec.Agent, launch.ACP.Args) {
+			progress.Report(ctx, "Checking "+req.Spec.Agent+" agent runtime install…")
+			if err := runtimeinstall.EnsureAgent(ctx, f.Config, req.Spec.Agent, os.Stderr); err != nil {
+				return nil, fmt.Errorf("provision agent %s: %w", req.Spec.Agent, err)
+			}
 		}
 	} else if entry, ok := runtimeinstall.EntryPoint(req.Spec.Agent, launch.Distribution); !ok || launch.ACP == nil || len(launch.ACP.Args) == 0 || launch.ACP.Args[0] != entry {
 		return nil, fmt.Errorf("managed agent %s has an invalid pinned distribution", req.Spec.Agent)
