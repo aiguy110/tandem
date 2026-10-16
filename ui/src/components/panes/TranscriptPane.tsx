@@ -1077,7 +1077,7 @@ function AnnotationTray({
         const available = knownSeqs.has(a.seq);
         const editing = editingId === a.id;
         return (
-          <div className="annotation-row" id={annotationTargetId(a.id)} key={a.id}>
+          <div className={`annotation-row${editing ? ' editing' : ''}`} id={annotationTargetId(a.id)} key={a.id}>
             <div
               className={`annotation-snippet${available ? '' : ' unavailable'}`}
               onClick={() => available && onJump(a.seq, annotationTargetId(a.id))}
@@ -1091,8 +1091,10 @@ function AnnotationTray({
             {editing ? (
               <div className="annotation-edit">
                 <textarea rows={2} autoFocus value={editText} onChange={(e) => setEditText(e.target.value)} />
-                <button type="button" onClick={() => void saveEdit()}>Save</button>
-                <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                <div className="annotation-edit-actions">
+                  <button type="button" onClick={() => void saveEdit()}>Save</button>
+                  <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
               </div>
             ) : (
               <div className="annotation-actions">

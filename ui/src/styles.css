@@ -861,6 +861,7 @@ body.dock-resizing .app { transition: none; }
 .annotation-tray { display: flex; flex-direction: column; gap: 5px; padding: 7px 9px; margin: 0 14px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
 .annotation-tray-header { color: var(--text-dim); font-size: var(--fs-xs); font-weight: 600; }
 .annotation-row { display: flex; align-items: flex-start; gap: 8px; }
+.annotation-row.editing { flex-direction: column; align-items: stretch; gap: 5px; }
 .annotation-snippet { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
 .annotation-snippet.unavailable { cursor: default; }
 .annotation-quote { color: var(--text-dim); font-size: var(--fs-xs); font-style: italic; overflow-wrap: anywhere; }
@@ -871,7 +872,8 @@ body.dock-resizing .app { transition: none; }
 .annotation-actions button:hover { color: var(--text); }
 .annotation-edit { display: flex; flex-direction: column; gap: 5px; flex: 1; }
 .annotation-edit textarea { width: 100%; resize: vertical; font: inherit; font-size: var(--fs-sm); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 5px 7px; }
-.annotation-edit button { align-self: flex-end; appearance: none; border: 0; background: none; color: var(--text-faint); font: inherit; font-size: var(--fs-xs); cursor: pointer; margin-left: 8px; }
+.annotation-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.annotation-edit button { appearance: none; border: 0; background: none; color: var(--text-faint); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 .annotation-edit button:hover { color: var(--text); }
 
 /* Citation chip: a sent `quote` prompt block, rendered inside a user row. */
