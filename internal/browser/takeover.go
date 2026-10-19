@@ -30,6 +30,7 @@ type takeover struct {
 	sessionID string
 	browserID string
 	resolved  bool
+	dismissed bool
 	lastSeen  time.Time
 }
 
@@ -96,9 +97,9 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		t.mu.Lock()
 		request := t.requests[r.URL.Query().Get("reqId")]
-		resolved := false
+		resolved, dismissed := false, false
 		if request != nil {
-			resolved = request.resolved
+			resolved, dismissed = request.resolved, request.dismissed
 			request.lastSeen = t.opts.Now()
 		}
 		t.mu.Unlock()
@@ -106,7 +107,7 @@ func (t *Takeovers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			takeoverJSON(w, http.StatusNotFound, map[string]string{"error": "no such takeover"})
 			return
 		}
-		takeoverJSON(w, http.StatusOK, map[string]bool{"resolved": resolved})
+		takeoverJSON(w, http.StatusOK, map[string]bool{"resolved": resolved, "dismissed": dismissed})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -167,6 +168,21 @@ func (t *Takeovers) Abandon(reqID string) {
 	if request := t.requests[reqID]; request != nil {
 		request.resolved = true
 	}
+}
+
+// Dismiss marks a session's takeover resolved because the human declined it,
+// without firing OnResolved; the caller records the resolution. A late poll
+// tells the waiting tool call it was dismissed rather than completed. It
+// reports whether the request was still pending in memory.
+func (t *Takeovers) Dismiss(sessionID, reqID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	request := t.requests[reqID]
+	if request == nil || request.sessionID != sessionID || request.resolved {
+		return false
+	}
+	request.resolved, request.dismissed = true, true
+	return true
 }
 
 func (t *Takeovers) authorized(r *http.Request) bool {

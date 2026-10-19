@@ -21,7 +21,7 @@ func TestTakeoverReconcilerResolvesOrphansFromLog(t *testing.T) {
 	abandoned := map[string]bool{}
 	r := newTakeoverReconciler()
 	r.events = func(id string, _ ...string) ([]store.StoredEvent, error) { return events[id], nil }
-	r.live = func(reqID string) bool { return reqID == "tk_live" }
+	r.live = func(_, reqID string) bool { return reqID == "tk_live" }
 	r.abandon = func(reqID string) { abandoned[reqID] = true }
 	r.resolve = func(id, reqID string) { resolved[reqID] = id }
 	r.scan("a")
@@ -31,7 +31,7 @@ func TestTakeoverReconcilerResolvesOrphansFromLog(t *testing.T) {
 		t.Fatalf("resolved = %v abandoned = %v, want only tk_2", resolved, abandoned)
 	}
 	// The live request stays tracked and is swept once its caller goes away.
-	r.live = func(string) bool { return false }
+	r.live = func(string, string) bool { return false }
 	r.sweep()
 	if resolved["tk_live"] != "b" {
 		t.Fatalf("resolved = %v, want tk_live swept", resolved)
@@ -45,10 +45,25 @@ func TestTakeoverReconcilerResolvesOrphansFromLog(t *testing.T) {
 
 func TestTakeoverReconcilerForgetsNormallyResolvedRequests(t *testing.T) {
 	r := newTakeoverReconciler()
-	r.live = func(string) bool { return false }
+	r.live = func(string, string) bool { return false }
 	r.abandon = func(string) {}
 	r.resolve = func(_, reqID string) { t.Fatalf("resolved %s after it was forgotten", reqID) }
 	r.track("a", "tk_1")
 	r.forget("tk_1")
+	r.sweep()
+}
+
+func TestTakeoverReconcilerClaimIsExclusive(t *testing.T) {
+	r := newTakeoverReconciler()
+	r.live = func(string, string) bool { return false }
+	r.abandon = func(string) {}
+	r.resolve = func(_, reqID string) { t.Fatalf("sweep resolved claimed %s", reqID) }
+	r.track("a", "tk_1")
+	if r.claim("b", "tk_1") {
+		t.Fatal("claimed another session's takeover")
+	}
+	if !r.claim("a", "tk_1") || r.claim("a", "tk_1") {
+		t.Fatal("claim should succeed exactly once")
+	}
 	r.sweep()
 }

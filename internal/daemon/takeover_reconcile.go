@@ -20,7 +20,9 @@ const takeoverSweepInterval = 10 * time.Second
 // matching takeover_resolved, and the UI would show it forever.
 type takeoverReconciler struct {
 	events func(sessionID string, kinds ...string) ([]store.StoredEvent, error)
-	live   func(reqID string) bool
+	// live reports whether someone can still answer the request: its tool
+	// call is polling and the session's turn is still running.
+	live func(sessionID, reqID string) bool
 	// abandon unblocks any late poller for the request in memory.
 	abandon func(reqID string)
 	// resolve records the resolution durably for the session.
@@ -44,6 +46,18 @@ func (r *takeoverReconciler) forget(reqID string) {
 	r.mu.Lock()
 	delete(r.outstanding, reqID)
 	r.mu.Unlock()
+}
+
+// claim removes reqID from the outstanding set if it is pending for
+// sessionID, so exactly one of sweep, dismissal, or release resolves it.
+func (r *takeoverReconciler) claim(sessionID, reqID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.outstanding[reqID] != sessionID {
+		return false
+	}
+	delete(r.outstanding, reqID)
+	return true
 }
 
 // scan loads a session's unresolved takeover requests from the event log so
@@ -78,7 +92,7 @@ func (r *takeoverReconciler) sweep() {
 	r.mu.Lock()
 	var orphaned [][2]string
 	for reqID, sessionID := range r.outstanding {
-		if !r.live(reqID) {
+		if !r.live(sessionID, reqID) {
 			orphaned = append(orphaned, [2]string{sessionID, reqID})
 			delete(r.outstanding, reqID)
 		}

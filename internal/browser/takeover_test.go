@@ -115,3 +115,29 @@ func TestBrokerReleaseResolvesTakeovers(t *testing.T) {
 		t.Fatalf("status = %s", w.Body.String())
 	}
 }
+
+func TestTakeoverDismissReportsDismissedToPoller(t *testing.T) {
+	h := NewTakeovers(TakeoverOptions{Token: "secret", AgentExists: func(string) bool { return true }, OnResolved: func(string, string) { t.Fatal("dismiss fired OnResolved") }})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/internal/browser/takeover?sessionId=one&token=secret", bytes.NewBufferString(`{}`)))
+	var registered struct {
+		ReqID string `json:"reqId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &registered)
+	if h.Dismiss("other", registered.ReqID) {
+		t.Fatal("dismissed another session's takeover")
+	}
+	if !h.Dismiss("one", registered.ReqID) || h.Dismiss("one", registered.ReqID) {
+		t.Fatal("dismiss should succeed exactly once")
+	}
+	if h.Live(registered.ReqID) {
+		t.Fatal("dismissed takeover is live")
+	}
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "/internal/browser/takeover?reqId="+registered.ReqID+"&token=secret", nil))
+	if !strings.Contains(rw.Body.String(), `"dismissed":true`) {
+		t.Fatalf("poll = %s, want dismissed", rw.Body.String())
+	}
+	// A later release must not resolve it a second time.
+	h.Release(InstanceKey("one", DefaultBrowserID))
+}

@@ -46,6 +46,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const setPane = useStore((s) => s.setPane);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const acknowledgeTakeover = useStore((s) => s.acknowledgeTakeover);
+  const dismissTakeover = useStore((s) => s.dismissTakeover);
   const setBrowserView = useStore((s) => s.setBrowserView);
   const collapsed = useStore((s) => s.approvalsRailCollapsed);
   const toggleCollapsed = useStore((s) => s.toggleApprovalsRail);
@@ -177,6 +178,16 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
               }}
             >
               🖐 Take the wheel
+            </button>
+            <button
+              className="btn-deny"
+              title="Clear this request without taking the wheel (e.g. the browser is gone)"
+              onClick={(e) => {
+                e.stopPropagation();
+                void dismissTakeover(sessionId, takeover.reqId);
+              }}
+            >
+              Dismiss
             </button>
           </div>
         </div>

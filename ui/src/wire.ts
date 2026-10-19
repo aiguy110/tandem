@@ -634,6 +634,7 @@ export type ClientMsg =
   // Which browser instance this client watches; independent of the agent's target.
   | { t: 'browser_view'; sessionId: string; browserId: string; corrId?: string }
   | { t: 'close_browser_instance'; sessionId: string; browserId: string; corrId?: string }
+  | { t: 'dismiss_takeover'; sessionId: string; reqId: string; corrId?: string }
   | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve' | 'deny'; snapshotId?: string; corrId?: string }
   | { t: 'restart_harness'; sessionId: string; corrId?: string }
   // Starts a new agent on a conversation-only fork of sessionId (workspace is

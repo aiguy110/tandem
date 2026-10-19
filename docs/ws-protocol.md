@@ -314,6 +314,7 @@ type ClientMsg =
   | { t: 'browser_view'; sessionId: string; browserId: string }
   | { t: 'close_browser_instance'; sessionId: string; browserId: string }
   | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve'|'deny'; snapshotId?: string } // snapshotId: the human's pick for a user_choice request
+  | { t: 'dismiss_takeover'; sessionId: string; reqId: string } // clear a browser takeover without taking the wheel; the agent's tool call errors as dismissed
   | { t: 'list_system_notifications' }
   | { t: 'system_notification_action'; notificationId: string; action: string }
   | { t: 'list_agent_distributions' }

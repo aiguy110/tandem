@@ -571,7 +571,17 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, ResolveBrowserInstance: func(resolveCtx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error {
+	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, DismissTakeover: func(sessionID, reqID string) error {
+		if agents.Get(sessionID) == nil {
+			return errors.New("no such agent")
+		}
+		if !takeoverReconcile.claim(sessionID, reqID) {
+			return errors.New("no pending takeover with that id")
+		}
+		slog.Info("browser takeover dismissed by user", "session", sessionID, "reqId", reqID, "was_live", takeovers.Dismiss(sessionID, reqID))
+		takeoverReconcile.resolve(sessionID, reqID)
+		return nil
+	}, ResolveBrowserInstance: func(resolveCtx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error {
 		_, resolveErr := browserInstances.Resolve(resolveCtx, sessionID, requestID, granted, savedProfileID)
 		return resolveErr
 	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
@@ -590,7 +600,14 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	messagingService.Start(ctx)
 	defer messagingService.Close()
 	takeoverReconcile.events = db.EventsOfKinds
-	takeoverReconcile.live = takeovers.Live
+	takeoverReconcile.live = func(id, reqID string) bool {
+		// A takeover blocks its tool call, which blocks the turn. Once the turn
+		// has ended (cancelled, crashed, or the harness gave up on the call) the
+		// agent can no longer act on the human's answer, even if a stray
+		// mcp-control process keeps polling.
+		s := agents.Get(id)
+		return s != nil && s.ActiveTurn() && takeovers.Live(reqID)
+	}
 	takeoverReconcile.abandon = takeovers.Abandon
 	takeoverReconcile.resolve = func(id, reqID string) {
 		pushAgentEvent(agents, id, map[string]any{"kind": "takeover_resolved", "reqId": reqID})

@@ -36,7 +36,17 @@ type server struct {
 	cfg Config
 	out io.Writer
 	mu  sync.Mutex
+	// calls cancels in-flight tools/call requests by JSON-RPC id, so a client
+	// that abandons a call (a cancelled turn) stops its daemon-side polling.
+	callsMu sync.Mutex
+	calls   map[string]context.CancelFunc
 }
+
+// errDismissed reports that the human dismissed a takeover without doing it.
+var errDismissed = errors.New("the human dismissed the takeover request without taking the wheel; do not retry it unless they ask")
+
+// errTakeoverGone reports that the daemon no longer tracks the request.
+var errTakeoverGone = errors.New("the takeover request expired (the Tandem daemon restarted); ask again if you still need the human")
 
 // Run serves newline-delimited MCP JSON-RPC until input closes or ctx ends.
 func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
@@ -46,7 +56,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = time.Second
 	}
-	s := &server{cfg: cfg, out: out}
+	s := &server{cfg: cfg, out: out, calls: make(map[string]context.CancelFunc)}
 	scan := bufio.NewScanner(in)
 	scan.Buffer(make([]byte, 64<<10), 4<<20)
 	var calls sync.WaitGroup
@@ -81,6 +91,19 @@ func (s *server) handle(ctx context.Context, line []byte) {
 	switch req.Method {
 	case "notifications/initialized":
 		return
+	case "notifications/cancelled":
+		var p struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(req.Params, &p) == nil && len(p.RequestID) > 0 {
+			s.callsMu.Lock()
+			cancel := s.calls[string(p.RequestID)]
+			s.callsMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+		}
+		return
 	case "initialize":
 		var p struct {
 			ProtocolVersion string `json:"protocolVersion"`
@@ -107,6 +130,18 @@ func (s *server) handle(ctx context.Context, line []byte) {
 			s.rpcError(req.ID, -32602, "invalid tool call")
 			return
 		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		key := string(req.ID)
+		s.callsMu.Lock()
+		s.calls[key] = cancel
+		s.callsMu.Unlock()
+		defer func() {
+			s.callsMu.Lock()
+			delete(s.calls, key)
+			s.callsMu.Unlock()
+			cancel()
+		}()
 		switch p.Name {
 		case ToolName:
 			var args struct {
@@ -446,6 +481,9 @@ func (s *server) takeover(ctx context.Context, reason, browserID string) error {
 			return ctx.Err()
 		case <-ticker.C:
 			resolved, err := s.poll(ctx, base, registered.ReqID)
+			if errors.Is(err, errDismissed) || errors.Is(err, errTakeoverGone) {
+				return err
+			}
 			if err == nil && resolved {
 				return nil
 			}
@@ -471,14 +509,25 @@ func (s *server) poll(ctx context.Context, base, reqID string) (bool, error) {
 		return false, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// The daemon restarted and no longer knows the request; it has already
+		// cleared the notification, so waiting longer would hang the turn.
+		return false, errTakeoverGone
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, fmt.Errorf("takeover status failed (%d)", resp.StatusCode)
 	}
 	var body struct {
-		Resolved bool `json:"resolved"`
+		Resolved  bool `json:"resolved"`
+		Dismissed bool `json:"dismissed"`
 	}
-	err = json.NewDecoder(resp.Body).Decode(&body)
-	return body.Resolved, err
+	if err = json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, err
+	}
+	if body.Dismissed {
+		return false, errDismissed
+	}
+	return body.Resolved, nil
 }
 
 func (s *server) result(id json.RawMessage, value any) {

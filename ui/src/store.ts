@@ -491,6 +491,9 @@ interface StoreState {
   // Browser instances. Commands above act on the session's viewed instance.
   setBrowserView: (sessionId: string, browserId: string) => void;
   closeBrowserInstance: (sessionId: string, browserId: string) => Promise<AckResult>;
+  // Clears an agent's takeover request without taking the wheel (e.g. its
+  // browser died); the waiting tool call is told it was dismissed.
+  dismissTakeover: (sessionId: string, reqId: string) => Promise<AckResult>;
   resolveBrowserInstance: (sessionId: string, requestId: string, approve: boolean, savedProfileId?: string) => Promise<AckResult>;
 }
 
@@ -2156,6 +2159,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'close_browser_instance', sessionId, browserId, corrId });
+      }),
+    dismissTakeover: (sessionId, reqId) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'dismiss_takeover', sessionId, reqId, corrId });
       }),
     resolveBrowserInstance: (sessionId, requestId, approve, savedProfileId) =>
       new Promise<AckResult>((resolve) => {

@@ -97,3 +97,71 @@ func TestMCPHandshakeAndTakeoverBlocksUntilRelease(t *testing.T) {
 		t.Fatal("server did not stop")
 	}
 }
+
+// startTakeover runs the MCP server against a daemon stub whose GET status
+// body comes from status, and issues one takeover call with id 7.
+func startTakeover(t *testing.T, status func() string) (send func(string), responses chan map[string]any, polls *atomic.Int64) {
+	t.Helper()
+	polls = &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = io.WriteString(w, `{"reqId":"tk_1"}`)
+			return
+		}
+		polls.Add(1)
+		_, _ = io.WriteString(w, status())
+	}))
+	t.Cleanup(server.Close)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); _ = inW.Close(); _ = outW.Close() })
+	go func() {
+		_ = Run(ctx, inR, outW, Config{ControlURL: server.URL, Token: "secret", SessionID: "s", BrowserEnabled: true, PollInterval: 5 * time.Millisecond})
+	}()
+	responses = make(chan map[string]any, 8)
+	go func() {
+		s := bufio.NewScanner(outR)
+		for s.Scan() {
+			var v map[string]any
+			if json.Unmarshal(s.Bytes(), &v) == nil {
+				responses <- v
+			}
+		}
+	}()
+	send = func(line string) { _, _ = io.WriteString(inW, line+"\n") }
+	send(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_request_takeover","arguments":{"reason":"log in"}}}`)
+	return send, responses, polls
+}
+
+func TestTakeoverStopsPollingWhenClientCancels(t *testing.T) {
+	send, responses, polls := startTakeover(t, func() string { return `{"resolved":false}` })
+	deadline := time.Now().Add(time.Second)
+	for polls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"turn cancelled"}}`)
+	select {
+	case <-responses:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled takeover call did not finish")
+	}
+	settled := polls.Load()
+	time.Sleep(50 * time.Millisecond)
+	if polls.Load() != settled {
+		t.Fatal("takeover kept polling after cancellation")
+	}
+}
+
+func TestTakeoverReportsDismissal(t *testing.T) {
+	_, responses, _ := startTakeover(t, func() string { return `{"resolved":true,"dismissed":true}` })
+	select {
+	case got := <-responses:
+		data, _ := json.Marshal(got)
+		if !strings.Contains(string(data), "dismissed") || !strings.Contains(string(data), `"error"`) {
+			t.Fatalf("tool response = %s, want dismissal error", data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dismissed takeover did not finish")
+	}
+}

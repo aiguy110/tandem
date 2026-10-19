@@ -44,6 +44,7 @@ export function BrowserPane() {
   const browserStates = useStore((s) => s.sessions[sessionId]?.browserStates ?? NO_STATES);
   const viewId = useStore((s) => s.sessions[sessionId]?.browserViewId ?? DEFAULT_BROWSER_ID);
   const setBrowserView = useStore((s) => s.setBrowserView);
+  const dismissTakeover = useStore((s) => s.dismissTakeover);
   const closeBrowserInstance = useStore((s) => s.closeBrowserInstance);
   const takeovers = allTakeovers.filter((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === viewId);
   const otherTakeover = allTakeovers.find((t) => (t.browserId ?? DEFAULT_BROWSER_ID) !== viewId);
@@ -668,6 +669,9 @@ export function BrowserPane() {
           <button className="wheel-btn hot" onClick={() => setBrowserView(sessionId, otherTakeover.browserId ?? DEFAULT_BROWSER_ID)}>
             Show it
           </button>
+          <button className="wheel-btn" title="Clear this request without taking the wheel" onClick={() => void dismissTakeover(sessionId, otherTakeover.reqId)}>
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -681,6 +685,9 @@ export function BrowserPane() {
               Take the wheel
             </button>
           )}
+          <button className="wheel-btn" title="Clear this request without taking the wheel" onClick={() => void dismissTakeover(sessionId, takeovers[takeovers.length - 1].reqId)}>
+            Dismiss
+          </button>
         </div>
       )}
 

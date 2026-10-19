@@ -82,7 +82,10 @@ type Options struct {
 	Browser    *browser.Broker
 	// ResolveBrowserInstance records the human's decision on an agent's
 	// request for an additional browser instance.
-	ResolveBrowserInstance   func(ctx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error
+	ResolveBrowserInstance func(ctx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error
+	// DismissTakeover clears an agent's browser takeover request without the
+	// human taking the wheel, e.g. when the browser it referred to is gone.
+	DismissTakeover          func(sessionID, reqID string) error
 	History                  HistoryLifecycle
 	HostMetrics              HostMetrics
 	Automation               AutomationStore
@@ -1868,6 +1871,20 @@ func (c *connection) handle(m clientMessage) {
 		ctx, cancel := context.WithTimeout(c.ctx, 15*time.Second)
 		defer cancel()
 		if err := c.server.opts.Registry.CloseInstance(ctx, m.SessionID, m.BrowserID); err != nil {
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, m.SessionID)
+	case "dismiss_takeover":
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		if c.server.opts.DismissTakeover == nil {
+			c.commandError(m, errors.New("browser subsystem disabled"))
+			return
+		}
+		if err := c.server.opts.DismissTakeover(m.SessionID, m.ReqID); err != nil {
+			slog.Warn("dismiss takeover failed", "session_id", m.SessionID, "reqId", m.ReqID, "err", err)
 			c.commandError(m, err)
 			return
 		}
