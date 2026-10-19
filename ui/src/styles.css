@@ -1263,8 +1263,9 @@ body.dock-resizing .app { transition: none; }
 .git-ref-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; color: var(--text-faint); font: var(--fs-xs) var(--font-mono); }
 .git-ref-meta em { padding: 1px 4px; border-radius: 3px; background: var(--agent-soft); color: var(--agent); font-style: normal; }
 .git-ref-empty { padding: 10px; color: var(--text-faint); font-size: var(--fs-xs); }
-.confirm-modal { width: min(560px, 92vw); }
-.confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; }
+.confirm-modal { width: min(560px, 92vw); max-height: calc(100vh - 12vh - 24px); display: flex; flex-direction: column; }
+.confirm-modal .confirm-body { padding: 16px; font-size: var(--fs-sm); line-height: 1.5; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
+.confirm-modal > :not(.confirm-body) { flex-shrink: 0; }
 .confirm-modal section { margin-top: 14px; }
 .confirm-modal pre { max-height: 150px; overflow: auto; margin: 5px 0 0; padding: 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); white-space: pre-wrap; }
 .delete-worktree-option { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
