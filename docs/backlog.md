@@ -47,3 +47,30 @@ the full Web Push stack.
 
 **Decide before building:** is routing notification metadata through Google/Apple
 infrastructure acceptable for a self-hosted tool?
+
+## Shared browser: JavaScript dialogs are invisible to the user and block the agent
+
+**What.** When a page raises a JavaScript dialog (`beforeunload`, `alert`, `confirm`,
+`prompt`) in a shared browser instance, the page stalls until something answers it. The agent
+only learns of it as a "Modal state" note on the next browser tool call, and the user sees
+nothing — the shared view just looks frozen.
+
+**Seen.** Repeatedly; most recently on ceac.state.gov (DS-160). Clicking a radio button or
+changing a select there causes an ASP.NET postback, which fires a `beforeunload` dialog with
+an empty message. The agent's next call failed with `does not handle the modal state` (or
+timed out on `browser_snapshot`), and the user reported a frozen browser with no visible
+prompt. Navigating directly to another URL triggers the same dialog.
+
+**Wanted.**
+
+- Render pending dialogs in the shared browser view (type, message, Accept/Dismiss) so the
+  user can answer them too.
+- Surface them to the agent immediately, not only on the next tool call. Ideally the
+  tool result that triggered a dialog says so ("action opened a beforeunload dialog").
+- Consider a per-instance policy for `beforeunload` (auto-accept for agent-initiated
+  actions) since an agent clicking a form control cannot meaningfully "leave the page".
+- Make every browser tool fail fast with a clear message while a dialog is pending, rather
+  than waiting out the 30 s timeout.
+
+**Not decided.** Whether auto-accepting `beforeunload` is safe — it can discard unsaved
+form input the user typed in the shared view.
