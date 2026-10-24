@@ -11,7 +11,7 @@ let sent: ClientMsg[] = [];
 
 beforeEach(() => {
   sent = [];
-  vi.spyOn(WsClient.prototype, 'send').mockImplementation((m) => { sent.push(m); });
+  vi.spyOn(WsClient.prototype, 'send').mockImplementation((m) => { sent.push(m); return true; });
 });
 
 afterEach(() => {

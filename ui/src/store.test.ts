@@ -45,7 +45,7 @@ afterEach(() => {
 describe('prompt acknowledgements', () => {
   it('times out without leaving the composer waiting forever', async () => {
     vi.useFakeTimers();
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     const pending = useStore.getState().prompt('session-1', 'continue');
 
     await vi.advanceTimersByTimeAsync(15_000);
@@ -442,7 +442,7 @@ describe('audio focus retention on a hidden document', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     useStore.getState().focus('session-1'); // hidden + idle engine -> null baseline
 
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
 
     setEnginePlaylist('session-1', [1]);
     enginePlay('session-1', 1);
@@ -478,7 +478,7 @@ describe('audio focus retention on a hidden document', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     useStore.getState().focus('session-1');
 
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
 
     useStore.getState().focus('session-1');
@@ -489,13 +489,13 @@ describe('audio focus retention on a hidden document', () => {
 
 describe('pending spawns', () => {
   const spec = { agent: 'claude', adapter: 'acp' as const, workspace: { kind: 'worktree' as const, repo: '/repo/demo' } };
-  function sentSpawnCorr(sendSpy: ReturnType<typeof vi.spyOn>): string {
+  function sentSpawnCorr(sendSpy: { mock: { calls: unknown[][] } }): string {
     const msg = sendSpy.mock.calls.map((c: unknown[]) => c[0] as { t: string; corrId?: string }).find((m: { t: string }) => m.t === 'spawn_agent');
     return msg!.corrId!;
   }
 
   it('shows progress, then focuses the new session when the user is still watching', async () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     const done = useStore.getState().spawn(spec);
     const corrId = sentSpawnCorr(sendSpy);
     expect(useStore.getState().focusedSpawnId).toBe(corrId);
@@ -513,8 +513,31 @@ describe('pending spawns', () => {
     sendSpy.mockRestore();
   });
 
+  it('fails a spawn whose socket died before the daemon acked it', async () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
+    const done = useStore.getState().spawn(spec);
+    const corrId = sentSpawnCorr(sendSpy);
+    const client = sendSpy.mock.contexts[0] as unknown as { opts: { onState: (s: string) => void } };
+    client.opts.onState('reconnecting');
+    expect((await done).error).toMatch(/Connection lost/);
+    expect(useStore.getState().pendingSpawns).toMatchObject([{ corrId, error: expect.stringMatching(/Connection lost/) }]);
+    useStore.getState().dismissPendingSpawn(corrId);
+    sendSpy.mockRestore();
+  });
+
+  it('keeps a spawn queued while offline pending across the reconnect', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => false);
+    void useStore.getState().spawn(spec);
+    const corrId = sentSpawnCorr(sendSpy);
+    const client = sendSpy.mock.contexts[0] as unknown as { opts: { onState: (s: string) => void } };
+    client.opts.onState('reconnecting');
+    expect(useStore.getState().pendingSpawns).toMatchObject([{ corrId, error: null }]);
+    useStore.getState().dismissPendingSpawn(corrId);
+    sendSpy.mockRestore();
+  });
+
   it('keeps a failed spawn in the rail after the user moved elsewhere', async () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     __testApplyServerMsg({ t: 'agents', sessions: [summary()] });
     const done = useStore.getState().spawn(spec);
     const corrId = sentSpawnCorr(sendSpy);
@@ -541,7 +564,7 @@ describe('spawn palette data', () => {
     spy.mock.calls.map((c) => c[0] as { t: string; corrId?: string; hostId?: string; all?: boolean }).filter((m) => m.t === t);
 
   it('tracks a host repo scan from loading through refreshing to ready', () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     useStore.getState().refreshHostDirs('worker-1');
     expect(useStore.getState().dirsStatusByHost['worker-1']).toBe('loading');
     const [req] = sentOf(sendSpy, 'list_dirs');
@@ -560,7 +583,7 @@ describe('spawn palette data', () => {
   });
 
   it('reports a failed scan instead of an empty list', () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     useStore.getState().refreshHostDirs('worker-1');
     const [req] = sentOf(sendSpy, 'list_dirs');
     __testApplyServerMsg({ t: 'ack', corrId: req.corrId, error: 'route to "worker-1" is offline' });
@@ -570,7 +593,7 @@ describe('spawn palette data', () => {
   });
 
   it('caches batch profiles per host and applies broadcasts', () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     useStore.getState().refreshProfiles('worker-1');
     const [req] = sentOf(sendSpy, 'list_profiles');
     expect(req).toMatchObject({ all: true, hostId: 'worker-1' });
@@ -586,7 +609,7 @@ describe('spawn palette data', () => {
   });
 
   it('marks a host whose daemon ignores the batch flag as legacy', () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     useStore.getState().refreshProfiles('old-host');
     const [req] = sentOf(sendSpy, 'list_profiles');
     __testApplyServerMsg({ t: 'profiles', corrId: req.corrId, hostId: 'old-host', profiles: [profile('p1')], recent: [], project: '' });
@@ -621,14 +644,14 @@ describe('agent messaging projections', () => {
   });
 
   it('reads the kill-switch state of each newly readable host', () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     __testApplyServerMsg({ t: 'hosts', hosts: [{ id: 'b', name: 'Builder', status: 'connected', access: 'view' }, { id: 'c', status: 'offline' }, { id: 'd', status: 'connected', access: 'none' }] });
     const asked = sendSpy.mock.calls.map(([m]) => m).filter((m) => m.t === 'get_messaging_state');
     expect(asked).toEqual([{ t: 'get_messaging_state', hostId: 'b' }]);
   });
 
   it('pauses messaging only on hosts with operate access and drives the palette entries', async () => {
-    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => {});
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
     __testApplyServerMsg({ t: 'hosts', hosts: [
       { id: 'op', status: 'connected', access: 'operate' },
       { id: 'ro', status: 'connected', access: 'message' },

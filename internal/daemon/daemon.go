@@ -112,6 +112,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}
 	metricsService := hostmetrics.New(db, cfg.Home, metricsMaxBytes)
 	metricsService.Start(ctx)
+	warnLowInotifyLimit("/proc/sys/fs/inotify/max_user_instances")
 	var voiceRenderer voice.Renderer
 	if cfg.Voice.Enabled {
 		languageModel, languageErr := languagemodel.New(cfg.LanguageModel)
@@ -1434,4 +1435,23 @@ func federationPolicy(rules []config.FederationAccessRule) (federation.Policy, e
 		return nil, fmt.Errorf("settings.federation.access: %w", err)
 	}
 	return policy, nil
+}
+
+// minInotifyInstances is the per-user inotify instance count below which a
+// handful of agents (each ACP bridge opens several watchers) exhausts the
+// limit and their settings watchers fail with EMFILE.
+const minInotifyInstances = 512
+
+func warnLowInotifyLimit(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return // Not Linux, or /proc unavailable.
+	}
+	limit, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || limit >= minInotifyInstances {
+		return
+	}
+	slog.Warn("inotify instance limit is low; agents may fail to watch files with EMFILE",
+		"max_user_instances", limit, "recommended", minInotifyInstances,
+		"fix", "echo 'fs.inotify.max_user_instances = 1024' | sudo tee /etc/sysctl.d/60-tandem-inotify.conf && sudo sysctl --system")
 }

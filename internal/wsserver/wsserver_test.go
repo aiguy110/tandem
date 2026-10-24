@@ -1936,3 +1936,29 @@ func TestRemoteNotificationActionRefreshesHostList(t *testing.T) {
 		}
 	}
 }
+
+func TestDownsampleHostMetricsKeepsEndpoints(t *testing.T) {
+	metrics := make([]store.HostMetric, 1000)
+	for i := range metrics {
+		metrics[i].Timestamp = int64(i)
+	}
+	if got := downsampleHostMetrics(metrics, 0); len(got) != 1000 {
+		t.Fatalf("maxPoints=0 returned %d samples", len(got))
+	}
+	got := downsampleHostMetrics(metrics, 10)
+	if len(got) != 10 || got[0].Timestamp != 0 || got[9].Timestamp != 999 {
+		t.Fatalf("downsampled = %+v", got)
+	}
+	if one := downsampleHostMetrics(metrics, 1); len(one) != 1 || one[0].Timestamp != 999 {
+		t.Fatalf("maxPoints=1 = %+v", one)
+	}
+}
+
+func TestWriteDeadlineScalesWithMessageSize(t *testing.T) {
+	if got := writeDeadline(1024); got != 5*time.Second {
+		t.Fatalf("small message deadline = %v", got)
+	}
+	if got := writeDeadline(4 << 20); got != 37*time.Second {
+		t.Fatalf("4 MiB message deadline = %v", got)
+	}
+}

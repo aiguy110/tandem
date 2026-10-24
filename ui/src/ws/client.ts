@@ -197,9 +197,16 @@ export class WsClient {
   }
 
   // Public send: queues while offline so intent isn't lost across a blip.
-  send(m: ClientMsg): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.rawSend(m);
-    else if (m.t !== 'browser_input') this.outbox.push(m);
+  // Returns true when written to an open socket, false when queued/dropped.
+  // A written message can still be lost if that socket dies before the
+  // daemon reads it; it is not replayed on reconnect.
+  send(m: ClientMsg): boolean {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.rawSend(m);
+      return true;
+    }
+    if (m.t !== 'browser_input') this.outbox.push(m);
+    return false;
   }
 
   private closeSocket(): void {

@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import type { HostMetric } from '../wire';
 
+// Sparklines are ~100 units wide; more history points only cost bandwidth.
+const HISTORY_POINTS = 720;
+
 const pct = (used: number, total: number) => total > 0 ? Math.max(0, Math.min(100, used / total * 100)) : 0;
 const bytes = (value: number) => `${(value / 1024 / 1024 / 1024).toFixed(value >= 100 * 1024 ** 3 ? 0 : 1)} GiB`;
 
@@ -18,8 +21,26 @@ export function HostMetricsModal() {
   const [metrics, setMetrics] = useState<HostMetric[]>([]);
   const [error, setError] = useState('');
   useEffect(() => {
+    // Load a downsampled 24h history once, then poll only for newer samples:
+    // re-fetching the full history every tick is megabytes per poll, which
+    // saturates slow links (e.g. a tailnet) and stalls the whole socket.
     let active = true;
-    const load = () => void fetchMetrics(hostId).then((next) => { if (active) { setMetrics(next); setError(''); } }).catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : String(e)); });
+    let newest: number | null = null;
+    let busy = false;
+    const fail = (e: unknown) => { if (active) setError(e instanceof Error ? e.message : String(e)); };
+    const load = () => {
+      if (busy) return;
+      busy = true;
+      const initial = newest === null;
+      void fetchMetrics(hostId, initial ? undefined : newest! + 1, initial ? HISTORY_POINTS : undefined).then((next) => {
+        if (!active) return;
+        setError('');
+        if (next.length) newest = next[next.length - 1].ts;
+        else if (initial) newest = Date.now();
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        setMetrics((cur) => initial ? next : [...cur, ...next].filter((m) => m.ts >= cutoff));
+      }).catch(fail).finally(() => { busy = false; });
+    };
     load(); const timer = window.setInterval(load, 5000);
     return () => { active = false; window.clearInterval(timer); };
   }, [fetchMetrics, hostId]);

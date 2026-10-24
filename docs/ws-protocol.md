@@ -52,7 +52,19 @@ closes before browser cleanup, so cleanup cannot prevent reconnect recovery.
 
 Screencast frames retain only the latest unsent image and yield to control
 traffic. Frame pacing slows when socket writes are expensive. A socket write
-still has a five-second deadline. Structured daemon logs identify connection
+has a five-second deadline plus one second per 128 KiB of message, so large
+messages on slow links (e.g. a tailnet) are not mistaken for a dead peer.
+
+Acks are connection-scoped. A `spawn_agent` written to a socket that closes
+before its `ack` arrives is failed in the UI ("connection lost before the
+daemon confirmed this spawn") rather than left pending; it is not resent,
+because the daemon may already have created the session. A spawn queued in
+the offline outbox is flushed on reconnect and stays pending.
+
+`list_host_metrics` accepts an optional `maxPoints`; the daemon then returns at
+most that many evenly strided samples (always including the newest). The
+utilization modal fetches a downsampled 24h history once and then polls only
+for samples newer than the last one it holds. Structured daemon logs identify connection
 IDs, closure causes, queue bytes/messages, slow writes and commands, replay
 volume, dropped intermediate frames, and CDP failures without logging prompts
 or credentials.

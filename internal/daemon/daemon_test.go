@@ -595,3 +595,15 @@ func TestConfiguredMCPServersWithholdsServersNeedingSignIn(t *testing.T) {
 		t.Fatalf("servers = %#v", servers)
 	}
 }
+
+func TestWarnLowInotifyLimitToleratesMissingAndMalformedFiles(t *testing.T) {
+	dir := t.TempDir()
+	warnLowInotifyLimit(filepath.Join(dir, "missing"))
+	path := filepath.Join(dir, "limit")
+	for _, value := range []string{"garbage", "128\n", "8192\n"} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		warnLowInotifyLimit(path)
+	}
+}

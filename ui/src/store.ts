@@ -396,7 +396,7 @@ interface StoreState {
   openSpawnAtHost: (hostId: string) => void;
   openFleetAtHost: (hostId: string) => void;
   openHostMetrics: (hostId: string) => void;
-  fetchHostMetrics: (hostId: string, since?: number) => Promise<HostMetric[]>;
+  fetchHostMetrics: (hostId: string, since?: number, maxPoints?: number) => Promise<HostMetric[]>;
   clearFleetFocusHost: () => void;
   // Open the spawn palette pre-selected to hand off from this agent.
   handOffAgent: (sessionId: string) => void;
@@ -508,6 +508,23 @@ interface StoreState {
 let corrCounter = 0;
 const nextCorr = () => `c${++corrCounter}`;
 const pendingAcks = new Map<string, (r: AckResult) => void>();
+// Spawns written to the current socket and still awaiting their ack. Acks are
+// connection-scoped, so if that socket dies they can never arrive.
+const inFlightSpawns = new Set<string>();
+// Spawns queued in the client outbox while offline; it flushes them on open.
+const queuedSpawns = new Set<string>();
+const SPAWN_CONNECTION_LOST = 'Connection lost before the daemon confirmed this spawn. Check the session list before retrying.';
+
+function failInFlightSpawns(): void {
+  if (!inFlightSpawns.size) return;
+  console.warn('Tandem WebSocket lost with spawns awaiting ack', { corrIds: [...inFlightSpawns] });
+  for (const corrId of [...inFlightSpawns]) {
+    inFlightSpawns.delete(corrId);
+    const ack = pendingAcks.get(corrId);
+    pendingAcks.delete(corrId);
+    ack?.({ error: SPAWN_CONNECTION_LOST });
+  }
+}
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
 const RATE_LIMIT_ACK_TIMEOUT_MS = 5_000;
 
@@ -1358,8 +1375,14 @@ export const useStore = create<StoreState>((set, get) => {
 
   client = new WsClient({
     onMessage: apply,
-    onState: (conn) => set({ conn }),
+    onState: (conn) => {
+      if (conn !== 'connected') failInFlightSpawns();
+      set({ conn });
+    },
     onOpen: () => {
+      // The outbox was just flushed onto this socket.
+      for (const corrId of queuedSpawns) inFlightSpawns.add(corrId);
+      queuedSpawns.clear();
       // The daemon drops connection-scoped audio focus on a socket close, so
       // always re-announce the active chat after reconnecting.
       audioFocusAgent = null;
@@ -1588,12 +1611,12 @@ export const useStore = create<StoreState>((set, get) => {
       get().refreshHosts();
       set({ modal: 'host-metrics', hostMetricsHostId: hostId });
     },
-    fetchHostMetrics: (hostId, since = Date.now() - 24 * 60 * 60 * 1000) => new Promise((resolve, reject) => {
+    fetchHostMetrics: (hostId, since = Date.now() - 24 * 60 * 60 * 1000, maxPoints) => new Promise((resolve, reject) => {
       const corrId = nextCorr();
       pendingHostMetrics.set(corrId, { resolve, reject });
       client.send(isLocalHost(hostId)
-        ? { t: 'list_host_metrics', sinceSeq: since, limit: 20000, corrId }
-        : { t: 'list_host_metrics', hostId, sinceSeq: since, limit: 20000, corrId });
+        ? { t: 'list_host_metrics', sinceSeq: since, limit: 20000, maxPoints, corrId }
+        : { t: 'list_host_metrics', hostId, sinceSeq: since, limit: 20000, maxPoints, corrId });
     }),
     clearFleetFocusHost: () => set({ fleetFocusHostId: null }),
     handOffAgent: (sessionId) => {
@@ -1736,6 +1759,8 @@ export const useStore = create<StoreState>((set, get) => {
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, (r) => {
+          inFlightSpawns.delete(corrId);
+          queuedSpawns.delete(corrId);
           const st = get();
           const ok = !!r.sessionId && !r.error;
           if (ok) {
@@ -1773,7 +1798,7 @@ export const useStore = create<StoreState>((set, get) => {
           }],
         }));
         syncAudioFocus();
-        client.send({ t: 'spawn_agent', spec, corrId });
+        (client.send({ t: 'spawn_agent', spec, corrId }) ? inFlightSpawns : queuedSpawns).add(corrId);
       }),
     actOnSystemNotification: (notificationId, action) =>
       new Promise<AckResult>((resolve) => {

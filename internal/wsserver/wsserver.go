@@ -434,6 +434,7 @@ type clientMessage struct {
 	Source            string                    `json:"source"`
 	Query             string                    `json:"query"`
 	Limit             int                       `json:"limit"`
+	MaxPoints         int                       `json:"maxPoints,omitempty"`
 	MaxHits           int                       `json:"maxHitsPerSession"`
 	Reindex           bool                      `json:"reindex"`
 	InterruptFirst    bool                      `json:"interrupt"`
@@ -799,7 +800,7 @@ func (c *connection) write(data []byte) bool {
 
 func (c *connection) writeMessage(data []byte, lane string) bool {
 	started := time.Now()
-	_ = c.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = c.ws.SetWriteDeadline(time.Now().Add(writeDeadline(len(data))))
 	if err := c.ws.WriteMessage(websocket.TextMessage, data); err != nil {
 		slog.Warn("websocket write failed", "connection_id", c.id, "lane", lane, "bytes", len(data), "elapsed_ms", time.Since(started).Milliseconds(), "queue_messages", len(c.out), "queue_bytes", c.queuedBytes.Load(), "error", err)
 		c.closeWithReason("write_failed", err)
@@ -816,6 +817,29 @@ func (c *connection) writeMessage(data []byte, lane string) bool {
 		slog.Warn("websocket slow write", "connection_id", c.id, "lane", lane, "bytes", len(data), "elapsed_ms", time.Since(started).Milliseconds(), "queue_messages", len(c.out), "queue_bytes", c.queuedBytes.Load())
 	}
 	return true
+}
+
+// writeDeadline allows 5s plus 1s per 128 KiB, so a large message on a slow
+// link (e.g. a tailnet) is not mistaken for a dead peer.
+func writeDeadline(bytes int) time.Duration {
+	return 5*time.Second + time.Duration(bytes/(128<<10))*time.Second
+}
+
+// downsampleHostMetrics keeps at most maxPoints evenly strided samples,
+// always including the newest. maxPoints <= 0 returns metrics unchanged.
+func downsampleHostMetrics(metrics []store.HostMetric, maxPoints int) []store.HostMetric {
+	if maxPoints <= 0 || len(metrics) <= maxPoints {
+		return metrics
+	}
+	last := len(metrics) - 1
+	if maxPoints == 1 {
+		return metrics[last:]
+	}
+	out := make([]store.HostMetric, 0, maxPoints)
+	for i := 0; i < maxPoints; i++ {
+		out = append(out, metrics[i*last/(maxPoints-1)])
+	}
+	return out
 }
 
 func (c *connection) close() {
@@ -1210,7 +1234,9 @@ func (c *connection) handle(m clientMessage) {
 			c.commandError(m, err)
 			return
 		}
-		slog.Debug("served local host metrics history", "samples", len(metrics), "since", m.SinceSeq)
+		total := len(metrics)
+		metrics = downsampleHostMetrics(metrics, m.MaxPoints)
+		slog.Debug("served local host metrics history", "samples", len(metrics), "stored_samples", total, "max_points", m.MaxPoints, "since", m.SinceSeq)
 		c.send(withCorr(map[string]any{"t": "host_metrics", "metrics": metrics}, m.CorrID))
 	case "subscribe":
 		c.subscribe(m)

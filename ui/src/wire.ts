@@ -662,7 +662,7 @@ export type ClientMsg =
   | { t: 'list_agents'; corrId?: string }
   | { t: 'list_agent_catalog'; hostId?: string; corrId?: string }
   | { t: 'list_hosts'; corrId?: string }
-  | { t: 'list_host_metrics'; hostId?: string; sinceSeq?: number; limit?: number; corrId?: string }
+  | { t: 'list_host_metrics'; hostId?: string; sinceSeq?: number; limit?: number; maxPoints?: number; corrId?: string }
   | { t: 'list_sessions'; hostId?: string; corrId?: string }
   | { t: 'list_automation'; repositoryId?: string; corrId?: string }
   | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
