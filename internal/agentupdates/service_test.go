@@ -223,3 +223,22 @@ func TestPollOffersUntestedUpdateEndToEnd(t *testing.T) {
 		t.Fatalf("installed=%q", installed)
 	}
 }
+
+func TestActionOnWithdrawnUpdateClearsNotification(t *testing.T) {
+	center := notifications.New()
+	s := NewService(Options{Center: center})
+	center.Upsert(notifications.Notification{ID: "agent-update:claude", Title: "claude ACP update available"})
+	if _, err := s.HandleAction(context.Background(), "agent-update:claude", "dismiss"); err != nil {
+		t.Fatalf("dismissing a withdrawn update should succeed: %v", err)
+	}
+	if len(center.List()) != 0 {
+		t.Fatalf("withdrawn notification remained: %#v", center.List())
+	}
+	center.Upsert(notifications.Notification{ID: "agent-update:claude", Title: "claude ACP update available"})
+	if _, err := s.HandleAction(context.Background(), "agent-update:claude", "install"); err == nil {
+		t.Fatal("installing a withdrawn update should report it")
+	}
+	if len(center.List()) != 0 {
+		t.Fatalf("withdrawn notification remained after install: %#v", center.List())
+	}
+}

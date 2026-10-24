@@ -261,6 +261,11 @@ func (h *Handler) broadcastFederationEvent(hostID string, payload json.RawMessag
 		}
 		h.setRemoteNotifications(hostID, relayed.Notifications)
 		h.broadcastSystemNotifications(nil)
+		// A host folds its own descendants' notifications into the list it
+		// pushes, so a change there is the only signal that one of theirs
+		// changed. Those hosts are tracked under their own route IDs; re-read
+		// them so an entry withdrawn two hops away does not linger here.
+		h.refreshDescendantNotifications(hostID)
 		return
 	}
 	// A relayed "hosts" list is the remote daemon's own view of its fleet (it
@@ -2147,6 +2152,13 @@ func (c *connection) forwardFederation(m clientMessage) {
 		return
 	}
 	response, err := c.server.opts.Federation.Call(callCtx, hostID, payload)
+	if m.T == "system_notification_action" {
+		// Whatever the action did (or failed to do because the entry was
+		// already gone), the host's list may have changed. Re-read it rather
+		// than trusting a push to arrive under this host's ID: hosts reached
+		// through another daemon only push as part of that daemon's list.
+		defer func() { go c.server.fetchHostNotifications(hostID) }()
+	}
 	if err != nil {
 		if m.T == "subscribe" && remoteID != "" && errors.Is(err, context.DeadlineExceeded) {
 			// The command reached a connected tunnel and is still queued on
@@ -2344,10 +2356,35 @@ func (h *Handler) systemNotifications() []notifications.Notification {
 	return items
 }
 
+// setRemoteNotifications records a host's own notifications. Entries the host
+// relays for its descendants are dropped: this daemon reaches each descendant
+// under its route ID and tracks its list there, so keeping the relayed copy
+// would show the same notification twice, once with a stale snapshot.
 func (h *Handler) setRemoteNotifications(hostID string, items []notifications.Notification) {
+	own := make([]notifications.Notification, 0, len(items))
+	for _, item := range items {
+		if _, _, nested := SplitRemoteSessionID(item.ID); nested {
+			continue
+		}
+		own = append(own, item)
+	}
 	h.mu.Lock()
-	h.remoteNotifications[hostID] = items
+	h.remoteNotifications[hostID] = own
 	h.mu.Unlock()
+}
+
+// refreshDescendantNotifications re-reads the notifications of every connected
+// host reached through the direct child hostID.
+func (h *Handler) refreshDescendantNotifications(hostID string) {
+	if h.opts.Federation == nil {
+		return
+	}
+	for _, host := range h.opts.Federation.Hosts() {
+		if host.Upstream || host.Status != "connected" || len(host.Route) < 2 || host.Route[0] != hostID {
+			continue
+		}
+		go h.fetchHostNotifications(host.ID)
+	}
 }
 
 // syncHostNotifications reconciles the relayed snapshots with the hosts that
@@ -2395,6 +2432,7 @@ func (h *Handler) fetchHostNotifications(hostID string) {
 	defer cancel()
 	response, err := h.opts.Federation.Call(ctx, hostID, json.RawMessage(`{"t":"list_system_notifications"}`))
 	if err != nil {
+		slog.Warn("remote notification list fetch failed", "host_id", hostID, "error", err)
 		return
 	}
 	var envelope struct {
@@ -2402,8 +2440,10 @@ func (h *Handler) fetchHostNotifications(hostID string) {
 		Notifications []notifications.Notification `json:"notifications"`
 	}
 	if json.Unmarshal(response, &envelope) != nil || envelope.T != "system_notifications" {
+		slog.Warn("remote notification list fetch returned an unexpected reply", "host_id", hostID)
 		return
 	}
+	slog.Debug("remote notification list refreshed", "host_id", hostID, "count", len(envelope.Notifications))
 	h.setRemoteNotifications(hostID, envelope.Notifications)
 	h.broadcastSystemNotifications(nil)
 }

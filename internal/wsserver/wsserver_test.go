@@ -39,6 +39,8 @@ type testFederation struct {
 	// subscribeTimeout makes a forwarded subscribe time out before the child
 	// answers, as a slow child does while restoring its agents.
 	subscribeTimeout bool
+	// notificationLists, when set, answers list_system_notifications per host.
+	notificationLists map[string]string
 }
 
 func (f *testFederation) Hosts() []federation.Host { return f.hosts }
@@ -59,6 +61,12 @@ func (f *testFederation) Call(ctx context.Context, hostID string, payload json.R
 	_ = json.Unmarshal(payload, &command)
 	switch command.T {
 	case "list_system_notifications":
+		f.mu.Lock()
+		list, ok := f.notificationLists[hostID]
+		f.mu.Unlock()
+		if ok {
+			return json.RawMessage(`{"t":"system_notifications","notifications":` + list + `}`), nil
+		}
 		return json.RawMessage(`{"t":"system_notifications","notifications":[{"id":"tandem-update","severity":"attention","title":"Tandem update available","actions":[{"id":"install","label":"Update","primary":true}]}]}`), nil
 	case "system_notification_action":
 		return json.RawMessage(`{"t":"ack"}`), nil
@@ -673,8 +681,14 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 		}
 		break
 	}
+	// The action is followed by a re-read of the host's list; find the action.
+	last := ""
 	fed.mu.Lock()
-	last := string(fed.calls[len(fed.calls)-1])
+	for _, call := range fed.calls {
+		if strings.Contains(string(call), "system_notification_action") {
+			last = string(call)
+		}
+	}
 	fed.mu.Unlock()
 	if !strings.Contains(last, `"notificationId":"tandem-update"`) || strings.Contains(last, "host-one") {
 		t.Fatalf("forwarded action payload = %s", last)
@@ -1825,5 +1839,67 @@ func TestRemoteHostReconnectRequestsResubscribe(t *testing.T) {
 	ids, _ := got["sessionIds"].([]any)
 	if len(ids) != 1 || ids[0] != remoteID {
 		t.Fatalf("resubscribe sessions = %#v", got)
+	}
+}
+
+// A host two hops away only pushes its notifications folded into its parent's
+// list. The relayed copy must not be shown, and a change in the parent's list
+// must re-read the descendant so an entry withdrawn there does not linger.
+func TestDescendantNotificationsRefreshWhenIntermediatePushes(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	leaf := "route@leaf"
+	update := `[{"id":"agent-update:claude","severity":"attention","title":"claude ACP update available"}]`
+	fed := &testFederation{
+		hosts: []federation.Host{
+			{ID: "middle", Name: "middle", Status: "connected", Route: []string{"middle"}},
+			{ID: leaf, Name: "leaf", Status: "connected", Route: []string{"middle", "leaf"}},
+		},
+		notificationLists: map[string]string{"middle": `[]`, leaf: update},
+	}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Notifications: notifications.New(), Federation: fed})
+	t.Cleanup(handler.Close)
+	handler.fetchHostNotifications(leaf)
+	if items := handler.systemNotifications(); len(items) != 1 || items[0].HostID != leaf {
+		t.Fatalf("initial notifications = %#v", items)
+	}
+
+	fed.mu.Lock()
+	fed.notificationLists[leaf] = `[]`
+	subscriber := fed.subscriber
+	fed.mu.Unlock()
+	subscriber("middle", json.RawMessage(`{"t":"system_notifications","notifications":[{"id":"fed~leaf~agent-update:claude","title":"claude ACP update available"}]}`))
+	deadline := time.Now().Add(2 * time.Second)
+	for len(handler.systemNotifications()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("stale descendant notification remained: %#v", handler.systemNotifications())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Acting on a remote notification re-reads that host's list, so an entry the
+// host already withdrew disappears even though the action itself failed.
+func TestRemoteNotificationActionRefreshesHostList(t *testing.T) {
+	db, backend, _, _, _ := setupWS(t, 0)
+	fed := &testFederation{
+		hosts:             []federation.Host{{ID: "host-one", Name: "builder", Status: "connected", Route: []string{"host-one"}}},
+		notificationLists: map[string]string{"host-one": `[{"id":"agent-update:claude","title":"claude ACP update available"}]`},
+	}
+	handler := New(Options{Token: "secret", Registry: backend, Automation: db, Notifications: notifications.New(), Federation: fed})
+	t.Cleanup(handler.Close)
+	handler.fetchHostNotifications("host-one")
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+
+	fed.mu.Lock()
+	fed.notificationLists["host-one"] = `[]`
+	fed.mu.Unlock()
+	send(t, c, map[string]any{"t": "system_notification_action", "notificationId": "fed~host-one~agent-update:claude", "action": "dismiss", "corrId": "act"})
+	for {
+		got := recv(t, c)
+		if got["t"] == "system_notifications" && len(got["notifications"].([]any)) == 0 {
+			break
+		}
 	}
 }

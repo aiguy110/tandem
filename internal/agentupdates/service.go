@@ -161,11 +161,19 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 	s.mu.Lock()
 	u, ok := s.available[agent]
 	s.mu.Unlock()
+	if !ok && action != "rollback" {
+		// The offer was withdrawn (installed elsewhere, superseded, or the daemon
+		// restarted) while a view still showed it. Drop the leftover entry so
+		// it cannot sit in the panel with buttons that can only fail.
+		s.opts.Center.Remove(id)
+		slog.Info("ACP adapter update notification acted on after the offer was withdrawn", "agent", agent, "action", action)
+		if action == "dismiss" {
+			return "", nil
+		}
+		return "", fmt.Errorf("update is no longer available")
+	}
 	switch action {
 	case "dismiss":
-		if !ok {
-			return "", fmt.Errorf("update is no longer available")
-		}
 		s.mu.Lock()
 		s.dismissed[agent] = u.LatestVersion
 		s.mu.Unlock()
@@ -173,9 +181,6 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		slog.Info("ACP adapter update dismissed", "agent", agent, "version", u.LatestVersion)
 		return "", nil
 	case "install":
-		if !ok {
-			return "", fmt.Errorf("update is no longer available")
-		}
 		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "attention", Title: "Updating " + agent + " ACP", Message: "Installing the new version beside the existing distribution…"})
 		locked, err := s.opts.Install(ctx, s.opts.Config, agent, u.LatestVersion, s.opts.Log)
 		if err != nil {
@@ -190,9 +195,6 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		slog.Info("ACP adapter update installed", "agent", agent, "from_version", u.CurrentVersion, "to_version", locked.Version)
 		return "", nil
 	case "rebase":
-		if !ok {
-			return "", fmt.Errorf("update is no longer available")
-		}
 		if u.Kind != runtimeinstall.UpdateKindRebase || u.Fork == nil {
 			return "", fmt.Errorf("agent %s does not track an ACP fork", agent)
 		}
