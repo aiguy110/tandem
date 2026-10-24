@@ -585,7 +585,7 @@ export type ClientMsg =
   | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean; browserId?: string }
   | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
-  | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; includeQueue?: boolean; corrId?: string }
   | { t: 'aside'; sessionId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; sessionId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; sessionId: string; corrId?: string }

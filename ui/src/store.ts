@@ -445,7 +445,8 @@ interface StoreState {
   // Drops a profile from one repo's recency list; the profile itself survives.
   forgetProfile: (id: string, project: string, hostId?: string) => Promise<{ profiles: Profile[]; recent: string[] }>;
   prompt: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
-  steer: (sessionId: string, input: string | PromptBlock[]) => Promise<AckResult>;
+  /** includeQueue appends the session's queued prompts and removes them from the queue. */
+  steer: (sessionId: string, input: string | PromptBlock[], opts?: { includeQueue?: boolean }) => Promise<AckResult>;
   aside: (sessionId: string, question: string) => Promise<AckResult>;
   removeQueuedPrompt: (sessionId: string, promptId: string) => Promise<AckResult>;
   clearPromptQueue: (sessionId: string) => Promise<AckResult>;
@@ -1914,13 +1915,14 @@ export const useStore = create<StoreState>((set, get) => {
           ? { t: 'prompt', sessionId, text: input, corrId }
           : { t: 'prompt', sessionId, blocks: input, corrId });
       }),
-    steer: (sessionId, input) =>
+    steer: (sessionId, input, opts) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
         registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
+        const includeQueue = opts?.includeQueue ? { includeQueue: true } : {};
         client.send(typeof input === 'string'
-          ? { t: 'steer', sessionId, text: input, corrId }
-          : { t: 'steer', sessionId, blocks: input, corrId });
+          ? { t: 'steer', sessionId, text: input, corrId, ...includeQueue }
+          : { t: 'steer', sessionId, blocks: input, corrId, ...includeQueue });
       }),
     aside: (sessionId, question) =>
       new Promise<AckResult>((resolve) => {

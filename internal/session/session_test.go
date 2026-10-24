@@ -599,3 +599,69 @@ func TestUsageTimestampSurvivesRestart(t *testing.T) {
 		t.Fatalf("restart reset the usage timer: %d != %d", got, firstAt)
 	}
 }
+
+type steeringFake struct {
+	*fakeAdapter
+	steered [][]agentadapter.PromptBlock
+}
+
+func (f *steeringFake) Capabilities() agentadapter.Capabilities {
+	return agentadapter.Capabilities{Structured: true, Steering: true}
+}
+func (f *steeringFake) Steer(_ context.Context, blocks []agentadapter.PromptBlock) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.steered = append(f.steered, blocks)
+	return nil
+}
+
+func TestSteerWithQueueDrainsUserPromptsIntoCurrentTurn(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := eventlog.New("steer-1", db, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &steeringFake{fakeAdapter: newFake()}
+	s, err := New("steer-1", "steer-1", agentadapter.Spec{}, a, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Dispose(context.Background()); db.Close() })
+
+	if _, err := s.SteerWithQueue(context.Background(), nil); err == nil {
+		t.Fatal("steering an empty queue should fail")
+	}
+	if _, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "first"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for !s.ActiveTurn() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	for _, text := range []string{"second", "third"} {
+		if _, err := s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: text}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quote := agentadapter.PromptBlock{Type: "quote", Role: "assistant", Quote: "q", Comment: "c"}
+	steered, err := s.SteerWithQueue(context.Background(), []agentadapter.PromptBlock{quote})
+	if err != nil || steered != 2 {
+		t.Fatalf("steered=%d err=%v", steered, err)
+	}
+	if queued := s.QueuedPrompts(); len(queued) != 0 {
+		t.Fatalf("queue after steer = %+v", queued)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var text []string
+	for _, block := range a.steered[0] {
+		text = append(text, block.Text)
+	}
+	got := strings.Join(text, "|")
+	if !strings.Contains(got, "second") || !strings.Contains(got, "third") || !strings.Contains(got, "\"q\"") || strings.Index(got, "second") > strings.Index(got, "third") {
+		t.Fatalf("steered blocks = %q", got)
+	}
+}

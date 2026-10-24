@@ -1419,6 +1419,38 @@ describe('TranscriptPane steering', () => {
     expect(Array.from(actions.children)).toContain(steer);
     expect(Array.from(actions.children)).toContain(queue);
   });
+
+  it('steers the queued prompts when the prompt box is empty', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    const working = agent();
+    working.status = 'working';
+    working.steeringSupport = true;
+    working.queuedPrompts = [{ id: 'q1', blocks: [{ type: 'text', text: 'queued' }], queuedAt: '2026-10-24T00:00:00Z' }];
+    const steer = vi.fn().mockResolvedValue({});
+    useStore.setState({
+      ...initialState, steer,
+      sessions: { 'session-1': working }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+
+    const view = render(<TranscriptPane />);
+    const button = view.getByRole('button', { name: 'Steer current turn' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(steer).toHaveBeenCalledWith('session-1', [], { includeQueue: true }));
+  });
+
+  it('keeps steering disabled with nothing typed, queued, or annotated', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    const working = agent();
+    working.status = 'working';
+    working.steeringSupport = true;
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': working }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    expect((view.getByRole('button', { name: 'Steer current turn' }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });
 
 describe('TranscriptPane message forking', () => {

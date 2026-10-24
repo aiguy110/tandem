@@ -490,6 +490,70 @@ func (s *Session) SteerWithEvent(ctx context.Context, blocks []agentadapter.Prom
 		return errors.New("agent hand-off snapshot is in progress")
 	}
 	defer s.promptMu.Unlock()
+	return s.steerLocked(ctx, blocks, ev)
+}
+
+// SteerWithQueue steers leading (e.g. annotation quotes) followed by every
+// queued user prompt into the active turn as one message, and removes those
+// prompts from the queue. It holds the prompt lock throughout, so a queued
+// prompt cannot also start as its own turn. Asides and agent-link messages
+// stay queued: they are not something the user typed. It returns how many
+// queued prompts were steered.
+func (s *Session) SteerWithQueue(ctx context.Context, leading []agentadapter.PromptBlock) (int, error) {
+	if s.ControlMode() != "transcript" {
+		return 0, errors.New("agent session is controlled by the terminal")
+	}
+	if !s.Capabilities().Steering {
+		return 0, errors.New("this agent does not support steering")
+	}
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	if s.handoffSnapshotting {
+		return 0, errors.New("agent hand-off snapshot is in progress")
+	}
+	blocks := append([]agentadapter.PromptBlock(nil), leading...)
+	var taken []*queuedPrompt
+	for _, prompt := range s.promptQueue {
+		if prompt.aside || prompt.event != nil {
+			continue
+		}
+		if len(taken) > 0 || (len(blocks) > 0 && blocks[len(blocks)-1].Type == "text") {
+			blocks = append(blocks, agentadapter.PromptBlock{Type: "text", Text: "\n\n"})
+		}
+		blocks = append(blocks, prompt.Blocks...)
+		taken = append(taken, prompt)
+	}
+	if len(blocks) == 0 {
+		return 0, errors.New("nothing to steer: the prompt box and queue are empty")
+	}
+	if err := s.ValidatePrompt(blocks); err != nil {
+		return 0, err
+	}
+	if err := s.steerLocked(ctx, blocks, nil); err != nil {
+		return 0, err
+	}
+	kept := s.promptQueue[:0]
+	for _, prompt := range s.promptQueue {
+		steered := false
+		for _, t := range taken {
+			steered = steered || t == prompt
+		}
+		if !steered {
+			kept = append(kept, prompt)
+			continue
+		}
+		prompt.done <- promptResult{err: errors.New("prompt steered into the current turn")}
+		close(prompt.done)
+		s.emitPromptQueueEvent("prompt_removed", prompt.QueuedPrompt, 0)
+	}
+	s.promptQueue = kept
+	slog.Info("queued prompts steered into current turn", "session_id", s.ID, "steered", len(taken), "still_queued", len(kept))
+	return len(taken), nil
+}
+
+// steerLocked sends blocks to the adapter's active turn and records them.
+// The caller holds promptMu.
+func (s *Session) steerLocked(ctx context.Context, blocks []agentadapter.PromptBlock, ev func(disposition string) eventlog.Event) error {
 	steerer, ok := s.adapter.(agentadapter.SteeringAdapter)
 	if !ok {
 		return errors.New("this agent does not support steering")

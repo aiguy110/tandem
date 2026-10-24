@@ -400,61 +400,63 @@ func tokenMatches(got, want string) bool {
 }
 
 type clientMessage struct {
-	T                 string                     `json:"t"`
-	SessionID         string                     `json:"sessionId"`
-	TargetSessionID   string                     `json:"targetSessionId,omitempty"`
-	After             bool                       `json:"after,omitempty"`
-	Channels          []string                   `json:"channels"`
-	SinceSeq          int64                      `json:"sinceSeq"`
-	PagedReplay       bool                       `json:"pagedReplay,omitempty"`
-	CorrID            json.RawMessage            `json:"corrId"`
-	Text              string                     `json:"text"`
-	Blocks            []agentadapter.PromptBlock `json:"blocks"`
-	BytesB64          string                     `json:"bytesB64"`
-	Cols              int                        `json:"cols"`
-	Rows              int                        `json:"rows"`
-	ReqID             string                     `json:"reqId"`
-	PromptID          string                     `json:"promptId"`
-	OptionID          string                     `json:"optionId"`
-	ModeID            string                     `json:"modeId"`
-	ConfigID          string                     `json:"configId"`
-	Value             any                        `json:"value"`
-	Spec              agentadapter.Spec          `json:"spec"`
-	Agent             string                     `json:"agent"`
-	Harness           string                     `json:"harness"`
-	ACPArgs           []string                   `json:"acpArgs"`
-	CWD               string                     `json:"cwd"`
-	Repo              string                     `json:"repo"`
-	Force             bool                       `json:"force"`
-	DeleteWorktree    *bool                      `json:"deleteWorktree"`
-	DeinitSubmodules  bool                       `json:"deinitSubmodules"`
-	ExternalSessionID string                     `json:"externalSessionId"`
-	Source            string                     `json:"source"`
-	Query             string                     `json:"query"`
-	Limit             int                        `json:"limit"`
-	MaxHits           int                        `json:"maxHitsPerSession"`
-	Reindex           bool                       `json:"reindex"`
-	InterruptFirst    bool                       `json:"interrupt"`
-	Edit              bool                       `json:"edit"`
-	Action            string                     `json:"action"`
-	Event             browser.BrowserInputEvent  `json:"event"`
-	Name              string                     `json:"name"`
-	ID                string                     `json:"id"`
-	SnapshotID        string                     `json:"snapshotId"`
-	BrowserID         string                     `json:"browserId"`
-	Project           string                     `json:"project"`
-	RepositoryID      string                     `json:"repositoryId"`
-	Enabled           bool                       `json:"enabled"`
-	Focused           bool                       `json:"focused"`
-	Seq               int64                      `json:"seq"`
-	Role              string                     `json:"role"`
-	Quote             string                     `json:"quote"`
-	Comment           string                     `json:"comment"`
-	Message           string                     `json:"message"`
-	Path              string                     `json:"path"`
-	PositionMs        int64                      `json:"positionMs"`
-	NotificationID    string                     `json:"notificationId"`
-	HostID            string                     `json:"hostId"`
+	T               string                     `json:"t"`
+	SessionID       string                     `json:"sessionId"`
+	TargetSessionID string                     `json:"targetSessionId,omitempty"`
+	After           bool                       `json:"after,omitempty"`
+	Channels        []string                   `json:"channels"`
+	SinceSeq        int64                      `json:"sinceSeq"`
+	PagedReplay     bool                       `json:"pagedReplay,omitempty"`
+	CorrID          json.RawMessage            `json:"corrId"`
+	Text            string                     `json:"text"`
+	Blocks          []agentadapter.PromptBlock `json:"blocks"`
+	BytesB64        string                     `json:"bytesB64"`
+	Cols            int                        `json:"cols"`
+	Rows            int                        `json:"rows"`
+	ReqID           string                     `json:"reqId"`
+	PromptID        string                     `json:"promptId"`
+	// IncludeQueue on steer appends the session's queued prompts.
+	IncludeQueue      bool                      `json:"includeQueue,omitempty"`
+	OptionID          string                    `json:"optionId"`
+	ModeID            string                    `json:"modeId"`
+	ConfigID          string                    `json:"configId"`
+	Value             any                       `json:"value"`
+	Spec              agentadapter.Spec         `json:"spec"`
+	Agent             string                    `json:"agent"`
+	Harness           string                    `json:"harness"`
+	ACPArgs           []string                  `json:"acpArgs"`
+	CWD               string                    `json:"cwd"`
+	Repo              string                    `json:"repo"`
+	Force             bool                      `json:"force"`
+	DeleteWorktree    *bool                     `json:"deleteWorktree"`
+	DeinitSubmodules  bool                      `json:"deinitSubmodules"`
+	ExternalSessionID string                    `json:"externalSessionId"`
+	Source            string                    `json:"source"`
+	Query             string                    `json:"query"`
+	Limit             int                       `json:"limit"`
+	MaxHits           int                       `json:"maxHitsPerSession"`
+	Reindex           bool                      `json:"reindex"`
+	InterruptFirst    bool                      `json:"interrupt"`
+	Edit              bool                      `json:"edit"`
+	Action            string                    `json:"action"`
+	Event             browser.BrowserInputEvent `json:"event"`
+	Name              string                    `json:"name"`
+	ID                string                    `json:"id"`
+	SnapshotID        string                    `json:"snapshotId"`
+	BrowserID         string                    `json:"browserId"`
+	Project           string                    `json:"project"`
+	RepositoryID      string                    `json:"repositoryId"`
+	Enabled           bool                      `json:"enabled"`
+	Focused           bool                      `json:"focused"`
+	Seq               int64                     `json:"seq"`
+	Role              string                    `json:"role"`
+	Quote             string                    `json:"quote"`
+	Comment           string                    `json:"comment"`
+	Message           string                    `json:"message"`
+	Path              string                    `json:"path"`
+	PositionMs        int64                     `json:"positionMs"`
+	NotificationID    string                    `json:"notificationId"`
+	HostID            string                    `json:"hostId"`
 	// FederationOrigin is set only by this daemon's own federation bridge on
 	// a command it relays; see federation.OriginField.
 	FederationOrigin string `json:"federationOrigin,omitempty"`
@@ -1460,6 +1462,16 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		blocks := m.Blocks
+		if m.IncludeQueue {
+			// An empty prompt box steers what is waiting in the queue instead.
+			steered, err := sess.SteerWithQueue(context.Background(), blocks)
+			if err != nil {
+				c.commandError(m, err)
+				return
+			}
+			c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "disposition": "steered", "cleared": steered}, m.CorrID))
+			return
+		}
 		if blocks == nil {
 			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
 		}

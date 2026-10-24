@@ -2518,7 +2518,10 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     if (sendingRef.current) return;
     const t = text.trim();
     const hasAnnotations = annotations.length > 0;
-    if (!t && attachments.length === 0 && !hasAnnotations) return;
+    // Steering with nothing typed injects what is already waiting: the queued
+    // prompts (moved out of the queue by the daemon) behind any annotations.
+    const steerQueue = steering && !t && attachments.length === 0 && turnQueuedPrompts.length > 0;
+    if (!t && attachments.length === 0 && !hasAnnotations && !steerQueue) return;
     if (scheduledRateLimit) {
       if (steering || attachments.length > 0 || hasAnnotations) {
         setAttachmentError('The scheduled wake-up accepts text from the prompt box only.');
@@ -2535,6 +2538,27 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
         }
       } catch (error) {
         setAttachmentError(error instanceof Error ? error.message : 'Could not schedule wake-up.');
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+      return;
+    }
+    if (steerQueue) {
+      const quotes: PromptBlock[] = [...annotations]
+        .sort((a, b) => a.seq - b.seq)
+        .map((a) => ({ type: 'quote', refSeq: a.seq, role: a.role, quote: a.quote, comment: a.comment }));
+      sendingRef.current = true;
+      setSending(true);
+      try {
+        const result = await steer(sessionId, quotes, { includeQueue: true });
+        if (result.error) setAttachmentError(result.error);
+        else {
+          setAttachmentError(null);
+          if (hasAnnotations) void clearAnnotations(sessionId);
+        }
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : 'Could not steer queued prompts.');
       } finally {
         sendingRef.current = false;
         setSending(false);
@@ -2856,8 +2880,8 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
             <button
               className="btn steer-btn"
               onClick={() => void send(true)}
-              disabled={sending || uploadsPending || !canSubmit}
-              title="Inject this message into the current turn"
+              disabled={sending || uploadsPending || !(canSubmit || turnQueuedPrompts.length > 0)}
+              title={canSubmit || turnQueuedPrompts.length === 0 ? 'Inject this message into the current turn' : 'Inject the queued prompts into the current turn'}
               aria-label="Steer current turn"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
