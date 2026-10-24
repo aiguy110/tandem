@@ -38,3 +38,23 @@ it('allows viewing tabs while the agent drives, but requires control to navigate
   fireEvent.click(view.getByRole('button', { name: 'Go' }));
   await waitFor(() => expect(browserNavigate).toHaveBeenCalledWith('test', { kind: 'navigate', url: 'http://localhost:3000' }));
 });
+
+it('shows a pending page dialog and answers it without taking control', async () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  const pages = { pages: [{ targetId: 'form', title: 'Application form', url: 'https://example.test/form' }], selectedTargetId: 'form', canGoBack: false, canGoForward: false };
+  const answerBrowserDialog = vi.fn(async () => ({}));
+  const dialog = { targetId: 'form', type: 'beforeunload', message: '', url: 'https://example.test/form', openedAt: 1 };
+  const session = {
+    id: 'test', browserActive: true, browserOwner: 'agent', takeovers: [], browserViewId: 'default',
+    browserInstances: [{ id: 'default', name: 'Default' }],
+    browserStates: { default: { active: true, owner: 'agent', takeoverHeld: false, dialogs: [dialog] } },
+  } as unknown as SessionView;
+  useStore.setState({ focusedId: 'test', sessions: { test: session }, browserPages: vi.fn(async () => pages), answerBrowserDialog, setBrowserSub: vi.fn(), listSnapshots: vi.fn(async () => []) });
+  const view = render(<BrowserPane />);
+  const banner = view.getByRole('alertdialog', { name: 'Page dialog: beforeunload' });
+  expect(banner.textContent).toContain('Leave page?');
+  expect(banner.textContent).toContain('discards unsaved form input');
+  await waitFor(() => expect(banner.textContent).toContain('Application form'));
+  fireEvent.click(view.getByRole('button', { name: 'Stay on page' }));
+  await waitFor(() => expect(answerBrowserDialog).toHaveBeenCalledWith('test', 'default', 'form', false, undefined));
+});

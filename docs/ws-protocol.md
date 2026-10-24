@@ -315,6 +315,8 @@ type ClientMsg =
   | { t: 'close_browser_instance'; sessionId: string; browserId: string }
   | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve'|'deny'; snapshotId?: string } // snapshotId: the human's pick for a user_choice request
   | { t: 'dismiss_takeover'; sessionId: string; reqId: string } // clear a browser takeover without taking the wheel; the agent's tool call errors as dismissed
+  | { t: 'browser_dialog'; sessionId: string; browserId?: string; action: 'accept'|'dismiss'; // answer a JavaScript dialog from browser_state.dialogs;
+      event: { targetId: string; text?: string } }                    // text = prompt reply. Needs no control; not queued behind browser_input
   | { t: 'list_system_notifications' }
   | { t: 'system_notification_action'; notificationId: string; action: string }
   | { t: 'list_agent_distributions' }
@@ -397,7 +399,9 @@ type ServerMsg =
   | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; // CDP screencast JPEG of the viewed instance
       meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
   | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; // lifecycle + wheel, per instance
-      controlOwner: 'agent'|'user' }
+      controlOwner: 'agent'|'user';
+      dialogs: { targetId: string; type: 'alert'|'confirm'|'prompt'|'beforeunload'; message: string; // open JavaScript dialogs
+        defaultPrompt?: string; url?: string; openedAt: number }[] }
   | { t: 'message_audio'; sessionId: string; seq: number;                 // reply to render_message_audio
       mimeType?: string; data?: string; error?: string }                // data: base64 clip bytes
   | { t: 'asset'; sessionId: string; assetId: string;                   // reply to get_asset
@@ -580,7 +584,8 @@ concrete payoff of the "daemon owns all state" invariant.
 - **`terminals`** — client-owned terminal output for structured agents.
 - **`browser`** (Phase 5, implemented) — `browser_frame` CDP screencast frames (JSON+base64;
   binary framing is a future optimization, same as raw_pty) and `browser_state`
-  (active + controlOwner). Subscribing to this channel is what starts the screencast — the
+  (active + controlOwner + open JavaScript dialogs; it is re-sent whenever a dialog opens
+  or closes). Subscribing to this channel is what starts the screencast — the
   UI subscribes it **only for the focused agent with the Browser pane open** (bandwidth
   rule); the daemon stops the cast when the last browser-channel subscriber unsubscribes.
   Subscribing does **not** provision a browser; `active:false` is reported until the agent's

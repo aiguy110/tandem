@@ -159,6 +159,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			}
 			return agents.AuthorizeBrowserKey(key)
 		},
+		WatchDialogs: true,
 	})
 	if err = broker.Start(); err != nil {
 		return err
@@ -267,6 +268,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 				pushAgentEvent(agents, sessionID, map[string]any{"kind": "status", "status": "working"})
 			}
 		},
+	})
+	browserDialogs := browser.NewDialogControl(browser.DialogControlOptions{
+		Token: token, Broker: broker,
+		AgentExists: func(id string) bool { return agents.Get(id) != nil },
 	})
 	automationService := &automation.Service{
 		Store: db, Agents: agents, Token: token,
@@ -509,6 +514,9 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			return
 		case browser.InstanceRequestsPath, browser.InstanceRequestsPath + "/request", browser.InstanceRequestsPath + "/status", browser.InstanceRequestsPath + "/close", browser.InstanceRequestsPath + "/saved-profiles":
 			browserInstances.ServeHTTP(w, r)
+			return
+		case browser.DialogsPath, browser.DialogsPath + "/handle":
+			browserDialogs.ServeHTTP(w, r)
 			return
 		case "/internal/browser/takeover":
 			if takeovers != nil {

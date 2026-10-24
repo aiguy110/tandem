@@ -35,6 +35,10 @@ type BrokerConfig struct {
 	// enforcement point that keeps an unapproved browser instance from ever
 	// launching, whichever path (agent CDP proxy or human view) asks first.
 	Authorize func(key string) error
+	// WatchDialogs keeps a dialog watcher on every provisioned browser so
+	// JavaScript dialogs appear in BrowserState and can be answered through
+	// HandleDialog (see dialogs.go).
+	WatchDialogs bool
 }
 type heldFrame struct {
 	kind int
@@ -60,6 +64,7 @@ type agentBrowser struct {
 	releaseMu         transportMutex
 	links             map[*proxyLink]struct{}
 	shared            *SharedBrowser
+	dialogs           *dialogWatcher
 	nextListener      uint64
 	stateListeners    map[uint64]*browserStateListener
 	frameListeners    map[uint64]func(ScreencastFrame)
@@ -77,6 +82,20 @@ type browserStateListener struct {
 type BrowserState struct {
 	Active       bool         `json:"active"`
 	ControlOwner ControlOwner `json:"controlOwner"`
+	// Dialogs are JavaScript dialogs currently blocking pages of the browser.
+	Dialogs []PendingDialog `json:"dialogs,omitempty"`
+}
+
+// stateLocked snapshots a's state. a.mu must be held; the dialog watcher's
+// lock nests inside it and never the other way round.
+func (a *agentBrowser) stateLocked() BrowserState {
+	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	if a.dialogs != nil {
+		if dialogs := a.dialogs.Dialogs(); len(dialogs) > 0 {
+			state.Dialogs = dialogs
+		}
+	}
+	return state
 }
 
 // sessionStateListener observes every browser instance of one session. Like
@@ -154,7 +173,7 @@ func (b *Broker) State(id string) BrowserState {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	return a.stateLocked()
 }
 
 func (b *Broker) OnState(id string, callback func(BrowserState)) func() {
@@ -168,7 +187,7 @@ func (b *Broker) OnState(id string, callback func(BrowserState)) func() {
 	a.nextListener++
 	listenerID := a.nextListener
 	a.stateListeners[listenerID] = listener
-	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	state := a.stateLocked()
 	a.mu.Unlock()
 	callback(state)
 	listener.mu.Unlock()
@@ -207,7 +226,7 @@ func (b *Broker) AddFrameListener(id string, callback func(ScreencastFrame)) fun
 func (b *Broker) emitState(id string) {
 	a := b.record(id)
 	a.mu.Lock()
-	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	state := a.stateLocked()
 	listeners := make([]*browserStateListener, 0, len(a.stateListeners))
 	for _, callback := range a.stateListeners {
 		listeners = append(listeners, callback)
@@ -261,7 +280,7 @@ func (b *Broker) OnSessionState(sessionID string, callback func(browserID string
 	}
 	for browserID, a := range records {
 		a.mu.Lock()
-		state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+		state := a.stateLocked()
 		a.mu.Unlock()
 		callback(browserID, state)
 	}
@@ -367,11 +386,18 @@ func (b *Broker) EnsureProvisioned(ctx context.Context, id string) error {
 		// This client dials the real browser WebSocket, not the gated proxy.
 		a.shared = NewSharedBrowser(ws)
 		a.shared.ownerID = id
+		if b.cfg.WatchDialogs {
+			a.dialogs = newDialogWatcher(ws, id, func() { b.emitState(id) })
+		}
 	}
 	a.provisioning = nil
 	close(wait)
 	listenerCount := len(a.frameListeners)
+	watcher := a.dialogs
 	a.mu.Unlock()
+	if err == nil && watcher != nil {
+		watcher.start()
+	}
 	if err != nil {
 		_ = b.driver.Teardown(context.Background(), id)
 	} else {
@@ -400,6 +426,43 @@ func (b *Broker) SharedBrowser(ctx context.Context, id string) (*SharedBrowser, 
 		return nil, err
 	}
 	return shared, nil
+}
+
+// Dialogs returns the JavaScript dialogs open in a browser. It never
+// provisions one.
+func (b *Broker) Dialogs(id string) []PendingDialog {
+	b.mu.Lock()
+	a := b.agents[id]
+	b.mu.Unlock()
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	watcher := a.dialogs
+	a.mu.Unlock()
+	if watcher == nil {
+		return nil
+	}
+	return watcher.Dialogs()
+}
+
+// HandleDialog answers the dialog on targetID (or the only one when empty).
+// Either the human or the agent may answer; it does not require control,
+// since a dialog blocks both of them.
+func (b *Broker) HandleDialog(ctx context.Context, id, targetID string, accept bool, promptText string) (PendingDialog, error) {
+	b.mu.Lock()
+	a := b.agents[id]
+	b.mu.Unlock()
+	if a == nil {
+		return PendingDialog{}, ErrNoDialog
+	}
+	a.mu.Lock()
+	watcher := a.dialogs
+	a.mu.Unlock()
+	if watcher == nil {
+		return PendingDialog{}, ErrNoDialog
+	}
+	return watcher.Handle(ctx, targetID, accept, promptText)
 }
 
 // DevNavigate is the low-level development-only navigation hook. Its caller is
@@ -791,6 +854,8 @@ func (b *Broker) detach(id string) {
 	a.mu.Lock()
 	shared := a.shared
 	a.shared = nil
+	watcher := a.dialogs
+	a.dialogs = nil
 	links := make([]*proxyLink, 0, len(a.links))
 	for l := range a.links {
 		links = append(links, l)
@@ -799,6 +864,9 @@ func (b *Broker) detach(id string) {
 	a.mu.Unlock()
 	if shared != nil {
 		_ = shared.Close()
+	}
+	if watcher != nil {
+		watcher.close()
 	}
 	for _, l := range links {
 		_ = l.agent.Close()
@@ -830,6 +898,8 @@ func (b *Broker) Restart(ctx context.Context, id, kind, ref string) error {
 	}
 	shared := a.shared
 	a.shared = nil
+	watcher := a.dialogs
+	a.dialogs = nil
 	links := make([]*proxyLink, 0, len(a.links))
 	for link := range a.links {
 		links = append(links, link)
@@ -844,6 +914,9 @@ func (b *Broker) Restart(ctx context.Context, id, kind, ref string) error {
 
 	if shared != nil {
 		_ = shared.Close()
+	}
+	if watcher != nil {
+		watcher.close()
 	}
 	for _, link := range links {
 		_ = link.agent.Close()

@@ -577,6 +577,10 @@ func (c *connection) run() {
 			}
 		case "browser_input", "browser_control", "restart_browser", "browser_pages", "browser_select_page":
 			c.enqueueBrowser(m)
+		case "browser_dialog":
+			// Not queued behind input: while a dialog is open, every queued
+			// click or key waits out its CDP timeout first.
+			go c.handle(m)
 		default:
 			c.handle(m)
 		}
@@ -1870,6 +1874,34 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.commandAck(m, m.SessionID)
+	case "browser_dialog":
+		// A JavaScript dialog blocks the agent and the human alike, so either
+		// may answer it without holding control.
+		if c.server.opts.Browser == nil {
+			c.commandError(m, errors.New("browser subsystem disabled"))
+			return
+		}
+		if _, ok := c.requireSession(m); !ok {
+			return
+		}
+		key, ok := c.browserKey(m)
+		if !ok {
+			return
+		}
+		if m.Action != "accept" && m.Action != "dismiss" {
+			c.commandError(m, errors.New("action must be accept or dismiss"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+		defer cancel()
+		dialog, err := c.server.opts.Browser.HandleDialog(ctx, key, m.Event.TargetID, m.Action == "accept", m.Event.Text)
+		if err != nil {
+			slog.Warn("browser dialog answer from viewer failed", "session_id", m.SessionID, "browser_id", browserIDOf(m), "target_id", m.Event.TargetID, "error", err)
+			c.commandError(m, err)
+			return
+		}
+		slog.Info("browser dialog answered from viewer", "session_id", m.SessionID, "browser_id", browserIDOf(m), "target_id", dialog.TargetID, "type", dialog.Type, "action", m.Action)
+		c.commandAck(m, m.SessionID)
 	case "restart_browser":
 		if _, ok := c.requireSession(m); !ok {
 			return
@@ -2901,7 +2933,11 @@ func (c *connection) subscribe(m clientMessage) {
 		// tab enables (and survives a page refresh) as soon as the agent has a
 		// browser, independent of whether this client is viewing the pane.
 		offState := c.server.opts.Browser.OnSessionState(sess.ID, func(browserID string, state browser.BrowserState) {
-			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "browserId": browserID, "active": state.Active, "controlOwner": state.ControlOwner})
+			dialogs := state.Dialogs
+			if dialogs == nil {
+				dialogs = []browser.PendingDialog{}
+			}
+			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "browserId": browserID, "active": state.Active, "controlOwner": state.ControlOwner, "dialogs": dialogs})
 		})
 		sub.mu.Lock()
 		active := sub.active.Load()

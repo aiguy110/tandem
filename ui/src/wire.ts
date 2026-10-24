@@ -3,6 +3,17 @@
 // what the daemon sends. Kept as a hand-maintained copy so the UI has no build
 // dependency on the daemon package.
 
+// A JavaScript dialog (alert/confirm/prompt/beforeunload) blocking a page of
+// a shared browser until someone answers it (docs/browser.md).
+export interface BrowserDialog {
+  targetId: string;
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload' | string;
+  message: string;
+  defaultPrompt?: string;
+  url?: string;
+  openedAt: number;
+}
+
 export type SessionStatus = 'idle' | 'working' | 'blocked' | 'error';
 export type ControlMode = 'transcript' | 'switching' | 'terminal';
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
@@ -635,6 +646,8 @@ export type ClientMsg =
   | { t: 'browser_view'; sessionId: string; browserId: string; corrId?: string }
   | { t: 'close_browser_instance'; sessionId: string; browserId: string; corrId?: string }
   | { t: 'dismiss_takeover'; sessionId: string; reqId: string; corrId?: string }
+  // Answers a JavaScript dialog; event.text is the prompt reply.
+  | { t: 'browser_dialog'; sessionId: string; browserId?: string; action: 'accept' | 'dismiss'; event: { targetId: string; text?: string }; corrId?: string }
   | { t: 'resolve_browser_instance'; sessionId: string; id: string; action: 'approve' | 'deny'; snapshotId?: string; corrId?: string }
   | { t: 'restart_harness'; sessionId: string; corrId?: string }
   // Starts a new agent on a conversation-only fork of sessionId (workspace is
@@ -733,7 +746,7 @@ export type ServerMsg =
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user' }
+  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user'; dialogs?: BrowserDialog[] }
   // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
   | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
   | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };

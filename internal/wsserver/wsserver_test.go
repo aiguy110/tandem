@@ -151,6 +151,39 @@ func TestPingContinuesWhileBrowserInputIsStalled(t *testing.T) {
 	}
 }
 
+func TestBrowserDialogAnswerIsNotQueuedBehindStalledInput(t *testing.T) {
+	started := make(chan struct{})
+	broker := browser.NewBroker(stalledBrowserDriver{started: started}, browser.BrokerConfig{})
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(opts *Options) { opts.Browser = broker })
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "browser_control", "sessionId": "a", "action": "grab", "corrId": "grab"})
+	if got := recv(t, c); got["corrId"] != "grab" {
+		t.Fatalf("grab ack=%v", got)
+	}
+	send(t, c, map[string]any{"t": "browser_input", "sessionId": "a", "event": map[string]any{"kind": "click"}, "corrId": "input"})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("browser operation did not start")
+	}
+	send(t, c, map[string]any{"t": "browser_dialog", "sessionId": "a", "action": "maybe", "event": map[string]any{"targetId": "p"}, "corrId": "bad"})
+	send(t, c, map[string]any{"t": "browser_dialog", "sessionId": "a", "action": "dismiss", "event": map[string]any{"targetId": "p"}, "corrId": "answer"})
+	replies := map[string]string{}
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	for len(replies) < 2 {
+		var got map[string]any
+		if err := c.ReadJSON(&got); err != nil {
+			t.Fatalf("dialog answers blocked behind browser input: %v (got %v)", err, replies)
+		}
+		if corr, _ := got["corrId"].(string); corr == "bad" || corr == "answer" {
+			replies[corr], _ = got["error"].(string)
+		}
+	}
+	if !strings.Contains(replies["bad"], "accept or dismiss") || !strings.Contains(replies["answer"], "no JavaScript dialog") {
+		t.Fatalf("replies=%v", replies)
+	}
+}
+
 func TestPagedSnapshotPreservesUnicodeAndSurvivesSmallWriteQueue(t *testing.T) {
 	_, backend, _, _, url := setupWS(t, 2)
 	text := strings.Repeat("🙂 browser \"state\"\n", 40000)

@@ -26,6 +26,7 @@ import type {
   Approval,
   AutomationJob,
   AutomationRun,
+  BrowserDialog,
   BrowserInputWire,
   BrowserInstance,
   BrowserInstanceSource,
@@ -84,6 +85,8 @@ export interface BrowserInstanceState {
   owner: 'agent' | 'user';
   // The user grabbed this browser to satisfy an agent's takeover request.
   takeoverHeld: boolean;
+  // JavaScript dialogs currently blocking pages of this browser.
+  dialogs: BrowserDialog[];
 }
 export const DEFAULT_BROWSER_ID = 'default';
 const DEFAULT_BROWSER_INSTANCES: BrowserInstance[] = [{ id: DEFAULT_BROWSER_ID, name: 'Default' }];
@@ -495,6 +498,9 @@ interface StoreState {
   // Clears an agent's takeover request without taking the wheel (e.g. its
   // browser died); the waiting tool call is told it was dismissed.
   dismissTakeover: (sessionId: string, reqId: string) => Promise<AckResult>;
+  // Answers a JavaScript dialog in one of the session's browsers. Works
+  // without holding control: a dialog blocks the agent and the human alike.
+  answerBrowserDialog: (sessionId: string, browserId: string, targetId: string, accept: boolean, promptText?: string) => Promise<AckResult>;
   resolveBrowserInstance: (sessionId: string, requestId: string, approve: boolean, savedProfileId?: string) => Promise<AckResult>;
 }
 
@@ -1043,7 +1049,7 @@ export const useStore = create<StoreState>((set, get) => {
           const takeoverGrab = userJustGrabbed && waiting.length > 0;
           const takeovers = takeoverGrab ? a.takeovers.filter((t) => !waiting.includes(t)) : a.takeovers;
           const takeoverHeld = msg.controlOwner === 'user' && ((previous?.takeoverHeld ?? false) || takeoverGrab);
-          const browserStates = { ...a.browserStates, [browserId]: { active: msg.active, owner: msg.controlOwner, takeoverHeld } };
+          const browserStates = { ...a.browserStates, [browserId]: { active: msg.active, owner: msg.controlOwner, takeoverHeld, dialogs: msg.dialogs ?? [] } };
           return {
             sessions: {
               ...st.sessions,
@@ -2167,6 +2173,12 @@ export const useStore = create<StoreState>((set, get) => {
         const corrId = nextCorr();
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'dismiss_takeover', sessionId, reqId, corrId });
+      }),
+    answerBrowserDialog: (sessionId, browserId, targetId, accept, promptText) =>
+      new Promise<AckResult>((resolve) => {
+        const corrId = nextCorr();
+        pendingAcks.set(corrId, resolve);
+        client.send({ t: 'browser_dialog', sessionId, browserId, action: accept ? 'accept' : 'dismiss', event: { targetId, text: promptText }, corrId });
       }),
     resolveBrowserInstance: (sessionId, requestId, approve, savedProfileId) =>
       new Promise<AckResult>((resolve) => {

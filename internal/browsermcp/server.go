@@ -32,6 +32,13 @@ const (
 	ListInstancesTool     = "browser_list_instances"
 	RequestInstanceTool   = "browser_request_instance"
 	CloseInstanceTool     = "browser_close_instance"
+	// HandleDialogTool is Playwright MCP's dialog tool; the router answers
+	// daemon-tracked dialogs itself (see handleDialog).
+	HandleDialogTool = "browser_handle_dialog"
+
+	// DefaultCallTimeout bounds one Playwright tool call, counting only time
+	// the agent holds control (a human takeover legitimately holds calls).
+	DefaultCallTimeout = 2 * time.Minute
 )
 
 // Child is one Playwright MCP connection to one browser instance.
@@ -49,14 +56,26 @@ type Config struct {
 	JSRuntime, PlaywrightCLI, CDPBase, OutputDir string
 	HTTPClient                                   *http.Client
 	PollInterval                                 time.Duration
-	Stderr                                       io.Writer
+	// CallTimeout bounds a Playwright tool call (DefaultCallTimeout when
+	// zero); a call that exceeds it restarts that browser's Playwright MCP.
+	CallTimeout time.Duration
+	// DialogPollInterval is how often a running call checks the daemon for a
+	// newly opened dialog or a human takeover (500ms when zero).
+	DialogPollInterval time.Duration
+	Stderr             io.Writer
 	// StartChild overrides how a Playwright MCP child is launched (tests).
 	StartChild func(ctx context.Context, browserID, endpoint string) (Child, error)
 }
 
+// childSlot is one Playwright MCP child. Calls to it run one at a time;
+// lock is a one-token channel so waiting for it can be bounded.
 type childSlot struct {
-	callMu sync.Mutex
-	child  Child
+	lock  chan struct{}
+	child Child
+}
+
+func newChildSlot(child Child) *childSlot {
+	return &childSlot{lock: make(chan struct{}, 1), child: child}
 }
 
 type server struct {
@@ -70,6 +89,10 @@ type server struct {
 	children map[string]*childSlot
 	tools    []toolregistry.Declaration
 	toolSet  map[string]bool
+	// dialogSeen marks browsers where this router reported a dialog; once it
+	// closes, Playwright's possibly stale modal state is cleared (see
+	// clearStaleDialog).
+	dialogSeen map[string]bool
 }
 
 // Run serves newline-delimited MCP JSON-RPC until input closes or ctx ends.
@@ -83,9 +106,15 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
 	}
+	if cfg.CallTimeout <= 0 {
+		cfg.CallTimeout = DefaultCallTimeout
+	}
+	if cfg.DialogPollInterval <= 0 {
+		cfg.DialogPollInterval = 500 * time.Millisecond
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	s := &server{cfg: cfg, ctx: ctx, out: out, children: make(map[string]*childSlot)}
+	s := &server{cfg: cfg, ctx: ctx, out: out, children: make(map[string]*childSlot), dialogSeen: make(map[string]bool)}
 	if s.cfg.StartChild == nil {
 		s.cfg.StartChild = s.startPlaywright
 	}
@@ -293,16 +322,19 @@ func (s *server) callPlaywright(ctx context.Context, name string, raw json.RawMe
 	if err := unscopeRefs(args, browserID); err != nil {
 		return nil, err
 	}
-	slot, err := s.child(browserID)
-	if err != nil {
-		return nil, err
+	if name == HandleDialogTool {
+		return s.handleDialog(ctx, browserID, args)
+	}
+	status, statusErr := s.dialogStatus(ctx, browserID)
+	if statusErr == nil {
+		if len(status.Dialogs) > 0 {
+			s.setDialogSeen(browserID, true)
+			return nil, errors.New(dialogBlockedMessage(browserID, status.Dialogs, "this tool call was not run"))
+		}
+		s.clearStaleDialog(ctx, browserID)
 	}
 	encoded, _ := json.Marshal(args)
-	// Playwright MCP keeps mutable per-page state (selected tab, element
-	// refs); calls to one browser run one at a time.
-	slot.callMu.Lock()
-	result, err := slot.child.CallTool(ctx, name, encoded)
-	slot.callMu.Unlock()
+	result, err := s.runPlaywright(ctx, browserID, name, encoded, true)
 	if err != nil {
 		slog.Warn("browser tool call failed", "session_id", s.cfg.SessionID, "browser_id", browserID, "tool", name, "error", err)
 		return nil, err
@@ -312,6 +344,226 @@ func (s *server) callPlaywright(ctx context.Context, name string, raw json.RawMe
 		s.scopeSnapshotFiles(result, browserID)
 	}
 	return result, nil
+}
+
+type callResult struct {
+	result json.RawMessage
+	err    error
+}
+
+// runPlaywright runs one tool call on a browser's Playwright MCP child,
+// serialized with that browser's other calls because Playwright MCP keeps
+// mutable per-page state (selected tab, element refs).
+//
+// The call is supervised rather than awaited blindly: a call (or the wait for
+// the previous one) that runs past CallTimeout of agent-held time restarts
+// the child, since nothing else can unblock it; with watchDialogs, a
+// JavaScript dialog that opens meanwhile returns at once, because the page
+// cannot make progress until someone answers it. In that case the call keeps
+// running and holds the browser until it settles, which answering the dialog
+// allows.
+func (s *server) runPlaywright(ctx context.Context, browserID, name string, arguments json.RawMessage, watchDialogs bool) (json.RawMessage, error) {
+	slot, err := s.child(browserID)
+	if err != nil {
+		return nil, err
+	}
+	clock := s.newCallClock(browserID)
+	defer clock.stop()
+	acquired := false
+	for !acquired {
+		select {
+		case slot.lock <- struct{}{}:
+			acquired = true
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-clock.tick():
+			status, statusErr := clock.advance(ctx)
+			if watchDialogs && statusErr == nil && len(status.Dialogs) > 0 {
+				s.setDialogSeen(browserID, true)
+				return nil, errors.New(dialogBlockedMessage(browserID, status.Dialogs, "this tool call was not run"))
+			}
+			if clock.expired() {
+				slog.Warn("browser tool call gave up waiting for the previous call", "session_id", s.cfg.SessionID, "browser_id", browserID, "tool", name, "timeout", s.cfg.CallTimeout)
+				return nil, fmt.Errorf("browser %q is still busy with an earlier tool call after %s; try again shortly", browserID, s.cfg.CallTimeout)
+			}
+		}
+	}
+	callCtx, cancel := context.WithCancel(ctx)
+	done := make(chan callResult, 1)
+	go func() {
+		result, err := slot.child.CallTool(callCtx, name, arguments)
+		cancel()
+		<-slot.lock
+		done <- callResult{result, err}
+	}()
+	clock.stop()
+	clock = s.newCallClock(browserID)
+	defer clock.stop()
+	for {
+		select {
+		case got := <-done:
+			return got.result, got.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-clock.tick():
+			status, statusErr := clock.advance(ctx)
+			if watchDialogs && statusErr == nil && len(status.Dialogs) > 0 {
+				s.setDialogSeen(browserID, true)
+				slog.Info("browser tool call interrupted by a dialog", "session_id", s.cfg.SessionID, "browser_id", browserID, "tool", name, "dialog_type", status.Dialogs[0].Type)
+				go func() {
+					got := <-done
+					slog.Info("browser tool call settled after its dialog", "session_id", s.cfg.SessionID, "browser_id", browserID, "tool", name, "error", got.err)
+				}()
+				return nil, errors.New(dialogBlockedMessage(browserID, status.Dialogs, name+" opened it, or was running when it opened, and has not finished"))
+			}
+			if clock.expired() {
+				slog.Warn("browser tool call timed out; restarting Playwright MCP", "session_id", s.cfg.SessionID, "browser_id", browserID, "tool", name, "timeout", s.cfg.CallTimeout)
+				s.resetChild(browserID, slot)
+				<-done
+				return nil, fmt.Errorf("%s did not finish within %s, so Tandem restarted the Playwright connection for browser %q. The browser itself, its tabs and logins are unchanged; take a browser_snapshot to see where it is", name, s.cfg.CallTimeout, browserID)
+			}
+		}
+	}
+}
+
+// callClock measures a call's agent-held time: while the human holds the
+// browser, the broker deliberately queues the agent's CDP traffic, so that
+// time does not count toward CallTimeout.
+type callClock struct {
+	s         *server
+	browserID string
+	ticker    *time.Ticker
+	last      time.Time
+	elapsed   time.Duration
+}
+
+func (s *server) newCallClock(browserID string) *callClock {
+	return &callClock{s: s, browserID: browserID, ticker: time.NewTicker(s.cfg.DialogPollInterval), last: time.Now()}
+}
+
+func (c *callClock) tick() <-chan time.Time { return c.ticker.C }
+
+func (c *callClock) advance(ctx context.Context) (browser.DialogStatus, error) {
+	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	status, err := c.s.dialogStatus(statusCtx, c.browserID)
+	cancel()
+	now := time.Now()
+	if err != nil || status.ControlOwner != browser.ControlUser {
+		c.elapsed += now.Sub(c.last)
+	}
+	c.last = now
+	return status, err
+}
+
+func (c *callClock) expired() bool { return c.elapsed >= c.s.cfg.CallTimeout }
+
+func (c *callClock) stop() { c.ticker.Stop() }
+
+// resetChild closes a wedged Playwright MCP child; the next call starts a
+// fresh one. Closing it ends its CDP connection, not the browser.
+func (s *server) resetChild(browserID string, slot *childSlot) {
+	s.mu.Lock()
+	if s.children[browserID] == slot {
+		delete(s.children, browserID)
+	}
+	s.mu.Unlock()
+	_ = slot.child.Close()
+}
+
+func (s *server) dialogStatus(ctx context.Context, browserID string) (browser.DialogStatus, error) {
+	var status browser.DialogStatus
+	query := "?sessionId=" + url.QueryEscape(s.cfg.SessionID) + "&browserId=" + url.QueryEscape(browserID)
+	err := s.control(ctx, http.MethodGet, browser.DialogsPath+query, nil, &status)
+	return status, err
+}
+
+func (s *server) setDialogSeen(browserID string, seen bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seen {
+		s.dialogSeen[browserID] = true
+	} else {
+		delete(s.dialogSeen, browserID)
+	}
+}
+
+// clearStaleDialog runs after a dialog this router reported has closed. If
+// Playwright MCP also saw the dialog, it still records it as modal state and
+// would refuse every tool until browser_handle_dialog; when the human (or the
+// router) answered the dialog through the daemon, nobody would. Dismissing it
+// through Playwright clears that state; if the dialog is truly gone the CDP
+// call merely fails. Dismiss, not accept: should a dialog the daemon missed
+// still be open, staying on the page loses nothing.
+func (s *server) clearStaleDialog(ctx context.Context, browserID string) {
+	s.mu.Lock()
+	seen := s.dialogSeen[browserID]
+	s.mu.Unlock()
+	if !seen {
+		return
+	}
+	s.setDialogSeen(browserID, false)
+	cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := s.runPlaywright(cleanupCtx, browserID, HandleDialogTool, json.RawMessage(`{"accept":false}`), false)
+	slog.Debug("cleared Playwright dialog state", "session_id", s.cfg.SessionID, "browser_id", browserID, "error", err)
+}
+
+// handleDialog answers a dialog the daemon tracks, which works even when
+// Playwright MCP missed the dialog or is itself stuck behind it. Without one
+// it falls back to Playwright's own tool.
+func (s *server) handleDialog(ctx context.Context, browserID string, args map[string]any) (any, error) {
+	accept, _ := args["accept"].(bool)
+	promptText, _ := args["promptText"].(string)
+	status, err := s.dialogStatus(ctx, browserID)
+	if err != nil || len(status.Dialogs) == 0 {
+		s.setDialogSeen(browserID, false)
+		encoded, _ := json.Marshal(args)
+		return s.runPlaywright(ctx, browserID, HandleDialogTool, encoded, false)
+	}
+	dialog := status.Dialogs[0]
+	var handled struct {
+		Remaining []browser.PendingDialog `json:"remaining"`
+	}
+	body := map[string]any{"sessionId": s.cfg.SessionID, "browserId": browserID, "targetId": dialog.TargetID, "accept": accept, "promptText": promptText}
+	if err := s.control(ctx, http.MethodPost, browser.DialogsPath+"/handle", body, &handled); err != nil {
+		return nil, fmt.Errorf("answer the %q dialog: %w", dialog.Type, err)
+	}
+	s.setDialogSeen(browserID, true)
+	verb := "Dismissed"
+	if accept {
+		verb = "Accepted"
+	}
+	text := fmt.Sprintf("%s the %q dialog on %s.", verb, dialog.Type, dialogPage(dialog))
+	if len(handled.Remaining) > 0 {
+		text += " " + dialogBlockedMessage(browserID, handled.Remaining, "another dialog is still open")
+	}
+	return toolText(text), nil
+}
+
+func dialogPage(dialog browser.PendingDialog) string {
+	if dialog.URL != "" {
+		return dialog.URL
+	}
+	return "page " + dialog.TargetID
+}
+
+// dialogBlockedMessage explains an open dialog to the agent, including how
+// to answer it.
+func dialogBlockedMessage(browserID string, dialogs []browser.PendingDialog, context string) string {
+	dialog := dialogs[0]
+	var b strings.Builder
+	fmt.Fprintf(&b, "A JavaScript %q dialog is open in browser %q on %s", dialog.Type, browserID, dialogPage(dialog))
+	if dialog.Message != "" {
+		fmt.Fprintf(&b, " with message %q", dialog.Message)
+	}
+	fmt.Fprintf(&b, " (%s). The page cannot respond until the dialog is answered. Call %s with accept true or false; the human can also answer it from the Browser pane.", context, HandleDialogTool)
+	if dialog.Type == "beforeunload" {
+		b.WriteString(" For this beforeunload dialog, accept leaves the page and discards unsaved form input; dismiss stays on the page.")
+	}
+	if len(dialogs) > 1 {
+		fmt.Fprintf(&b, " %d more dialog(s) are open on other tabs.", len(dialogs)-1)
+	}
+	return b.String()
 }
 
 // snapshotLinkPattern matches the page-snapshot files Playwright MCP links
@@ -535,7 +787,7 @@ func (s *server) child(browserID string) (*childSlot, error) {
 		return nil, fmt.Errorf("start Playwright MCP for browser %s: %w", browserID, err)
 	}
 	slog.Info("playwright MCP started", "session_id", s.cfg.SessionID, "browser_id", browserID)
-	slot = &childSlot{child: child}
+	slot = newChildSlot(child)
 	s.mu.Lock()
 	s.children[browserID] = slot
 	s.mu.Unlock()

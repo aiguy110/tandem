@@ -169,6 +169,13 @@ describe('thread audio preference', () => {
     view = useStore.getState().sessions['session-1'];
     expect(view.browserAnyActive).toBe(true);
     expect(view.browserActive).toBe(false);
+    expect(view.browserStates.b2.dialogs).toEqual([]);
+    const dialog = { targetId: 'p1', type: 'confirm', message: 'Sure?', openedAt: 5 };
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', browserId: 'b2', active: true, controlOwner: 'user', dialogs: [dialog] });
+    expect(useStore.getState().sessions['session-1'].browserStates.b2.dialogs).toEqual([dialog]);
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', browserId: 'b2', active: true, controlOwner: 'user', dialogs: [] });
+    view = useStore.getState().sessions['session-1'];
+    expect(view.browserStates.b2.dialogs).toEqual([]);
 
     useStore.getState().setBrowserView('session-1', 'b2');
     view = useStore.getState().sessions['session-1'];

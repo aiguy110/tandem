@@ -280,6 +280,58 @@ client requests `browser_pages` every 1.5 seconds (with no overlapping polls).
 ordered `browser_input` queue with kinds `navigate` (and `url`), `back`, `forward`,
 and `reload`.
 
+## JavaScript dialogs
+
+A JavaScript dialog (`alert`, `confirm`, `prompt`, or `beforeunload`) blocks its page's
+renderer until someone answers it. While it is open, CDP calls that need that page hang:
+`Runtime.evaluate`, `Page.enable` on a newly attached session, screencast changes, and
+`Input.*`. The CDP screencast never shows native dialogs, so before this was handled the
+human saw a frozen page and every agent tool call for that browser hung.
+
+- **Tracking.** With `BrokerConfig.WatchDialogs` (on in the daemon), every provisioned
+  browser gets a *dialog watcher* (`internal/browser/dialogs.go`). It has its own direct
+  CDP connection, separate from the human viewer's, and follows targets with
+  `Target.setDiscoverTargets`. It attaches a Page-enabled session to every page as soon
+  as the page appears. This has to happen early: once a dialog is open, a session that
+  attaches afterwards can neither enable Page nor see or answer the dialog
+  (`Page.handleJavaScriptDialog` fails with "No dialog is showing"). The watcher reports
+  `Page.javascriptDialogOpening`/`Closed` per target. Open dialogs are part of
+  `BrowserState.dialogs` and are pushed to the UI in `browser_state`. Dialogs survive a
+  watcher reconnect but cannot then be answered through Tandem. A dialog that was already
+  open when the daemon attached (for example after a daemon restart) is not seen.
+- **Human.** The Browser pane shows a banner for each pending dialog on the viewed instance:
+  type, page, message, and the page's own choices (*Leave page* / *Stay on page* for
+  `beforeunload`, *OK* / *Cancel*, plus a reply field for `prompt`). A dialog in another
+  instance shows a "Show it" banner. Answering sends `browser_dialog`. It does **not**
+  require holding control, because the dialog blocks the agent and the human alike, and
+  it bypasses the ordered `browser_input` queue, whose clicks would each wait out a CDP
+  timeout first.
+- **Agent.** `tandem mcp-browser` asks the daemon (`GET /internal/browser/dialogs`,
+  bearer-authed) before each Playwright tool call. While a dialog is open on that browser,
+  every tool except `browser_handle_dialog` fails at once, with the dialog's type, page,
+  and message and how to answer it. A dialog that opens *during* a call ends that call's
+  wait immediately, so a `browser_navigate` that triggers `beforeunload` reports the
+  dialog instead of timing out after 60 s. The interrupted call keeps the browser until it
+  settles, which answering the dialog allows. `browser_handle_dialog` is answered through
+  the daemon (`POST /internal/browser/dialogs/handle`), so it works even when Playwright
+  MCP never recorded the dialog. Playwright still records the dialogs it does see as
+  "modal state", so after a dialog the router reported has closed, the router first sends
+  Playwright a `browser_handle_dialog` with `accept: false` to clear any stale modal state.
+  It uses dismiss rather than accept so that a dialog the daemon missed is never confirmed.
+- **No automatic answers.** Tandem never answers a dialog by itself. Accepting
+  `beforeunload` leaves the page and discards unsaved form input, possibly input the human
+  typed in the shared view, so that choice stays with a person or an explicit agent call.
+
+### Bounded tool calls
+
+The router runs each browser's Playwright calls one at a time, because Playwright MCP keeps
+per-page state. A call that never returns would otherwise hold that browser forever, and
+every later call would queue behind it. Each call, and each wait for the previous call, is
+bounded by `browsermcp.DefaultCallTimeout` (2 minutes). Only time the agent holds control
+counts: during a human takeover the broker deliberately queues the agent's CDP traffic. On
+timeout the router closes that browser's Playwright MCP child and returns an error. The
+browser, its tabs, and its logins are untouched, and the next call starts a fresh child.
+
 ## Multiple browser instances and saved browser profiles
 
 Terminology:

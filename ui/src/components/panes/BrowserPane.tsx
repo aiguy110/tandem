@@ -12,11 +12,60 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_BROWSER_ID, useStore, type BrowserInstanceState, type Takeover } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
-import type { BrowserInputWire, BrowserInstance, BrowserPages } from '../../wire';
+import type { BrowserDialog, BrowserInputWire, BrowserInstance, BrowserPages } from '../../wire';
 
 const NO_TAKEOVERS: Takeover[] = [];
+const NO_DIALOGS: BrowserDialog[] = [];
 const NO_INSTANCES: BrowserInstance[] = [];
 const NO_STATES: Record<string, BrowserInstanceState> = {};
+
+// The page's own words for a dialog's two answers.
+function dialogChoices(type: string): { accept: string; dismiss?: string } {
+  switch (type) {
+    case 'beforeunload': return { accept: 'Leave page', dismiss: 'Stay on page' };
+    case 'alert': return { accept: 'OK' };
+    default: return { accept: 'OK', dismiss: 'Cancel' };
+  }
+}
+
+// A JavaScript dialog blocks its page, and with it the agent's browser tools,
+// until answered. The screencast never shows native dialogs, so this banner is
+// the only place the human sees one. Answering does not need the wheel.
+function DialogBanner({ sessionId, browserId, dialog, pageTitle }: { sessionId: string; browserId: string; dialog: BrowserDialog; pageTitle?: string }) {
+  const answerBrowserDialog = useStore((s) => s.answerBrowserDialog);
+  const [promptText, setPromptText] = useState(dialog.defaultPrompt ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const choices = dialogChoices(dialog.type);
+  const answer = async (accept: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await answerBrowserDialog(sessionId, browserId, dialog.targetId, accept, dialog.type === 'prompt' && accept ? promptText : undefined);
+      if (result.error) throw new Error(result.error);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally { setBusy(false); }
+  };
+  const where = pageTitle || dialog.url || 'a page';
+  return (
+    <div className="takeover-banner browser-dialog-banner" role="alertdialog" aria-label={`Page dialog: ${dialog.type}`} onKeyDown={(event) => event.stopPropagation()}>
+      <span>
+        <b>{dialog.type === 'beforeunload' ? 'Leave page?' : `Page ${dialog.type}`}</b> on {where}
+        {dialog.message ? <> — “{dialog.message}”</> : null}
+        {dialog.type === 'beforeunload' ? ' Leaving discards unsaved form input.' : ''}
+        {' '}The page (and the agent's browser tools) wait for an answer.
+      </span>
+      {dialog.type === 'prompt' && (
+        <input className="browser-dialog-input" value={promptText} onChange={(event) => setPromptText(event.target.value)} aria-label="Prompt reply" />
+      )}
+      <button className="wheel-btn hot" disabled={busy} onClick={() => void answer(true)}>{choices.accept}</button>
+      {choices.dismiss && <button className="wheel-btn" disabled={busy} onClick={() => void answer(false)}>{choices.dismiss}</button>}
+      {error && <span role="status" className="browser-bar-message" title={error}>{error}</span>}
+    </div>
+  );
+}
 
 type BrowserIconName = 'agent' | 'user' | 'play' | 'restart' | 'keyboard' | 'wheel' | 'save' | 'close';
 
@@ -49,6 +98,8 @@ export function BrowserPane() {
   const takeovers = allTakeovers.filter((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === viewId);
   const otherTakeover = allTakeovers.find((t) => (t.browserId ?? DEFAULT_BROWSER_ID) !== viewId);
   const viewed = instances.find((instance) => instance.id === viewId);
+  const dialogs = browserStates[viewId]?.dialogs ?? NO_DIALOGS;
+  const otherDialogBrowser = instances.find((instance) => instance.id !== viewId && (browserStates[instance.id]?.dialogs?.length ?? 0) > 0);
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
   const browserInput = useStore((s) => s.browserInput);
@@ -658,6 +709,17 @@ export function BrowserPane() {
               onKeyDown={(event) => { if (event.key === 'Escape') { setEditingAddress(false); event.currentTarget.blur(); } }} />
             <button className="browser-action-btn" type="submit" disabled={!userOwns || navBusy || !address.trim()}>Go</button>
           </form>
+        </div>
+      )}
+
+      {dialogs.map((dialog) => (
+        <DialogBanner key={`${dialog.targetId}-${dialog.openedAt}`} sessionId={sessionId} browserId={viewId} dialog={dialog}
+          pageTitle={pages?.pages.find((page) => page.targetId === dialog.targetId)?.title} />
+      ))}
+      {otherDialogBrowser && (
+        <div className="takeover-banner">
+          <span>A page dialog is waiting in browser <b>{otherDialogBrowser.name}</b>.</span>
+          <button className="wheel-btn hot" onClick={() => setBrowserView(sessionId, otherDialogBrowser.id)}>Show it</button>
         </div>
       )}
 
