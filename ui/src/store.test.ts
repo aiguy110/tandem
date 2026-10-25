@@ -677,3 +677,40 @@ describe('agent messaging projections', () => {
     expect(resume.enabled!()).toBe(true);
   });
 });
+
+describe('light background subscriptions', () => {
+  const snapshot = (sessionId: string, partial: boolean) => ({
+    t: 'snapshot' as const, sessionId, seq: 40, status: 'idle' as const, controlMode: 'transcript' as const, pendingApprovals: [], queuedPrompts: [],
+    transcript: [{ seq: 40, event: { kind: 'message_chunk' as const, text: 'latest' } }],
+    ...(partial ? { partial: true } : {}),
+  });
+
+  it('subscribes background sessions light and loads full history on focus', () => {
+    const sendSpy = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
+    useStore.setState({ focusedId: 'a' });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'a' }), summary({ id: 'b' })] });
+    const subscribes = () => sendSpy.mock.calls.map(([msg]) => msg).filter((msg) => msg.t === 'subscribe');
+    expect(subscribes()).toEqual([
+      expect.not.objectContaining({ sessionId: 'a', transcriptTail: expect.anything() }),
+      expect.objectContaining({ sessionId: 'b', transcriptTail: 30 }),
+    ]);
+
+    __testApplyServerMsg(snapshot('b', true));
+    expect(useStore.getState().sessions.b.historyPartial).toBe(true);
+    expect(useStore.getState().sessions.b.historyLoaded).toBe(false);
+    sendSpy.mockClear();
+
+    useStore.getState().focus('b');
+    expect(subscribes()).toEqual([expect.objectContaining({ sessionId: 'b', sinceSeq: 0 })]);
+    expect(subscribes()[0]).not.toHaveProperty('transcriptTail');
+    // A second focus while the full snapshot is in flight does not re-request it.
+    useStore.getState().focus('a');
+    useStore.getState().focus('b');
+    expect(subscribes().filter((msg) => msg.t === 'subscribe' && msg.sessionId === 'b')).toHaveLength(1);
+
+    __testApplyServerMsg(snapshot('b', false));
+    expect(useStore.getState().sessions.b.historyPartial).toBe(false);
+    expect(useStore.getState().sessions.b.historyLoaded).toBe(true);
+    sendSpy.mockRestore();
+  });
+});

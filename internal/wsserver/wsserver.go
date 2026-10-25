@@ -407,6 +407,7 @@ type clientMessage struct {
 	Channels        []string                   `json:"channels"`
 	SinceSeq        int64                      `json:"sinceSeq"`
 	PagedReplay     bool                       `json:"pagedReplay,omitempty"`
+	TranscriptTail  int                        `json:"transcriptTail,omitempty"` // > 0: light snapshot (lightTranscript)
 	CorrID          json.RawMessage            `json:"corrId"`
 	Text            string                     `json:"text"`
 	Blocks          []agentadapter.PromptBlock `json:"blocks"`
@@ -508,6 +509,7 @@ type connection struct {
 	id                      string
 	openedAt                time.Time
 	queuedBytes             atomic.Int64
+	replayBytes             atomic.Int64
 	writtenBytes            atomic.Int64
 	writtenMessages         atomic.Int64
 	frameBytes              atomic.Int64
@@ -525,6 +527,9 @@ type connection struct {
 	server                  *Handler
 	ws                      *websocket.Conn
 	out                     chan []byte
+	replayMu                sync.Mutex
+	replayQueue             []replayItem
+	replayReady             chan struct{}
 	frameReady              chan string
 	frameMu                 sync.Mutex
 	latestFrames            map[string][]byte
@@ -541,7 +546,7 @@ func newConnection(h *Handler, ws *websocket.Conn) *connection {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &connection{
 		ctx: ctx, cancel: cancel, openedAt: time.Now(), browserReady: make(chan struct{}, 1), subscriptionQueue: make(chan clientMessage, 256), outDrained: make(chan struct{}, 1), priority: make(chan []byte, 16),
-		server: h, ws: ws,
+		server: h, ws: ws, replayReady: make(chan struct{}, 1),
 		out:        make(chan []byte, h.opts.WriteQueue),
 		frameReady: make(chan string, 16), latestFrames: make(map[string][]byte),
 		done: make(chan struct{}), subs: map[string]*subscription{}, remoteSubs: map[string]struct{}{},
@@ -688,6 +693,10 @@ func (c *connection) writeLoop() {
 			if !c.write(data) {
 				return
 			}
+		case <-c.replayReady:
+			if !c.writeReplay() {
+				return
+			}
 		case sessionID := <-c.frameReady:
 			// Pace frames according to the previous write's cost. Continue serving
 			// control traffic during the cooldown, retaining the latest frame.
@@ -705,6 +714,11 @@ func (c *connection) writeLoop() {
 					case data := <-c.out:
 						c.dequeued(data)
 						if !c.write(data) {
+							timer.Stop()
+							return
+						}
+					case <-c.replayReady:
+						if !c.writeReplay() {
 							timer.Stop()
 							return
 						}
@@ -741,34 +755,107 @@ func (c *connection) dequeued(data []byte) {
 	}
 }
 
+// replayItem is one message on the replay lane. sub, when set, counts the
+// item as outstanding so that subscription's live events cannot overtake it.
+type replayItem struct {
+	data []byte
+	sub  *subscription
+}
+
+// writeReplay writes the next replay-lane message. Replay is the
+// lowest-priority control lane: bulk subscription snapshots must not delay
+// command acks and live events on a slow link (e.g. a phone on a tailnet).
+// One message per wake-up lets the writer re-check the higher lanes between.
+func (c *connection) writeReplay() bool {
+	c.replayMu.Lock()
+	if len(c.replayQueue) == 0 {
+		c.replayMu.Unlock()
+		return true
+	}
+	item := c.replayQueue[0]
+	c.replayQueue[0] = replayItem{}
+	c.replayQueue = c.replayQueue[1:]
+	more := len(c.replayQueue) > 0
+	c.replayMu.Unlock()
+	if more {
+		c.signalReplay()
+	}
+	c.replayBytes.Add(-int64(len(item.data)))
+	c.dequeued(item.data)
+	ok := c.writeMessage(item.data, "replay")
+	if item.sub != nil {
+		item.sub.replayPending.Add(-1)
+	}
+	return ok
+}
+
+func (c *connection) signalReplay() {
+	select {
+	case c.replayReady <- struct{}{}:
+	default:
+	}
+}
+
+func (c *connection) pushReplay(sub *subscription, data []byte) {
+	c.replayBytes.Add(int64(len(data)))
+	c.queuedBytes.Add(int64(len(data)))
+	if sub != nil {
+		sub.replayPending.Add(1)
+	}
+	c.replayMu.Lock()
+	c.replayQueue = append(c.replayQueue, replayItem{data: data, sub: sub})
+	c.replayMu.Unlock()
+	c.signalReplay()
+}
+
 // Replay waits for byte budget instead of disconnecting a healthy client when
 // recovery produces messages faster than its connection can consume them.
-func (c *connection) sendReplay(value any) bool {
+func (c *connection) sendReplay(sub *subscription, value any) bool {
 	normalizeSessionEnvelope(value)
 	data, err := json.Marshal(value)
 	if err != nil {
 		return false
 	}
-	for c.queuedBytes.Load() > 4<<20 {
+	for c.replayBytes.Load() > 4<<20 {
 		select {
 		case <-c.outDrained:
 		case <-c.done:
 			return false
 		}
 	}
-	c.queuedBytes.Add(int64(len(data)))
 	select {
-	case c.out <- data:
-		return true
 	case <-c.done:
-		c.queuedBytes.Add(-int64(len(data)))
 		return false
+	default:
 	}
+	c.pushReplay(sub, data)
+	return true
 }
 
-func (c *connection) sendSnapshot(sessionID string, value map[string]any, paged bool) bool {
+// maxLiveReplayBytes bounds the replay lane when live events pile up behind
+// a replay the client is not draining; past it the client is treated as dead.
+const maxLiveReplayBytes = 64 << 20
+
+// sendLiveReplay queues a live event behind its subscription's unwritten
+// replay without waiting for byte budget (live callbacks must not block).
+func (c *connection) sendLiveReplay(sub *subscription, value any) bool {
+	normalizeSessionEnvelope(value)
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	if c.replayBytes.Load()+int64(len(data)) > maxLiveReplayBytes {
+		slog.Warn("websocket replay queue full", "connection_id", c.id, "session_id", sub.s.ID, "message_bytes", len(data), "replay_bytes", c.replayBytes.Load(), "queue_bytes", c.queuedBytes.Load())
+		c.closeWithReason("queue_full", nil)
+		return false
+	}
+	c.pushReplay(sub, data)
+	return true
+}
+
+func (c *connection) sendSnapshot(sub *subscription, sessionID string, value map[string]any, paged bool) bool {
 	if !paged {
-		return c.sendReplay(value)
+		return c.sendReplay(sub, value)
 	}
 	normalizeSessionEnvelope(value)
 	data, err := json.Marshal(value)
@@ -776,7 +863,7 @@ func (c *connection) sendSnapshot(sessionID string, value map[string]any, paged 
 		return false
 	}
 	replayID := fmt.Sprintf("%s-%d", c.id, c.replaySequence.Add(1))
-	if !c.sendReplay(map[string]any{"t": "snapshot_start", "sessionId": sessionID, "replayId": replayID}) {
+	if !c.sendReplay(sub, map[string]any{"t": "snapshot_start", "sessionId": sessionID, "replayId": replayID}) {
 		return false
 	}
 	// ASCII JSON escaping in each chunk preserves UTF-8 across byte boundaries.
@@ -786,12 +873,12 @@ func (c *connection) sendSnapshot(sessionID string, value map[string]any, paged 
 		for n < len(data) && data[n]&0xc0 == 0x80 {
 			n--
 		}
-		if !c.sendReplay(map[string]any{"t": "snapshot_chunk", "sessionId": sessionID, "replayId": replayID, "data": string(data[:n])}) {
+		if !c.sendReplay(sub, map[string]any{"t": "snapshot_chunk", "sessionId": sessionID, "replayId": replayID, "data": string(data[:n])}) {
 			return false
 		}
 		data = data[n:]
 	}
-	return c.sendReplay(map[string]any{"t": "snapshot_end", "sessionId": sessionID, "replayId": replayID})
+	return c.sendReplay(sub, map[string]any{"t": "snapshot_end", "sessionId": sessionID, "replayId": replayID})
 }
 
 func (c *connection) write(data []byte) bool {
@@ -2791,6 +2878,9 @@ type subscription struct {
 	browserFrameOff func()
 	// browserID is the instance whose screencast this subscription streams.
 	browserID string
+	// replayPending counts this subscription's messages still queued on the
+	// connection's replay lane.
+	replayPending atomic.Int64
 }
 
 func (s *subscription) wants(ev eventlog.Event) bool {
@@ -2843,8 +2933,16 @@ func (c *connection) subscribe(m clientMessage) {
 			sub.mu.Unlock()
 			return
 		}
-		sub.mu.Unlock()
-		c.send(eventMessage(sess.ID, le))
+		// Until this subscription's replay is on the wire, live events stay
+		// on the replay lane behind it so a client never sees seq N+1 before
+		// the snapshot ending at N.
+		if sub.replayPending.Load() > 0 {
+			c.sendLiveReplay(sub, eventMessage(sess.ID, le))
+			sub.mu.Unlock()
+		} else {
+			sub.mu.Unlock()
+			c.send(eventMessage(sess.ID, le))
+		}
 		// Status transitions (turn start/end, blocked/unblocked) are the
 		// moments the workspace's git state is likely to have changed, so
 		// refresh every client's agent list rather than waiting for the next
@@ -2879,11 +2977,21 @@ func (c *connection) subscribe(m clientMessage) {
 	}
 	slog.Info("websocket replay started", "connection_id", c.id, "session_id", sess.ID, "source", replay.Source, "since_seq", m.SinceSeq, "boundary_seq", boundary, "events", len(replay.Events), "payload_bytes", replayBytes, "paged", m.PagedReplay)
 	if replay.Source == eventlog.ReplaySnapshot {
-		transcript := make([]map[string]any, 0, len(replay.Events))
+		wanted := make([]eventlog.LoggedEvent, 0, len(replay.Events))
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {
-				transcript = append(transcript, map[string]any{"seq": le.Seq, "event": wireEvent(le.Event)})
+				wanted = append(wanted, le)
 			}
+		}
+		partial := false
+		if m.TranscriptTail > 0 {
+			before := len(wanted)
+			wanted, partial = lightTranscript(wanted, m.TranscriptTail)
+			slog.Debug("websocket light snapshot", "connection_id", c.id, "session_id", sess.ID, "tail", m.TranscriptTail, "events", before, "kept", len(wanted), "partial", partial)
+		}
+		transcript := make([]map[string]any, 0, len(wanted))
+		for _, le := range wanted {
+			transcript = append(transcript, map[string]any{"seq": le.Seq, "event": wireEvent(le.Event)})
 		}
 		annotations, err := c.server.opts.Registry.ListAnnotations(sess.ID)
 		if err != nil || annotations == nil {
@@ -2900,17 +3008,20 @@ func (c *connection) subscribe(m clientMessage) {
 			}
 		}
 		snapshot := map[string]any{"t": "snapshot", "sessionId": sess.ID, "seq": boundary, "transcript": transcript, "status": sess.Status(), "controlMode": sess.ControlMode(), "pendingApprovals": sess.PendingApprovals(), "queuedPrompts": sess.QueuedPrompts(), "annotations": annotations, "audioReadySeqs": readySeqs, "audioReady": audioReady}
+		if partial {
+			snapshot["partial"] = true
+		}
 		if pos, err := c.server.opts.Registry.AudioPosition(sess.ID); err == nil && pos != nil {
 			snapshot["audioPosition"] = map[string]any{"seq": pos.Seq, "positionMs": pos.PositionMs, "updatedAt": pos.UpdatedAt}
 		}
-		if !c.sendSnapshot(sess.ID, snapshot, m.PagedReplay) {
+		if !c.sendSnapshot(sub, sess.ID, snapshot, m.PagedReplay) {
 			sub.stop()
 			return
 		}
 	} else {
 		for _, le := range replay.Events {
 			if sub.wants(le.Event) {
-				if !c.sendReplay(eventMessage(sess.ID, le)) {
+				if !c.sendReplay(sub, eventMessage(sess.ID, le)) {
 					sub.stop()
 					return
 				}
@@ -2930,7 +3041,7 @@ func (c *connection) subscribe(m clientMessage) {
 		}
 	}
 	if queueRelevant {
-		if !c.sendReplay(map[string]any{"t": "prompt_queue", "sessionId": sess.ID, "queuedPrompts": queuedPrompts}) {
+		if !c.sendReplay(sub, map[string]any{"t": "prompt_queue", "sessionId": sess.ID, "queuedPrompts": queuedPrompts}) {
 			sub.stop()
 			return
 		}
@@ -2947,7 +3058,7 @@ func (c *connection) subscribe(m clientMessage) {
 		sub.mu.Unlock()
 		for _, le := range pending {
 			if le.Seq > boundary {
-				if !c.sendReplay(eventMessage(sess.ID, le)) {
+				if !c.sendReplay(sub, eventMessage(sess.ID, le)) {
 					sub.stop()
 					return
 				}
@@ -2991,8 +3102,43 @@ func (c *connection) subscribe(m clientMessage) {
 			}
 		}
 	}
-	c.sendReplay(withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID}, m.CorrID))
+	c.sendReplay(sub, withCorr(map[string]any{"t": "ack", "sessionId": m.SessionID}, m.CorrID))
 	slog.Info("websocket replay completed", "connection_id", c.id, "session_id", sess.ID, "elapsed_ms", time.Since(started).Milliseconds(), "queue_bytes", c.queuedBytes.Load())
+}
+
+// lightRequestKinds pair up into open/resolved requests that the client folds
+// from the whole transcript, so a light snapshot keeps every one of them.
+var lightRequestKinds = map[string]bool{
+	"permission_request": true, "takeover_request": true, "takeover_resolved": true,
+	"secret_request": true, "secret_resolved": true,
+	"browser_instance_request": true, "browser_instance_resolved": true,
+}
+
+// lightTranscript trims a snapshot for a session the client is not viewing:
+// every request event, the latest event of each other kind (status, usage,
+// capabilities, audio, ...), and the newest tail events. A client loads the
+// full transcript when the session is opened. partial reports whether
+// anything was dropped.
+func lightTranscript(events []eventlog.LoggedEvent, tail int) ([]eventlog.LoggedEvent, bool) {
+	if len(events) <= tail {
+		return events, false
+	}
+	keep := make([]bool, len(events))
+	seen := make(map[string]bool)
+	for i := len(events) - 1; i >= 0; i-- {
+		kind := events[i].Event.Kind
+		if i >= len(events)-tail || lightRequestKinds[kind] || !seen[kind] {
+			keep[i] = true
+		}
+		seen[kind] = true
+	}
+	out := make([]eventlog.LoggedEvent, 0, tail+len(seen))
+	for i, le := range events {
+		if keep[i] {
+			out = append(out, le)
+		}
+	}
+	return out, len(out) < len(events)
 }
 
 func (c *connection) unsubscribe(m clientMessage) {

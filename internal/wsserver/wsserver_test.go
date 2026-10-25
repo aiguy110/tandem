@@ -280,6 +280,95 @@ func TestPingOvertakesBackpressuredSnapshotReplay(t *testing.T) {
 	}
 }
 
+func TestCommandRepliesAndLiveEventsOvertakeBackpressuredReplay(t *testing.T) {
+	_, backend, a, _, url := setupWS(t, 64)
+	payload, _ := json.Marshal(map[string]any{"kind": "message_chunk", "role": "assistant", "text": strings.Repeat("x", 16<<20)})
+	if _, err := backend.Get("a").Log.Append(eventlog.Event{Kind: "message_chunk", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "subscribe", "sessionId": "a", "pagedReplay": true})
+	c.SetReadDeadline(time.Now().Add(15 * time.Second))
+	var msg map[string]any
+	if err := c.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["t"] != "snapshot_start" {
+		t.Fatalf("snapshot start=%v", msg["t"])
+	}
+	time.Sleep(50 * time.Millisecond)
+	send(t, c, map[string]any{"t": "list_agents"})
+	a.events <- event("live")
+	sawAgents, ended := false, false
+	for {
+		msg := recv(t, c)
+		switch msg["t"] {
+		case "agents":
+			if ended {
+				t.Fatal("command reply waited for the entire replay")
+			}
+			sawAgents = true
+		case "snapshot_end":
+			ended = true
+		case "event":
+			// The live event must never overtake the snapshot it follows.
+			if !ended {
+				t.Fatal("live event overtook its subscription's snapshot")
+			}
+			if seq, _ := msg["seq"].(float64); seq != 2 {
+				t.Fatalf("live seq=%v want 2", msg["seq"])
+			}
+			if !sawAgents {
+				t.Fatal("agents reply missing")
+			}
+			return
+		}
+	}
+}
+
+func TestLightSnapshotKeepsRequestsLatestStateAndTail(t *testing.T) {
+	_, backend, _, _, url := setupWS(t, 64)
+	log := backend.Get("a").Log
+	appendEvent := func(kind string, fields map[string]any) {
+		fields["kind"] = kind
+		payload, _ := json.Marshal(fields)
+		if _, err := log.Append(eventlog.Event{Kind: kind, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent("takeover_request", map[string]any{"reqId": "r1", "reason": "login"})
+	appendEvent("usage", map[string]any{"used": 1, "size": 10})
+	for i := 0; i < 20; i++ {
+		appendEvent("tool_call", map[string]any{"toolCallId": fmt.Sprint(i), "title": "t"})
+	}
+	appendEvent("usage", map[string]any{"used": 2, "size": 10})
+	for i := 0; i < 3; i++ {
+		appendEvent("tool_call", map[string]any{"toolCallId": fmt.Sprint("tail", i), "title": "t"})
+	}
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "subscribe", "sessionId": "a", "transcriptTail": 3})
+	msg := recv(t, c)
+	if msg["t"] != "snapshot" || msg["partial"] != true {
+		t.Fatalf("light snapshot=%v partial=%v", msg["t"], msg["partial"])
+	}
+	var kinds []string
+	for _, entry := range msg["transcript"].([]any) {
+		event := entry.(map[string]any)["event"].(map[string]any)
+		kinds = append(kinds, event["kind"].(string))
+	}
+	want := []string{"takeover_request", "usage", "tool_call", "tool_call", "tool_call"}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kept %v want %v", kinds, want)
+	}
+
+	full := dial(t, url)
+	send(t, full, map[string]any{"t": "subscribe", "sessionId": "a"})
+	msg = recv(t, full)
+	if _, partial := msg["partial"]; partial || len(msg["transcript"].([]any)) != 26 {
+		t.Fatalf("full snapshot partial=%v events=%d", msg["partial"], len(msg["transcript"].([]any)))
+	}
+}
+
 type inertBrowserDriver struct{}
 
 func (inertBrowserDriver) Kind() string { return "test" }

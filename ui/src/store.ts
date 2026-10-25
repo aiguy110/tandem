@@ -202,6 +202,9 @@ export interface SessionView {
   // False until the first transcript snapshot for this session arrives, so the
   // transcript can show a loading state instead of claiming it is empty.
   historyLoaded: boolean;
+  // The last snapshot was light (request/state events plus a recent tail, sent
+  // for sessions not being viewed); opening the session loads the full one.
+  historyPartial: boolean;
   // Browser subsystem (Phase 5): whether a browser exists for this agent and who
   // holds the wheel, plus any pending session-initiated takeover requests.
   // browserActive/browserOwner/browserTakeoverHeld describe the browser
@@ -724,7 +727,12 @@ const MOBILE_BREAKPOINT = '(max-width: 860px)';
 const isNarrowViewport = (): boolean =>
   typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia(MOBILE_BREAKPOINT).matches;
 
-export const useStore = create<StoreState>((set, get) => {
+// Background sessions subscribe with a light snapshot of this many recent
+// transcript events, so a page load on a slow link (e.g. a phone on a
+// tailnet) does not download every session's full history.
+const LIGHT_TRANSCRIPT_TAIL = 30;
+
+export const useStore = create<StoreState>((set, get, api) => {
   let audioFocusAgent: string | null = null;
   function syncAudioFocus(): void {
     const state = get();
@@ -760,14 +768,33 @@ export const useStore = create<StoreState>((set, get) => {
     if (get().browserSubAgent === id) channels.push('browser');
     return channels;
   };
+  // Sessions whose full transcript was requested to replace a light snapshot.
+  const fullHistoryRequested = new Set<string>();
   function subscribeAgent(id: string, replayPty = false): void {
+    const view = get().sessions[id];
+    const full = id === get().focusedId;
     // Terminal output was deliberately skipped while this agent was in the
     // background. Request its full channel history only on the first visit to
-    // a terminal surface; normal re-subscriptions continue incrementally.
-    const sinceSeq = replayPty ? 0 : get().sessions[id]?.lastSeq ?? 0;
-    const browserId = get().sessions[id]?.browserViewId;
-    client.send({ t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq, pagedReplay: true, ...(browserId && browserId !== DEFAULT_BROWSER_ID ? { browserId } : {}) });
+    // a terminal surface; normal re-subscriptions continue incrementally. A
+    // light transcript cannot be extended into a full one, so replace it.
+    const sinceSeq = replayPty || (full && view?.historyPartial) ? 0 : view?.lastSeq ?? 0;
+    const browserId = view?.browserViewId;
+    client.send({
+      t: 'subscribe', sessionId: id, channels: channelsFor(id), sinceSeq, pagedReplay: true,
+      ...(browserId && browserId !== DEFAULT_BROWSER_ID ? { browserId } : {}),
+      ...(full ? {} : { transcriptTail: LIGHT_TRANSCRIPT_TAIL }),
+    });
   }
+  function ensureFullHistory(id: string): void {
+    if (!get().sessions[id]?.historyPartial || fullHistoryRequested.has(id)) return;
+    fullHistoryRequested.add(id);
+    subscribeAgent(id);
+  }
+  // Every focus path (rail click, spawn, close, restore) funnels through
+  // focusedId, so load the full transcript here rather than at each caller.
+  api.subscribe((state, prev) => {
+    if (state.focusedId && state.focusedId !== prev.focusedId) ensureFullHistory(state.focusedId);
+  });
   function replayPtyFor(id: string): void {
     if (!get().sessions[id]) return;
     // A full terminal replay replaces prior terminal state. Clear the client
@@ -1259,7 +1286,8 @@ export const useStore = create<StoreState>((set, get) => {
             hasPty: prev.hasPty || msg.transcript.some((e) => e.event.kind === 'raw_pty'),
             shellExited,
             shellExitMessage,
-            historyLoaded: true,
+            historyLoaded: !msg.partial,
+            historyPartial: !!msg.partial,
             audioOnTurnEnd,
             audioState,
             audioError,
@@ -1276,6 +1304,8 @@ export const useStore = create<StoreState>((set, get) => {
             annotations: { ...st.annotations, [msg.sessionId]: msg.annotations ?? [] },
           };
         });
+        if (!msg.partial) fullHistoryRequested.delete(msg.sessionId);
+        else if (get().focusedId === msg.sessionId) ensureFullHistory(msg.sessionId);
         syncAudioFocus();
         return;
       }
@@ -1387,6 +1417,7 @@ export const useStore = create<StoreState>((set, get) => {
       // always re-announce the active chat after reconnecting.
       audioFocusAgent = null;
       syncAudioFocus();
+      fullHistoryRequested.clear();
       // Rediscover sessions (and their metadata) and re-subscribe with sinceSeq.
       client.send({ t: 'list_agents' });
       client.send({ t: 'list_agent_catalog' });
@@ -2303,6 +2334,7 @@ function shell(id: string): SessionView {
     shellExited: false,
     shellExitMessage: null,
     historyLoaded: false,
+    historyPartial: false,
     browserActive: false,
     browserOwner: 'agent',
     browserTakeoverHeld: false,

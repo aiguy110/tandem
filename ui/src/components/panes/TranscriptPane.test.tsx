@@ -30,6 +30,7 @@ function agent(): SessionView {
     hasPty: false,
     shellExited: false,
     historyLoaded: true,
+    historyPartial: false,
     shellExitMessage: null,
     browserActive: false,
     browserOwner: 'agent',

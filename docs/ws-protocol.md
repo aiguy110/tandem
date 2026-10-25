@@ -42,6 +42,20 @@ disconnecting merely because replay filled the message queue. Snapshot replay
 retains only the latest command catalog, configuration, and capability state;
 durable history and incremental replay remain intact.
 
+Replay (snapshots, replayed events, and the subscribe `ack`) travels on its own
+lowest-priority lane, so command replies and live events for other sessions
+are not queued behind bulk history on a slow link. A subscription's live events
+stay on the replay lane until its replay has been written, so they never
+overtake the snapshot they follow.
+
+A subscribe carrying `transcriptTail: N` (N > 0) asks for a light snapshot when
+the reply is a snapshot: every request event (permission, takeover, secret,
+browser-instance request/resolution), the latest event of each other kind, and
+the newest N events. If anything was dropped the snapshot carries
+`partial: true`. The UI subscribes background sessions this way and replaces a
+partial transcript with a full `sinceSeq: 0` subscribe when the session is
+focused. Incremental (`sinceSeq` delta) replay is unaffected.
+
 Subscription recovery and ordered browser input/control run separately from
 the connection reader. Adjacent uncorrelated mouse movements may coalesce;
 button/key events and grab/release retain their order. Chromium writes and lock
