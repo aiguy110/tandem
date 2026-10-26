@@ -15,3 +15,20 @@ export async function loadDaemonVersion(signal?: AbortSignal): Promise<DaemonVer
   }
   return value as DaemonVersion;
 }
+
+const reloadAttemptKey = 'tandem.versionReloadAttempt';
+
+// Reloads once per daemon version to pick up a freshly deployed UI. Returns
+// false when this tab already reloaded for that version and still runs a
+// different bundle: the daemon is serving a stale embedded UI, and reloading
+// again would only loop.
+export function reloadForDaemonVersion(daemonVersion: string): boolean {
+  if (daemonVersion === frontendVersion) {
+    sessionStorage.removeItem(reloadAttemptKey);
+    return false;
+  }
+  if (sessionStorage.getItem(reloadAttemptKey) === daemonVersion) return false;
+  sessionStorage.setItem(reloadAttemptKey, daemonVersion);
+  window.location.reload();
+  return true;
+}
