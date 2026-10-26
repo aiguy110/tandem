@@ -604,6 +604,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	if err != nil {
 		return fmt.Errorf("restore agents: %w", err)
 	}
+	agents.StartIdleReaper(ctx, cfg.AgentIdleTimeout)
 	// Link approvals pending at the last shutdown are re-raised against the
 	// restored sessions; timeouts and the outbox resume from the store.
 	messagingService.Start(ctx)

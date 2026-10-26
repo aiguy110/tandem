@@ -1116,6 +1116,29 @@ func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agenta
 	if err != nil {
 		return nil, err
 	}
+	a, err := r.launch(ctx, &rec, &spec, log, req)
+	if err != nil {
+		return nil, err
+	}
+	s, err := session.NewWithStatus(rec.ID, rec.Name, spec, a, log, session.Status(rec.Status))
+	if err != nil {
+		a.Close(ctx)
+		return nil, err
+	}
+	if err := r.register(ctx, rec, s); err != nil {
+		return nil, err
+	}
+	if sid := s.ExternalSessionID(); sid != "" {
+		_ = r.store.SetExternalSessionID(rec.ID, sid)
+	}
+	return s, nil
+}
+
+// launch starts rec's adapter on log and applies its persisted session
+// config, recovering that config from the log (and recording it on rec and
+// spec) when the spec predates persisting it.
+func (r *Registry) launch(ctx context.Context, rec *store.Session, spec *agentadapter.Spec, log *eventlog.Log, req agentadapter.StartRequest) (agentadapter.Adapter, error) {
+	var err error
 	if len(spec.SessionConfig) == 0 {
 		if recovered := recoverSessionConfig(log); len(recovered) > 0 {
 			spec.SessionConfig = recovered
@@ -1123,12 +1146,12 @@ func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agenta
 			if err != nil {
 				return nil, err
 			}
-			if err = r.store.UpsertSession(rec); err != nil {
+			if err = r.store.UpsertSession(*rec); err != nil {
 				return nil, err
 			}
 		}
 	}
-	req.SessionID, req.CWD, req.Spec, req.Log = rec.ID, rec.CWD, spec, log
+	req.SessionID, req.CWD, req.Spec, req.Log = rec.ID, rec.CWD, *spec, log
 	a, err := r.factory.Start(ctx, req)
 	if err != nil {
 		return nil, err
@@ -1138,11 +1161,12 @@ func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agenta
 		a.Close(ctx)
 		return nil, fmt.Errorf("restore session config: %w", err)
 	}
-	s, err := session.NewWithStatus(rec.ID, rec.Name, spec, a, log, session.Status(rec.Status))
-	if err != nil {
-		a.Close(ctx)
-		return nil, err
-	}
+	return a, nil
+}
+
+// register makes s the live session for rec, disposing s if another session
+// already holds that ID.
+func (r *Registry) register(ctx context.Context, rec store.Session, s *session.Session) error {
 	s.OnEvent(func(le eventlog.LoggedEvent) {
 		if le.Event.Kind == "status" {
 			_ = r.store.SetStatus(rec.ID, string(s.Status()))
@@ -1152,23 +1176,97 @@ func (r *Registry) startWith(ctx context.Context, rec store.Session, spec agenta
 	if _, exists := r.sessions[rec.ID]; exists {
 		r.mu.Unlock()
 		s.Dispose(ctx)
-		return nil, fmt.Errorf("agent already live: %s", rec.ID)
+		return fmt.Errorf("agent already live: %s", rec.ID)
 	}
 	r.sessions[rec.ID] = s
 	r.cwds[rec.ID] = rec.CWD
 	r.known[rec.ID] = true
 	r.mu.Unlock()
 	r.placeAtTop(rec.ID)
+	if s.Spec.Adapter == "acp" {
+		s.SetWaker(r.waker(rec.ID))
+	}
 	if r.onSession != nil {
 		r.onSession(s)
 	}
 	if m := r.messagingHooks(); m != nil {
 		m.Watch(s)
 	}
-	if sid := s.ExternalSessionID(); sid != "" {
-		_ = r.store.SetExternalSessionID(rec.ID, sid)
+	return nil
+}
+
+// startDormant registers rec as a session whose agent process is launched
+// only when it is first needed (see session.NewDormant). Restoring a fleet
+// of agents eagerly after a daemon restart is what let one restart re-spawn
+// every harness at once and exhaust the host's memory.
+func (r *Registry) startDormant(ctx context.Context, rec store.Session, spec agentadapter.Spec) (*session.Session, error) {
+	log, err := eventlog.New(rec.ID, r.store, r.ring)
+	if err != nil {
+		return nil, err
+	}
+	external := ""
+	if rec.ExternalSessionID != nil {
+		external = *rec.ExternalSessionID
+	}
+	status := session.Status(rec.Status)
+	staleTurn := status == session.Working || status == session.Blocked
+	if staleTurn {
+		// The process that was running this turn died with the daemon.
+		status = session.Idle
+	}
+	s, err := session.NewDormant(rec.ID, rec.Name, spec, log, status, external, r.waker(rec.ID))
+	if err != nil {
+		return nil, err
+	}
+	if err := r.register(ctx, rec, s); err != nil {
+		return nil, err
+	}
+	if staleTurn {
+		payload, _ := json.Marshal(map[string]any{"kind": "status", "status": "idle"})
+		s.PushEvent(eventlog.Event{Kind: "status", Payload: payload})
 	}
 	return s, nil
+}
+
+// waker relaunches a dormant agent from its durable row, resuming its
+// upstream session the same way an eager restore would.
+func (r *Registry) waker(id string) session.Waker {
+	return func(ctx context.Context, log *eventlog.Log) (agentadapter.Adapter, error) {
+		rec, err := r.store.Session(id)
+		if err != nil {
+			return nil, err
+		}
+		if rec == nil || rec.ClosedAt != nil {
+			return nil, fmt.Errorf("no such agent: %s", id)
+		}
+		var spec agentadapter.Spec
+		if err := json.Unmarshal(rec.Spec, &spec); err != nil {
+			return nil, err
+		}
+		resume := ""
+		if rec.ExternalSessionID != nil {
+			resume = *rec.ExternalSessionID
+		}
+		// See restoreOne: an unprompted ACP session may never have been
+		// persisted by the harness, so start a fresh one instead.
+		if resume != "" {
+			prompted, err := hasUserMessage(r.store, id)
+			if err != nil {
+				return nil, err
+			}
+			if !prompted {
+				resume = ""
+			}
+		}
+		a, err := r.launch(ctx, rec, &spec, log, agentadapter.StartRequest{ResumeSessionID: resume})
+		if err != nil {
+			return nil, err
+		}
+		if sid := a.ExternalSessionID(); sid != "" {
+			_ = r.store.SetExternalSessionID(id, sid)
+		}
+		return a, nil
+	}
 }
 
 func recoverSessionConfig(log *eventlog.Log) json.RawMessage {
@@ -1429,14 +1527,75 @@ func (r *Registry) restoreOne(ctx context.Context, rec store.Session, workspaceM
 			}
 		}
 		if err == nil {
-			_, err = r.start(ctx, rec, spec, resume)
+			if spec.Adapter == "acp" {
+				// Structured agents come back dormant and launch on first
+				// use; their transcript replays from the event log.
+				_, err = r.startDormant(ctx, rec, spec)
+			} else {
+				_, err = r.start(ctx, rec, spec, resume)
+			}
 		}
 	}
 	if err != nil {
 		_ = r.store.SetStatus(rec.ID, "error")
 	}
-	slog.Info("restored agent", "session_id", rec.ID, "agent", spec.Agent, "resume", rec.ExternalSessionID != nil, "duration_ms", time.Since(started).Milliseconds(), "error", err)
+	slog.Info("restored agent", "session_id", rec.ID, "agent", spec.Agent, "dormant", spec.Adapter == "acp", "resume", rec.ExternalSessionID != nil, "duration_ms", time.Since(started).Milliseconds(), "error", err)
 	return err
+}
+
+// idleReapInterval is how often StartIdleReaper looks for idle agents.
+const idleReapInterval = time.Minute
+
+// StartIdleReaper hibernates structured agents that have been idle for at
+// least after, checking periodically until ctx ends. A hibernated agent keeps
+// its session and transcript; its harness process relaunches on next use.
+// after <= 0 disables hibernation.
+func (r *Registry) StartIdleReaper(ctx context.Context, after time.Duration) {
+	if after <= 0 {
+		slog.Info("agent idle hibernation disabled")
+		return
+	}
+	slog.Info("agent idle hibernation enabled", "idle_after", after.String(), "interval", idleReapInterval.String())
+	go func() {
+		tick := time.NewTicker(idleReapInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				r.reapIdle(ctx, after)
+			}
+		}
+	}()
+}
+
+// reapIdle hibernates every live structured agent idle for at least after.
+func (r *Registry) reapIdle(ctx context.Context, after time.Duration) {
+	live, dormant, hibernated := 0, 0, 0
+	for _, s := range r.List() {
+		if s.Spec.Adapter != "acp" {
+			continue
+		}
+		if s.Dormant() {
+			dormant++
+			continue
+		}
+		live++
+		if s.IdleFor() < after {
+			continue
+		}
+		ok, err := s.Hibernate(ctx)
+		if err != nil {
+			slog.Warn("idle agent hibernation failed", "session_id", s.ID, "error", err)
+		}
+		if ok {
+			hibernated++
+		}
+	}
+	if hibernated > 0 {
+		slog.Info("hibernated idle agents", "hibernated", hibernated, "still_live", live-hibernated, "dormant", dormant+hibernated)
+	}
 }
 
 // awaitRestore blocks while the agent's startup restore is in flight.

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	tandem "github.com/aiguy110/tandem"
 	"gopkg.in/yaml.v3"
@@ -148,11 +149,15 @@ type Config struct {
 	DefaultHarness string                  `json:"defaultHarness,omitempty"`
 	// ACPForkRebaseProfile is the agent profile spawned to rebase a tracked ACP
 	// server fork. Empty disables the one-click rebase offer.
-	ACPForkRebaseProfile string              `json:"acpForkRebaseProfile,omitempty"`
-	Browser              BrowserConfig       `json:"browser"`
-	Bun                  BunConfig           `json:"bun"`
-	LanguageModel        LanguageModelConfig `json:"languageModel"`
-	Voice                VoiceConfig         `json:"voice"`
+	ACPForkRebaseProfile string        `json:"acpForkRebaseProfile,omitempty"`
+	Browser              BrowserConfig `json:"browser"`
+	// AgentIdleTimeout is how long a structured agent may sit idle before its
+	// harness process is stopped (it relaunches on next use). Zero disables
+	// hibernation.
+	AgentIdleTimeout time.Duration       `json:"agentIdleTimeout"`
+	Bun              BunConfig           `json:"bun"`
+	LanguageModel    LanguageModelConfig `json:"languageModel"`
+	Voice            VoiceConfig         `json:"voice"`
 	// FederationAccess is the host-to-host access policy for commands this
 	// daemon executes for other federated hosts; see docs/federation.md.
 	FederationAccess []FederationAccessRule `json:"federationAccess,omitempty"`
@@ -594,6 +599,10 @@ func LoadWithOptions(o Options) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	idleTimeout, err := envDuration(env, "TANDEM_AGENT_IDLE_TIMEOUT", DefaultAgentIdleTimeout)
+	if err != nil {
+		return Config{}, err
+	}
 
 	bun := resolveBun(env, settings, home, o)
 	cat, err := loadCatalog(o, home, bun.Command)
@@ -644,6 +653,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		ACPForkRebaseProfile: strings.TrimSpace(value(env, "TANDEM_ACP_FORK_REBASE_PROFILE", settings.ACPForkRebaseProfile)),
 		Browser:              BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", JSRuntime: bun.Command, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 		Bun:                  bun,
+		AgentIdleTimeout:     idleTimeout,
 		LanguageModel:        resolveLanguageModel(env, settings.LanguageModel, settings.Voice),
 		Voice:                resolveVoice(env, settings.Voice),
 		FederationAccess:     settings.Federation.Access,
@@ -1216,6 +1226,27 @@ func value(m map[string]string, key, fallback string) string {
 	}
 	return fallback
 }
+
+// DefaultAgentIdleTimeout is how long a structured agent may sit idle before
+// its harness is hibernated, unless TANDEM_AGENT_IDLE_TIMEOUT overrides it.
+const DefaultAgentIdleTimeout = 30 * time.Minute
+
+// envDuration parses a Go duration; "off" or "0" yields zero (disabled).
+func envDuration(m map[string]string, key string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(m[key])
+	switch raw {
+	case "":
+		return fallback, nil
+	case "off", "0":
+		return 0, nil
+	}
+	v, err := time.ParseDuration(raw)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("%s must be a duration like 30m, or off: %q", key, raw)
+	}
+	return v, nil
+}
+
 func envInt(m map[string]string, key string, fallback int) (int, error) {
 	raw := m[key]
 	if raw == "" {

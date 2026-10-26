@@ -51,6 +51,15 @@ type Session struct {
 	disposeErr       error
 	disposed         bool
 	done             chan struct{}
+	// lastActivity is when the session last appended an event or started a
+	// turn; the registry hibernates agents that stay idle past a threshold.
+	lastActivity time.Time
+
+	// waker relaunches the agent after it has been left dormant (see
+	// dormant.go); nil for sessions that cannot hibernate. wakeMu serializes
+	// waking against hibernating.
+	waker  Waker
+	wakeMu sync.Mutex
 
 	promptMu      sync.Mutex
 	promptQueue   []*queuedPrompt
@@ -147,7 +156,7 @@ func NewWithStatus(id, name string, spec agentadapter.Spec, adapter agentadapter
 	if adapter == nil || log == nil {
 		return nil, errors.New("session: adapter and event log are required")
 	}
-	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, controlMode: "transcript", approvals: map[string]agentadapter.Approval{}, approvalHandlers: map[string]func(string) error{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
+	s := &Session{ID: id, Name: name, Spec: spec, Log: log, adapter: adapter, status: status, controlMode: "transcript", lastActivity: time.Now(), approvals: map[string]agentadapter.Approval{}, approvalHandlers: map[string]func(string) error{}, listeners: map[uint64]func(eventlog.LoggedEvent){}, done: make(chan struct{})}
 	if binder, ok := adapter.(agentadapter.EventBinder); ok {
 		binder.BindEventSink(s.append)
 	}
@@ -355,12 +364,13 @@ func (s *Session) append(ev eventlog.Event) (eventlog.LoggedEvent, error) {
 		s.mu.Unlock()
 		return eventlog.LoggedEvent{}, err
 	}
-	s.mu.RLock()
+	s.mu.Lock()
+	s.lastActivity = time.Now()
 	callbacks := make([]func(eventlog.LoggedEvent), 0, len(s.listeners))
 	for _, cb := range s.listeners {
 		callbacks = append(callbacks, cb)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	for _, cb := range callbacks {
 		cb(le)
 	}
@@ -705,7 +715,12 @@ func (s *Session) runPromptQueue() {
 }
 
 func (s *Session) executeAside(ctx context.Context, id string, blocks []agentadapter.PromptBlock) (string, error) {
+	if err := s.ensureAwake(ctx); err != nil {
+		return "", err
+	}
+	s.mu.RLock()
 	asides, ok := s.adapter.(agentadapter.AsideAdapter)
+	s.mu.RUnlock()
 	if !ok {
 		return "", errors.New("this agent does not support context-isolated asides")
 	}
@@ -730,6 +745,15 @@ func (s *Session) executeAside(ctx context.Context, id string, blocks []agentada
 }
 
 func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.PromptBlock, override *eventlog.Event) (string, error) {
+	// Wake before recording the message: whether the harness session can be
+	// resumed is judged by whether the transcript already holds a prompt.
+	if s.Dormant() {
+		s.emitStatus(Working)
+		if err := s.ensureAwake(ctx); err != nil {
+			s.emitStatus(Idle)
+			return "", err
+		}
+	}
 	s.mu.Lock()
 	s.active++
 	epoch := s.adapterEpoch
@@ -950,6 +974,9 @@ func (s *Session) Interrupt() error {
 // SetMode and SetConfigOption expose ACP's live session configuration without
 // making those structured-only operations part of every adapter implementation.
 func (s *Session) SetMode(ctx context.Context, modeID string) error {
+	if err := s.ensureAwake(ctx); err != nil {
+		return err
+	}
 	s.mu.RLock()
 	a := s.adapter
 	s.mu.RUnlock()
@@ -963,6 +990,9 @@ func (s *Session) SetMode(ctx context.Context, modeID string) error {
 }
 
 func (s *Session) SetConfigOption(ctx context.Context, configID string, value any) error {
+	if err := s.ensureAwake(ctx); err != nil {
+		return err
+	}
 	s.mu.RLock()
 	a := s.adapter
 	s.mu.RUnlock()
