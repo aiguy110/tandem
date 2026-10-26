@@ -961,7 +961,11 @@ func TestStartRestoreLeavesACPAgentsDormantUntilUsed(t *testing.T) {
 	for i, id := range ids {
 		dir := t.TempDir()
 		raw, _ := json.Marshal(existing(dir))
-		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, Status: "working", CreatedAt: int64(i + 1)}); err != nil {
+		status := "working"
+		if i == 2 {
+			status = "error"
+		}
+		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, Status: status, CreatedAt: int64(i + 1)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -984,10 +988,13 @@ func TestStartRestoreLeavesACPAgentsDormantUntilUsed(t *testing.T) {
 		if s == nil || !s.Dormant() {
 			t.Fatalf("%s not restored dormant: %v", id, s)
 		}
-		// The turn that was running died with the previous daemon.
+		// The turn (or failed process) died with the previous daemon.
 		if s.Status() != session.Idle {
 			t.Fatalf("%s status = %s, want idle", id, s.Status())
 		}
+	}
+	if rec, _ := db.Session("c-3"); rec == nil || rec.Status != "idle" {
+		t.Fatalf("stale error status was not cleared durably: %+v", rec)
 	}
 	restoredMu.Lock()
 	if len(restored) != len(ids) {

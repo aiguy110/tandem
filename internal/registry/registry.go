@@ -1209,9 +1209,12 @@ func (r *Registry) startDormant(ctx context.Context, rec store.Session, spec age
 		external = *rec.ExternalSessionID
 	}
 	status := session.Status(rec.Status)
-	staleTurn := status == session.Working || status == session.Blocked
+	// Working, blocked, and error all describe a process that died with the
+	// previous daemon. An eager restore cleared them when the relaunched
+	// adapter reported idle; a dormant agent has no process yet, so clear them
+	// here. A harness that still cannot start reports its error on wake.
+	staleTurn := status == session.Working || status == session.Blocked || status == session.Error
 	if staleTurn {
-		// The process that was running this turn died with the daemon.
 		status = session.Idle
 	}
 	s, err := session.NewDormant(rec.ID, rec.Name, spec, log, status, external, r.waker(rec.ID))
