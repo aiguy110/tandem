@@ -2,8 +2,11 @@ package runtimeinstall
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,6 +84,175 @@ func TestForkLockCurrentDetectsRepin(t *testing.T) {
 	// Pinned correctly, but the tree was never built.
 	if forkLockCurrent(LockedAgent{Path: t.TempDir(), Fork: locked.Fork}, fork, dist) {
 		t.Fatal("a missing dist must invalidate the lock")
+	}
+	// Same commit, corrected build recipe: must rebuild.
+	rerecipe := fork
+	rerecipe.PackageDir, rerecipe.BuildScript = "packages/pi-acp", config.ForkBuildNone
+	if forkLockCurrent(locked, rerecipe, dist) {
+		t.Fatal("a new build recipe must invalidate the lock")
+	}
+}
+
+// fakeBun writes a stand-in bun that logs "<cwd> <args>" to the returned file,
+// makes `pm pack` drop a tarball, and makes `add` install omp's entry point.
+func fakeBun(t *testing.T) (bun, logPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	bun, logPath = filepath.Join(dir, "bun"), filepath.Join(dir, "bun.log")
+	script := `#!/bin/sh
+echo "$(pwd -P) $*" >> "$FAKE_BUN_LOG"
+case "$1" in
+pm) while [ $# -gt 0 ]; do [ "$1" = --destination ] && : > "$2/fork.tgz"; shift; done ;;
+add) mkdir -p node_modules/@oh-my-pi/pi-coding-agent/dist && : > node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(bun, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_BUN_LOG", logPath)
+	return bun, logPath
+}
+
+// monorepoFork commits a Bun-workspace fixture shaped like omp: a private root
+// whose `build` builds everything, and the package in packages/coding-agent
+// with no `build` of its own, only `prepare`.
+func monorepoFork(t *testing.T) config.ACPFork {
+	t.Helper()
+	if _, err := os.Stat("/usr/bin/git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	files := map[string]string{
+		"package.json":                       `{"private":true,"workspaces":["packages/*"],"scripts":{"build":"build-everything"}}`,
+		"packages/coding-agent/package.json": `{"name":"@oh-my-pi/pi-coding-agent","scripts":{"prepare":"x","prepack":"make-dist"}}`,
+		"packages/other/package.json":        `{"name":"other"}`,
+	}
+	for name, body := range files {
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{
+		{"init", "--initial-branch=tandem"},
+		{"add", "."},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "seed"},
+	} {
+		if err := runGit(context.Background(), repo, os.Stderr, args...); err != nil {
+			t.Fatalf("seed %v: %v", args, err)
+		}
+	}
+	commit, err := gitOutput(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config.ACPFork{Repo: repo, Ref: "tandem", Commit: strings.TrimSpace(commit),
+		UpstreamPackage: "@oh-my-pi/pi-coding-agent", UpstreamVersion: "18.12.6", PackageDir: "packages/coding-agent"}
+}
+
+func readBunLog(t *testing.T, logPath string) []string {
+	t.Helper()
+	b, err := os.ReadFile(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+func TestBuildForkMonorepoInstallsAtRootAndPacksPackage(t *testing.T) {
+	fork := monorepoFork(t)
+	cfg := config.Config{Home: t.TempDir(), RuntimeRoot: t.TempDir()}
+	src := filepath.Join(cfg.RuntimeRoot, ".fork-src")
+	pkg := filepath.Join(src, "packages", "coding-agent")
+	pack := filepath.Join(cfg.RuntimeRoot, ".fork-pack")
+
+	for name, tc := range map[string]struct {
+		script string
+		want   []string
+	}{
+		// The root's build would build every workspace; only the package's own
+		// scripts count, and it has `prepare`, not `build`.
+		"auto": {"", []string{src + " install", pkg + " run prepare", pkg + " pm pack --quiet --destination " + pack}},
+		"none": {config.ForkBuildNone, []string{src + " install", pkg + " pm pack --quiet --destination " + pack}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bun, logPath := fakeBun(t)
+			f := fork
+			f.BuildScript = tc.script
+			tarball, err := buildFork(context.Background(), cfg, bun, cfg.RuntimeRoot, f, io.Discard)
+			if err != nil {
+				t.Fatalf("buildFork: %v", err)
+			}
+			if tarball != filepath.Join(pack, "fork.tgz") {
+				t.Fatalf("tarball = %q", tarball)
+			}
+			if got := readBunLog(t, logPath); !slices.Equal(got, tc.want) {
+				t.Fatalf("bun calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(*config.ACPFork){
+		"missing package dir": func(f *config.ACPFork) { f.PackageDir = "packages/nope" },
+		"unknown script":      func(f *config.ACPFork) { f.BuildScript = "build" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bun, logPath := fakeBun(t)
+			f := fork
+			mutate(&f)
+			if _, err := buildFork(context.Background(), cfg, bun, cfg.RuntimeRoot, f, io.Discard); err == nil {
+				t.Fatal("expected buildFork to fail")
+			}
+			if got := readBunLog(t, logPath); len(got) != 0 {
+				t.Fatalf("a bad recipe should fail before running bun, got %q", got)
+			}
+		})
+	}
+}
+
+func TestInstallForkRebuildsWhenRecipeChangesAtSameCommit(t *testing.T) {
+	fork := monorepoFork(t)
+	fork.BuildScript = "prepare"
+	cfg := config.Config{Home: t.TempDir(), RuntimeRoot: t.TempDir()}
+	bun, logPath := fakeBun(t)
+	builds := func() int {
+		n := 0
+		for _, line := range readBunLog(t, logPath) {
+			if strings.HasSuffix(line, " install") {
+				n++
+			}
+		}
+		return n
+	}
+
+	first, err := installFork(context.Background(), cfg, bun, "omp", fork, io.Discard)
+	if err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if builds() != 1 || first.Fork.BuildScript != "prepare" || first.Fork.PackageDir != fork.PackageDir {
+		t.Fatalf("first install: builds=%d lock=%+v", builds(), first.Fork)
+	}
+	if _, err := installFork(context.Background(), cfg, bun, "omp", fork, io.Discard); err != nil || builds() != 1 {
+		t.Fatalf("same recipe must reuse the distribution: builds=%d err=%v", builds(), err)
+	}
+	// Same commit, so the same distribution directory, but a corrected recipe.
+	fork.BuildScript = config.ForkBuildNone
+	second, err := installFork(context.Background(), cfg, bun, "omp", fork, io.Discard)
+	if err != nil {
+		t.Fatalf("re-recipe install: %v", err)
+	}
+	if builds() != 2 || second.Path != first.Path || second.Fork.BuildScript != config.ForkBuildNone {
+		t.Fatalf("a changed recipe must rebuild in place: builds=%d lock=%+v", builds(), second.Fork)
+	}
+	if got := readBunLog(t, logPath); strings.Contains(strings.Join(got[len(got)-3:], "\n"), " run ") {
+		t.Fatalf("buildScript none must not run a script, got %q", got)
 	}
 }
 

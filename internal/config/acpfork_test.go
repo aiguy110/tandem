@@ -95,6 +95,33 @@ func TestACPForkLoadRejectsInvalidRecords(t *testing.T) {
 	}
 }
 
+func TestACPForkValidateBuildRecipe(t *testing.T) {
+	ok := sampleFork()
+	ok.PackageDir, ok.BuildScript = "packages/coding-agent", ForkBuildNone
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("monorepo recipe rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*ACPFork){
+		"parent dir":          func(f *ACPFork) { f.PackageDir = "../x" },
+		"inner parent dir":    func(f *ACPFork) { f.PackageDir = "packages/../../x" },
+		"absolute dir":        func(f *ACPFork) { f.PackageDir = "/packages/x" },
+		"uncleaned dir":       func(f *ACPFork) { f.PackageDir = "packages//x/" },
+		"dot dir":             func(f *ACPFork) { f.PackageDir = "." },
+		"backslash dir":       func(f *ACPFork) { f.PackageDir = `packages\x` },
+		"script with spaces":  func(f *ACPFork) { f.BuildScript = "build && rm -rf /" },
+		"script with newline": func(f *ACPFork) { f.BuildScript = "build\n" },
+		"script as flag":      func(f *ACPFork) { f.BuildScript = "--bun" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := sampleFork()
+			mutate(&f)
+			if err := f.Validate(); err == nil {
+				t.Fatalf("expected %+v to be rejected", f)
+			}
+		})
+	}
+}
+
 func TestACPForkLoadAbsentFileIsEmpty(t *testing.T) {
 	forks, err := LoadACPForks(t.TempDir())
 	if err != nil || len(forks) != 0 {

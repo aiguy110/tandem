@@ -802,6 +802,10 @@ export interface ForkTracking {
   latestUpstreamVersion?: string;
   reason?: string;
   upstreamPrs?: number[];
+  /** Package path inside a monorepo fork; absent means the repo root. */
+  packageDir?: string;
+  /** Script run before packing; absent means build, else prepare. */
+  buildScript?: string;
   /** False when the pinned commit has not been built yet. */
   installed: boolean;
 }

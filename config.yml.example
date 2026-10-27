@@ -149,6 +149,14 @@ harnesses: {}
 #     reason: Emits ACP usage_update so Tandem can show pi context usage
 #     upstreamPrs: [114]      # PRs that would make the fork unnecessary
 #     clone: ""               # optional; defaults to <runtimeRoot>/forks/<agent>
+#     packageDir: ""          # optional; npm package path in a monorepo (bun
+#                             # install runs at the repo root, build+pack here)
+#     buildScript: ""         # optional; script run before packing (empty:
+#                             # build, else prepare; "none": rely on prepack)
+#   # omp is a Bun workspace whose dist/ comes from the package's prepack;
+#   # its fork adds a `tandem:build` script that fetches the prebuilt addon:
+#   #   packageDir: packages/coding-agent
+#   #   buildScript: tandem:build
 
 # The `tandem setup` wizard writes an
 # operator-owned `settings:` block to $TANDEM_HOME/config.yml, separate from

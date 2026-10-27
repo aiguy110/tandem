@@ -330,6 +330,7 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 				Clone:           config.ForkCloneDir(cfg.RuntimeRoot, agent, fork),
 				UpstreamPackage: fork.UpstreamPackage, UpstreamRepo: fork.UpstreamRepo,
 				UpstreamVersion: fork.UpstreamVersion, Reason: fork.Reason, UpstreamPRs: fork.UpstreamPRs,
+				PackageDir: fork.PackageDir, BuildScript: fork.BuildScript,
 				Installed: forkLockCurrent(locked, fork, p.dist),
 			}
 			// Newest published release, so the UI can say whether the fork is

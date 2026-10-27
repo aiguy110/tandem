@@ -42,6 +42,12 @@ function ForkRow({ row, fork }: { row: ManagedAdapter; fork: ForkTracking }) {
           {fork.ref} @ <code>{fork.shortCommit}</code>
           {' · rebased onto '}
           {fork.upstreamPackage}@{fork.upstreamVersion}
+          {fork.packageDir && (
+            <>
+              {' · package '}
+              <code>{fork.packageDir}</code>
+            </>
+          )}
         </div>
         {fork.reason && <div className="adapter-fork-reason">{fork.reason}</div>}
         <div className="adapter-installed">

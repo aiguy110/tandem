@@ -33,7 +33,7 @@ There are two kinds of work:
   the `acp/*` branches cherry-picked on top, along with any open upstream PRs
   we choose to carry.
 - **Fork record:**
-  - `tandem acp fork omp --repo https://github.com/aiguy110/oh-my-pi --ref tandem --commit <sha> --upstream-package @oh-my-pi/pi-coding-agent --rebased-onto <ver> --upstream-repo https://github.com/can1357/oh-my-pi --reason "<one line>" --pr <N>...`
+  - `tandem acp fork omp --repo https://github.com/aiguy110/oh-my-pi --ref tandem --commit <sha> --upstream-package @oh-my-pi/pi-coding-agent --rebased-onto <ver> --upstream-repo https://github.com/can1357/oh-my-pi --package-dir packages/coding-agent --build-script tandem:build --reason "<one line>" --pr <N>...`
   - Each upstream PR number is added with `--pr` once it exists.
   - When upstream has merged every carried PR, `tandem acp upstream omp`
     retires the fork.
@@ -126,11 +126,15 @@ Changes:
   - `packageDir`: path inside the repo, for example `packages/coding-agent`.
     Empty keeps today's behavior.
   - `buildScript`: script name to run before packing. Empty keeps today's
-    `build`/`prepare` choice.
-  - For omp, `buildScript` is left empty and the package's `prepack` lifecycle
-    produces `dist/`. Verify that `bun pm pack` runs `prepack`. If it doesn't,
-    set `buildScript: gen:bundle` and run `gen:tool-views` at the repo root
-    first.
+    `build`/`prepare` choice; `none` runs no script.
+  - For omp, `buildScript` is `tandem:build`, a fork-only script
+    (`scripts/tandem-fetch-natives.ts`). `bun pm pack` does run the package's
+    `prepack` (`gen:tool-views && gen:bundle`), but the bundle step loads
+    `pi-natives`, and a source checkout has no compiled addon. The fork carries
+    no Rust changes, so `tandem:build` downloads the published
+    `@oh-my-pi/pi-natives-<platform>-<arch>` addon for the workspace version,
+    checks its npm integrity hash, and drops it into `packages/natives/native/`.
+    Never upstream this commit; keep it on top of `tandem` across rebases.
 - **`buildFork`:**
   - Run `bun install` at the clone root, so workspaces resolve.
   - Run the build script and `bun pm pack` in `packageDir`.

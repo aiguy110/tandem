@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -51,7 +54,22 @@ type ACPFork struct {
 	// Clone overrides where the working clone lives. Defaults to
 	// <RuntimeRoot>/forks/<agent>.
 	Clone string `yaml:"clone,omitempty" json:"clone,omitempty"`
+	// PackageDir is the slash-separated path of the npm package inside the
+	// repo, e.g. packages/coding-agent. Empty means the repo root. A workspace
+	// monorepo's root is usually a private package whose scripts build every
+	// member, so Tandem installs dependencies at the root (where workspaces
+	// resolve) but builds and packs only this directory.
+	PackageDir string `yaml:"packageDir,omitempty" json:"packageDir,omitempty"`
+	// BuildScript names the package script run before packing. Empty picks
+	// `build`, else `prepare`, which suits a single-package repo. ForkBuildNone
+	// runs nothing and relies on the `prepack` lifecycle `bun pm pack` runs,
+	// for packages whose `build` makes something other than the published
+	// files (omp's builds a standalone binary; prepack makes dist/).
+	BuildScript string `yaml:"buildScript,omitempty" json:"buildScript,omitempty"`
 }
+
+// ForkBuildNone is the BuildScript value that skips the build step.
+const ForkBuildNone = "none"
 
 // ACPForksKey is the top-level config.yml key holding the fork records.
 const ACPForksKey = "acpForks"
@@ -110,6 +128,19 @@ func (f ACPFork) Validate() error {
 	}
 	if strings.TrimSpace(f.UpstreamVersion) == "" {
 		return errors.New("fork upstreamVersion is required")
+	}
+	if f.PackageDir != "" {
+		// The directory is joined onto a fresh clone, so it must stay inside it.
+		if path.IsAbs(f.PackageDir) || filepath.IsAbs(f.PackageDir) || strings.Contains(f.PackageDir, `\`) ||
+			path.Clean(f.PackageDir) != f.PackageDir || f.PackageDir == "." ||
+			slices.Contains(strings.Split(f.PackageDir, "/"), "..") {
+			return fmt.Errorf("fork packageDir must be a clean relative slash path inside the repo (empty for the root), got %q", f.PackageDir)
+		}
+	}
+	if f.BuildScript != "" && (strings.ContainsFunc(f.BuildScript, unicode.IsSpace) || strings.HasPrefix(f.BuildScript, "-")) {
+		// It is passed to `bun run` as one argument; anything else is a command
+		// line, not a script name.
+		return fmt.Errorf("fork buildScript must be a package script name or %q, got %q", ForkBuildNone, f.BuildScript)
 	}
 	return nil
 }

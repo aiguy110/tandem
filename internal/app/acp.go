@@ -29,6 +29,11 @@ fork flags:
   --pr N                upstream PR that would retire the fork (repeatable;
                         replaces the recorded list)
   --no-prs              clear the recorded upstream PR list
+  --package-dir DIR     package path inside a monorepo, e.g. packages/coding-agent
+                        (bun install runs at the repo root, build and pack here;
+                        "" resets to the repo root)
+  --build-script NAME   script run before packing; "none" relies on the pack's
+                        prepack lifecycle; "" resets to build, else prepare
 
 On an existing record every flag is optional and only the given fields change,
 so recording a completed rebase is just:
@@ -111,6 +116,9 @@ func acpStatus(args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "         watching upstream PRs: %s\n", strings.Join(prs, ", "))
 		}
+		if f.PackageDir != "" || f.BuildScript != "" {
+			fmt.Fprintf(stdout, "         package dir: %s, build script: %s\n", orDefault(f.PackageDir, "(repo root)"), orDefault(f.BuildScript, "(build, else prepare)"))
+		}
 		fmt.Fprintf(stdout, "         clone: %s\n", f.Clone)
 	}
 	return 0
@@ -119,6 +127,13 @@ func acpStatus(args []string, stdout, stderr io.Writer) int {
 func orNone(v string) string {
 	if v == "" {
 		return "(not installed)"
+	}
+	return v
+}
+
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
 	}
 	return v
 }
@@ -141,7 +156,7 @@ func acpFork(args []string, stdout, stderr io.Writer) int {
 	for len(args) > 0 {
 		flag := args[0]
 		switch flag {
-		case "--repo", "--ref", "--commit", "--upstream-package", "--rebased-onto", "--upstream-repo", "--reason", "--clone":
+		case "--repo", "--ref", "--commit", "--upstream-package", "--rebased-onto", "--upstream-repo", "--reason", "--clone", "--package-dir", "--build-script":
 			if len(args) < 2 {
 				fmt.Fprintf(stderr, "acp: %s requires a value\n", flag)
 				return 2
@@ -194,6 +209,10 @@ func acpFork(args []string, stdout, stderr io.Writer) int {
 			fork.Reason = value
 		case "--clone":
 			fork.Clone = value
+		case "--package-dir":
+			fork.PackageDir = value
+		case "--build-script":
+			fork.BuildScript = value
 		}
 	}
 	if prsGiven {

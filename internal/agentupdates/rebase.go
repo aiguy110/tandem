@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aiguy110/tandem/internal/config"
 	"github.com/aiguy110/tandem/internal/runtimeinstall"
 )
 
@@ -46,6 +47,18 @@ func RebasePrompt(u runtimeinstall.UpdateInfo, clone, tandemBin string) string {
 		}
 		fmt.Fprintf(&b, "- Upstream PRs that would make the fork unnecessary: %s\n", strings.Join(prs, ", "))
 	}
+	pkgDir, script := "the repo root", "`build`, else `prepare`"
+	if fork.PackageDir != "" {
+		pkgDir = "`" + fork.PackageDir + "`"
+	}
+	switch fork.BuildScript {
+	case "":
+	case config.ForkBuildNone:
+		script = "none (the package's `prepack`, run by `bun pm pack`, must produce it)"
+	default:
+		script = "`" + fork.BuildScript + "`"
+	}
+	fmt.Fprintf(&b, "- How Tandem builds it: `bun install` at the repo root, then the build script (%s) and `bun pm pack` in the package at %s\n", script, pkgDir)
 	b.WriteString("\nRead `FORK.md` in the clone if it exists; it should record exactly which commits are carried and why.\n")
 	fmt.Fprintf(&b, "\nThe `tandem` CLI may not be on your PATH; invoke it as `%s`.\n", tandemBin)
 
@@ -97,10 +110,10 @@ misbehaves is worse than a stale one:
 Also confirm the packaging invariants Tandem depends on, which a rebase can
 quietly break:
 
-- ` + "`package.json`" + ` still has the same package ` + "`name`" + ` as upstream (Tandem
-  resolves the entry point by that path).
-- ` + "`npm run build`" + ` still produces the ACP entry point, and a ` + "`prepare`" + ` script
-  still runs it, since Tandem installs this fork straight from a git SHA.
+- ` + "`package.json`" + ` in the package directory still has the same package ` + "`name`" + `
+  as upstream (Tandem resolves the entry point by that path).
+- The build Tandem runs (described above) still produces the ACP entry point,
+  since Tandem installs this fork straight from a git SHA.
 
 Keep the diff to what the rebase needs. Do not run formatters or other
 whole-tree rewrites over commits you did not otherwise have to touch.
@@ -123,7 +136,8 @@ stops flagging this release:
 Bring the recorded upstream PRs up to date in the same command or a follow-up
 one: pass ` + "`--pr N`" + ` once for each upstream PR that is still open and would
 still retire the fork (this replaces the list), or ` + "`--no-prs`" + ` if none remain.
-If the fork's purpose changed, update ` + "`--reason`" + ` too.
+If the fork's purpose changed, update ` + "`--reason`" + ` too. If upstream moved the
+package or its build, update ` + "`--package-dir`" + ` / ` + "`--build-script`" + ` to match.
 
 Then bring the clone's local branches up to the published state, since the
 clone is what the next rebase starts from:

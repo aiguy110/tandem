@@ -24,6 +24,10 @@ type LockedFork struct {
 	Ref             string `json:"ref"`
 	Commit          string `json:"commit"`
 	UpstreamVersion string `json:"upstreamVersion"`
+	// PackageDir and BuildScript are the build recipe; changing either must
+	// rebuild even at the same commit.
+	PackageDir  string `json:"packageDir,omitempty"`
+	BuildScript string `json:"buildScript,omitempty"`
 }
 
 // ForkStatus is the fork-tracking view of one managed agent, reported to the UI
@@ -43,6 +47,9 @@ type ForkStatus struct {
 	LatestUpstreamVersion string `json:"latestUpstreamVersion,omitempty"`
 	Reason                string `json:"reason,omitempty"`
 	UpstreamPRs           []int  `json:"upstreamPrs,omitempty"`
+	// PackageDir and BuildScript are how the fork is built; see config.ACPFork.
+	PackageDir  string `json:"packageDir,omitempty"`
+	BuildScript string `json:"buildScript,omitempty"`
 	// Installed reports whether the pinned commit is the one currently
 	// installed. False means the record was re-pinned but no session has
 	// spawned since, so the new tree is not built yet.
@@ -70,6 +77,17 @@ func installFork(ctx context.Context, cfg config.Config, bun, agent string, fork
 	p := agentPins[agent]
 	version := fork.DistributionVersion()
 	root := filepath.Join(cfg.RuntimeRoot, "agents", agent, version)
+	recipe := forkRecipe{PackageDir: fork.PackageDir, BuildScript: fork.BuildScript}
+	if distExists(root, p.dist) && readForkRecipe(root) != recipe {
+		// The directory is named for the commit alone, so a record re-pinned to
+		// the same commit with a corrected recipe would otherwise keep the tree
+		// the old recipe produced. Start over rather than layer builds.
+		slog.Info("rebuilding ACP fork for a changed build recipe", "agent", agent, "dir", root,
+			"package_dir", fork.PackageDir, "build_script", fork.BuildScript)
+		if err := os.RemoveAll(root); err != nil {
+			return LockedAgent{}, err
+		}
+	}
 	if !distExists(root, p.dist) {
 		if err := ensureRuntimeRoot(root); err != nil {
 			return LockedAgent{}, err
@@ -81,20 +99,56 @@ func installFork(ctx context.Context, cfg config.Config, bun, agent string, fork
 		if err := installAt(ctx, cfg, bun, root, tarball, log); err != nil {
 			return LockedAgent{}, err
 		}
+		if err := writeForkRecipe(root, recipe); err != nil {
+			return LockedAgent{}, err
+		}
 	}
 	if !distExists(root, p.dist) {
 		// Most likely the fork renamed the package or stopped building dist/;
 		// the install reports success either way, so say what to check.
-		return LockedAgent{}, fmt.Errorf("provision agent %s from fork %s#%s: %s is missing after install (the fork must keep package name %q and build %s with its `build` or `prepare` script)",
-			agent, fork.Repo, fork.ShortCommit(), p.dist, p.packageName, p.dist)
+		return LockedAgent{}, fmt.Errorf("provision agent %s from fork %s#%s: %s is missing after install (the fork must keep package name %q and its build — packageDir %q, buildScript %q — must produce %s)",
+			agent, fork.Repo, fork.ShortCommit(), p.dist, p.packageName, fork.PackageDir, fork.BuildScript, p.dist)
 	}
 	return LockedAgent{
 		Package:    p.packageName,
 		Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"),
 		Version:    version,
 		Path:       root,
-		Fork:       &LockedFork{Repo: fork.Repo, Ref: fork.Ref, Commit: fork.Commit, UpstreamVersion: fork.UpstreamVersion},
+		Fork: &LockedFork{Repo: fork.Repo, Ref: fork.Ref, Commit: fork.Commit, UpstreamVersion: fork.UpstreamVersion,
+			PackageDir: fork.PackageDir, BuildScript: fork.BuildScript},
 	}, nil
+}
+
+// forkRecipeFile records, inside a fork distribution, the recipe that built it.
+const forkRecipeFile = ".fork-recipe.json"
+
+type forkRecipe struct {
+	PackageDir  string `json:"packageDir,omitempty"`
+	BuildScript string `json:"buildScript,omitempty"`
+}
+
+// readForkRecipe returns the recipe a distribution was built with. A missing
+// file reads as the default recipe, which is how every fork was built before
+// the recipe was configurable; an unreadable one reads as an impossible recipe
+// so the distribution is rebuilt.
+func readForkRecipe(root string) forkRecipe {
+	b, err := os.ReadFile(filepath.Join(root, forkRecipeFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return forkRecipe{}
+	}
+	var r forkRecipe
+	if err != nil || json.Unmarshal(b, &r) != nil {
+		return forkRecipe{BuildScript: " unreadable"}
+	}
+	return r
+}
+
+func writeForkRecipe(root string, r forkRecipe) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, forkRecipeFile), b, 0o644)
 }
 
 // buildFork checks out the fork's pinned commit, builds it, and packs it into a
@@ -102,13 +156,18 @@ func installFork(ctx context.Context, cfg config.Config, bun, agent string, fork
 // Bun (unlike npm) neither installs a git dependency's devDependencies nor runs
 // its `prepare` script, so installing the git URL directly would yield an
 // unbuilt package; building here reproduces what npm did implicitly.
+//
+// Dependencies are installed at the clone root so a workspace monorepo's
+// members resolve; the build script and the pack run in fork.PackageDir.
 func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork config.ACPFork, log io.Writer) (string, error) {
 	src := filepath.Join(root, ".fork-src")
 	if err := os.RemoveAll(src); err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(src)
-	slog.Info("building ACP fork", "repo", fork.Repo, "commit", fork.Commit, "dir", src)
+	pkg := filepath.Join(src, filepath.FromSlash(fork.PackageDir))
+	slog.Info("building ACP fork", "repo", fork.Repo, "commit", fork.Commit, "dir", src,
+		"package_dir", fork.PackageDir, "build_script", fork.BuildScript)
 	fmt.Fprintf(log, "tandem: building ACP fork %s#%s\n", fork.Repo, fork.ShortCommit())
 	if err := runGit(ctx, root, log, "clone", "--quiet", fork.Repo, src); err != nil {
 		return "", err
@@ -116,9 +175,9 @@ func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork co
 	if err := runGit(ctx, src, log, "checkout", "--quiet", "--detach", fork.Commit); err != nil {
 		return "", err
 	}
-	run := func(args ...string) error {
+	run := func(dir string, args ...string) error {
 		cmd := exec.CommandContext(ctx, bun, args...)
-		cmd.Dir = src
+		cmd.Dir = dir
 		cmd.Stdout = log
 		cmd.Stderr = log
 		cmd.Env = buildEnv(cfg, bun)
@@ -127,23 +186,38 @@ func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork co
 		}
 		return nil
 	}
-	if err := run("install"); err != nil {
-		return "", err
-	}
-	// A fork's `prepare` is often `npm run build`, which fails on a host with
-	// only Bun, so prefer the build script it delegates to.
-	scripts, err := packageScripts(filepath.Join(src, "package.json"))
-	if err != nil {
-		return "", err
-	}
-	switch {
-	case scripts["build"] != "":
-		err = run("run", "build")
-	case scripts["prepare"] != "":
-		err = run("run", "prepare")
+	scripts, err := packageScripts(filepath.Join(pkg, "package.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("fork packageDir %q has no package.json at commit %s", fork.PackageDir, fork.ShortCommit())
 	}
 	if err != nil {
 		return "", err
+	}
+	script := fork.BuildScript
+	switch script {
+	case "":
+		// A fork's `prepare` is often `npm run build`, which fails on a host
+		// with only Bun, so prefer the build script it delegates to.
+		switch {
+		case scripts["build"] != "":
+			script = "build"
+		case scripts["prepare"] != "":
+			script = "prepare"
+		}
+	case config.ForkBuildNone:
+		script = ""
+	default:
+		if scripts[script] == "" {
+			return "", fmt.Errorf("fork buildScript %q is not a script in %s", script, filepath.ToSlash(filepath.Join(fork.PackageDir, "package.json")))
+		}
+	}
+	if err := run(src, "install"); err != nil {
+		return "", err
+	}
+	if script != "" {
+		if err := run(pkg, "run", script); err != nil {
+			return "", err
+		}
 	}
 	packDir := filepath.Join(root, ".fork-pack")
 	if err := os.RemoveAll(packDir); err != nil {
@@ -152,7 +226,9 @@ func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork co
 	if err := os.MkdirAll(packDir, 0o755); err != nil {
 		return "", err
 	}
-	if err := run("pm", "pack", "--quiet", "--destination", packDir); err != nil {
+	// Packing runs the package's prepack lifecycle, which is where some
+	// packages (omp) generate dist/ — hence buildScript `none`.
+	if err := run(pkg, "pm", "pack", "--quiet", "--destination", packDir); err != nil {
 		return "", err
 	}
 	tarballs, _ := filepath.Glob(filepath.Join(packDir, "*.tgz"))
@@ -179,7 +255,8 @@ func packageScripts(path string) (map[string]string, error) {
 // forkLockCurrent reports whether locked already satisfies fork.
 func forkLockCurrent(locked LockedAgent, fork config.ACPFork, dist string) bool {
 	return locked.Fork != nil && locked.Fork.Commit == fork.Commit &&
-		locked.Fork.Repo == fork.Repo && distExists(locked.Path, dist)
+		locked.Fork.Repo == fork.Repo && locked.Fork.PackageDir == fork.PackageDir &&
+		locked.Fork.BuildScript == fork.BuildScript && distExists(locked.Path, dist)
 }
 
 // EnsureForkClone makes sure a fork-tracked agent has a working clone on disk
