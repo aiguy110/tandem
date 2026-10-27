@@ -157,6 +157,33 @@ Changes:
 - Record the fork only once it carries at least one change Tandem needs. An
   unmodified fork is just slower installs.
 
+### Status (2026-10-27)
+
+- Fork created. `tandem` = `v18.13.2` plus the carried PRs below, pinned in
+  `acpForks.omp` at `74f142636d7e` with `--package-dir packages/coding-agent
+  --build-script tandem:build`.
+- **Carried:** #12716 (mid-turn `usage_update`), #14472 (per-command
+  `allow_always`), #14797 (MCP routes on resume), #15043 (subagent sessions).
+  `CHANGELOG.md` hunks were dropped from the picks (3-way merges put them in
+  released sections) and re-added under `[Unreleased]` in one fork commit.
+- **Not carried:** #10652. 18.13.2 already keeps a failed client MCP server in
+  the session and reports it as a chunk instead of rejecting `session/new`.
+- **Fork-only fixes on top of the picks:**
+  - #12716's second commit (`order prompt handlers`) chains event handlers, so
+    the `agent_end` handler's async-delivery drain settled the turn before the
+    follow-up events queued behind it ran. `acp-agent.test.ts` "keeps async
+    delivery follow-up updates inside the owning ACP prompt" failed. Fix: wait
+    for idle and settle off the chain, after the chain drains. Report on #12716
+    (after confirmation).
+  - #14472 makes `allow_always` per-command; 18.13.2's pattern-policy test
+    still expected tool-wide grants, so its expectation was updated.
+  - `tandem:build` (natives fetch, see 0.2). Never upstream.
+- **Checks run:** `check:types` clean; ACP test files 362/363 pass. The one
+  failure, `acp-lazy-startup` "honors explicit host-defaulted and todo
+  settings", fails identically on clean `v18.13.2`. Tandem's real
+  `installFork` built the fork, `omp --version` ran from it, and an ACP
+  handshake advertised `_meta.steering.supported` and created a session.
+
 ## Phase 1: correctness fixes
 
 ### 1.1 `usage_update` with `size: 0` kills the session
@@ -197,10 +224,9 @@ Changes:
   its own Playwright and Tandem-control servers plus the user's `mcpServers`, so
   one broken user server makes omp unspawnable.
 - **omp:**
-  - Carry upstream PR #10652 ("keep healthy MCP servers when a sibling fails to
-    connect") on `tandem` until it merges.
-  - Don't open a competing PR. If it stalls, comment on #10652 (after
-    confirmation) with our reproduction.
+  - Not needed on the 18.13.x base: a failed client-declared server is kept
+    and reported as a chunk, so `session/new` succeeds. #10652 conflicts with
+    that change and isn't carried.
 - **Tandem:**
   - Read `agentCapabilities.mcpCapabilities`, and omit `http`/`sse` servers the
     agent doesn't advertise, with a warning log naming the skipped server.
@@ -445,11 +471,11 @@ Document the omp fork record and the monorepo fork fields in
 
 | # | Item | Where | Upstream |
 |---|---|---|---|
-| 0.1 | Update omp ≥ 18.12.6, raise pin | Tandem | already upstream |
-| 0.2 | Monorepo fork builds | Tandem | — |
-| 0.3 | Create `aiguy110/oh-my-pi` | GitHub | — |
+| 0.1 | Update omp ≥ 18.12.6, raise pin | Tandem | already upstream (fork base 18.13.2 has it) |
+| 0.2 | Monorepo fork builds | Tandem | — (done) |
+| 0.3 | Create `aiguy110/oh-my-pi` | GitHub | — (done) |
 | 1.1 | `usage_update size 0` | Tandem + omp | direct PR |
-| 1.2 | MCP partial failure | omp (carry) + Tandem | PR #10652 (theirs) |
+| 1.2 | MCP partial failure | Tandem | fixed in 18.13.x |
 | 1.3 | Lenient restore of mode/config | Tandem | — |
 | 2.1 | Fork at message | Tandem gate, then omp | Discord, then PR |
 | 2.2 | Compaction updates | omp | PR, links #16969 |
