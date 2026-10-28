@@ -135,6 +135,16 @@ the event log. Project roots are configurable via `TANDEM_PROJECT_ROOTS` (defaul
 **Why:** An agent is a long-lived unit of work with a workspace and history; a daemon
 restart (crash, upgrade) shouldn't lose it.
 
+**Amendment — lazy restore and idle hibernation:** Structured (ACP) agents are restored
+*dormant*: their session, transcript, and rail position come back from durable state, but
+no harness process is launched until the agent is next needed (a prompt, aside, or
+mode/config change; terminal handoff and harness restart swap in a process directly). An
+ACP agent idle for `TANDEM_AGENT_IDLE_TIMEOUT` (default `30m`, `off` disables) is
+hibernated the same way — its process is stopped and relaunched on next use via
+`session/load`. Raw-pty agents still restore eagerly. Why: eagerly relaunching every
+agent on restart spawned ~10 processes per agent at once; with dozens of agents this
+exhausted host memory, got the daemon OOM-killed, and the systemd restart repeated it.
+
 ## D12 — Terminal renderer: ghostty-web default, xterm.js fallback
 
 **Choice:** Render terminals against the xterm.js API behind a `TerminalRenderer` interface.

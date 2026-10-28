@@ -20,7 +20,7 @@ import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { AppearanceModal } from './components/AppearanceModal';
 import { uiScale } from './appearance';
 import { useValuePresence } from './transitions';
-import { frontendVersion, loadDaemonVersion } from './version';
+import { frontendVersion, loadDaemonVersion, reloadForDaemonVersion } from './version';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -77,10 +77,7 @@ export function App() {
     if (conn !== 'connected') return;
     const controller = new AbortController();
     void loadDaemonVersion(controller.signal).then(({ version }) => {
-      if (version !== frontendVersion) {
-        window.location.reload();
-        return;
-      }
+      if (reloadForDaemonVersion(version)) return;
       setDaemonVersion(version);
     }).catch((error: unknown) => {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
@@ -113,6 +110,11 @@ export function App() {
         <Inspector />
       </div>
       <ConnectionBanner />
+      {daemonVersion !== null && daemonVersion !== frontendVersion && (
+        <div className="conn-banner mismatch">
+          UI {frontendVersion} does not match daemon {daemonVersion}; the daemon is serving a stale UI build.
+        </div>
+      )}
       <ModalHost modal={modal} />
     </>
   );

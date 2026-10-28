@@ -57,6 +57,7 @@ For Go changes, run the relevant package tests or `go test ./...`.
 | `TANDEM_BROWSER_MCP` | `on` | `off` skips registering Playwright + Tandem-control MCP at `session/new` |
 | `TANDEM_SHELL_ENV` | `on` | `off` skips importing the login shell's environment at daemon startup; `force` imports even when started from a terminal |
 | `TANDEM_SHELL_ENV_TIMEOUT` | `10s` | How long the login shell may take to report its environment |
+| `TANDEM_AGENT_IDLE_TIMEOUT` | `30m` | Stop an idle ACP agent's harness process after this long (relaunched on next prompt); `off` disables |
 
 Agent launches are declared by the shipped `config.yml.example`, overlaid by optional
 `$TANDEM_HOME/config.yml` definitions and reusable profiles. Claude, Codex, and Pi are

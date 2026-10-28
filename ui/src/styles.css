@@ -1056,6 +1056,7 @@ body.dock-resizing .app { transition: none; }
 .conn-banner { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 50; padding: 6px 14px; border-radius: 999px; font-size: var(--fs-sm); box-shadow: var(--shadow); }
 .conn-banner.reconnecting { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
 .conn-banner.connecting { background: var(--working-soft); color: var(--working); border: 1px solid var(--working); }
+.conn-banner.mismatch { background: var(--err-soft); color: var(--err); border: 1px solid var(--err); }
 
 /* ---- modals / palettes ---- */
 .modal-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }

@@ -381,12 +381,16 @@ func TestPartialRestoreAndRepeatedClose(t *testing.T) {
 	if err := r.RestoreAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if r.Get("web-1") == nil || r.Get("api-2") != nil {
-		t.Fatal("partial restore isolation failed")
+	// Restore launches nothing, so a broken harness only surfaces when that
+	// agent is woken, and it does not take its neighbours down with it.
+	if r.Get("web-1") == nil || r.Get("api-2") == nil {
+		t.Fatal("agents were not restored dormant")
 	}
-	failed, _ := db.Session("api-2")
-	if failed.Status != "error" {
-		t.Fatalf("failed status=%s", failed.Status)
+	if err := r.Get("web-1").Wake(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get("api-2").Wake(context.Background()); err == nil || !r.Get("api-2").Dormant() {
+		t.Fatalf("failed wake = %v, dormant = %v", err, r.Get("api-2").Dormant())
 	}
 	ok, err := r.Close(context.Background(), "web-1", false, false, false)
 	if !ok || err != nil {
@@ -422,8 +426,12 @@ func TestRestoreUnpromptedAgentStartsFreshACPSession(t *testing.T) {
 	if err = r2.RestoreAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if r2.Get(s.ID) == nil {
+	restored := r2.Get(s.ID)
+	if restored == nil {
 		t.Fatal("unprompted agent was not restored")
+	}
+	if err = restored.Wake(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	if got := f2.requests[s.ID].ResumeSessionID; got != "" {
 		t.Fatalf("unprompted agent resumed ACP session %q, want a fresh session", got)
@@ -452,6 +460,9 @@ func TestRestorePromptedAgentResumesACPSession(t *testing.T) {
 	}
 	defer r2.DisposeAll(context.Background())
 	if err = r2.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = r2.Get(s.ID).Wake(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := f2.requests[s.ID].ResumeSessionID; got != "session-"+s.ID {
@@ -533,6 +544,9 @@ func TestSessionConfigPersistsAndReapplies(t *testing.T) {
 	}
 	defer r2.DisposeAll(context.Background())
 	if err = r2.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = r2.Get(s.ID).Wake(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	restored := f2.adapters[s.ID]
@@ -918,6 +932,12 @@ func TestRestoreKeepsThePinnedDistribution(t *testing.T) {
 	if err := restored.RestoreAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	f.mu.Lock()
+	delete(f.requests, id)
+	f.mu.Unlock()
+	if err := restored.Get(id).Wake(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	// Restore must not move a live session onto different code behind the
 	// operator's back; only an explicit harness restart re-resolves.
 	f.mu.Lock()
@@ -928,39 +948,24 @@ func TestRestoreKeepsThePinnedDistribution(t *testing.T) {
 	}
 }
 
-// gatedFactory holds every Start until release is closed, recording how many
-// starts were in flight at once.
-type gatedFactory struct {
-	fakeFactory
-	release  chan struct{}
-	mu       sync.Mutex
-	inFlight int
-	peak     int
+func (f *fakeFactory) startCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
 }
 
-func (f *gatedFactory) Start(ctx context.Context, r agentadapter.StartRequest) (agentadapter.Adapter, error) {
-	f.mu.Lock()
-	f.inFlight++
-	if f.inFlight > f.peak {
-		f.peak = f.inFlight
-	}
-	f.mu.Unlock()
-	<-f.release
-	f.mu.Lock()
-	f.inFlight--
-	f.mu.Unlock()
-	return f.fakeFactory.Start(ctx, r)
-}
-
-func TestStartRestoreServesPlaceholdersAndRestoresConcurrently(t *testing.T) {
-	f := &gatedFactory{release: make(chan struct{})}
-	r, db, _ := setup(t, &f.fakeFactory)
-	r.factory = f
+func TestStartRestoreLeavesACPAgentsDormantUntilUsed(t *testing.T) {
+	f := &fakeFactory{}
+	r, db, _ := setup(t, f)
 	ids := []string{"a-1", "b-2", "c-3"}
 	for i, id := range ids {
 		dir := t.TempDir()
 		raw, _ := json.Marshal(existing(dir))
-		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, Status: "idle", CreatedAt: int64(i + 1)}); err != nil {
+		status := "working"
+		if i == 2 {
+			status = "error"
+		}
+		if err := db.UpsertSession(store.Session{ID: id, Name: id, Spec: raw, CWD: dir, Status: status, CreatedAt: int64(i + 1)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -974,54 +979,131 @@ func TestStartRestoreServesPlaceholdersAndRestoresConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every agent is listed while its restore is still blocked.
-	summaries := r.Summaries(context.Background())
-	if len(summaries) != len(ids) {
-		t.Fatalf("summaries during restore = %d, want %d", len(summaries), len(ids))
-	}
-	for i, summary := range summaries {
-		if summary.ID != ids[i] || summary.Name != ids[i] || summary.Status != "idle" {
-			t.Fatalf("placeholder summary %d = %+v", i, summary)
-		}
-	}
-	got := make(chan bool)
-	go func() { got <- r.Get("b-2") != nil }()
-	select {
-	case <-got:
-		t.Fatal("Get returned before the agent's restore finished")
-	case <-time.After(50 * time.Millisecond):
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		f.mu.Lock()
-		peak := f.peak
-		f.mu.Unlock()
-		if peak == len(ids) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("peak concurrent restores = %d, want %d", peak, len(ids))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	close(f.release)
-	if !<-got {
-		t.Fatal("Get did not return the restored agent")
-	}
 	<-done
+	if n := f.startCount(); n != 0 {
+		t.Fatalf("restore launched %d agent processes, want none", n)
+	}
 	for _, id := range ids {
-		if r.Get(id) == nil {
-			t.Fatalf("%s was not restored", id)
+		s := r.Get(id)
+		if s == nil || !s.Dormant() {
+			t.Fatalf("%s not restored dormant: %v", id, s)
 		}
+		// The turn (or failed process) died with the previous daemon.
+		if s.Status() != session.Idle {
+			t.Fatalf("%s status = %s, want idle", id, s.Status())
+		}
+	}
+	if rec, _ := db.Session("c-3"); rec == nil || rec.Status != "idle" {
+		t.Fatalf("stale error status was not cleared durably: %+v", rec)
 	}
 	restoredMu.Lock()
-	defer restoredMu.Unlock()
 	if len(restored) != len(ids) {
 		t.Fatalf("onRestored calls = %v", restored)
 	}
+	restoredMu.Unlock()
 	if n := len(r.Summaries(context.Background())); n != len(ids) {
 		t.Fatalf("summaries after restore = %d, want %d", n, len(ids))
 	}
+
+	// A prompt wakes only the agent it is sent to.
+	receipt, err := r.Get("b-2").EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "hi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for f.startCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("prompt did not wake the agent")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	f.mu.Lock()
+	f.adapters["b-2"].gate <- struct{}{}
+	f.mu.Unlock()
+	_ = receipt
+	for r.Get("b-2").ActiveTurn() || r.Get("b-2").Dormant() {
+		if time.Now().After(deadline) {
+			t.Fatal("woken agent did not finish its turn")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := f.startCount(); n != 1 || r.Get("a-1").Dormant() == false {
+		t.Fatalf("starts = %d, a-1 dormant = %v; want only b-2 woken", n, r.Get("a-1").Dormant())
+	}
+}
+
+func TestIdleAgentHibernatesAndWakesOnPrompt(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := f.adapters[s.ID]
+	first.gate <- struct{}{}
+	if _, err = s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "hello"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Recently active agents are left alone.
+	r.reapIdle(context.Background(), time.Hour)
+	if s.Dormant() {
+		t.Fatal("hibernated an agent that was not idle long enough")
+	}
+	r.reapIdle(context.Background(), 0)
+	if !s.Dormant() {
+		t.Fatal("idle agent was not hibernated")
+	}
+	select {
+	case <-first.done:
+	default:
+		t.Fatal("hibernation did not stop the agent process")
+	}
+	if got := s.ExternalSessionID(); got != "session-"+s.ID {
+		t.Fatalf("dormant agent lost its external session id: %q", got)
+	}
+
+	f.mu.Lock()
+	delete(f.requests, s.ID)
+	f.mu.Unlock()
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			f.mu.Lock()
+			a := f.adapters[s.ID]
+			f.mu.Unlock()
+			if a != first {
+				a.gate <- struct{}{}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	if _, err = s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "again"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Dormant() {
+		t.Fatal("prompt did not wake the agent")
+	}
+	if got := f.requests[s.ID].ResumeSessionID; got != "session-"+s.ID {
+		t.Fatalf("woken agent resumed %q, want its prior session", got)
+	}
+}
+
+func TestBusyAgentIsNotHibernated(t *testing.T) {
+	f := &fakeFactory{}
+	r, _, _ := setup(t, f)
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.EnqueuePrompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "long"}}); err != nil {
+		t.Fatal(err)
+	}
+	r.reapIdle(context.Background(), 0)
+	if s.Dormant() {
+		t.Fatal("hibernated an agent with a running turn")
+	}
+	f.adapters[s.ID].gate <- struct{}{}
 }
 
 type stubMessaging struct {

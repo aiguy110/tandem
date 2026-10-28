@@ -182,7 +182,7 @@ harnesses: {}
 #   bun:                     # JS runtime + package manager for agent bridges and scripts
 #     mode: managed          # "managed" (default; Tandem-downloaded) or "system" (command/PATH)
 #     command: bun           # only used when mode is "system"
-#     version: 1.4.3         # pinned version downloaded when mode is "managed"
+#     version: 1.4.4         # pinned version downloaded when mode is "managed"
 #   languageModel:             # shared Chat Completions model (voice, summaries, titles)
 #     endpoint: https://api.openai.com/v1/chat/completions
 #     apiKey: ""               # optional for local services; stored owner-only
