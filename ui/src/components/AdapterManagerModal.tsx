@@ -54,6 +54,11 @@ function ForkRow({ row, fork }: { row: ManagedAdapter; fork: ForkTracking }) {
           {behind
             ? 'A rebase agent checks whether the change was upstreamed, then either retires the fork or rebases it.'
             : 'Tandem will offer a rebase when a newer upstream release appears.'}
+          {fork.follow === 'off'
+            ? ` Trees other hosts publish on ${fork.ref} are ignored.`
+            : fork.follow === 'auto'
+              ? ` Trees other hosts publish on ${fork.ref} are adopted automatically.`
+              : ` Trees other hosts publish on ${fork.ref} are offered for adoption.`}
           {prs.length > 0 && upstreamName && (
             <>
               {' Watching '}

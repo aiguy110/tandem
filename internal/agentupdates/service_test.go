@@ -2,6 +2,7 @@ package agentupdates
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -134,13 +135,16 @@ func TestForkRebaseWithoutProfileIsInformational(t *testing.T) {
 func TestRebasePromptLeadsWithUpstreamCheck(t *testing.T) {
 	prompt := RebasePrompt(rebaseUpdate(), "/rt/forks/pi", "/opt/bin/tandem")
 	for _, want := range []string{
-		"/opt/bin/tandem acp upstream pi",      // the retire path, by absolute path
-		"/opt/bin/tandem acp fork pi --commit", // the re-pin path
-		"#114",                                 // the PRs to check first
-		"--no-prs",                             // refreshing the PR list
-		"Emits usage_update",                   // why the fork exists
-		"git rebase upstream/main",             // the rebase itself
-		"/rt/forks/pi",                         // where to work
+		"/opt/bin/tandem acp upstream pi",                                                // the retire path, by absolute path
+		"/opt/bin/tandem acp sync pi --check",                                            // another instance may have done it
+		"/opt/bin/tandem acp manifest pi --rebased-onto 0.0.34 --write tandem-fork.json", // publishing it
+		"--retired-for",                 // publishing a retirement
+		"/opt/bin/tandem acp sync pi\n", // the re-pin path, from the branch
+		"#114",                          // the PRs to check first
+		"--no-prs",                      // refreshing the PR list
+		"Emits usage_update",            // why the fork exists
+		"git rebase upstream/main",      // the rebase itself
+		"/rt/forks/pi",                  // where to work
 		"npm run typecheck && npm run lint && npm test",  // the checks
 		"git -C /rt/forks/pi reset --hard origin/tandem", // syncing the clone
 		"Finish with your worktree clean",
@@ -148,6 +152,10 @@ func TestRebasePromptLeadsWithUpstreamCheck(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("rebase prompt is missing %q", want)
 		}
+	}
+	// Checking the shared branch comes before any review work.
+	if strings.Index(prompt, "acp sync pi --check") > strings.Index(prompt, "git fetch upstream") {
+		t.Error("the shared-branch check must come before the upstreaming check")
 	}
 	// Retiring must be presented before rebasing, or an agent will rebase by reflex.
 	if strings.Index(prompt, "upstreamed") > strings.Index(prompt, "git rebase upstream/main") {
@@ -240,5 +248,81 @@ func TestActionOnWithdrawnUpdateClearsNotification(t *testing.T) {
 	}
 	if len(center.List()) != 0 {
 		t.Fatalf("withdrawn notification remained after install: %#v", center.List())
+	}
+}
+
+func adoptUpdate() runtimeinstall.UpdateInfo {
+	u := rebaseUpdate()
+	u.Kind = runtimeinstall.UpdateKindAdopt
+	u.Blessed = &runtimeinstall.BlessedFork{Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Manifest: &runtimeinstall.BlessedManifest{Schema: 1, UpstreamPackage: "pi-acp", UpstreamVersion: "0.0.34"}}
+	return u
+}
+
+func TestBlessedForkOffersAdoptInsteadOfRebase(t *testing.T) {
+	center := notifications.New()
+	synced, spawned := "", false
+	s := NewService(Options{Center: center,
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{adoptUpdate()}, nil
+		},
+		SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+			spawned = true
+			return "", nil
+		},
+		Sync: func(_ context.Context, _ config.Config, agent string, _ io.Writer) (runtimeinstall.SyncResult, error) {
+			synced = agent
+			return runtimeinstall.SyncResult{Kind: runtimeinstall.UpdateKindAdopt,
+				After: config.ACPFork{Commit: "bbbbbbbbbbbb", UpstreamVersion: "0.0.34"}}, nil
+		}})
+	s.poll(context.Background())
+	items := center.List()
+	if len(items) != 1 || items[0].Actions[0].ID != "sync" || !items[0].Actions[0].Primary {
+		t.Fatalf("notification=%#v", items)
+	}
+	for _, a := range items[0].Actions {
+		if a.ID == "rebase" {
+			t.Fatal("offered a rebase for a tree that was already published")
+		}
+	}
+	if _, err := s.HandleAction(context.Background(), items[0].ID, "sync"); err != nil {
+		t.Fatal(err)
+	}
+	if synced != "pi" || spawned {
+		t.Fatalf("synced=%q spawned=%v", synced, spawned)
+	}
+	if items := center.List(); len(items) != 1 || items[0].Severity != "success" {
+		t.Fatalf("expected a success notification, got %#v", items)
+	}
+}
+
+func TestBlessedForkAutoFollow(t *testing.T) {
+	center := notifications.New()
+	calls := 0
+	fail := true
+	s := NewService(Options{Center: center,
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			u := adoptUpdate()
+			u.Fork.Follow = config.ForkFollowAuto
+			return []runtimeinstall.UpdateInfo{u}, nil
+		},
+		Sync: func(context.Context, config.Config, string, io.Writer) (runtimeinstall.SyncResult, error) {
+			calls++
+			if fail {
+				return runtimeinstall.SyncResult{}, errors.New("build failed")
+			}
+			return runtimeinstall.SyncResult{Kind: runtimeinstall.UpdateKindAdopt}, nil
+		}})
+	s.poll(context.Background())
+	if calls != 1 {
+		t.Fatalf("auto-follow did not sync: calls=%d", calls)
+	}
+	if items := center.List(); len(items) != 1 || items[0].Severity != "failure" {
+		t.Fatalf("expected the failure to be surfaced, got %#v", items)
+	}
+	// A broken tree is not retried every poll.
+	s.poll(context.Background())
+	if calls != 1 {
+		t.Fatalf("retried a failed auto-follow: calls=%d", calls)
 	}
 }

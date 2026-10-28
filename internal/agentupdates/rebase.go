@@ -63,6 +63,18 @@ func RebasePrompt(u runtimeinstall.UpdateInfo, clone, tandemBin string) string {
 	fmt.Fprintf(&b, "\nThe `tandem` CLI may not be on your PATH; invoke it as `%s`.\n", tandemBin)
 
 	b.WriteString(`
+## Step 0 — check whether another Tandem already did this
+
+The fork branch is shared by every Tandem instance tracking this fork. Another
+one may already have rebased onto this release and published it with a
+` + "`" + runtimeinstall.BlessedManifestFile + "`" + ` manifest at the branch tip:
+
+    ` + tandemBin + ` acp sync ` + u.Agent + ` --check
+
+If the tip is already rebased onto **` + u.LatestVersion + `** (or newer), or says the
+fork is retired, run ` + "`" + tandemBin + " acp sync " + u.Agent + "`" + ` to adopt it, report that,
+and stop — do not repeat the review or rebase.
+
 ## Step 1 — check whether the change has been upstreamed first
 
 Do this before any rebase work. If upstream now does what the fork does, the
@@ -84,8 +96,18 @@ Then check, using the fork's reason above to know what to look for:
     ` + tandemBin + ` acp upstream ` + u.Agent + ` --constraint '^<version-that-has-it>'
 
 That installs the published package, drops the fork tracking from Tandem's
-config, and stops these notifications. Report what you verified and stop — do
-not rebase.
+config, and stops these notifications.
+
+Then publish the retirement so other Tandem instances retire too, instead of
+each re-checking. From your worktree, on top of ` + "`origin/" + fork.Ref + "`" + `:
+
+    git fetch origin && git reset --hard origin/` + fork.Ref + `
+    ` + tandemBin + ` acp manifest ` + u.Agent + ` --retired-for '^<version-that-has-it>' --write ` + runtimeinstall.BlessedManifestFile + `
+    git add ` + runtimeinstall.BlessedManifestFile + ` && git commit -m "tandem-fork: retired for <version-that-has-it>"
+    git push --force-with-lease=` + fork.Ref + `:origin/` + fork.Ref + ` origin HEAD:` + fork.Ref + `
+
+(Run ` + "`acp manifest`" + ` before ` + "`acp upstream`" + `, while the record still exists.)
+Report what you verified and stop — do not rebase.
 
 ## Step 2 — otherwise, rebase
 
@@ -121,23 +143,40 @@ whole-tree rewrites over commits you did not otherwise have to touch.
 Update ` + "`FORK.md`" + ` for the new baseline (carried commits, what upstream now
 covers, what would let the fork retire) and commit it.
 
+Then write the manifest other Tandem instances read to adopt this rebase, and
+commit it as the branch tip:
+
+    ` + tandemBin + ` acp manifest ` + u.Agent + ` --rebased-onto ` + u.LatestVersion + ` --write ` + runtimeinstall.BlessedManifestFile + `
+
+Pass the same ` + "`--pr N`" + ` / ` + "`--no-prs`" + `, ` + "`--reason`" + `, ` + "`--package-dir`" + ` and
+` + "`--build-script`" + ` flags here that the record needs (described in Step 3); it
+prints the manifest without changing the record, so rerun it until it is right.
+Commit ` + "`" + runtimeinstall.BlessedManifestFile + "`" + ` last, after every other change.
+
 ## Step 3 — publish, re-pin, and sync the clone
 
 Before pushing, ` + "`git status`" + ` must be clean: commit every intended change,
 and discard incidental churn (lockfile rewrites from installing, formatter
 output, build artifacts) with ` + "`git checkout -- <path>`" + ` / ` + "`git clean`" + `.
 
-Push the rebased branch and record the new baseline so Tandem installs it and
-stops flagging this release:
+Push the rebased branch, then pin this Tandem to it from the branch, which
+builds the published tree and records the new baseline from the manifest:
 
     git push --force-with-lease=` + fork.Ref + `:origin/` + fork.Ref + ` origin HEAD:` + fork.Ref + `
-    ` + tandemBin + ` acp fork ` + u.Agent + ` --commit $(git rev-parse HEAD) --rebased-onto ` + u.LatestVersion + `
+    ` + tandemBin + ` acp sync ` + u.Agent + `
 
-Bring the recorded upstream PRs up to date in the same command or a follow-up
-one: pass ` + "`--pr N`" + ` once for each upstream PR that is still open and would
-still retire the fork (this replaces the list), or ` + "`--no-prs`" + ` if none remain.
-If the fork's purpose changed, update ` + "`--reason`" + ` too. If upstream moved the
-package or its build, update ` + "`--package-dir`" + ` / ` + "`--build-script`" + ` to match.
+Confirm ` + "`acp sync`" + ` reports the commit you pushed (` + "`git rev-parse HEAD`" + `). If
+the push is rejected because ` + "`origin/" + fork.Ref + "`" + ` moved, another Tandem
+published first: run ` + "`" + tandemBin + " acp sync " + u.Agent + " --check`" + `, and if its tip is
+on this release, adopt it with ` + "`acp sync`" + ` and discard your rebase rather
+than overwriting theirs.
+
+The manifest flags mean: ` + "`--pr N`" + ` once for each upstream PR that is still open
+and would still retire the fork (this replaces the list), or ` + "`--no-prs`" + ` if none
+remain. If the fork's purpose changed, update ` + "`--reason`" + ` too. If upstream moved
+the package or its build, update ` + "`--package-dir`" + ` / ` + "`--build-script`" + ` to match.
+If a field is wrong after publishing, fix the manifest in a new commit, push,
+and ` + "`acp sync`" + ` again.
 
 Then bring the clone's local branches up to the published state, since the
 clone is what the next rebase starts from:
@@ -150,8 +189,7 @@ clone is what the next rebase starts from:
 The clone is a Tandem-managed checkout, so resetting it is expected. Only if
 ` + "`status --porcelain`" + ` shows changes you did not make, leave it and report them.
 
-Run ` + "`" + tandemBin + " acp status`" + ` to confirm the record reads as expected. The new
-distribution is built on the next session spawn for this agent.
+Run ` + "`" + tandemBin + " acp status`" + ` to confirm the record reads as expected.
 
 Finish with your worktree clean (` + "`git status`" + ` prints nothing to commit).
 

@@ -50,6 +50,8 @@ type ForkStatus struct {
 	// PackageDir and BuildScript are how the fork is built; see config.ACPFork.
 	PackageDir  string `json:"packageDir,omitempty"`
 	BuildScript string `json:"buildScript,omitempty"`
+	// Follow is the policy for trees published on the fork branch.
+	Follow string `json:"follow,omitempty"`
 	// Installed reports whether the pinned commit is the one currently
 	// installed. False means the record was re-pinned but no session has
 	// spawned since, so the new tree is not built yet.

@@ -37,6 +37,13 @@ There are two kinds of work:
   - Each upstream PR number is added with `--pr` once it exists.
   - When upstream has merged every carried PR, `tandem acp upstream omp`
     retires the fork.
+- **Shared across instances:** the `tandem` branch tip carries a
+  `tandem-fork.json` manifest (written by `tandem acp manifest omp ...`) with
+  the baseline, PRs, reason and build recipe. Every Tandem tracking the fork
+  reads the tip on its update check; a newer published tree is offered as
+  "Adopt" (`tandem acp sync omp`, or automatically with `follow: auto`)
+  instead of a fresh rebase, and a manifest with `retiredFor` retires the fork
+  everywhere.
 
 ### Upstream contribution rules
 

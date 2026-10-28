@@ -806,6 +806,8 @@ export interface ForkTracking {
   packageDir?: string;
   /** Script run before packing; absent means build, else prepare. */
   buildScript?: string;
+  /** Policy for trees published on the fork branch: offer (absent), auto, or off. */
+  follow?: 'offer' | 'auto' | 'off';
   /** False when the pinned commit has not been built yet. */
   installed: boolean;
 }

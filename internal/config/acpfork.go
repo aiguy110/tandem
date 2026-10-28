@@ -66,7 +66,19 @@ type ACPFork struct {
 	// for packages whose `build` makes something other than the published
 	// files (omp's builds a standalone binary; prepack makes dist/).
 	BuildScript string `yaml:"buildScript,omitempty" json:"buildScript,omitempty"`
+	// Follow is how this instance treats a newer tree published on Ref with a
+	// tandem-fork.json manifest by another instance: empty (or ForkFollowOffer)
+	// offers to adopt it, ForkFollowAuto adopts it unprompted, and
+	// ForkFollowOff ignores the branch and relies on local rebases alone.
+	Follow string `yaml:"follow,omitempty" json:"follow,omitempty"`
 }
+
+// Follow policies for a fork branch's blessed manifest; see ACPFork.Follow.
+const (
+	ForkFollowOffer = "offer"
+	ForkFollowAuto  = "auto"
+	ForkFollowOff   = "off"
+)
 
 // ForkBuildNone is the BuildScript value that skips the build step.
 const ForkBuildNone = "none"
@@ -141,6 +153,11 @@ func (f ACPFork) Validate() error {
 		// It is passed to `bun run` as one argument; anything else is a command
 		// line, not a script name.
 		return fmt.Errorf("fork buildScript must be a package script name or %q, got %q", ForkBuildNone, f.BuildScript)
+	}
+	switch f.Follow {
+	case "", ForkFollowOffer, ForkFollowAuto, ForkFollowOff:
+	default:
+		return fmt.Errorf("fork follow must be %q, %q or %q, got %q", ForkFollowOffer, ForkFollowAuto, ForkFollowOff, f.Follow)
 	}
 	return nil
 }

@@ -255,15 +255,34 @@ const (
 	// Tandem carries as a fork. It cannot be installed directly without losing
 	// the fork's change, so it is offered as a rebase for an agent to perform.
 	UpdateKindRebase = "rebase"
+	// UpdateKindAdopt is a newer fork tree another instance published on the
+	// fork branch (see blessed.go): re-pin to it instead of rebasing again.
+	UpdateKindAdopt = "adopt"
+	// UpdateKindRetire is a fork branch whose manifest says the fork is no
+	// longer needed: return to the published package.
+	UpdateKindRetire = "retire"
 )
 
 type UpdateInfo struct {
 	Agent, Package, Constraint, CurrentVersion, LatestVersion string
-	// Kind is UpdateKindRelease or UpdateKindRebase.
+	// Kind is one of the UpdateKind constants.
 	Kind string
-	// Fork carries the tracking record when Kind is UpdateKindRebase, so the
-	// notification and the rebase agent have the repo, ref and reason to hand.
+	// Fork carries the tracking record for the fork kinds, so the notification
+	// and the rebase agent have the repo, ref and reason to hand.
 	Fork *config.ACPFork
+	// Blessed is the fork branch's published tree for UpdateKindAdopt and
+	// UpdateKindRetire.
+	Blessed *BlessedFork
+}
+
+// OfferKey identifies one offer, so dismissing it suppresses only that offer.
+// A blessed tree can move at the same upstream version (a new carried PR), so
+// its tip is part of the key.
+func (u UpdateInfo) OfferKey() string {
+	if u.Blessed != nil {
+		return u.Kind + ":" + u.LatestVersion + "@" + u.Blessed.Commit
+	}
+	return u.LatestVersion
 }
 
 type AdapterStatus struct {
@@ -330,7 +349,7 @@ func AdapterCatalog(ctx context.Context, cfg config.Config) ([]AdapterStatus, er
 				Clone:           config.ForkCloneDir(cfg.RuntimeRoot, agent, fork),
 				UpstreamPackage: fork.UpstreamPackage, UpstreamRepo: fork.UpstreamRepo,
 				UpstreamVersion: fork.UpstreamVersion, Reason: fork.Reason, UpstreamPRs: fork.UpstreamPRs,
-				PackageDir: fork.PackageDir, BuildScript: fork.BuildScript,
+				PackageDir: fork.PackageDir, BuildScript: fork.BuildScript, Follow: fork.Follow,
 				Installed: forkLockCurrent(locked, fork, p.dist),
 			}
 			// Newest published release, so the UI can say whether the fork is
@@ -377,6 +396,52 @@ func CheckUpdates(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) 
 	if os.Getenv("TANDEM_NO_UPDATE_CHECK") != "" {
 		return nil, nil
 	}
+	out, err := checkPublished(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	forks, err := config.LoadACPForks(cfg.Home)
+	if err != nil {
+		return nil, err
+	}
+	// The fork branches are read outside installMu: they are network fetches
+	// that must not hold up a session spawn's install.
+	for agent, fork := range forks {
+		if _, managed := agentPins[agent]; !managed || fork.Follow == config.ForkFollowOff {
+			continue
+		}
+		b, err := ReadBlessed(ctx, cfg, agent, fork)
+		if err != nil {
+			// The branch is advisory; an unreachable one leaves the npm-based
+			// rebase offer standing.
+			slog.Warn("could not read blessed ACP fork branch", "agent", agent, "repo", fork.Repo, "ref", fork.Ref, "error", err)
+			continue
+		}
+		kind := blessedOffer(fork, b)
+		slog.Debug("checked blessed ACP fork branch", "agent", agent, "repo", fork.Repo, "ref", fork.Ref,
+			"pinned", fork.Commit, "tip", b.Commit, "has_manifest", b.Manifest != nil, "offer", kind)
+		if kind == "" {
+			continue
+		}
+		record := fork
+		record.Clone = config.ForkCloneDir(cfg.RuntimeRoot, agent, fork)
+		latest := b.Manifest.UpstreamVersion
+		if kind == UpdateKindRetire {
+			latest = b.Manifest.RetiredFor
+		}
+		offer := UpdateInfo{Agent: agent, Package: fork.UpstreamPackage, CurrentVersion: fork.UpstreamVersion,
+			LatestVersion: latest, Kind: kind, Fork: &record, Blessed: &b}
+		// A blessed tree supersedes the rebase offer for the same agent: the
+		// rebase may already be done, and if the tree is still behind npm the
+		// rebase is offered again once it is adopted.
+		out = slices.DeleteFunc(out, func(u UpdateInfo) bool { return u.Agent == agent })
+		out = append(out, offer)
+	}
+	return out, nil
+}
+
+// checkPublished is CheckUpdates' npm half.
+func checkPublished(ctx context.Context, cfg config.Config) ([]UpdateInfo, error) {
 	installMu.Lock()
 	defer installMu.Unlock()
 	l, err := ReadLock(cfg.RuntimeRoot)

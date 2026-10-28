@@ -138,6 +138,11 @@ harnesses: {}
 # landed upstream. Installs are pinned to `commit`, so pushing the fork branch
 # changes nothing until the record is re-pinned.
 #
+# The fork branch is shared by every Tandem tracking it. A rebase publishes a
+# tandem-fork.json manifest at the branch tip (`tandem acp manifest`), and every
+# other instance sees the new tip on its update check and offers to adopt it
+# (`tandem acp sync AGENT`) instead of spawning its own rebase.
+#
 # acpForks:
 #   pi:
 #     repo: https://github.com/you/pi-acp      # fork remote (http/https)
@@ -153,6 +158,10 @@ harnesses: {}
 #                             # install runs at the repo root, build+pack here)
 #     buildScript: ""         # optional; script run before packing (empty:
 #                             # build, else prepare; "none": rely on prepack)
+#     follow: ""              # optional; trees another Tandem published on
+#                             # `ref` with a tandem-fork.json manifest: "offer"
+#                             # (default) to adopt, "auto" to adopt unprompted,
+#                             # "off" to ignore the branch
 #   # omp is a Bun workspace whose dist/ comes from the package's prepack;
 #   # its fork adds a `tandem:build` script that fetches the prebuilt addon:
 #   #   packageDir: packages/coding-agent
