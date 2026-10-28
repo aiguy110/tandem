@@ -242,8 +242,8 @@ type Options struct {
 
 // DefaultManagedBunVersion is the Bun version Tandem downloads for its managed
 // runtime. It must satisfy every managed agent's engine requirement (Oh My Pi
-// requires Bun >= 1.3.14).
-const DefaultManagedBunVersion = "1.4.3"
+// 18.13+ requires Bun >= 1.4.4).
+const DefaultManagedBunVersion = "1.4.4"
 
 // Settings is the operator-owned, file-persisted portion of Tandem's
 // configuration written by the setup wizard to $TANDEM_HOME/config.yml under the
