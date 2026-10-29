@@ -82,11 +82,14 @@ type Host struct {
 	// NodeID is the identity assigned by the node's direct parent. ID is the
 	// route-scoped address used to reach it from this daemon; they differ only
 	// for descendants.
-	NodeID   string          `json:"nodeId,omitempty"`
-	ParentID string          `json:"parentId,omitempty"`
-	Route    []string        `json:"route,omitempty"`
-	Depth    int             `json:"depth,omitempty"`
-	Name     string          `json:"name,omitempty"`
+	NodeID   string   `json:"nodeId,omitempty"`
+	ParentID string   `json:"parentId,omitempty"`
+	Route    []string `json:"route,omitempty"`
+	Depth    int      `json:"depth,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	// Hostname is the machine's OS hostname; only reported for the local
+	// host, whose Name is the generic "This host" unless renamed.
+	Hostname string          `json:"hostname,omitempty"`
 	Endpoint string          `json:"endpoint,omitempty"`
 	Status   string          `json:"status"`
 	LastSeen int64           `json:"lastSeenAt,omitempty"`
@@ -140,6 +143,7 @@ func (s *Service) LocalHost() Host {
 		Local:           true,
 		NodeID:          s.selfID(),
 		Name:            "This host",
+		Hostname:        s.name,
 		Status:          "connected",
 		ProtocolVersion: ProtocolVersion,
 		BuildVersion:    s.buildVersion,

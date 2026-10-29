@@ -346,16 +346,23 @@ body.dock-resizing .app { transition: none; }
   color: var(--text-dim); font: 600 var(--fs-xs) var(--font-mono); text-transform: uppercase; letter-spacing: .06em;
 }
 .session-host-group:first-child .session-host-divider { border-top: none; }
-.session-host-link {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none;
-  padding: 1px 6px 1px 5px; border: 1px solid var(--border); border-radius: 999px;
-  font: 600 var(--fs-xs) var(--font-mono); letter-spacing: .04em;
+.session-host-divider { cursor: pointer; user-select: none; }
+.session-host-divider:hover { color: var(--text); }
+.session-host-divider:focus-visible { outline: 1px solid var(--agent); outline-offset: -1px; }
+.session-host-chevron { flex: none; width: 10px; font-size: 10px; line-height: 1; transition: transform .15s ease; }
+.session-host-divider.collapsed .session-host-chevron { transform: rotate(-90deg); }
+.session-host-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-host-local { flex: none; margin-left: -2px; color: var(--text-faint); font-weight: 500; }
+.session-host-count {
+  margin-left: auto; flex: none; min-width: 18px; padding: 0 5px; text-align: center;
+  border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim);
+  font: 600 var(--fs-xs) var(--font-mono); letter-spacing: 0;
 }
-.session-host-link-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.session-host-link.link-online { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
-.session-host-link.link-pending { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
-.session-host-link.link-rejected { color: var(--err); background: var(--err-soft); border-color: transparent; }
-.session-host-link.link-offline { color: var(--text-faint); }
+.session-host-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.session-host-dot.link-online { background: var(--ok); }
+.session-host-dot.link-pending { background: var(--warn); }
+.session-host-dot.link-rejected { background: var(--err); }
+.session-host-dot.link-offline { background: var(--text-faint); }
 .resume-host, .spawn-host { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 16px; color: var(--text-dim); font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
 .resume-host select, .spawn-host select {
   flex: 1; height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border);

@@ -54,7 +54,16 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
     || Object.values(agents).some((agent) => !isLocalHost(agent.hostId));
   const displayedGroups = federationGrouping
     ? groupedAgentRows(order, agents, hosts)
-    : [{ hostId: 'all', label: '', link: null, ids: order }];
+    : [{ hostId: 'all', label: '', local: true, link: null, ids: order }];
+  const [collapsedHosts, setCollapsedHosts] = useState(loadCollapsedHosts);
+  const toggleHostCollapsed = (hostId: string) => {
+    setCollapsedHosts((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(hostId)) next.add(hostId);
+      try { localStorage.setItem(COLLAPSED_HOSTS_KEY, JSON.stringify([...next])); } catch { /* storage unavailable */ }
+      return next;
+    });
+  };
   // Keep the full dock alive until the grid has finished contracting, so its
   // contents stay clipped by the shrinking dock rather than disappearing at
   // the start of the transition.
@@ -277,12 +286,14 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
               {federationGrouping && (
                 <HostHeader
                   group={group}
+                  collapsed={collapsedHosts.has(group.hostId)}
+                  onToggle={() => toggleHostCollapsed(group.hostId)}
                   onSpawn={() => openSpawnAtHost(group.hostId)}
                   onDetails={() => openFleetAtHost(group.hostId)}
                   onMetrics={() => openHostMetrics(group.hostId)}
                 />
               )}
-              {group.ids.map((id) => (
+              {!(federationGrouping && collapsedHosts.has(group.hostId)) && group.ids.map((id) => (
                 <Row
                   key={id}
                   rowRef={registerRow(id)}
@@ -448,9 +459,6 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   );
 }
 
-// A remote host's rows survive its tunnel dropping (the parent keeps the last
-// snapshot), so each remote divider carries a link badge saying whether what
-// is listed under it is live or the last thing that host reported.
 function submoduleSyncSummary(submodule: NonNullable<ClosePreview['submodules']>[number]): string {
   const lines = [`${submodule.branch ?? 'detached'} @ ${submodule.head ?? 'unknown'}`];
   if (!submodule.upstream) lines.push('No upstream to compare against');
@@ -461,23 +469,35 @@ function submoduleSyncSummary(submodule: NonNullable<ClosePreview['submodules']>
   return lines.join('\n');
 }
 
-function hostLinkBadge(status: FederationHost['status']): HostLink {
+function hostLinkStatus(status: FederationHost['status'], local: boolean): HostLink {
+  if (local) return { tone: 'link-online', title: 'Local — the Tandem daemon serving this page' };
   switch (status) {
     case 'connected':
-      return { label: 'online', tone: 'link-online', title: 'Connected — this host is reachable and its sessions are live' };
+      return { tone: 'link-online', title: 'Online — this host is reachable and its sessions are live' };
     case 'pending':
-      return { label: 'pending', tone: 'link-pending', title: 'Awaiting approval — this host has requested to join' };
+      return { tone: 'link-pending', title: 'Pending — this host has requested to join and awaits approval' };
     case 'rejected':
-      return { label: 'rejected', tone: 'link-rejected', title: 'Rejected — this host was refused' };
+      return { tone: 'link-rejected', title: 'Rejected — this host was refused' };
     default:
-      return { label: 'offline', tone: 'link-offline', title: 'Disconnected — showing the last state this host reported' };
+      return { tone: 'link-offline', title: 'Offline — showing the last state this host reported' };
   }
 }
 
-type HostLink = { label: string; tone: string; title: string };
-type HostGroup = { hostId: string; label: string; link: HostLink | null; ids: string[] };
+type HostLink = { tone: string; title: string };
+type HostGroup = { hostId: string; label: string; local: boolean; link: HostLink | null; ids: string[] };
 
-function HostHeader({ group, onSpawn, onDetails, onMetrics }: { group: HostGroup; onSpawn: () => void; onDetails: () => void; onMetrics: () => void }) {
+const COLLAPSED_HOSTS_KEY = 'tandem.sessionsRail.collapsedHosts';
+
+function loadCollapsedHosts(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(COLLAPSED_HOSTS_KEY) ?? '[]');
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function HostHeader({ group, collapsed, onToggle, onSpawn, onDetails, onMetrics }: { group: HostGroup; collapsed: boolean; onToggle: () => void; onSpawn: () => void; onDetails: () => void; onMetrics: () => void }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (!menu) return;
@@ -490,21 +510,30 @@ function HostHeader({ group, onSpawn, onDetails, onMetrics }: { group: HostGroup
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [menu]);
+  const count = group.ids.length;
   return (
     <div
-      className="session-host-divider"
+      className={`session-host-divider${collapsed ? ' collapsed' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={!collapsed}
+      title={collapsed ? 'Expand host' : 'Collapse host'}
+      onClick={onToggle}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onToggle();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ x: event.clientX, y: event.clientY });
       }}
     >
-      <span>{group.label}</span>
-      {group.link && (
-        <span className={`session-host-link ${group.link.tone}`} title={group.link.title}>
-          <span className="session-host-link-dot" />
-          {group.link.label}
-        </span>
-      )}
+      <span className="session-host-chevron" aria-hidden="true">▾</span>
+      {group.link && <span className={`session-host-dot ${group.link.tone}`} title={group.link.title} aria-label={group.link.title} />}
+      <span className="session-host-name">{group.label}</span>
+      {group.local && <span className="session-host-local">(local)</span>}
+      <span className="session-host-count" title={`${count} session${count === 1 ? '' : 's'}`}>{count}</span>
       {menu && createPortal(
         <div
           className="session-context-menu"
@@ -556,6 +585,16 @@ function PendingSpawnRow({ spawn, active, onClick, onDismiss }: { spawn: Pending
   );
 }
 
+// The local host is named "This host" unless the operator renamed it; show
+// the machine's hostname instead of that generic default.
+function localHostLabel(host: FederationHost | undefined): string {
+  if (host?.name && host.name !== 'This host') return host.name;
+  return host?.hostname || 'This host';
+}
+
+// A remote host's rows survive its tunnel dropping (the parent keeps the last
+// snapshot), so each divider carries a status dot saying whether what is
+// listed under it is live or the last thing that host reported.
 function groupedAgentRows(order: string[], agents: Record<string, SessionView>, hosts: FederationHost[]): HostGroup[] {
   const groups = new Map<string, HostGroup>();
   for (const id of order) {
@@ -564,8 +603,8 @@ function groupedAgentRows(order: string[], agents: Record<string, SessionView>, 
     const hostId = agent.hostId ?? LOCAL_HOST_ID;
     const configured = hosts.find((host) => host.id === hostId);
     const local = configured?.local || hostId === LOCAL_HOST_ID;
-    const label = local ? 'This host' : agent.hostName || configured?.name || hostId;
-    const group = groups.get(hostId) ?? { hostId, label, link: local ? null : hostLinkBadge(configured?.status), ids: [] };
+    const label = local ? localHostLabel(configured) : agent.hostName || configured?.name || hostId;
+    const group = groups.get(hostId) ?? { hostId, label, local, link: hostLinkStatus(configured?.status, local), ids: [] };
     group.ids.push(id);
     groups.set(hostId, group);
   }

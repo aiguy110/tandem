@@ -245,6 +245,8 @@ export interface RepoInfo {
 export interface FederationHost {
   id: string;
   name?: string;
+  // The machine's OS hostname; reported only for the local host.
+  hostname?: string;
   // The immediate upstream. A missing parent on a non-local host is
   // interpreted as the local Tandem instance for compatibility with the
   // original one-hop federation response.

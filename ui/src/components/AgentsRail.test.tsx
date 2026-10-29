@@ -341,3 +341,35 @@ describe('SessionsRail agent messaging', () => {
     expect(view.container.querySelector('.session-ask-badge')).toBeNull();
   });
 });
+
+describe('SessionsRail host headers', () => {
+  afterEach(() => localStorage.clear());
+
+  it('labels the local host by hostname, counts sessions, and collapses on click', () => {
+    const remote = session();
+    const local = { ...session(), id: 'local-1', name: 'Local agent', hostId: LOCAL_HOST_ID, hostName: undefined };
+    useStore.setState({
+      sessions: { [remote.id]: remote, [local.id]: local },
+      order: [local.id, remote.id],
+      focusedId: null,
+      hosts: [
+        { id: LOCAL_HOST_ID, name: 'This host', hostname: 'bifrost', status: 'connected', local: true },
+        { id: 'worker', name: 'Worker', status: 'offline' },
+      ],
+    });
+    const view = render(<SessionsRail />);
+    const headers = view.container.querySelectorAll('.session-host-divider');
+    expect(headers[0].querySelector('.session-host-name')?.textContent).toBe('bifrost');
+    expect(headers[0].querySelector('.session-host-local')?.textContent).toBe('(local)');
+    expect(headers[0].querySelector('.session-host-count')?.textContent).toBe('1');
+    expect(headers[1].querySelector('.session-host-local')).toBeNull();
+    expect(headers[1].querySelector('.session-host-dot')?.getAttribute('title')).toMatch(/^Offline/);
+
+    expect(screen.queryByText('Remote agent')).not.toBeNull();
+    fireEvent.click(headers[1]);
+    expect(screen.queryByText('Remote agent')).toBeNull();
+    expect(headers[1].getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(headers[1]);
+    expect(screen.queryByText('Remote agent')).not.toBeNull();
+  });
+});
