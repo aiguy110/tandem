@@ -1191,6 +1191,7 @@ body.dock-resizing .app { transition: none; }
 .metric-heading { display: flex; justify-content: space-between; font: var(--fs-sm) var(--font-mono); }
 .metric-detail { margin: 4px 0 8px; color: var(--text-faint); font: var(--fs-xs) var(--font-mono); }
 .metric-chart { display: block; width: 100%; height: 90px; border-bottom: 1px solid var(--border); }
+.metric-axis { display: flex; justify-content: space-between; padding-top: 3px; font-size: var(--fs-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .host-metrics-empty { padding: 40px 16px; text-align: center; color: var(--text-faint); }
 .host-metrics-foot { justify-content: space-between; }
 .host-metrics-foot button { flex: 0 0 auto; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font-size: var(--fs-xs); cursor: pointer; }
