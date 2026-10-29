@@ -4,7 +4,7 @@ import { LOCAL_HOST_ID, useStore } from '../store';
 import { fuzzyFilter, fuzzyFilterFields } from '../fuzzy';
 import type { BrowserSnapshot, FederationHost, GitRefInfo, Profile, RepoInfo, SpawnOptions, SpawnSpec, ToolStatus, WireEvent } from '../wire';
 import { usePresence, useValuePresence } from '../transitions';
-import { ModelPicker } from './ModelPicker';
+import { ModelPicker, cycleSelectOnArrow } from './ModelPicker';
 
 const RECENT_DIRS_KEY = 'tandem.recentDirs';
 const RECENT_DIRS_MAX = 3;
@@ -872,7 +872,7 @@ export function SpawnPalette() {
             {adapter === 'acp' && (
               <>
                 <label>Model<ModelPicker value={model} options={spawnOptions?.configOptions.find((o) => o.category === 'model')?.options ?? []} onChange={setModel} disabled={optionsBusy || !spawnOptions} defaultLabel="Agent default" /></label>
-                <label>Effort<select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.configOptions.find((o) => o.category === 'thought_level')?.options?.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</select></label>
+                <label>Effort<select value={effort} onChange={(e) => setEffort(e.target.value)} onKeyDown={(e) => cycleSelectOnArrow(e, setEffort)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.configOptions.find((o) => o.category === 'thought_level')?.options?.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}</select></label>
                 <label>Permissions<select value={permission} onChange={(e) => setPermission(e.target.value)} disabled={optionsBusy || !spawnOptions}><option value="">Agent default</option>{spawnOptions?.modes?.availableModes.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
                 {(optionsBusy || optionsError) && <div style={{ gridColumn: '1 / -1' }} className={optionsError ? 'modal-err' : 'sub'}>{optionsError || `Querying ${agent} ACP options…`}</div>}
               </>

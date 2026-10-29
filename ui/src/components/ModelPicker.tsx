@@ -1,4 +1,19 @@
+import type React from 'react';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+
+// Up/Down on a focused select steps through its options (wrapping) and
+// commits immediately, matching the ModelPicker. Browsers disagree on what
+// arrow keys do to a closed <select> (macOS opens the popup), so do it here.
+export function cycleSelectOnArrow(event: React.KeyboardEvent<HTMLSelectElement>, onChange: (value: string) => void) {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  const select = event.currentTarget;
+  if (select.options.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const delta = event.key === 'ArrowDown' ? 1 : -1;
+  const next = (select.selectedIndex + delta + select.options.length) % select.options.length;
+  onChange(select.options[next].value);
+}
 
 export interface ModelOption {
   value: string;
@@ -85,7 +100,21 @@ export function ModelPicker({
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [options, query]);
-  const first = grouped[0]?.[1][0];
+  const matches = useMemo(() => grouped.flatMap(([, items]) => items), [grouped]);
+  const [active, setActive] = useState(0);
+  const menu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setActive(0), [query, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    menu.current?.querySelector('.model-picker-active')?.scrollIntoView?.({ block: 'nearest' });
+  }, [active, open]);
+
+  const move = (delta: number) => {
+    if (matches.length === 0) return;
+    setActive((index) => (index + delta + matches.length) % matches.length);
+  };
 
   const choose = (next: string) => {
     onChange(next);
@@ -111,12 +140,16 @@ export function ModelPicker({
         onChange={(event) => { setOpen(true); setQuery(event.target.value); }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') { setOpen(false); input.current?.blur(); }
-          if (event.key === 'Enter' && first) { event.preventDefault(); choose(first.value); }
-          if (event.key === 'ArrowDown') setOpen(true);
+          if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active].value); }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!open) setOpen(true);
+            else move(event.key === 'ArrowDown' ? 1 : -1);
+          }
         }}
       />
       {open && (
-        <div id={`${id}-models`} className={`model-picker-menu${placement.up ? ' model-picker-menu-up' : ''}`} style={{ maxHeight: placement.maxHeight }} role="listbox" aria-label="Available models">
+        <div id={`${id}-models`} className={`model-picker-menu${placement.up ? ' model-picker-menu-up' : ''}`} style={{ maxHeight: placement.maxHeight }} ref={menu} role="listbox" aria-label="Available models">
           {defaultLabel && (
             <button type="button" role="option" aria-selected={!value} className="model-picker-option model-picker-default" onMouseDown={(event) => event.preventDefault()} onClick={() => choose('')}>
               {defaultLabel}
@@ -130,13 +163,13 @@ export function ModelPicker({
                   type="button"
                   role="option"
                   aria-selected={option.value === value}
-                  className="model-picker-option"
+                  className={`model-picker-option${option === matches[active] ? ' model-picker-active' : ''}`}
                   key={option.value}
                   title={option.description ?? option.name}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => choose(option.value)}
                 >
-                  <span>{displayName(option)}</span>
+                  <span className="model-picker-name">{displayName(option)}</span>
                   {option.description && <small>{option.description}</small>}
                 </button>
               ))}

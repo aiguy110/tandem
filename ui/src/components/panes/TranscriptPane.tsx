@@ -15,7 +15,7 @@ import { usePresence, useUpdateFlash } from '../../transitions';
 import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition, renderClip, restoreLocalPosition, seedDurations, setPlaylist, useEngineState } from '../../audio/engine';
 import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
 import { InlineAudioBar } from '../audio/InlineAudioBar';
-import { ModelPicker } from '../ModelPicker';
+import { ModelPicker, cycleSelectOnArrow } from '../ModelPicker';
 
 // The Transcript pane renders the normalized SessionEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -1884,6 +1884,7 @@ function SessionConfigBar({ sessionId, sessionConfig, usage }: { sessionId: stri
           <select
             value={String(thoughtLevelOpt.currentValue)}
             onChange={(e) => setConfigOption(sessionId, thoughtLevelOpt.id, e.target.value)}
+            onKeyDown={(e) => cycleSelectOnArrow(e, (value) => setConfigOption(sessionId, thoughtLevelOpt.id, value))}
           >
             {(thoughtLevelOpt.options ?? []).map((o) => (
               <option key={o.value} value={o.value}>

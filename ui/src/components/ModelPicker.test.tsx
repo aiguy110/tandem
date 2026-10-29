@@ -36,6 +36,23 @@ describe('ModelPicker', () => {
     expect(onChange).toHaveBeenCalledWith('');
   });
 
+  it('cycles through filtered models with arrow keys', () => {
+    const onChange = vi.fn();
+    render(<ModelPicker value="" options={options} onChange={onChange} />);
+    const input = screen.getByRole('combobox', { name: 'Model' });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'openrouter' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledWith('openrouter/moonshotai/kimi-k2.5');
+
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onChange).toHaveBeenLastCalledWith('openrouter/qwen/qwen3-coder-next');
+  });
+
   it('opens above the input when there is no room below', () => {
     render(<ModelPicker value="" options={options} onChange={vi.fn()} />);
     const input = screen.getByRole('combobox', { name: 'Model' });
