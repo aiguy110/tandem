@@ -3,6 +3,8 @@ package agentupdates
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,12 +37,27 @@ type Options struct {
 	// Sync adopts a fork tree published on the fork branch, or retires the fork
 	// when the branch says so. Defaults to runtimeinstall.SyncBlessed.
 	Sync func(context.Context, config.Config, string, io.Writer) (runtimeinstall.SyncResult, error)
+	// RebaseStatePath persists which session was spawned to rebase each fork,
+	// so a daemon restart does not re-offer a rebase an agent is already doing.
+	// Empty keeps the record in memory only.
+	RebaseStatePath string
+	// SessionOpen reports whether a session still exists and is not closed. A
+	// recorded rebase suppresses its offer only while its session is open; nil
+	// treats every recorded session as open.
+	SessionOpen func(id string) bool
 }
 type Service struct {
 	opts      Options
 	mu        sync.Mutex
 	available map[string]runtimeinstall.UpdateInfo
 	dismissed map[string]string
+	rebases   map[string]rebaseRecord
+}
+
+// rebaseRecord is a rebase agent spawned for one offer.
+type rebaseRecord struct {
+	Offer   string `json:"offer"`
+	Session string `json:"session"`
 }
 
 func (s *Service) Catalog(ctx context.Context) ([]runtimeinstall.AdapterStatus, error) {
@@ -81,7 +98,61 @@ func NewService(o Options) *Service {
 	if o.Sync == nil {
 		o.Sync = runtimeinstall.SyncBlessed
 	}
-	return &Service{opts: o, available: map[string]runtimeinstall.UpdateInfo{}, dismissed: map[string]string{}}
+	return &Service{opts: o, available: map[string]runtimeinstall.UpdateInfo{}, dismissed: map[string]string{}, rebases: loadRebases(o.RebaseStatePath)}
+}
+
+func loadRebases(path string) map[string]rebaseRecord {
+	out := map[string]rebaseRecord{}
+	if path == "" {
+		return out
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("could not read ACP fork rebase state", "path", path, "error", err)
+		}
+		return out
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		slog.Warn("ignoring unreadable ACP fork rebase state", "path", path, "error", err)
+		return map[string]rebaseRecord{}
+	}
+	return out
+}
+
+// saveRebasesLocked writes the rebase records; s.mu must be held.
+func (s *Service) saveRebasesLocked() {
+	path := s.opts.RebaseStatePath
+	if path == "" {
+		return
+	}
+	data, err := json.MarshalIndent(s.rebases, "", "  ")
+	if err == nil {
+		tmp := path + ".tmp"
+		if err = os.WriteFile(tmp, data, 0o600); err == nil {
+			err = os.Rename(tmp, path)
+		}
+	}
+	if err != nil {
+		slog.Error("could not persist ACP fork rebase state", "path", path, "error", err)
+	}
+}
+
+// rebaseInProgressLocked returns the session already rebasing u's fork for
+// this offer, forgetting records whose offer moved on or whose session closed.
+// s.mu must be held.
+func (s *Service) rebaseInProgressLocked(u runtimeinstall.UpdateInfo) (string, bool) {
+	rec, ok := s.rebases[u.Agent]
+	if !ok {
+		return "", false
+	}
+	if rec.Offer == u.OfferKey() && (s.opts.SessionOpen == nil || s.opts.SessionOpen(rec.Session)) {
+		return rec.Session, true
+	}
+	slog.Info("forgetting finished ACP fork rebase", "agent", u.Agent, "session", rec.Session, "offer", rec.Offer, "current_offer", u.OfferKey())
+	delete(s.rebases, u.Agent)
+	s.saveRebasesLocked()
+	return "", false
 }
 func (s *Service) Start(ctx context.Context) {
 	go func() {
@@ -130,6 +201,11 @@ func (s *Service) poll(ctx context.Context) {
 			continue
 		}
 		if u.Kind == runtimeinstall.UpdateKindRebase && u.Fork != nil {
+			if session, busy := s.rebaseInProgressLocked(u); busy {
+				slog.Info("ACP fork is behind upstream; rebase agent already working", "agent", u.Agent, "session", session, "upstream_version", u.LatestVersion)
+				s.opts.Center.Remove(Prefix + u.Agent)
+				continue
+			}
 			slog.Info("ACP fork is behind upstream", "agent", u.Agent, "fork_rebased_onto", u.CurrentVersion, "upstream_version", u.LatestVersion, "fork_repo", u.Fork.Repo)
 			s.opts.Center.Upsert(s.rebaseNotification(u))
 			continue
@@ -297,6 +373,8 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		// the entry suppressed for this release so it does not nag mid-rebase.
 		s.mu.Lock()
 		s.dismissed[agent] = u.OfferKey()
+		s.rebases[agent] = rebaseRecord{Offer: u.OfferKey(), Session: sessionID}
+		s.saveRebasesLocked()
 		s.mu.Unlock()
 		s.opts.Center.Remove(id)
 		slog.Info("ACP fork rebase agent spawned", "agent", agent, "session", sessionID, "upstream_version", u.LatestVersion)

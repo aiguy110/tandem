@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -109,6 +110,41 @@ func TestForkRebaseOffersSpawnRatherThanInstall(t *testing.T) {
 	s.poll(context.Background())
 	if len(center.List()) != 0 {
 		t.Fatalf("re-raised while the rebase agent is working: %#v", center.List())
+	}
+}
+
+// A daemon restart must not re-offer a rebase an agent is still working on,
+// and closing that agent's session re-offers it.
+func TestForkRebaseInProgressSurvivesRestart(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "rebases.json")
+	open := map[string]bool{}
+	newService := func(center *notifications.Center) *Service {
+		return NewService(Options{Center: center, RebaseStatePath: state,
+			SessionOpen: func(id string) bool { return open[id] },
+			Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+				return []runtimeinstall.UpdateInfo{rebaseUpdate()}, nil
+			},
+			SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+				open["session-1"] = true
+				return "session-1", nil
+			}})
+	}
+	center := notifications.New()
+	s := newService(center)
+	s.poll(context.Background())
+	if _, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := notifications.New()
+	s = newService(restarted)
+	s.poll(context.Background())
+	if len(restarted.List()) != 0 {
+		t.Fatalf("re-offered after restart while the rebase agent is open: %#v", restarted.List())
+	}
+	open["session-1"] = false
+	s.poll(context.Background())
+	if items := restarted.List(); len(items) != 1 || items[0].Actions[0].ID != "rebase" {
+		t.Fatalf("not re-offered after the rebase session closed: %#v", items)
 	}
 }
 

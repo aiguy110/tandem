@@ -488,7 +488,12 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 			return session.ID, nil
 		}
 	}
-	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout, SpawnRebase: spawnRebase})
+	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout, SpawnRebase: spawnRebase,
+		RebaseStatePath: filepath.Join(cfg.Home, "acp-fork-rebases.json"),
+		SessionOpen: func(id string) bool {
+			rec, err := db.Session(id)
+			return err == nil && rec != nil && rec.ClosedAt == nil
+		}})
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/federation/") {
 			federationService.ServeHTTP(w, r)
