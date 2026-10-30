@@ -488,7 +488,7 @@ func (s *Service) linkOutcomeEnvelope(from, to Address, approved bool, note stri
 		event = EventLinkApproved
 		// The sender is named by the receiving host (the prompt's from
 		// reference), not here: host names are viewer-relative.
-		body = "Your link request was approved. You can now message this agent with messages_send or messages_ask."
+		body = "Your link request was approved. You and this agent can now message each other with messages_send."
 	} else if body == "" {
 		body = "The link request was denied."
 	} else {

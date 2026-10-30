@@ -33,7 +33,10 @@ func (s *Service) liveSession(sessionID string) (*session.Session, error) {
 	return sess, nil
 }
 
-// Send sends a one-way message from a local agent.
+// Send sends a message from a local agent. While the recipient has an ask
+// open with the sender, the message answers it: it goes as a reply, which
+// needs no link of its own (so it also reaches hosts that grant no reverse
+// link). Any further message is an ordinary send over the link.
 func (s *Service) Send(ctx context.Context, sessionID, to, body, threadID string) (SendResult, error) {
 	sess, err := s.liveSession(sessionID)
 	if err != nil {
@@ -42,6 +45,18 @@ func (s *Service) Send(ctx context.Context, sessionID, to, body, threadID string
 	dest, err := s.resolve(ctx, sess, to)
 	if err != nil {
 		return SendResult{}, err
+	}
+	if ob := s.openObligationFrom(sess.ID, dest); ob != nil {
+		res, err := s.answer(ctx, sessionID, ob.RequestID, KindReply, body)
+		var rej *Rejection
+		if err == nil || !errors.As(err, &rej) || rej.Code != ErrUnknownRequest {
+			if err == nil {
+				s.closeObligationsFrom(sess.ID, dest)
+			}
+			return res, err
+		}
+		// The asker stopped waiting (timed out); deliver it as a plain message.
+		slog.Info("agent answer to a closed ask; sending as a message instead", "session_id", sess.ID, "request_id", ob.RequestID)
 	}
 	hop := 0
 	if threadID == "" {
@@ -56,12 +71,76 @@ func (s *Service) Send(ctx context.Context, sessionID, to, body, threadID string
 	if err != nil {
 		return SendResult{}, err
 	}
+	s.closeObligationsFrom(sess.ID, dest)
 	return SendResult{Ref: s.Ref(dest), ID: res.ID, ThreadID: threadID, Status: res.Status}, nil
 }
 
-// Ask sends a question and returns immediately; the answer arrives later as
-// an ordinary inbound message. timeoutMinutes <= 0 means the default.
+// SendMessage is the agent-facing messages_send: Send, or with expectsReply
+// an ask (tracked as waitingOn, with a timeout). An ask needs a link to the
+// recipient; without one it still answers an ask the recipient has open,
+// as a reply.
+func (s *Service) SendMessage(ctx context.Context, sessionID, to, body, threadID string, expectsReply bool, timeoutMinutes int) (SendResult, error) {
+	if !expectsReply {
+		return s.Send(ctx, sessionID, to, body, threadID)
+	}
+	res, err := s.AskInThread(ctx, sessionID, to, body, threadID, timeoutMinutes)
+	var rej *Rejection
+	if err == nil || !errors.As(err, &rej) || rej.Code != ErrNoLink {
+		return res, err
+	}
+	sess, serr := s.liveSession(sessionID)
+	if serr != nil {
+		return SendResult{}, err
+	}
+	dest, rerr := s.resolve(ctx, sess, to)
+	if rerr != nil || s.openObligationFrom(sess.ID, dest) == nil {
+		return SendResult{}, err
+	}
+	slog.Info("agent ask without a link answers an open ask instead", "session_id", sess.ID, "to", dest.String())
+	return s.Send(ctx, sessionID, to, body, threadID)
+}
+
+// openObligationFrom returns the oldest ask peer has open with a local
+// session, or nil.
+func (s *Service) openObligationFrom(sessionID string, peer Address) *store.AgentMsgObligation {
+	obs, err := s.st.OpenAgentMsgObligations(sessionID)
+	if err != nil {
+		slog.Warn("agent obligation lookup failed", "session_id", sessionID, "error", err)
+		return nil
+	}
+	for _, ob := range obs {
+		if ob.AskerHost == peer.Host && ob.AskerAgent == peer.Agent {
+			return &ob
+		}
+	}
+	return nil
+}
+
+// closeObligationsFrom closes every ask peer has open with a local session:
+// any message to the asker answers it (the asker's host likewise stops
+// waiting on any message from this agent).
+func (s *Service) closeObligationsFrom(sessionID string, peer Address) {
+	obs, err := s.st.OpenAgentMsgObligations(sessionID)
+	if err != nil {
+		slog.Warn("agent obligation lookup failed", "session_id", sessionID, "error", err)
+		return
+	}
+	for _, ob := range obs {
+		if ob.AskerHost == peer.Host && ob.AskerAgent == peer.Agent {
+			s.closeObligation(ob.RequestID)
+		}
+	}
+}
+
+// Ask sends a message that expects an answer and returns immediately; the
+// answer arrives later as an ordinary inbound message. timeoutMinutes <= 0
+// means the default.
 func (s *Service) Ask(ctx context.Context, sessionID, to, body string, timeoutMinutes int) (SendResult, error) {
+	return s.AskInThread(ctx, sessionID, to, body, "", timeoutMinutes)
+}
+
+// AskInThread is Ask continuing threadID ("" starts a new thread).
+func (s *Service) AskInThread(ctx context.Context, sessionID, to, body, threadID string, timeoutMinutes int) (SendResult, error) {
 	sess, err := s.liveSession(sessionID)
 	if err != nil {
 		return SendResult{}, err
@@ -77,11 +156,20 @@ func (s *Service) Ask(ctx context.Context, sessionID, to, body string, timeoutMi
 	if timeoutSec > MaxAskTimeoutSec {
 		timeoutSec = MaxAskTimeoutSec
 	}
-	env := Envelope{ThreadID: newID("thr_"), Kind: KindAsk, RequestID: newID("req_"), To: dest, Body: body, TimeoutSec: timeoutSec}
+	hop := 0
+	if threadID == "" {
+		threadID = newID("thr_")
+	} else if known, ok, terr := s.st.AgentMsgThreadHop(sess.ID, threadID); terr != nil {
+		slog.Warn("agent thread hop lookup failed", "session_id", sess.ID, "thread_id", threadID, "error", terr)
+	} else if ok {
+		hop = known + 1
+	}
+	env := Envelope{ThreadID: threadID, Kind: KindAsk, RequestID: newID("req_"), To: dest, Body: body, Hop: hop, TimeoutSec: timeoutSec}
 	res, err := s.sendFrom(ctx, sess, env)
 	if err != nil {
 		return SendResult{}, err
 	}
+	s.closeObligationsFrom(sess.ID, dest)
 	return SendResult{Ref: s.Ref(dest), ID: res.ID, ThreadID: env.ThreadID, RequestID: env.RequestID, Status: res.Status}, nil
 }
 
@@ -267,6 +355,18 @@ func holdForPull(kind string) bool {
 	return kind == KindReply || kind == KindDecline || kind == KindSystem
 }
 
+// linkedBack reports whether env (a send or ask) goes to an agent that holds
+// a link to its sender here. Links are granted in both directions, so the
+// recipient's host holds the reverse link and pulls the envelope even when
+// this host has no federation rights there.
+func (s *Service) linkedBack(env Envelope) bool {
+	if env.Kind != KindSend && env.Kind != KindAsk {
+		return false
+	}
+	link, err := s.st.AgentMsgLink(env.To.Host, env.To.Agent, env.From.Agent)
+	return err == nil && link != nil
+}
+
 // attempt tries to deliver one outbox row to its remote host. A transport
 // failure leaves it pending (to be retried or pulled); a policy rejection is
 // terminal, except that a federation access denial of a reply, decline or
@@ -299,7 +399,7 @@ func (s *Service) attempt(ctx context.Context, row store.AgentMsgOutbox, env Env
 		return hold(err.Error())
 	}
 	if !res.OK() {
-		if fedDenied && holdForPull(env.Kind) {
+		if fedDenied && (holdForPull(env.Kind) || s.linkedBack(env)) {
 			return hold(firstNonEmpty(res.Message, res.Error))
 		}
 		if uerr := s.st.UpdateAgentMsgOutbox(env.ID, "failed", "", res.Error, row.Attempts+1, ms(now)); uerr != nil {

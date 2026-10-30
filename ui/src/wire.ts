@@ -88,7 +88,7 @@ export interface AgentLink {
   budgetPerHour: number;
   maxHops: number;
   paused: boolean;
-  source: 'user' | 'approval';
+  source: 'user' | 'approval' | 'reciprocal';
   createdAt: string;
   usedLastHour: number;
 }

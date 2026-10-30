@@ -31,7 +31,10 @@ const (
 // Limits and defaults.
 const (
 	DefaultBudgetPerHour = 60
-	DefaultMaxHops       = 20
+	DefaultMaxHops       = 200
+	// legacyDefaultMaxHops was DefaultMaxHops when a link allowed one
+	// answer per question; approved links still at it are raised on start.
+	legacyDefaultMaxHops = 20
 	DefaultAskTimeoutSec = 1800
 	MaxAskTimeoutSec     = 86400
 	MaxBodyBytes         = 64 << 10
@@ -64,6 +67,9 @@ const (
 const (
 	SourceUser     = "user"
 	SourceApproval = "approval"
+	// SourceReciprocal: created on the requester's host when its own link
+	// request was approved, so the conversation runs both ways.
+	SourceReciprocal = "reciprocal"
 )
 
 // Delivery result statuses and error codes. A Result carries either one of

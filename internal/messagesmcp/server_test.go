@@ -42,7 +42,7 @@ func TestToolsListDeclaresEverySpecifiedTool(t *testing.T) {
 			names = append(names, tool.(map[string]any)["name"].(string))
 		}
 	}
-	want := []string{ToolDirectory, ToolSend, ToolAsk, ToolReply, ToolDecline, ToolRequestLink, ToolSetCard}
+	want := []string{ToolDirectory, ToolSend, ToolRequestLink, ToolSetCard}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}

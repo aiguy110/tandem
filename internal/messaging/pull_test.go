@@ -136,7 +136,9 @@ func TestChildResponsesReachParentByPull(t *testing.T) {
 	_ = ask
 }
 
-// Responses are held for pull when a push is denied; a send or ask is not.
+// Responses are held for pull when a push is denied; a send or ask is not,
+// unless the recipient holds a link to the sender (see
+// TestSendOverReverseLinkIsHeldAndPulled).
 func TestAccessDeniedPushIsHeldForPullOnlyForResponses(t *testing.T) {
 	net := newNet()
 	a := newTestHost(t, "hostA", hostOpts{net: net})
@@ -154,8 +156,10 @@ func TestAccessDeniedPushIsHeldForPullOnlyForResponses(t *testing.T) {
 	eventually(t, "bob prompted", func() bool { return len(bobAd.promptTexts()) == 1 })
 	net.setLevel("hostB", "hostA", federation.LevelNone)
 
-	// A send is a policy rejection: terminal, as before.
-	if _, err := b.svc.Send(ctx, "bob", "hostA~alice", "hello", ""); rejectionCode(err) != ErrAccessDenied {
+	// A send to an agent with no link to bob here is a policy rejection:
+	// terminal, as before.
+	a.addSession("carol", "carol")
+	if _, err := b.svc.Send(ctx, "bob", "hostA~carol", "hello", ""); rejectionCode(err) != ErrAccessDenied {
 		t.Fatalf("send: %v", err)
 	}
 	if rows, _ := b.db.PendingAgentMsgOutbox(); len(rows) != 0 {
@@ -189,7 +193,11 @@ func TestAccessDeniedPushIsHeldForPullOnlyForResponses(t *testing.T) {
 	if n, err := b.svc.HandlePullAck("hostA", []string{reply.ID}, nil); err != nil || n != 0 {
 		t.Fatalf("repeated ack = %d, %v", n, err)
 	}
-	// Once nothing is outstanding, nothing is polled.
+	// Once nothing is outstanding, nothing is polled. A host whose agents
+	// hold links here is outstanding (it may hold their sends), so drop it.
+	if err := a.svc.DeleteLink("alice", b.addr("bob")); err != nil {
+		t.Fatal(err)
+	}
 	before := countCalls(net, "agent_message_pull")
 	a.svc.pullOutstanding(ctx)
 	if countCalls(net, "agent_message_pull") != before {
@@ -204,10 +212,15 @@ func TestPulledSendNeedsMessageAccessOnThePuller(t *testing.T) {
 	_, aliceAd := a.addSession("alice", "alice")
 	b.addSession("bob", "bob")
 	ctx := context.Background()
-	a.link(b.addr("bob"), "alice")
 	b.link(a.addr("alice"), "bob")
 	// A has an outstanding ask to B, so it polls B; B cannot reach A at all.
-	if _, err := a.svc.Ask(ctx, "alice", "hostB~bob", "q?", 0); err != nil {
+	ask, err := a.svc.Ask(ctx, "alice", "hostB~bob", "q?", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bob's sends below are plain sends, not the answer to that ask.
+	eventually(t, "ask delivered", func() bool { ob, _ := b.db.AgentMsgObligation(ask.RequestID); return ob != nil })
+	if _, err := b.db.CloseAgentMsgObligation(ask.RequestID, 0); err != nil {
 		t.Fatal(err)
 	}
 	net.setOffline("hostA", true)
@@ -228,6 +241,7 @@ func TestPulledSendNeedsMessageAccessOnThePuller(t *testing.T) {
 	}
 
 	// With message access granted, the same kind of send is accepted.
+	a.link(b.addr("bob"), "alice")
 	net.setLevel("hostB", "hostA", federation.LevelMessage)
 	net.setOffline("hostA", true)
 	sent2, err := b.svc.Send(ctx, "bob", "hostA~alice", "welcome", "")
@@ -383,5 +397,39 @@ func TestRequestLinkWaitTimesOutPendingThenDeliversLater(t *testing.T) {
 	}
 	if len(a.svc.linkWaits) != 0 {
 		t.Fatalf("waiter leaked after cancel: %v", a.svc.linkWaits)
+	}
+}
+
+// Approved links run both ways, so the asked agent can keep talking even when
+// its host has no federation rights on the asker's: its sends wait for pull.
+func TestSendOverReverseLinkIsHeldAndPulled(t *testing.T) {
+	net := newNet()
+	a := newTestHost(t, "hostA", hostOpts{net: net})
+	b := newTestHost(t, "hostB", hostOpts{net: net, clock: a.clock})
+	_, aliceAd := a.addSession("alice", "alice")
+	_, bobAd := b.addSession("bob", "bob")
+	ctx := context.Background()
+	b.link(a.addr("alice"), "bob")
+	a.link(b.addr("bob"), "alice") // the reciprocal link alice's host holds
+	net.setLevel("hostB", "hostA", federation.LevelNone)
+
+	if _, err := a.svc.Ask(ctx, "alice", "hostB~bob", "q?", 0); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob prompted", func() bool { return len(bobAd.promptTexts()) == 1 })
+	for _, body := range []string{"working on it", "half done", "all done"} {
+		res, err := b.svc.Send(ctx, "bob", "hostA~alice", body, "")
+		if err != nil || res.Status != StatusPending {
+			t.Fatalf("send %q = %+v, %v", body, res, err)
+		}
+	}
+	a.svc.pullOutstanding(ctx)
+	eventually(t, "alice receives every message", func() bool {
+		return sawText(aliceAd, "working on it") && sawText(aliceAd, "half done") && sawText(aliceAd, "all done")
+	})
+	// The ask closed with the first answer; alice keeps polling bob's host
+	// because of the link, which picks up the follow-ups.
+	if waiting, _ := a.svc.SummaryState("alice"); len(waiting) != 0 {
+		t.Fatalf("waitingOn = %+v", waiting)
 	}
 }

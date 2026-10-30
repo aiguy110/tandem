@@ -173,6 +173,11 @@ func (s *Service) Start(ctx context.Context) {
 		})
 		go func() { <-s.ctx.Done(); unsub() }()
 	}
+	if n, err := s.st.RaiseAgentMsgLinkMaxHops(SourceApproval, legacyDefaultMaxHops, DefaultMaxHops); err != nil {
+		slog.Warn("agent messaging: raising legacy link hop limits failed", "error", err)
+	} else if n > 0 {
+		slog.Info("agent messaging: raised legacy link hop limits", "links", n, "max_hops", DefaultMaxHops)
+	}
 	s.resumeLinkApprovals()
 	s.bg.Add(2)
 	go func() {
@@ -226,6 +231,7 @@ func (s *Service) loop() {
 func (s *Service) RunDue(ctx context.Context, forceOutbox bool) {
 	now := s.now()
 	s.expireRequests(ctx, now)
+	s.expireObligations(now)
 	s.expireLinkRequests(now)
 	last := time.UnixMilli(s.lastOutbox.Load())
 	if forceOutbox || now.Sub(last) >= outboxRetryInterval {

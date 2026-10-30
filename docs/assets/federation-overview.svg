@@ -196,7 +196,7 @@
   <!-- step 2: ask -->
   <circle cx="48" cy="930" r="11" fill="#2563eb"/><text x="48" y="934" text-anchor="middle" fill="#fff" class="b small">2</text>
   <path d="M135,930 L400,930" stroke="#2563eb" stroke-width="2" marker-end="url(#ahb)"/>
-  <text x="145" y="924" class="mono" fill="#2563eb">messages_ask(to, body)</text>
+  <text x="145" y="924" class="mono" fill="#2563eb">messages_send(to, body)</text>
   <text x="145" y="948" class="small sub">returns {requestId} at once; turn ends</text>
   <text x="145" y="962" class="small sub">A shows ⏳ waitingOn until reply / timeout</text>
   <rect x="415" y="938" width="170" height="44" rx="6" fill="#dbeafe" stroke="#2563eb"/>
@@ -216,7 +216,7 @@
   <!-- step 3: reply -->
   <circle cx="48" cy="1060" r="11" fill="#059669"/><text x="48" y="1064" text-anchor="middle" fill="#fff" class="b small">3</text>
   <path d="M1165,1060 L950,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
-  <text x="1000" y="1054" class="mono" fill="#059669">messages_reply(requestId)</text>
+  <text x="1000" y="1054" class="mono" fill="#059669">messages_send(to, body)</text>
   <path d="M945,1060 L410,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
   <text x="470" y="1054" class="small" fill="#059669">no link needed: accepted only if desktop has a matching open request</text>
   <path d="M405,1060 L140,1060" stroke="#059669" stroke-width="2" marker-end="url(#ahg)"/>
