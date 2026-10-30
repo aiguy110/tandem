@@ -63,6 +63,14 @@ function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
   };
 }
 
+it('deduplicates session summaries before storing rail order', () => {
+  const agent = summary();
+  __testApplyServerMsg({ t: 'agents', sessions: [agent, agent] });
+  expect(useStore.getState().order).toEqual([agent.id]);
+  __testApplyServerMsg({ t: 'agents', sessions: [agent] });
+  expect(useStore.getState().order).toEqual([agent.id]);
+});
+
 describe('federation projections', () => {
   it('keeps host-scoped directories/catalogs separate and synthesizes local compatibility', () => {
     __testApplyServerMsg({ t: 'hosts', hosts: [{ id: 'worker-1', name: 'Build host', status: 'connected' }] });

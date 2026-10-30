@@ -547,7 +547,13 @@ func (r *Registry) Summaries(ctx context.Context) []Summary {
 	// An agent still being restored is listed from its durable row so the
 	// client's list is complete while the daemon finishes relaunching it.
 	restoring := make([]restoringAgent, 0, len(r.restoring))
-	for _, pending := range r.restoring {
+	for id, pending := range r.restoring {
+		// restoreOne publishes the live session before its worker removes the
+		// restoring entry. Prefer the live summary during that overlap.
+		if r.sessions[id] != nil {
+			slog.Debug("session summary using live session during restore overlap", "session_id", id)
+			continue
+		}
 		restoring = append(restoring, pending)
 	}
 	r.mu.RUnlock()

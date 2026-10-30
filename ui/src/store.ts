@@ -648,7 +648,7 @@ function combinedCatalog(catalogs: Record<string, ResumeCatalog>): ResumeCatalog
 function rankSessions(sessions: Record<string, SessionView>, order: string[]): string[] {
   // `order` is the daemon-owned rail order (shared by every browser and
   // federation parent). Filter stale entries rather than re-sorting it.
-  return order.filter((id) => !!sessions[id]);
+  return [...new Set(order)].filter((id) => !!sessions[id]);
 }
 
 const initialTheme = (): 'dark' | 'light' => {
@@ -816,7 +816,7 @@ export const useStore = create<StoreState>((set, get, api) => {
           // any retained local session it did not report (the cleanup below
           // drops the ones with no history).
           const live = new Set(msg.sessions.map((a) => a.id));
-          const order = msg.sessions.map((a) => a.id);
+          const order = [...new Set(msg.sessions.map((a) => a.id))];
           for (const id of st.order) if (!live.has(id) && sessions[id]) order.push(id);
           applyPendingReorders(order);
           for (const s of msg.sessions) {

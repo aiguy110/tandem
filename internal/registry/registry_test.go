@@ -171,6 +171,21 @@ func TestSpawnOptionsLeavesOverriddenLaunchAlone(t *testing.T) {
 	}
 }
 
+func TestSummariesPreferLiveSessionDuringRestoreOverlap(t *testing.T) {
+	r, _, _ := setup(t, &fakeFactory{})
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.restoring[s.ID] = restoringAgent{}
+	r.mu.Unlock()
+	summaries := r.Summaries(context.Background())
+	if len(summaries) != 1 || summaries[0].ID != s.ID {
+		t.Fatalf("expected one live summary during restore overlap, got %+v", summaries)
+	}
+}
+
 func TestSummariesReportUnknownWhenGitStateIsUnavailable(t *testing.T) {
 	f := &fakeFactory{}
 	r, _, _ := setup(t, f)

@@ -5,7 +5,7 @@ import type { SessionView } from '../store';
 import { SessionsRail } from './AgentsRail';
 
 // Tests that stub store actions must not leak them into the next test.
-const realActions = { reorderAgent: useStore.getState().reorderAgent };
+const realActions = { focus: useStore.getState().focus, reorderAgent: useStore.getState().reorderAgent };
 
 afterEach(() => {
   cleanup();
@@ -350,7 +350,8 @@ describe('SessionsRail host headers', () => {
     const local = { ...session(), id: 'local-1', name: 'Local agent', hostId: LOCAL_HOST_ID, hostName: undefined };
     useStore.setState({
       sessions: { [remote.id]: remote, [local.id]: local },
-      order: [local.id, remote.id],
+      // Duplicate summaries must never produce duplicate React keys or ghost rows.
+      order: [local.id, local.id, remote.id],
       focusedId: null,
       hosts: [
         { id: LOCAL_HOST_ID, name: 'This host', hostname: 'bifrost', status: 'connected', local: true },
@@ -365,6 +366,11 @@ describe('SessionsRail host headers', () => {
     expect(headers[1].querySelector('.session-host-local')).toBeNull();
     expect(headers[1].querySelector('.session-host-dot')?.getAttribute('title')).toMatch(/^Offline/);
 
+    expect(view.container.querySelectorAll('.session-row')).toHaveLength(2);
+    fireEvent.click(screen.getByText('Local agent'));
+    expect(useStore.getState().focusedId).toBe(local.id);
+    fireEvent.click(headers[0]);
+    expect(screen.queryByText('Local agent')).toBeNull();
     expect(screen.queryByText('Remote agent')).not.toBeNull();
     fireEvent.click(headers[1]);
     expect(screen.queryByText('Remote agent')).toBeNull();
