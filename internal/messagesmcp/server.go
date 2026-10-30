@@ -17,7 +17,8 @@ import (
 	"sync"
 )
 
-// Tool names exposed to agents.
+// Tool names exposed to agents. Ask, reply and decline are no longer
+// declared but still served for agents whose tool list predates that.
 const (
 	ToolDirectory   = "messages_directory"
 	ToolSend        = "messages_send"
@@ -209,15 +210,11 @@ func toolDeclarations() []any {
 	return []any{
 		tool(ToolDirectory, "List agents you can message, on this host and on federated hosts. Each entry has a ref (e.g. @agent:bifrost/api-worker): pass it as `to` to the other tools. It also shows whether you already hold a link (canMessage). Optionally filter with a query.",
 			map[string]any{"query": str("Case-insensitive text matched against name, purpose, repo, path and host.")}),
-		tool(ToolSend, "Send a one-way message to another agent over a human-granted link. Delivered into the agent's turn (or queued). Fails with no_link if you have no link; use messages_request_link.",
-			map[string]any{"to": str(toAddr), "body": str("Message text."), "threadId": str("Continue an existing thread (optional).")}, "to", "body"),
-		tool(ToolAsk, "Ask another agent a question and return immediately. The answer arrives later as a message in your conversation; end your turn normally instead of waiting. Requires a link.",
-			map[string]any{"to": str(toAddr), "body": str("The question."), "timeoutMinutes": map[string]any{"type": "integer", "description": "Give up after this many minutes (default 30, max 1440)."}}, "to", "body"),
-		tool(ToolReply, "Answer an ask you received (a message with a request-id). Needs no link.",
-			map[string]any{"requestId": str("The request-id of the ask."), "body": str("Your answer.")}, "requestId", "body"),
-		tool(ToolDecline, "Decline an ask you received, with a reason. Needs no link.",
-			map[string]any{"requestId": str("The request-id of the ask."), "reason": str("Why you are not answering.")}, "requestId", "reason"),
-		tool(ToolRequestLink, "Ask a human to let you message another agent. The request appears in that agent's approvals. This call blocks until the human approves or denies (up to 10 minutes) and returns {status: \"approved\"|\"denied\"}; if there is still no decision it returns {status: \"pending\"} and the outcome later arrives as a message (link_approved or link_denied). Once approved you can use messages_send or messages_ask.",
+		tool(ToolSend, "Send a message to another agent over a human-granted link. It is delivered into the agent's turn (or queued) and returns immediately; replies arrive later as messages in your conversation, so end your turn normally instead of waiting. A conversation can go back and forth as many times as needed: answer a message by sending one back (pass its threadId), and send follow-ups or status updates whenever you have news. Fails with no_link if you have no link; use messages_request_link.",
+			map[string]any{"to": str(toAddr), "body": str("Message text."), "threadId": str("Continue an existing thread (optional)."),
+				"expectsReply":   map[string]any{"type": "boolean", "description": "You are waiting on an answer: it is tracked and you are told if none arrives in time (optional)."},
+				"timeoutMinutes": map[string]any{"type": "integer", "description": "With expectsReply: stop waiting after this many minutes (default 30, max 1440)."}}, "to", "body"),
+		tool(ToolRequestLink, "Ask a human to let you message another agent. The request appears in that agent's approvals. This call blocks until the human approves or denies (up to 10 minutes) and returns {status: \"approved\"|\"denied\"}; if there is still no decision it returns {status: \"pending\"} and the outcome later arrives as a message (link_approved or link_denied). Once approved, you and that agent can message each other freely with messages_send.",
 			map[string]any{"to": str(toAddr), "reason": str("Why you need to message this agent.")}, "to", "reason"),
 		tool(ToolSetCard, "Set the one-line description of your purpose shown to other agents in the directory.",
 			map[string]any{"card": str("One line, about 200 characters at most.")}, "card"),

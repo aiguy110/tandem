@@ -103,8 +103,10 @@ func (s *Service) pullLoop() {
 }
 
 // outstandingHosts lists the remote hosts this host awaits a response from: a
-// host an open ask was sent to (its reply, decline or terminal notice), or a
-// host a pending link request was sent to (its link_approved/link_denied).
+// host an open ask was sent to (its reply, decline or terminal notice), a
+// host a pending link request was sent to (its link_approved/link_denied), or
+// a host whose agents hold a link to a local agent (their messages, which
+// that host may only be able to hand over by pull).
 func (s *Service) outstandingHosts() map[string]struct{} {
 	hosts := map[string]struct{}{}
 	self := s.selfID()
@@ -124,6 +126,15 @@ func (s *Service) outstandingHosts() map[string]struct{} {
 	for _, l := range links {
 		if l.PeerHost != "" && l.PeerHost != self {
 			hosts[l.PeerHost] = struct{}{}
+		}
+	}
+	linked, err := s.st.AgentMsgLinkFromHosts()
+	if err != nil {
+		slog.Warn("agent pull: linked hosts lookup failed", "error", err)
+	}
+	for _, h := range linked {
+		if h != "" && h != self {
+			hosts[h] = struct{}{}
 		}
 	}
 	return hosts
@@ -250,15 +261,26 @@ func (s *Service) pollHost(ctx context.Context, hostID string) {
 // would be: origin is hostID's stable node ID, so the sender, reply, link and
 // kill-switch checks all apply. Federation's own access check is bypassed on
 // a pull, so a send or ask additionally needs this host's policy to grant
-// hostID message access.
+// hostID message access, or a link here granting its sender access to the
+// recipient (a human-granted, agent-level permission).
 func (s *Service) deliverPulled(ctx context.Context, hostID string, env Envelope) Result {
 	if env.Kind == KindSend || env.Kind == KindAsk {
-		if !s.mayReceiveFrom(hostID) {
+		if !s.mayReceiveFrom(hostID) && !s.hasLink(hostID, env) {
 			slog.Warn("agent pulled message rejected: host lacks message access here", "host_id", hostID, "envelope_id", env.ID, "kind", env.Kind)
 			return rejected(env.ID, ErrAccessDenied, "this host does not grant "+hostID+" message access")
 		}
 	}
 	return s.Deliver(ctx, hostID, env)
+}
+
+// hasLink reports whether a link here grants env's sender, on hostID, access
+// to its local recipient.
+func (s *Service) hasLink(hostID string, env Envelope) bool {
+	if env.From.Host != hostID {
+		return false
+	}
+	link, err := s.st.AgentMsgLink(env.From.Host, env.From.Agent, env.To.Agent)
+	return err == nil && link != nil
 }
 
 func (s *Service) mayReceiveFrom(hostID string) bool {

@@ -197,6 +197,34 @@ func (s *Store) AgentMsgLinks(toSession string) ([]AgentMsgLink, error) {
 	return out, rows.Err()
 }
 
+// AgentMsgLinkFromHosts lists the distinct sender hosts of every link.
+func (s *Store) AgentMsgLinkFromHosts() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT fromHost FROM agent_msg_links`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// RaiseAgentMsgLinkMaxHops sets maxHops to to on links of the given source
+// still at the old default from, and returns how many changed.
+func (s *Store) RaiseAgentMsgLinkMaxHops(source string, from, to int) (int64, error) {
+	res, err := s.db.Exec(`UPDATE agent_msg_links SET maxHops = ? WHERE source = ? AND maxHops = ?`, to, source, from)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // DeleteAgentMsgLink removes one link and reports whether it existed.
 func (s *Store) DeleteAgentMsgLink(toSession, fromHost, fromAgent string) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM agent_msg_links WHERE toSession = ? AND fromHost = ? AND fromAgent = ?`, toSession, fromHost, fromAgent)

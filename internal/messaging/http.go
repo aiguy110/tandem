@@ -36,6 +36,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Body           string `json:"body"`
 		ThreadID       string `json:"threadId"`
 		TimeoutMinutes int    `json:"timeoutMinutes"`
+		ExpectsReply   bool   `json:"expectsReply"`
 		RequestID      string `json:"requestId"`
 		Reason         string `json:"reason"`
 		Card           string `json:"card"`
@@ -55,7 +56,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		entries, err = s.Directory(r.Context(), req.SessionID, req.Query)
 		value = map[string]any{"agents": nonNil(entries)}
 	case "send":
-		value, err = s.Send(r.Context(), req.SessionID, req.To, req.Body, req.ThreadID)
+		value, err = s.SendMessage(r.Context(), req.SessionID, req.To, req.Body, req.ThreadID, req.ExpectsReply, req.TimeoutMinutes)
+	// ask, reply and decline are no longer offered to agents; they remain for
+	// agents whose tool list predates that.
 	case "ask":
 		value, err = s.Ask(r.Context(), req.SessionID, req.To, req.Body, req.TimeoutMinutes)
 	case "reply":

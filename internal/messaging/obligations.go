@@ -61,11 +61,8 @@ func (s *Service) onTurnEnd(sess *session.Session, end session.TurnEnd) {
 	var remind []store.AgentMsgObligation
 	for _, ob := range obs {
 		if ob.Reminded {
-			// The reminder turn is over (it just ended, or its prompt left
-			// the queue without running): the agent has had its chance.
-			if ob.ReminderPrompt == end.PromptID || !queued[ob.ReminderPrompt] {
-				s.declineForAgent(sess, ob)
-			}
+			// One reminder only. The ask stays open: the agent may still
+			// answer later, and the asker's own deadline bounds the wait.
 			continue
 		}
 		// An ask carried by a different, still-queued prompt has not had its
@@ -91,7 +88,7 @@ func (s *Service) remindAgent(sess *session.Session, obs []store.AgentMsgObligat
 	for _, ob := range obs {
 		fmt.Fprintf(&b, "- request %s from %s\n", ob.RequestID, s.Ref(Address{Host: ob.AskerHost, Agent: ob.AskerAgent, Name: ob.AskerName}))
 	}
-	b.WriteString("Call messages_reply(requestId, body) or messages_decline(requestId, reason) now. If you do not, Tandem will decline on your behalf.")
+	b.WriteString("Answer with messages_send(to, body). If you cannot answer yet, send a short status update now and follow up when you can; you may send as many messages as the conversation needs.")
 	env := Envelope{
 		ID: newID("msg_"), ThreadID: obs[0].ThreadID, Kind: KindSystem, RequestID: obs[0].RequestID,
 		From: s.systemAddress(), To: s.addressOf(sess), Body: b.String(), SentAt: s.now().UTC().Format(time.RFC3339),
@@ -114,22 +111,31 @@ func (s *Service) remindAgent(sess *session.Session, obs []store.AgentMsgObligat
 	log.Info("agent reply reminder enqueued", "prompt_id", receipt.ID, "disposition", receipt.Disposition)
 }
 
-// declineForAgent answers an ask the agent left unanswered through two turns.
-func (s *Service) declineForAgent(sess *session.Session, ob store.AgentMsgObligation) {
-	closed, err := s.st.CloseAgentMsgObligation(ob.RequestID, ms(s.now()))
-	if err != nil || !closed {
+// obligationMaxAge is how long an unanswered ask is held for its agent: the
+// longest ask timeout, after which the asker has certainly stopped waiting.
+const obligationMaxAge = MaxAskTimeoutSec * time.Second
+
+// expireObligations closes unanswered asks older than obligationMaxAge so
+// they stop counting as open on the agent.
+func (s *Service) expireObligations(now time.Time) {
+	obs, err := s.st.OpenAgentMsgObligations("")
+	if err != nil {
+		slog.Warn("agent obligation expiry scan failed", "error", err)
 		return
 	}
-	slog.Warn("agent left an ask unanswered through a reminder; declining on its behalf", "session_id", sess.ID, "request_id", ob.RequestID, "asker", ob.AskerHost+"~"+ob.AskerAgent)
-	s.summaryChanged()
-	env := Envelope{
-		ID: newID("msg_"), ThreadID: ob.ThreadID, Kind: KindDecline, RequestID: ob.RequestID,
-		From: s.addressOf(sess), To: Address{Host: ob.AskerHost, Agent: ob.AskerAgent, Name: ob.AskerName},
-		Body:   "The agent ended two turns without answering this request.",
-		Hop:    ob.Hop + 1,
-		SentAt: s.now().UTC().Format(time.RFC3339), System: &SystemInfo{Event: EventNoReply},
+	changed := false
+	for _, ob := range obs {
+		if now.Sub(time.UnixMilli(ob.CreatedAt)) < obligationMaxAge {
+			continue
+		}
+		if closed, err := s.st.CloseAgentMsgObligation(ob.RequestID, ms(now)); err == nil && closed {
+			slog.Info("agent obligation lapsed unanswered", "session_id", ob.Session, "request_id", ob.RequestID, "asker", ob.AskerHost+"~"+ob.AskerAgent)
+			changed = true
+		}
 	}
-	s.dispatchAsync(env, "")
+	if changed {
+		s.summaryChanged()
+	}
 }
 
 // SessionClosed is called after a user closes a session (not at daemon

@@ -32,7 +32,7 @@ func TestLocalAskReplyRoundTrip(t *testing.T) {
 	}
 	eventually(t, "bob to receive the ask", func() bool { return len(bobAd.promptTexts()) == 1 })
 	prompt := bobAd.promptTexts()[0]
-	for _, want := range []string{`kind="ask"`, `request-id="` + res.RequestID + `"`, `from="@agent:hostA/alice"`, `from-address="hostA~alice"`, "what is 6x7?", "untrusted", "messages_reply"} {
+	for _, want := range []string{`kind="ask"`, `request-id="` + res.RequestID + `"`, `from="@agent:hostA/alice"`, `from-address="hostA~alice"`, "what is 6x7?", "untrusted", "messages_send"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
@@ -257,7 +257,7 @@ func TestSenderHostMustMatchOrigin(t *testing.T) {
 	}
 }
 
-func TestReplyReminderThenNoReplyDecline(t *testing.T) {
+func TestReplyReminderThenLateAnswer(t *testing.T) {
 	h := newTestHost(t, "hostA", hostOpts{})
 	_, aliceAd := h.addSession("alice", "alice")
 	_, bobAd := h.addSession("bob", "bob")
@@ -279,26 +279,48 @@ func TestReplyReminderThenNoReplyDecline(t *testing.T) {
 	if _, asks := h.svc.SummaryState("bob"); asks != 1 {
 		t.Fatalf("obligation must stay open through the reminder, openAsks=%d", asks)
 	}
-	// The reminder turn also ends with the ask open: the host declines for bob.
+	// The reminder turn also ends with the ask open: nothing more happens.
+	// The ask stays open so bob can still answer, and alice keeps waiting.
 	bobAd.release()
-	eventually(t, "alice to receive the no_reply decline", func() bool {
-		for _, p := range aliceAd.promptTexts() {
-			if strings.Contains(p, `kind="decline"`) && strings.Contains(p, `event="no_reply"`) {
-				return true
-			}
-		}
-		return false
-	})
+	time.Sleep(50 * time.Millisecond)
 	h.svc.Wait()
-	if _, asks := h.svc.SummaryState("bob"); asks != 0 {
-		t.Fatalf("obligation not closed, openAsks=%d", asks)
+	if got := bobAd.promptTexts(); len(got) != 2 {
+		t.Fatalf("bob must get exactly one reminder, prompts=%d", len(got))
 	}
+	for _, p := range aliceAd.promptTexts() {
+		if strings.Contains(p, `kind="decline"`) {
+			t.Fatalf("no decline may be sent for bob: %s", p)
+		}
+	}
+	if _, asks := h.svc.SummaryState("bob"); asks != 1 {
+		t.Fatalf("obligation must stay open, openAsks=%d", asks)
+	}
+	// A late answer with messages_send is a reply: it needs no reverse link.
+	if res, err := h.svc.Send(ctx, "bob", "@alice", "pong", ""); err != nil || res.RequestID != ask.RequestID {
+		t.Fatalf("late answer = %+v, %v", res, err)
+	}
+	eventually(t, "alice receives the reply", func() bool { return sawText(aliceAd, "pong") })
 	if waiting, _ := h.svc.SummaryState("alice"); len(waiting) != 0 {
 		t.Fatalf("alice still waiting: %+v", waiting)
 	}
-	time.Sleep(30 * time.Millisecond)
-	if got := bobAd.promptTexts(); len(got) != 2 {
-		t.Fatalf("bob must get exactly one reminder, prompts=%d", len(got))
+	if _, asks := h.svc.SummaryState("bob"); asks != 0 {
+		t.Fatalf("obligation not closed, openAsks=%d", asks)
+	}
+}
+
+func TestUnansweredAskLapsesAfterMaxAge(t *testing.T) {
+	h := newTestHost(t, "hostA", hostOpts{})
+	h.addSession("alice", "alice")
+	_, bobAd := h.addSession("bob", "bob")
+	h.link(h.addr("alice"), "bob")
+	if _, err := h.svc.Ask(context.Background(), "alice", "bob", "ping?", 0); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "ask delivered", func() bool { return len(bobAd.promptTexts()) == 1 })
+	h.clock.Advance(obligationMaxAge + time.Minute)
+	h.svc.RunDue(context.Background(), false)
+	if _, asks := h.svc.SummaryState("bob"); asks != 0 {
+		t.Fatalf("obligation not lapsed, openAsks=%d", asks)
 	}
 }
 
@@ -693,12 +715,24 @@ func TestLinkRequestApprovalAndDenial(t *testing.T) {
 		return false
 	})
 	links, _ := b.svc.Links("bob")
-	if len(links.Links) != 1 || links.Links[0].Source != SourceApproval || links.Links[0].From.Agent != "alice" || links.Links[0].Delivery != DeliverySteer || links.Links[0].BudgetPerHour != 60 || links.Links[0].MaxHops != 20 {
+	if len(links.Links) != 1 || links.Links[0].Source != SourceApproval || links.Links[0].From.Agent != "alice" || links.Links[0].Delivery != DeliverySteer || links.Links[0].BudgetPerHour != 60 || links.Links[0].MaxHops != DefaultMaxHops {
 		t.Fatalf("links = %+v", links)
 	}
 	if _, err := a.svc.Send(ctx, "alice", "hostB~bob", "hi", ""); err != nil {
 		t.Fatalf("after approval: %v", err)
 	}
+	// Approval opens the conversation both ways: alice's host now lets bob
+	// message alice, as often as needed.
+	back, _ := a.svc.Links("alice")
+	if len(back.Links) != 1 || back.Links[0].Source != SourceReciprocal || back.Links[0].From.Agent != "bob" {
+		t.Fatalf("reciprocal links = %+v", back)
+	}
+	for _, body := range []string{"on it", "done"} {
+		if _, err := b.svc.Send(ctx, "bob", "hostA~alice", body, ""); err != nil {
+			t.Fatalf("bob -> alice %q: %v", body, err)
+		}
+	}
+	eventually(t, "alice hears from bob twice", func() bool { return sawText(aliceAd, "on it") && sawText(aliceAd, "done") })
 	// The recipient is back to idle-or-working, not stuck blocked.
 	if bob.Status() == "blocked" {
 		t.Fatal("bob stayed blocked after the approval resolved")
@@ -949,4 +983,30 @@ func TestMalformedReplyLeavesRequestOpenForRetry(t *testing.T) {
 	if _, asks := h.svc.SummaryState("bob"); asks != 0 {
 		t.Fatalf("answered request still open, openAsks=%d", asks)
 	}
+}
+
+// An answer that arrives after a later message from the same agent already
+// closed the ask is delivered over the link instead of being rejected.
+func TestLateReplyAfterAskClosedUsesLink(t *testing.T) {
+	h := newTestHost(t, "hostA", hostOpts{})
+	_, aliceAd := h.addSession("alice", "alice")
+	_, bobAd := h.addSession("bob", "bob")
+	h.link(h.addr("alice"), "bob")
+	ctx := context.Background()
+	ask, err := h.svc.Ask(ctx, "alice", "bob", "q?", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "ask delivered", func() bool { return len(bobAd.promptTexts()) == 1 })
+	h.svc.closeRequestsTo("alice", h.addr("bob"), "replied")
+	reply := Envelope{ID: "msg_late", ThreadID: "thr_x", Kind: KindReply, RequestID: ask.RequestID, From: h.addr("bob"), To: h.addr("alice"), Body: "late answer", Hop: 1, SentAt: "now"}
+	if res := h.svc.Deliver(ctx, "", reply); res.Error != ErrUnknownRequest {
+		t.Fatalf("without a link: %+v", res)
+	}
+	h.link(h.addr("bob"), "alice")
+	reply.ID = "msg_late2"
+	if res := h.svc.Deliver(ctx, "", reply); !res.OK() {
+		t.Fatalf("with a link: %+v", res)
+	}
+	eventually(t, "alice receives the late answer", func() bool { return sawText(aliceAd, "late answer") })
 }
