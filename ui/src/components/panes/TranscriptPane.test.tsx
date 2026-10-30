@@ -1504,6 +1504,28 @@ describe('TranscriptPane message forking', () => {
     await waitFor(() => expect(forkSession).toHaveBeenCalledWith('session-1', { seq: 1, edit: undefined }));
   });
 
+  it('offers image download and copy when right-clicking an image', async () => {
+    const withImage = forkable(true);
+    withImage.events = [
+      { seq: 1, event: { kind: 'user_message', blocks: [{ type: 'text', text: 'look' }, { type: 'image', assetId: 'a1', mimeType: 'image/png', name: 'shot.png' }] } },
+    ];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['png'], { type: 'image/png' }))));
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:shot', revokeObjectURL: () => {} }));
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': withImage }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+
+    const img = await view.findByRole('img', { name: 'shot.png' });
+    fireEvent.contextMenu(img);
+    expect(view.getByRole('menuitem', { name: 'Download image' })).toBeTruthy();
+    expect(view.getByRole('menuitem', { name: 'Copy image' })).toBeTruthy();
+
+    fireEvent.contextMenu(view.getByText('look'));
+    expect(view.queryByRole('menuitem', { name: 'Download image' })).toBeNull();
+  });
+
   it('offers no message menu when the agent cannot fork', () => {
     useStore.setState({
       ...initialState,

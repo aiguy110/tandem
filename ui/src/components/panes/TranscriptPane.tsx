@@ -1192,7 +1192,7 @@ function Row({
   subagentActivity?: React.ReactNode;
 }) {
   const sourceRef = useRef<HTMLElement>(null);
-  const [userMenu, setUserMenu] = useState<{ x: number; y: number } | null>(null);
+  const [userMenu, setUserMenu] = useState<{ x: number; y: number; image?: MenuImage } | null>(null);
   const [editingUser, setEditingUser] = useState(false);
   // Latched at mount so re-renders while the row streams cannot restart (or cut
   // short) the entrance animation, then dropped once it has played -- leaving it
@@ -1257,7 +1257,9 @@ function Row({
             // Leave the native menu for copying a text selection.
             if (window.getSelection()?.toString()) return;
             event.preventDefault();
-            setUserMenu({ x: Math.min(event.clientX, window.innerWidth - 200), y: Math.min(event.clientY, window.innerHeight - 100) });
+            const img = (event.target as HTMLElement).closest<HTMLImageElement>('img.transcript-image');
+            const image = img ? { src: img.currentSrc || img.src, name: img.alt } : undefined;
+            setUserMenu({ x: Math.min(event.clientX, window.innerWidth - 200), y: Math.min(event.clientY, window.innerHeight - (image ? 170 : 100)), image });
           } : undefined}
         >
           {item.blocks.map((block, i) => {
@@ -1268,6 +1270,7 @@ function Row({
           {userMenu && onFork && (
             <UserMessageMenu
               position={userMenu}
+              image={userMenu.image}
               onClose={() => setUserMenu(null)}
               onEdit={() => { setUserMenu(null); setEditingUser(true); }}
               onFork={onFork}
@@ -2080,8 +2083,39 @@ function withEditedText(blocks: PromptBlock[], text: string): PromptBlock[] {
   return out;
 }
 
-function UserMessageMenu({ position, onClose, onEdit, onFork }: {
+type MenuImage = { src: string; name: string };
+
+function downloadImage(image: MenuImage) {
+  const link = document.createElement('a');
+  link.href = image.src;
+  link.download = image.name || 'image';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+// The async Clipboard API reliably accepts only image/png, so re-encode other
+// formats through a canvas first.
+async function copyImage(image: MenuImage) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Clipboard unavailable (needs a secure context).');
+  const blob = await fetch(image.src).then((response) => response.blob());
+  const png = blob.type === 'image/png' ? blob : await toPng(blob);
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+}
+
+async function toPng(blob: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return new Promise((resolve, reject) => canvas.toBlob((out) => (out ? resolve(out) : reject(new Error('Image conversion failed.'))), 'image/png'));
+}
+
+function UserMessageMenu({ position, image, onClose, onEdit, onFork }: {
   position: { x: number; y: number };
+  image?: MenuImage;
   onClose: () => void;
   onEdit: () => void;
   onFork: () => Promise<AckResult>;
@@ -2108,6 +2142,19 @@ function UserMessageMenu({ position, onClose, onEdit, onFork }: {
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
+      {image && (
+        <>
+          <button type="button" role="menuitem" onClick={() => { downloadImage(image); onClose(); }}>
+            Download image
+          </button>
+          <button type="button" role="menuitem" onClick={() => {
+            setError('');
+            void copyImage(image).then(onClose, (err: unknown) => setError(err instanceof Error ? err.message : 'Copy failed.'));
+          }}>
+            Copy image
+          </button>
+        </>
+      )}
       <button type="button" role="menuitem" title="Rewrite this message in a new session forked from just before it" onClick={onEdit}>
         Edit…
       </button>
