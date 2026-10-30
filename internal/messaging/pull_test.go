@@ -423,6 +423,11 @@ func TestSendOverReverseLinkIsHeldAndPulled(t *testing.T) {
 			t.Fatalf("send %q = %+v, %v", body, res, err)
 		}
 	}
+	// Messages that race alice's turn start are queued behind it rather
+	// than steered; let her turns end so every one is seen.
+	for range 3 {
+		aliceAd.release()
+	}
 	a.svc.pullOutstanding(ctx)
 	eventually(t, "alice receives every message", func() bool {
 		return sawText(aliceAd, "working on it") && sawText(aliceAd, "half done") && sawText(aliceAd, "all done")

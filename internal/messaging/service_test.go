@@ -732,6 +732,9 @@ func TestLinkRequestApprovalAndDenial(t *testing.T) {
 			t.Fatalf("bob -> alice %q: %v", body, err)
 		}
 	}
+	for range 3 {
+		aliceAd.release() // let queued messages run
+	}
 	eventually(t, "alice hears from bob twice", func() bool { return sawText(aliceAd, "on it") && sawText(aliceAd, "done") })
 	// The recipient is back to idle-or-working, not stuck blocked.
 	if bob.Status() == "blocked" {
