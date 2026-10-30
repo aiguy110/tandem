@@ -330,6 +330,12 @@ func TestBlessedForkOffersAdoptInsteadOfRebase(t *testing.T) {
 	if items := center.List(); len(items) != 1 || items[0].Severity != "success" {
 		t.Fatalf("expected a success notification, got %#v", items)
 	}
+	if _, err := s.HandleAction(context.Background(), items[0].ID, "dismiss"); err != nil {
+		t.Fatal(err)
+	}
+	if items := center.List(); len(items) != 0 {
+		t.Fatalf("synced notification remained after dismiss: %#v", items)
+	}
 }
 
 func TestBlessedForkAutoFollow(t *testing.T) {

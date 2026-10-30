@@ -297,7 +297,8 @@ func (s *Service) sync(ctx context.Context, u runtimeinstall.UpdateInfo) error {
 		message = "Already pinned to the published fork tree."
 	}
 	slog.Info("blessed ACP fork synced", "agent", u.Agent, "kind", res.Kind, "from_commit", res.Before.Commit, "to_commit", res.After.Commit)
-	s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "success", Title: u.Agent + " ACP fork synced", Message: message})
+	s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "success", Title: u.Agent + " ACP fork synced", Message: message,
+		Actions: []notifications.Action{{ID: "dismiss", Label: "Dismiss"}}})
 	return nil
 }
 
@@ -390,7 +391,8 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 			slog.Error("ACP adapter rollback failed", "agent", agent, "error", err)
 			return "", err
 		}
-		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "success", Title: agent + " ACP rolled back", Message: fmt.Sprintf("New sessions will use %s.", locked.Version)})
+		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "success", Title: agent + " ACP rolled back", Message: fmt.Sprintf("New sessions will use %s.", locked.Version),
+			Actions: []notifications.Action{{ID: "dismiss", Label: "Dismiss"}}})
 		slog.Info("ACP adapter rollback complete", "agent", agent, "version", locked.Version)
 		return "", nil
 	default:
