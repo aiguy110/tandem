@@ -1884,7 +1884,11 @@ func (c *connection) handle(m clientMessage) {
 		// approval; neither should hold up this connection's other commands.
 		go c.handleMessaging(m)
 	case "render_message_audio":
-		c.renderMessageAudio(m)
+		// Rendering waits on a language model and a TTS provider. A federated
+		// parent multiplexes every command for this host over one loopback
+		// connection, so rendering inline stalls its snapshots and playback
+		// commands until they time out.
+		go c.renderMessageAudio(m)
 	case "get_asset":
 		c.getAsset(m)
 	case "has_upload_directory", "save_upload", "put_asset":
