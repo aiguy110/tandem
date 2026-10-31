@@ -20,6 +20,8 @@ import { AudioEngineRoot } from './components/audio/AudioEngineRoot';
 import { AppearanceModal } from './components/AppearanceModal';
 import { uiScale } from './appearance';
 import { useValuePresence } from './transitions';
+import { ArtifactPage } from './components/ArtifactView';
+import { parseArtifactRoute, useLocationHash } from './artifacts';
 import { frontendVersion, loadDaemonVersion, reloadForDaemonVersion } from './version';
 
 export function App() {
@@ -90,6 +92,7 @@ export function App() {
   }, [conn]);
 
   useGlobalKeys();
+  const artifactRoute = parseArtifactRoute(useLocationHash());
 
   if (conn === 'need-token' || conn === 'rejected') {
     return <TokenScreen rejected={conn === 'rejected'} />;
@@ -116,6 +119,7 @@ export function App() {
         </div>
       )}
       <ModalHost modal={modal} />
+      {artifactRoute && <ArtifactPage key={`${artifactRoute.sessionId}/${artifactRoute.artifactId}`} route={artifactRoute} />}
     </>
   );
 }

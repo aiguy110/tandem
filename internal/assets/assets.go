@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aiguy110/tandem/internal/store"
 )
@@ -38,7 +39,7 @@ func (e *UnsupportedError) Error() string { return e.Message }
 
 type TooLargeError struct{ Limit int64 }
 
-func (e *TooLargeError) Error() string { return fmt.Sprintf("image exceeds %d byte limit", e.Limit) }
+func (e *TooLargeError) Error() string { return fmt.Sprintf("asset exceeds %d byte limit", e.Limit) }
 
 var ErrNotFound = errors.New("asset not found")
 var ErrCorrupt = errors.New("asset data is corrupt")
@@ -88,6 +89,29 @@ func (s *Store) Put(sessionID string, data []byte, declaredMIME string) (Stored,
 	if declared != "" && declared != "application/octet-stream" && declared != mime {
 		return Stored{}, &UnsupportedError{Message: fmt.Sprintf("content type %s does not match %s bytes", declared, mime)}
 	}
+	return s.put(sessionID, data, mime)
+}
+
+// PutHTML stores a rendered HTML artifact (docs/artifacts.md). Artifacts share
+// the content-addressed layout and per-session authorization with images, but
+// never pass through Put: the upload path must keep refusing HTML.
+func (s *Store) PutHTML(sessionID string, data []byte) (Stored, error) {
+	if int64(len(data)) > MaxAssetBytes {
+		return Stored{}, &TooLargeError{Limit: MaxAssetBytes}
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return Stored{}, &UnsupportedError{Message: "HTML artifact is empty"}
+	}
+	if !utf8.Valid(data) {
+		return Stored{}, &UnsupportedError{Message: "HTML artifact must be UTF-8 text"}
+	}
+	return s.put(sessionID, data, HTMLMIME)
+}
+
+// HTMLMIME is the stored content type of HTML artifacts.
+const HTMLMIME = "text/html"
+
+func (s *Store) put(sessionID string, data []byte, mime string) (Stored, error) {
 	digest := sha256.Sum256(data)
 	id := hex.EncodeToString(digest[:])
 	dir := filepath.Join(s.root, id[:2])

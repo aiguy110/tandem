@@ -39,6 +39,9 @@ const PlaywrightMCPName = "tandem-playwright"
 // browser-instance tools, routing each call to the targeted instance.
 const BrowserMCPName = "tandem-browser"
 
+// ArtifactsMCPName publishes rendered artifacts (tandem mcp-artifacts).
+const ArtifactsMCPName = "tandem-artifacts"
+
 type MCPWiring struct {
 	Broker           *Broker
 	JSRuntime        string
@@ -54,7 +57,7 @@ type MCPWiring struct {
 }
 
 // BuildMCPServers returns the external Playwright MCP and Tandem's internal
-// control, scripts and messages MCP declarations for one agent. A missing Playwright installation is
+// control, scripts, messages and artifacts MCP declarations for one agent. A missing Playwright installation is
 // tolerated; tandem-control remains available.
 func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 	servers := make([]MCPServer, 0, 3)
@@ -109,6 +112,15 @@ func BuildMCPServers(w MCPWiring, sessionID, workspaceCWD string) []MCPServer {
 				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
 				{Name: "TANDEM_TOKEN", Value: w.Token},
 				{Name: "TANDEM_AGENT_ID", Value: sessionID},
+			},
+		})
+		servers = append(servers, MCPServer{
+			Name: ArtifactsMCPName, Command: w.TandemExecutable, Args: []string{"mcp-artifacts"},
+			Env: []MCPEnvVariable{
+				{Name: "TANDEM_CONTROL_URL", Value: w.ControlURL},
+				{Name: "TANDEM_TOKEN", Value: w.Token},
+				{Name: "TANDEM_AGENT_ID", Value: sessionID},
+				{Name: "TANDEM_WORKSPACE_CWD", Value: workspaceCWD},
 			},
 		})
 	}

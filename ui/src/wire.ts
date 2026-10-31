@@ -195,6 +195,9 @@ export type SessionEvent =
   // for the envelope with the same id (e.g. pending -> started).
   | { kind: 'agent_message'; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
   | { kind: 'agent_message_status'; id: string; status: string; error?: string }
+  // A rendered artifact the agent published (docs/artifacts.md). artifactId is
+  // the session asset holding the document.
+  | { kind: 'artifact'; artifactId: string; type: 'html'; title: string; filename: string; mimeType: string; size: number; sourcePath?: string; createdAt: number }
   | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'handoff_received'; sourceSessionId: string; cutoffSeq: number; mode: 'full' | 'brief'; rendererVersion: number; sourceWasActive: boolean; delegations: { completed: number; failed: number; running: number; unresolved: number } };
 

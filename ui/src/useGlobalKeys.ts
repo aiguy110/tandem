@@ -6,6 +6,7 @@ import { useEffect, useRef } from 'react';
 import { useStore } from './store';
 import { ChordMatcher, comboFromEvent, hasModifier, loadBindings } from './commands/keymap';
 import { runCommand } from './commands/registry';
+import { artifactRouteOpen } from './artifacts';
 
 function scopeOf(target: EventTarget | null, modalOpen: boolean, focused: boolean): 'global' | 'session-focused' | 'modal-open' | 'text-input' {
   if (modalOpen) return 'modal-open';
@@ -20,7 +21,8 @@ export function useGlobalKeys(): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const st = useStore.getState();
-      const scope = scopeOf(e.target, st.modal !== 'none', !!st.focusedId);
+      // The full-page artifact view owns the keyboard like a modal does.
+      const scope = scopeOf(e.target, st.modal !== 'none' || artifactRouteOpen(), !!st.focusedId);
 
       // Modals manage their own keys (Escape/Enter/arrows). Don't double-fire.
       if (scope === 'modal-open') return;

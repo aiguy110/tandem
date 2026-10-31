@@ -25,6 +25,7 @@ import (
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/agentupdates"
+	"github.com/aiguy110/tandem/internal/artifacts"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/automation"
 	"github.com/aiguy110/tandem/internal/browser"
@@ -431,6 +432,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return fmt.Errorf("configure agent messaging: %w", err)
 	}
 	agents.SetMessaging(messagingService)
+	artifactService := artifacts.New(artifacts.Options{Token: token, Store: assetStore, Sessions: artifactSessions{agents}})
 	httpHandler := httpserver.New(httpserver.Options{
 		// A federated agent's images live on the host that owns it; the
 		// federated store fetches them over the tunnel on a local miss.
@@ -497,6 +499,10 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/federation/") {
 			federationService.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, artifacts.Path) {
+			artifactService.ServeHTTP(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, messaging.Path) {
@@ -852,6 +858,18 @@ func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, se
 
 // federatedAssetStore serves local assets directly and routes assets for a
 // namespaced session to the daemon that owns it.
+// artifactSessions appends artifact events to live sessions' transcripts.
+type artifactSessions struct{ agents *registry.Registry }
+
+func (s artifactSessions) AppendEvent(sessionID string, ev eventlog.Event) error {
+	sess := s.agents.Get(sessionID)
+	if sess == nil {
+		return errors.New("invalid: no such session " + sessionID)
+	}
+	_, err := sess.AppendEvent(ev)
+	return err
+}
+
 type federatedAssetStore struct {
 	local      *assets.Store
 	federation *federation.Service

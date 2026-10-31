@@ -16,6 +16,8 @@ import { getRenderedSeqs, getState, play, prefetchClip, reconcileDaemonPosition,
 import { GlobalAudioPlayer } from '../audio/GlobalAudioPlayer';
 import { InlineAudioBar } from '../audio/InlineAudioBar';
 import { ModelPicker, cycleSelectOnArrow } from '../ModelPicker';
+import { ArtifactCard } from '../ArtifactView';
+import type { ArtifactEvent } from '../../artifacts';
 
 // The Transcript pane renders the normalized SessionEvent stream (docs/ui.md):
 // merged prose, dimmed thoughts, collapsed tool cards with status chips, plans,
@@ -39,6 +41,7 @@ type Item =
   | { kind: 'error'; key: string; message: string }
   | { kind: 'mcp-auth'; key: string; server: string; serverKey: string }
   | { kind: 'agent-message'; key: string; id: string; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
+  | { kind: 'artifact'; key: string; artifact: ArtifactEvent }
   | { kind: 'rate-limit'; key: string; id: string; harness: string; resetAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'aside'; key: string; id: string; question: string; answer: string; thought: string; complete: boolean; error?: string };
 
@@ -119,6 +122,9 @@ function build(events: { seq: number; event: WireEvent }[], pending: Approval[])
         items.push(item);
         break;
       }
+      case 'artifact':
+        items.push({ kind: 'artifact', key: `art${seq}`, artifact: ev });
+        break;
       case 'agent_message_status': {
         const card = agentMessages.get(ev.id);
         if (card) {
@@ -1335,6 +1341,8 @@ function Row({
       return <McpAuthNotice server={item.server} serverKey={item.serverKey} />;
     case 'agent-message':
       return <AgentMessageCard item={item} enterClass={enterClass} onOpenPeer={onOpenPeer} />;
+    case 'artifact':
+      return <ArtifactCard sessionId={sessionId} artifact={item.artifact} />;
     case 'rate-limit':
       return <RateLimitWidget item={item} onToggle={onRateLimitToggle} />;
     case 'aside':

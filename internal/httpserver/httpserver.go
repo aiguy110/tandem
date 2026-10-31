@@ -284,6 +284,12 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request, sessionID, as
 	w.Header().Set("Content-Length", fmt.Sprint(stored.Size))
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !isImageMIME(stored.MIMEType) {
+		// HTML artifacts are agent-authored: the UI renders them in a
+		// sandboxed iframe, and they must never run on the daemon's origin.
+		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Header().Set("Content-Disposition", "attachment")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(stored.Data)
 }

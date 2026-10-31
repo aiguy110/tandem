@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aiguy110/tandem/internal/artifactsmcp"
 	"github.com/aiguy110/tandem/internal/automationmcp"
 	"github.com/aiguy110/tandem/internal/browsermcp"
 	"github.com/aiguy110/tandem/internal/buildinfo"
@@ -48,6 +49,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "run mcp-messages: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	// mcp-artifacts is the internal stdio MCP subprocess behind artifact_publish.
+	if len(args) == 1 && args[0] == "mcp-artifacts" {
+		err := artifactsmcp.Run(context.Background(), os.Stdin, stdout, artifactsmcp.Config{
+			ControlURL: os.Getenv("TANDEM_CONTROL_URL"), Token: os.Getenv("TANDEM_TOKEN"), SessionID: os.Getenv("TANDEM_AGENT_ID"), WorkspaceCWD: os.Getenv("TANDEM_WORKSPACE_CWD"),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "run mcp-artifacts: %v\n", err)
 			return 1
 		}
 		return 0

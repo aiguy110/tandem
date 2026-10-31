@@ -206,3 +206,32 @@ func TestWebPDimensionVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestPutHTMLStoresArtifactsButPutStillRefusesHTML(t *testing.T) {
+	s, _, _ := testStore(t)
+	doc := []byte("<!doctype html><title>x</title><p>hi</p>")
+	stored, err := s.PutHTML("agent-1", doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.MIMEType != HTMLMIME || stored.Size != int64(len(doc)) {
+		t.Fatalf("stored=%#v", stored)
+	}
+	got, err := s.Get("agent-1", stored.AssetID)
+	if err != nil || !bytes.Equal(got.Data, doc) || got.MIMEType != HTMLMIME {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+	if _, err := s.Get("agent-2", stored.AssetID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other session err=%v", err)
+	}
+	if _, err := s.Put("agent-1", doc, "text/html"); err == nil {
+		t.Fatal("image Put accepted HTML")
+	}
+	var unsupported *UnsupportedError
+	if _, err := s.PutHTML("agent-1", []byte("  \n")); !errors.As(err, &unsupported) {
+		t.Fatalf("empty err=%v", err)
+	}
+	if _, err := s.PutHTML("agent-1", []byte{0xff, 0xfe}); !errors.As(err, &unsupported) {
+		t.Fatalf("invalid utf8 err=%v", err)
+	}
+}

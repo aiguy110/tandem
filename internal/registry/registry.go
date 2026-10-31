@@ -1086,7 +1086,9 @@ const tandemSessionPreamble = "## Tandem session\n\n" +
 	"repo-local skill, keep one canonical `skills/<name>/` directory with shared agent bridges. Start with " +
 	"`agent-docs/README.md` for concise guidance and links to deeper documentation. The `tandem-messages` MCP " +
 	"lets you message other agents over human-granted links: `messages_directory` discovers them (refer to an " +
-	"agent as `@agent:host/name`, e.g. `@agent:bifrost/api-worker`) and `messages_request_link` asks a human for access."
+	"agent as `@agent:host/name`, e.g. `@agent:bifrost/api-worker`) and `messages_request_link` asks a human for access. " +
+	"The `tandem-artifacts` MCP publishes rendered HTML artifacts the user can preview, open, and download: " +
+	"call `artifact_docs` before your first `artifact_publish`."
 
 // firstPrompt prefixes the first real user turn with Tandem-specific guidance,
 // then combines a hand-off transcript with the task the user typed at spawn.
