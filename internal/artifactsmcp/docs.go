@@ -70,4 +70,14 @@ The only type today is free-form HTML.
 Reports and summaries with tables or charts, visual diffs or comparisons,
 interactive explorers or calculators, diagrams, mockups and UI prototypes,
 rendered documentation.
+
+## Guides
+
+Task-specific playbooks; fetch one with artifact_docs({"guide": "<name>"}).
+
+- paper-explainer: converting or summarizing a white paper, spec, design doc,
+  or plan as a "scrollytelling" explainer: a figure (e.g. a sequence diagram)
+  pinned at the top that highlights, annotates, adds, or animates elements as
+  the text below scrolls. Read it whenever you are asked to explain, convert,
+  or summarize a paper or document.
 `

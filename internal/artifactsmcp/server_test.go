@@ -49,8 +49,16 @@ func TestToolsListAndDocs(t *testing.T) {
 		t.Fatalf("tools=%v", names)
 	}
 	text := replies[2]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "sandboxed iframe") {
+	if !strings.Contains(text, "sandboxed iframe") || !strings.Contains(text, "paper-explainer") {
 		t.Fatalf("docs=%q", text)
+	}
+	guides := runMCP(t, Config{}, call(3, ToolDocs, map[string]any{"guide": "paper-explainer"}), call(4, ToolDocs, map[string]any{"guide": "nope"}))
+	guide := guides[3]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(guide, "setStep") || !strings.Contains(guide, "Sequence diagrams") {
+		t.Fatalf("guide=%q", guide)
+	}
+	if guides[4]["result"].(map[string]any)["isError"] != true {
+		t.Fatalf("unknown guide=%v", guides[4])
 	}
 }
 

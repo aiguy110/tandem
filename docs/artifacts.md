@@ -14,7 +14,14 @@ Declared for every ACP agent (`tandem mcp-artifacts`, see
 | Tool | Arguments | Result |
 |---|---|---|
 | `artifact_publish` | exactly one of `path` (file, absolute or workspace-relative) or `html` (string); `title?`, `filename?` | `{artifactId, type, title, filename, mimeType, size, sourcePath?, createdAt, status: "published", note}` |
-| `artifact_docs` | — | Markdown guidance (`internal/artifactsmcp/docs.go`): rendering environment, sandbox limits, design advice |
+| `artifact_docs` | `guide?` | Markdown guidance (`internal/artifactsmcp/docs.go`): rendering environment, sandbox limits, design advice, and the list of guides. With `guide`, a task playbook from `internal/artifactsmcp/guides.go` |
+
+Guides:
+
+- `paper-explainer` — converting/summarizing a white paper, spec, or plan as a
+  "scrollytelling" explainer: one figure (often a sequence diagram) pinned at
+  the top of the view, whose elements are highlighted, annotated, added, or
+  animated by a pure `setStep(n)` as the step text below scrolls past.
 
 The MCP subprocess runs on the agent's host, so it reads a `path` argument
 itself and POSTs the content to `POST /internal/artifacts/publish` with the

@@ -109,7 +109,20 @@ func (s *server) handle(ctx context.Context, line []byte) {
 			return
 		}
 		if p.Name == ToolDocs {
-			s.result(req.ID, map[string]any{"content": []any{map[string]string{"type": "text", "text": Docs}}})
+			var args struct {
+				Guide string `json:"guide"`
+			}
+			_ = json.Unmarshal(p.Arguments, &args)
+			text := Docs
+			if args.Guide != "" {
+				guide, ok := Guides[strings.TrimSpace(args.Guide)]
+				if !ok {
+					s.result(req.ID, toolError("unknown guide "+args.Guide+"; see the Guides section of artifact_docs"))
+					return
+				}
+				text = guide
+			}
+			s.result(req.ID, map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}})
 			return
 		}
 		var args publishArgs
@@ -248,9 +261,12 @@ func toolDeclarations() []any {
 			}},
 		},
 		map[string]any{
-			"name":        ToolDocs,
-			"description": "Instructions and best practices for Tandem artifacts: how they render, sandbox limits, and how to make them look good in the preview and full-page views.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+			"name": ToolDocs,
+			"description": "Instructions and best practices for Tandem artifacts: how they render, sandbox limits, and how to make them look good in the preview and full-page views. " +
+				"Pass `guide` for a task-specific playbook, e.g. \"paper-explainer\" for converting or summarizing a white paper, spec, or plan as a scroll-driven explainer with a pinned, animated figure.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"guide": str("Optional playbook name: paper-explainer. Omit for the general docs, which list all guides."),
+			}},
 		},
 	}
 }
