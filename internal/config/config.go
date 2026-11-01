@@ -545,14 +545,8 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	root := filepath.Dir(exe)
-	managedRuntime := true
-	if cwd, cwdErr := os.Getwd(); cwdErr == nil {
-		if _, statErr := os.Stat(filepath.Join(cwd, "config.yml.example")); statErr == nil {
-			root = cwd
-			managedRuntime = false
-		}
-	}
+	cwd, _ := os.Getwd()
+	root, managedRuntime := resolveTandemRoot(cwd, filepath.Dir(exe))
 	runtimeRoot := filepath.Join(root, "runtime")
 	if managedRuntime {
 		runtimeRoot = filepath.Join(value(environ(), "TANDEM_HOME", filepath.Join(home, ".tandem")), "runtime")
@@ -563,6 +557,23 @@ func Load() (Config, error) {
 	}
 	cfg.ManagedRuntime = managedRuntime
 	return cfg, nil
+}
+
+// resolveTandemRoot reports the source checkout Tandem runs from, or the
+// executable's directory with managedRuntime set when there is none. The
+// working directory wins, then the executable's own directory, so a checkout
+// binary invoked from elsewhere (e.g. a rebase agent's fork worktree) still
+// shares the daemon's runtime root instead of falling back to TANDEM_HOME.
+func resolveTandemRoot(cwd, exeDir string) (root string, managedRuntime bool) {
+	for _, dir := range []string{cwd, exeDir} {
+		if dir == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "config.yml.example")); err == nil {
+			return dir, false
+		}
+	}
+	return exeDir, true
 }
 
 func environ() map[string]string {

@@ -594,3 +594,34 @@ func TestParentProxyFromEnvironment(t *testing.T) {
 		t.Fatalf("legacy ParentProxy = %q", legacy.ParentProxy)
 	}
 }
+
+// A checkout binary run from outside the checkout must still resolve the
+// checkout, or its CLI reads and builds into a different runtime root than the
+// daemon it controls.
+func TestResolveTandemRoot(t *testing.T) {
+	checkout := t.TempDir()
+	if err := os.WriteFile(filepath.Join(checkout, "config.yml.example"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	otherCheckout := t.TempDir()
+	if err := os.WriteFile(filepath.Join(otherCheckout, "config.yml.example"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, cwd, exeDir, root string
+		managed                 bool
+	}{
+		{"cwd checkout", checkout, other, checkout, false},
+		{"exe checkout from elsewhere", other, checkout, checkout, false},
+		{"cwd checkout wins over exe checkout", otherCheckout, checkout, otherCheckout, false},
+		{"release install", other, other, other, true},
+		{"unknown cwd", "", checkout, checkout, false},
+	}
+	for _, tc := range cases {
+		root, managed := resolveTandemRoot(tc.cwd, tc.exeDir)
+		if root != tc.root || managed != tc.managed {
+			t.Errorf("%s: got (%s, %v), want (%s, %v)", tc.name, root, managed, tc.root, tc.managed)
+		}
+	}
+}
