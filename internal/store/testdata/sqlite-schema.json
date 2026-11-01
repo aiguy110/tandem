@@ -38,6 +38,12 @@
     },
     {
       "type": "index",
+      "name": "events_kind_ts",
+      "tableName": "events",
+      "sql": "CREATE INDEX events_kind_ts ON events(kind, ts)"
+    },
+    {
+      "type": "index",
       "name": "host_metrics_ts",
       "tableName": "host_metrics",
       "sql": "CREATE INDEX host_metrics_ts ON host_metrics(ts)"
@@ -430,7 +436,7 @@
       "type": "table",
       "name": "message_audio",
       "tableName": "message_audio",
-      "sql": "CREATE TABLE message_audio (\n        sessionId    TEXT NOT NULL,\n        seq        INTEGER NOT NULL,\n        mimeType   TEXT NOT NULL,\n        data       BLOB NOT NULL,\n        durationMs INTEGER NOT NULL DEFAULT 0,\n        createdAt  INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, seq)\n      )"
+      "sql": "CREATE TABLE message_audio (\n        sessionId    TEXT NOT NULL,\n        seq        INTEGER NOT NULL,\n        mimeType   TEXT NOT NULL,\n        data       BLOB NOT NULL,\n        durationMs INTEGER NOT NULL DEFAULT 0,\n        sourceText TEXT NOT NULL DEFAULT '',\n        preparationInstructions TEXT NOT NULL DEFAULT '',\n        preparedText TEXT NOT NULL DEFAULT '',\n        createdAt  INTEGER NOT NULL,\n        PRIMARY KEY (sessionId, seq)\n      )"
     },
     {
       "type": "table",

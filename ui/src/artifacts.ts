@@ -34,6 +34,18 @@ export function parseArtifactRoute(hash: string): ArtifactRoute | null {
   }
 }
 
+// Metadata for artifacts opened from the gallery, whose session transcript may
+// not be loaded: the full page falls back to it for the title and filename.
+const known = new Map<string, { artifact: ArtifactEvent; sessionName?: string }>();
+
+export function rememberArtifact(sessionId: string, artifact: ArtifactEvent, sessionName?: string): void {
+  known.set(`${sessionId}\u0000${artifact.artifactId}`, { artifact, sessionName });
+}
+
+export function knownArtifact(sessionId: string, artifactId: string): { artifact: ArtifactEvent; sessionName?: string } | undefined {
+  return known.get(`${sessionId}\u0000${artifactId}`);
+}
+
 export function openArtifact(sessionId: string, artifactId: string): void {
   history.pushState({ tandemArtifact: true }, '', artifactHash(sessionId, artifactId));
   window.dispatchEvent(new Event(ROUTE_EVENT));

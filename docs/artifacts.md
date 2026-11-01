@@ -59,3 +59,14 @@ produce the same thing: a stored document plus a download.
   `allow-same-origin`: scripts run with an opaque origin and cannot reach the
   bearer token in localStorage, cookies, or the app DOM. The preview allows
   only scripts; the full page also allows forms, modals, popups and downloads.
+
+## Gallery
+
+"Artifacts Gallery" in the command palette (`artifacts.gallery`) opens
+`ui/src/components/ArtifactsGallery.tsx`: every artifact from every readable
+host (`list_artifacts`, see `docs/ws-protocol.md`), newest first, as lazily
+loaded preview tiles with a fuzzy title/session filter (Enter opens the top
+match). It reads the `events` table through the `events_kind_ts` index, so
+closed sessions' artifacts are included. An artifact opens on the usual full
+page over the gallery; Back returns to it. The page takes its title and
+filename from the gallery entry when the session's transcript is not loaded.

@@ -276,6 +276,14 @@ export interface FederationHost {
   dialer?: 'child' | 'parent';
 }
 
+// One entry of the artifacts gallery: an artifact event and the session that
+// published it. sessionId is local to the host that answered list_artifacts.
+export interface GalleryArtifact {
+  sessionId: string;
+  sessionName: string;
+  artifact: Extract<SessionEvent, { kind: 'artifact' }>;
+}
+
 export interface HostMetric {
   ts: number;
   cpuPercent: number;
@@ -669,6 +677,7 @@ export type ClientMsg =
   | { t: 'list_hosts'; corrId?: string }
   | { t: 'list_host_metrics'; hostId?: string; sinceSeq?: number; limit?: number; maxPoints?: number; corrId?: string }
   | { t: 'list_sessions'; hostId?: string; corrId?: string }
+  | { t: 'list_artifacts'; hostId?: string; limit?: number; corrId?: string }
   | { t: 'list_automation'; repositoryId?: string; corrId?: string }
   | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; hostId?: string; corrId?: string }
@@ -735,6 +744,7 @@ export type ServerMsg =
   | { t: 'agent_catalog'; corrId?: string; catalog: AgentCatalog; hostId?: string }
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'host_metrics'; corrId?: string; hostId?: string; metrics: HostMetric[]; error?: string }
+  | { t: 'artifacts'; corrId?: string; hostId?: string; artifacts?: GalleryArtifact[]; error?: string }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
   | { t: 'mcp_servers'; corrId?: string; servers?: McpServerStatus[]; error?: string }

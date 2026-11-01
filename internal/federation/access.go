@@ -163,6 +163,7 @@ var commandLevels = map[string]Level{
 	"list_profiles":             LevelView,
 	"render_message_audio":      LevelView,
 	"get_asset":                 LevelView,
+	"list_artifacts":            LevelView,
 	"has_upload_directory":      LevelView,
 	"get_close_preview":         LevelView,
 	"get_diff":                  LevelView,

@@ -1525,3 +1525,16 @@ body.dock-resizing .app { transition: none; }
 .appearance-preview { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); overflow: hidden; }
 .appearance-preview pre { margin: 6px 0 0; white-space: pre; }
 .appearance-modal .foot { justify-content: flex-end; }
+
+/* Artifacts gallery (palette: "Artifacts Gallery") */
+.artifacts-gallery { width: min(1120px, 95vw); display: flex; flex-direction: column; max-height: 80vh; }
+.artifacts-gallery-filter { margin: 10px 16px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text); font: inherit; }
+.artifacts-gallery-filter:focus { outline: none; border-color: var(--agent); }
+.artifacts-gallery-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+.artifacts-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.artifacts-gallery-empty { padding: 32px 0; color: var(--text-faint); text-align: center; font-size: var(--fs-sm); }
+.artifact-tile { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; }
+.artifact-tile:hover, .artifact-tile:focus-within { border-color: var(--agent); }
+.artifact-tile .artifact-preview { border-top: 0; border-bottom: 1px solid var(--border); }
+.artifact-tile-text { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; font-size: var(--fs-sm); }
+.artifact-tile-meta { color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

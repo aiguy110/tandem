@@ -6,8 +6,10 @@ import {
   closeArtifact,
   downloadArtifact,
   formatBytes,
+  knownArtifact,
   openArtifact,
   useArtifactContent,
+  type ArtifactContent,
   type ArtifactEvent,
   type ArtifactRoute,
 } from '../artifacts';
@@ -17,13 +19,13 @@ import {
 const PREVIEW_WIDTH = 1280;
 const PREVIEW_HEIGHT = 800;
 
-// Inline transcript card: title, size, and a live scaled-down preview. The
-// whole preview opens the artifact page; the preview itself is inert.
-export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artifact: ArtifactEvent }) {
+// A preview frame scaled to its width, loaded (and its scripts run) only once
+// scrolled near view: transcripts and the gallery can hold many artifacts.
+// Once loaded, a preview stays mounted.
+function useLazyPreview() {
   const frameRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.4);
   const [visible, setVisible] = useState(typeof IntersectionObserver === 'undefined');
-  const content = useArtifactContent(sessionId, artifact.artifactId, visible);
 
   useLayoutEffect(() => {
     const el = frameRef.current;
@@ -36,8 +38,6 @@ export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artif
     return () => observer.disconnect();
   }, []);
 
-  // Long transcripts can hold many artifacts; only load (and run) the ones
-  // scrolled near view. Once loaded, a preview stays mounted.
   useEffect(() => {
     const el = frameRef.current;
     if (visible || !el) return;
@@ -48,6 +48,56 @@ export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artif
     return () => observer.disconnect();
   }, [visible]);
 
+  return { frameRef, scale, visible };
+}
+
+// The clickable, inert thumbnail. Not a <button>: an iframe is not allowed
+// inside one.
+function PreviewFrame({ title, content, preview, onOpen }: {
+  title: string;
+  content: ArtifactContent;
+  preview: ReturnType<typeof useLazyPreview>;
+  onOpen: () => void;
+}) {
+  const { frameRef, scale } = preview;
+  return (
+    <div
+      ref={frameRef}
+      role="button"
+      tabIndex={0}
+      className="artifact-preview"
+      style={{ height: PREVIEW_HEIGHT * scale }}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      aria-label={`Open ${title}`}
+    >
+      {content.state === 'ready' && (
+        <iframe
+          title={`Preview of ${title}`}
+          sandbox={ARTIFACT_PREVIEW_SANDBOX}
+          srcDoc={content.html}
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT, transform: `scale(${scale})` }}
+        />
+      )}
+      {content.state === 'loading' && <span className="artifact-preview-status">Loading preview…</span>}
+      {content.state === 'error' && <span className="artifact-preview-status error">{content.message}</span>}
+      <span className="artifact-preview-open" aria-hidden="true">Open ↗</span>
+    </div>
+  );
+}
+
+// Inline transcript card: title, size, and a live scaled-down preview. The
+// whole preview opens the artifact page; the preview itself is inert.
+export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artifact: ArtifactEvent }) {
+  const preview = useLazyPreview();
+  const content = useArtifactContent(sessionId, artifact.artifactId, preview.visible);
   const open = () => openArtifact(sessionId, artifact.artifactId);
   return (
     <section className="artifact-card" aria-label={`Artifact: ${artifact.title}`}>
@@ -65,37 +115,28 @@ export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artif
           Download
         </button>
       </header>
-      {/* Not a <button>: an iframe is not allowed inside one. */}
-      <div
-        ref={frameRef}
-        role="button"
-        tabIndex={0}
-        className="artifact-preview"
-        style={{ height: PREVIEW_HEIGHT * scale }}
-        onClick={open}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            open();
-          }
-        }}
-        aria-label={`Open ${artifact.title}`}
-      >
-        {content.state === 'ready' && (
-          <iframe
-            title={`Preview of ${artifact.title}`}
-            sandbox={ARTIFACT_PREVIEW_SANDBOX}
-            srcDoc={content.html}
-            tabIndex={-1}
-            aria-hidden="true"
-            style={{ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT, transform: `scale(${scale})` }}
-          />
-        )}
-        {content.state === 'loading' && <span className="artifact-preview-status">Loading preview…</span>}
-        {content.state === 'error' && <span className="artifact-preview-status error">{content.message}</span>}
-        <span className="artifact-preview-open" aria-hidden="true">Open ↗</span>
-      </div>
+      <PreviewFrame title={artifact.title} content={content} preview={preview} onOpen={open} />
     </section>
+  );
+}
+
+// Artifacts gallery tile: the preview above the title and where it came from.
+export function ArtifactTile({ sessionId, artifact, source, onOpen }: {
+  sessionId: string;
+  artifact: ArtifactEvent;
+  source: string;
+  onOpen: () => void;
+}) {
+  const preview = useLazyPreview();
+  const content = useArtifactContent(sessionId, artifact.artifactId, preview.visible);
+  return (
+    <li className="artifact-tile">
+      <PreviewFrame title={artifact.title} content={content} preview={preview} onOpen={onOpen} />
+      <div className="artifact-tile-text">
+        <button type="button" className="artifact-card-title" onClick={onOpen} tabIndex={-1} title={artifact.title}>{artifact.title}</button>
+        <span className="artifact-tile-meta">{[source, new Date(artifact.createdAt).toLocaleString(), formatBytes(artifact.size)].filter(Boolean).join(' · ')}</span>
+      </div>
+    </li>
   );
 }
 
@@ -104,15 +145,16 @@ export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artif
 // was left.
 export function ArtifactPage({ route }: { route: ArtifactRoute }) {
   const events = useStore((s) => s.sessions[route.sessionId]?.events);
-  const sessionName = useStore((s) => s.sessions[route.sessionId]?.name);
+  const liveName = useStore((s) => s.sessions[route.sessionId]?.name);
+  const known = knownArtifact(route.sessionId, route.artifactId);
+  const sessionName = liveName ?? known?.sessionName;
   const artifact = useMemo(() => {
-    if (!events) return undefined;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i].event;
+    for (let i = (events?.length ?? 0) - 1; i >= 0; i--) {
+      const ev = events![i].event;
       if (ev.kind === 'artifact' && ev.artifactId === route.artifactId) return ev;
     }
-    return undefined;
-  }, [events, route.artifactId]);
+    return known?.artifact;
+  }, [events, route.artifactId, known]);
   const content = useArtifactContent(route.sessionId, route.artifactId);
   const title = artifact?.title ?? 'Artifact';
   const filename = artifact?.filename ?? `artifact-${route.artifactId.slice(0, 8)}.html`;

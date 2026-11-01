@@ -1401,6 +1401,22 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
+	case "list_artifacts":
+		backend, ok := c.server.opts.Registry.(interface {
+			Artifacts(int) ([]registry.GalleryArtifact, error)
+		})
+		if !ok {
+			c.commandError(m, errors.New("artifacts gallery is unsupported"))
+			return
+		}
+		list, err := backend.Artifacts(m.Limit)
+		if err != nil {
+			slog.Warn("list artifacts failed", "connection_id", c.id, "error", err)
+			c.commandError(m, err)
+			return
+		}
+		slog.Debug("served artifacts gallery", "connection_id", c.id, "artifacts", len(list), "limit", m.Limit)
+		c.send(withCorr(map[string]any{"t": "artifacts", "artifacts": list}, m.CorrID))
 	case "search_sessions":
 		if c.server.opts.History != nil {
 			c.server.opts.History.TriggerStale("")
@@ -2230,6 +2246,7 @@ var asyncForwards = map[string]bool{
 	"get_messaging_state": true, "list_agent_links": true,
 	"list_system_notifications": true,
 	"list_host_metrics":         true,
+	"list_artifacts":            true,
 }
 
 func (c *connection) forwardFederation(m clientMessage) {

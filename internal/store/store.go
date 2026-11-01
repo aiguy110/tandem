@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS events (
         ts      INTEGER NOT NULL,
         PRIMARY KEY (sessionId, seq)
       );
+CREATE INDEX IF NOT EXISTS events_kind_ts ON events(kind, ts);
 CREATE TABLE IF NOT EXISTS session_audio_settings (
         sessionId         TEXT PRIMARY KEY,
         enabled         INTEGER NOT NULL DEFAULT 0,
@@ -1365,6 +1366,37 @@ func (s *Store) RangeEvents(sessionID string, afterSeq int64) ([]StoredEvent, er
 // EventsOfKinds returns every persisted event of the given kinds in sequence
 // order. It lets reconcilers inspect sparse event types without loading a
 // session's whole transcript.
+// KindEvent is one event found by EventsOfKindAcrossSessions, with the
+// owning session's name ("" once its row is gone).
+type KindEvent struct {
+	SessionID   string
+	SessionName string
+	Seq         int64
+	Payload     string
+	TS          int64
+}
+
+// EventsOfKindAcrossSessions returns the newest events of one kind from every
+// session, newest first (the artifacts gallery).
+func (s *Store) EventsOfKindAcrossSessions(kind string, limit int) ([]KindEvent, error) {
+	rows, err := s.db.Query(`SELECT e.sessionId, COALESCE(s.name, ''), e.seq, e.payload, e.ts
+		FROM events e LEFT JOIN sessions s ON s.id = e.sessionId
+		WHERE e.kind = ? ORDER BY e.ts DESC, e.seq DESC LIMIT ?`, kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]KindEvent, 0)
+	for rows.Next() {
+		var event KindEvent
+		if err := rows.Scan(&event.SessionID, &event.SessionName, &event.Seq, &event.Payload, &event.TS); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) EventsOfKinds(sessionID string, kinds ...string) ([]StoredEvent, error) {
 	if len(kinds) == 0 {
 		return nil, nil

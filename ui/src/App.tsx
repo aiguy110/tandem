@@ -21,6 +21,7 @@ import { AppearanceModal } from './components/AppearanceModal';
 import { uiScale } from './appearance';
 import { useValuePresence } from './transitions';
 import { ArtifactPage } from './components/ArtifactView';
+import { ArtifactsGallery } from './components/ArtifactsGallery';
 import { parseArtifactRoute, useLocationHash } from './artifacts';
 import { frontendVersion, loadDaemonVersion, reloadForDaemonVersion } from './version';
 
@@ -140,6 +141,7 @@ function ModalHost({ modal }: { modal: string }) {
       {rendered === 'adapters' && <AdapterManagerModal />}
       {rendered === 'mcp' && <McpServersModal />}
       {rendered === 'appearance' && <AppearanceModal />}
+      {rendered === 'artifacts' && <ArtifactsGallery />}
     </div>
   );
 }

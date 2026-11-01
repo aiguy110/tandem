@@ -78,7 +78,13 @@ the offline outbox is flushed on reconnect and stays pending.
 `list_host_metrics` accepts an optional `maxPoints`; the daemon then returns at
 most that many evenly strided samples (always including the newest). The
 utilization modal fetches a downsampled 24h history once and then polls only
-for samples newer than the last one it holds. Structured daemon logs identify connection
+for samples newer than the last one it holds.
+
+`list_artifacts` (`hostId?`, `limit?` ≤ 500) answers
+`{t: "artifacts", artifacts: [{sessionId, sessionName, artifact}]}`: the host's
+published `artifact` events across every session, newest first, one per
+(session, artifactId). `sessionId` is local to the answering host; the
+gallery namespaces it (`fed~<host>~<session>`) for a remote host. Structured daemon logs identify connection
 IDs, closure causes, queue bytes/messages, slow writes and commands, replay
 volume, dropped intermediate frames, and CDP failures without logging prompts
 or credentials.
