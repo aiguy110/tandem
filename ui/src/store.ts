@@ -1278,8 +1278,8 @@ export const useStore = create<StoreState>((set, get, api) => {
           );
           // Feed any pty frames in the snapshot into the terminal hubs (rehydrate).
           for (const e of msg.transcript) {
-            if (e.event.kind === 'raw_pty') ptyHub.push(msg.sessionId, e.event.dataB64);
-            else if (e.event.kind === 'shell_pty') shellHub.push(msg.sessionId, e.event.dataB64);
+            if (e.event.kind === 'raw_pty') ptyHub.push(msg.sessionId, e.event.dataB64, true);
+            else if (e.event.kind === 'shell_pty') shellHub.push(msg.sessionId, e.event.dataB64, true);
           }
           // The shell is exited iff its last lifecycle event is shell_exit (a
           // restart appends fresh shell_pty after it).

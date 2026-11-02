@@ -8,7 +8,7 @@ import { useStore } from '../../store';
 // and the user shell (shell_pty) both drive it through these props.
 interface Props {
   // Live byte source; must immediately replay buffered scrollback into `cb`.
-  subscribe: (cb: (bytes: Uint8Array) => void) => () => void;
+  subscribe: (cb: (bytes: Uint8Array, replay?: boolean) => void) => () => void;
   // Keystrokes typed into the terminal, as a UTF-8 string.
   onData: (data: string) => void;
   // Fit-to-container size, reported on initial layout and every later resize.
@@ -345,8 +345,8 @@ export function PtyTerminal({ subscribe, onData, onResize, onEngine, onFirstData
       cbs.current.onEngine?.(created.engine);
 
       // Feed buffered scrollback + live bytes into the emulator.
-      unsub = cbs.current.subscribe((bytes) => {
-        renderer?.write(bytes);
+      unsub = cbs.current.subscribe((bytes, replay) => {
+        renderer?.write(bytes, replay);
         if (bytes.length) {
           urlScanBuffer.current = (urlScanBuffer.current + urlDecoder.current.decode(bytes, { stream: true })).slice(-32_768);
           const found = latestTerminalURL(urlScanBuffer.current);

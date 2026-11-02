@@ -15,9 +15,9 @@ function b64ToBytes(b64: string): Uint8Array {
 class PtyHub {
   private buffers = new Map<string, Uint8Array[]>();
   private sizes = new Map<string, number>();
-  private listeners = new Map<string, Set<(bytes: Uint8Array) => void>>();
+  private listeners = new Map<string, Set<(bytes: Uint8Array, replay?: boolean) => void>>();
 
-  push(sessionId: string, dataB64: string): void {
+  push(sessionId: string, dataB64: string, replay = false): void {
     const bytes = b64ToBytes(dataB64);
     const buf = this.buffers.get(sessionId) ?? [];
     buf.push(bytes);
@@ -26,12 +26,12 @@ class PtyHub {
     this.buffers.set(sessionId, buf);
     this.sizes.set(sessionId, size);
     const ls = this.listeners.get(sessionId);
-    if (ls) for (const l of ls) l(bytes);
+    if (ls) for (const l of ls) l(bytes, replay);
   }
 
   // Subscribe live; immediately replays the buffered scrollback into `cb`.
-  subscribe(sessionId: string, cb: (bytes: Uint8Array) => void): () => void {
-    for (const chunk of this.buffers.get(sessionId) ?? []) cb(chunk);
+  subscribe(sessionId: string, cb: (bytes: Uint8Array, replay?: boolean) => void): () => void {
+    for (const chunk of this.buffers.get(sessionId) ?? []) cb(chunk, true);
     const ls = this.listeners.get(sessionId) ?? new Set();
     ls.add(cb);
     this.listeners.set(sessionId, ls);

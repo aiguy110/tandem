@@ -7,7 +7,7 @@
 import { ensureTermFont, selectedFontFamily } from './font';
 
 export interface TerminalRenderer {
-  write(bytes: Uint8Array): void;
+  write(bytes: Uint8Array, replay?: boolean): void;
   setFontSize(px: number): void;
   onData(cb: (data: string) => void): void;
   resize(cols: number, rows: number): void;
@@ -43,7 +43,7 @@ interface XtermLike {
   options?: { fontSize?: number };
   rows: number;
   open(el: HTMLElement): void;
-  write(data: Uint8Array | string): void;
+  write(data: Uint8Array | string, callback?: () => void): void;
   onData(cb: (d: string) => void): void;
   resize(cols: number, rows: number): void;
   focus(): void;
@@ -62,7 +62,11 @@ interface FitLike {
   fit(): void;
 }
 
-class Adapter implements TerminalRenderer {
+export class Adapter implements TerminalRenderer {
+  private writes: { bytes: Uint8Array; replay: boolean }[] = [];
+  private writing = false;
+  private replaying = false;
+  private disposed = false;
   constructor(
     private term: XtermLike,
     private fitAddon: FitLike,
@@ -74,17 +78,46 @@ class Adapter implements TerminalRenderer {
     // reported to the pty.
     if (this.term.options) this.term.options.fontSize = px;
   }
-  write(bytes: Uint8Array): void {
-    this.term.write(bytes);
-    // ghostty-web 0.4's canvas can miss the final cursor-only update in the
-    // usual shell erase echo (BS, space, BS), especially after scrollback has
-    // been replayed. Its VT buffer is correct, but the old character and cursor
-    // remain painted until some later output dirties the row. Redraw only for
-    // chunks containing BS; xterm.js does not need this compatibility path.
-    if (bytes.includes(0x08)) this.forceRedraw?.();
+  write(bytes: Uint8Array, replay = false): void {
+    this.writes.push({ bytes, replay });
+    this.drainWrites();
+  }
+  private drainWrites(): void {
+    if (this.writing || this.disposed) return;
+    const next = this.writes.shift();
+    if (!next) return;
+    // Ghostty completes writes on an animation frame. Batch queued chunks so
+    // restoring history does not cost one frame per historical output chunk.
+    const chunks = [next.bytes];
+    while (this.writes[0]?.replay === next.replay) chunks.push(this.writes.shift()!.bytes);
+    if (chunks.length > 1) {
+      next.bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        next.bytes.set(chunk, offset);
+        offset += chunk.length;
+      }
+    }
+    this.writing = true;
+    this.replaying = next.replay;
+    if (next.replay) console.debug('[terminal] replay output', { bytes: next.bytes.length });
+    // Both engines can parse writes asynchronously. Keep replay suppression in
+    // effect until parsing completes, and queue live output behind that boundary.
+    this.term.write(next.bytes, () => {
+      if (this.disposed) return;
+      if (next.bytes.includes(0x08)) this.forceRedraw?.();
+      this.replaying = false;
+      this.writing = false;
+      this.drainWrites();
+    });
   }
   onData(cb: (data: string) => void): void {
-    this.term.onData(cb);
+    this.term.onData((data) => {
+      // onData combines user input and terminal replies. Only discard cursor
+      // reports; ordinary typing and navigation must still work during replay.
+      if (this.replaying && /^\x1b\[\??\d+;\d+(?:;\d+)?R$/.test(data)) return;
+      cb(data);
+    });
   }
   resize(cols: number, rows: number): void {
     this.term.resize(cols, rows);
@@ -106,6 +139,8 @@ class Adapter implements TerminalRenderer {
     }
   }
   dispose(): void {
+    this.disposed = true;
+    this.writes = [];
     try {
       this.term.dispose();
     } catch {
