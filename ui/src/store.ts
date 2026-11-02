@@ -145,6 +145,7 @@ function turnNotificationSeverity(prev: SessionStatus, next: SessionStatus): Not
 // green.
 export function agentBadge(agent: SessionView): { count: number; severity: NotifSeverity | null } {
   const severities = agent.turnNotifications.map((n) => n.severity);
+  if (agent.manuallyUnread && severities.length === 0) severities.push('success');
   const attention = agent.pendingApprovals.length + agent.takeovers.length + (agent.secretRequests?.length ?? 0) + (agent.browserInstanceRequests?.length ?? 0);
   for (let i = 0; i < attention; i++) severities.push('attention');
   return { count: severities.length, severity: maxSeverity(severities) };
@@ -199,6 +200,7 @@ export interface SessionView {
   lastSeq: number;
   pendingApprovals: Approval[];
   turnNotifications: TurnNotification[];
+  manuallyUnread?: boolean;
   hasPty: boolean; // any raw_pty seen → the agent CLI view has live content
   // User escape-hatch shell (Terminal tab). shellExited flips true when the
   // shell process ends (shell_exit) so the pane can offer a restart.
@@ -1672,8 +1674,8 @@ export const useStore = create<StoreState>((set, get, api) => {
       set((st) => {
         const agent = st.sessions[id];
         const pane = st.panesBySession[id] ?? 'chat';
-        if (!agent || agent.turnNotifications.length === 0) return { focusedId: id, pane };
-        return { focusedId: id, pane, sessions: { ...st.sessions, [id]: { ...agent, turnNotifications: [] } } };
+        if (!agent || agent.turnNotifications.length === 0 && !agent.manuallyUnread) return { focusedId: id, pane };
+        return { focusedId: id, pane, sessions: { ...st.sessions, [id]: { ...agent, turnNotifications: [], manuallyUnread: false } } };
       });
       if (get().sessions[id]) saveFocusedSession(id);
       syncAudioFocus();
@@ -1699,23 +1701,11 @@ export const useStore = create<StoreState>((set, get, api) => {
       });
       client.send({ t: 'reorder_session', sessionId: id, targetSessionId: targetId, after, corrId });
     },
-    // A user can restore the completed-turn badge after acknowledging it. This
-    // is deliberately browser-local, like notifications created from live
-    // status transitions, and is idempotent while the agent is already unread.
+    // Manual unread is a browser-local reminder, independent of the notification queue.
     markAgentUnread: (id) => set((st) => {
       const agent = st.sessions[id];
-      if (!agent || agent.turnNotifications.length > 0) return st;
-      const notification: TurnNotification = {
-        seq: agent.lastSeq,
-        createdAt: Date.now(),
-        severity: 'success',
-      };
-      return {
-        sessions: {
-          ...st.sessions,
-          [id]: { ...agent, turnNotifications: [...agent.turnNotifications, notification] },
-        },
-      };
+      if (!agent || agent.manuallyUnread) return st;
+      return { sessions: { ...st.sessions, [id]: { ...agent, manuallyUnread: true } } };
     }),
     // Selecting Terminal is view-only until its shroud's explicit Take control
     // action calls enterTerminal. Even an idle ACP session must never be swapped
@@ -2459,7 +2449,7 @@ export function notificationsSummary(st: StoreState): { total: number; severity:
   const severities: NotifSeverity[] = st.systemNotifications.map((n) => n.severity);
   let total = st.systemNotifications.length;
   for (const id of Object.keys(st.sessions)) {
-    const badge = agentBadge(st.sessions[id]);
+    const badge = agentBadge({ ...st.sessions[id], manuallyUnread: false });
     total += badge.count;
     if (badge.severity) severities.push(badge.severity);
   }

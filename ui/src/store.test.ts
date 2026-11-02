@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __testApplyServerMsg, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
+import { __testApplyServerMsg, agentBadge, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
 import type { SessionSummary, Annotation } from './wire';
 import { WsClient } from './ws/client';
 import { buildCommands } from './commands/registry';
@@ -750,5 +750,21 @@ describe('light background subscriptions', () => {
     expect(useStore.getState().sessions.b.historyPartial).toBe(false);
     expect(useStore.getState().sessions.b.historyLoaded).toBe(true);
     sendSpy.mockRestore();
+  });
+});
+
+describe('manual unread reminders', () => {
+  it('adds only a badge and clears it when focused', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle',
+      controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.getState().markAgentUnread('session-1');
+    useStore.getState().markAgentUnread('session-1');
+    expect(agentBadge(useStore.getState().sessions['session-1'])).toEqual({ count: 1, severity: 'success' });
+    expect(allTurnNotifications(useStore.getState())).toEqual([]);
+    expect(notificationsSummary(useStore.getState()).total).toBe(0);
+    useStore.getState().focus('session-1');
+    expect(agentBadge(useStore.getState().sessions['session-1']).count).toBe(0);
   });
 });

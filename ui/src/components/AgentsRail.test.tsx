@@ -379,3 +379,17 @@ describe('SessionsRail host headers', () => {
     expect(screen.queryByText('Remote agent')).not.toBeNull();
   });
 });
+
+it('splits host counts into read and unread sessions, including manual reminders', () => {
+  const read = session();
+  const unread = { ...session(), id: 'unread', manuallyUnread: true };
+  useStore.setState({
+    sessions: { [read.id]: read, [unread.id]: unread },
+    order: [read.id, unread.id],
+    hosts: [{ id: 'worker', name: 'Worker', status: 'connected' }],
+  });
+  render(<SessionsRail />);
+  expect(screen.getByLabelText('1 read, 1 unread sessions')).toBeTruthy();
+  act(() => useStore.getState().focus(unread.id));
+  expect(screen.getByLabelText('2 read, 0 unread sessions')).toBeTruthy();
+});

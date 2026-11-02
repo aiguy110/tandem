@@ -355,8 +355,10 @@ body.dock-resizing .app { transition: none; }
 .session-host-divider.collapsed .session-host-chevron { transform: rotate(-90deg); }
 .session-host-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-host-local { flex: none; margin-left: -2px; color: var(--text-faint); font-weight: 500; }
+.session-host-counts { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--text-dim); }
+.session-host-count.unread { color: var(--ok); }
 .session-host-count {
-  margin-left: auto; flex: none; min-width: 18px; padding: 0 5px; text-align: center;
+  flex: none; min-width: 18px; padding: 0 5px; text-align: center;
   border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim);
   font: 600 var(--fs-xs) var(--font-mono); letter-spacing: 0;
 }

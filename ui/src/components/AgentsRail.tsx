@@ -540,7 +540,11 @@ function HostHeader({ group, collapsed, onToggle, onSpawn, onDetails, onMetrics 
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [menu]);
-  const count = group.ids.length;
+  const unread = useStore((st) => group.ids.filter((id) => {
+    const agent = st.sessions[id];
+    return agent && (agent.manuallyUnread || agent.turnNotifications.length > 0);
+  }).length);
+  const read = group.ids.length - unread;
   return (
     <div
       className={`session-host-divider${collapsed ? ' collapsed' : ''}`}
@@ -563,7 +567,11 @@ function HostHeader({ group, collapsed, onToggle, onSpawn, onDetails, onMetrics 
       {group.link && <span className={`session-host-dot ${group.link.tone}`} title={group.link.title} aria-label={group.link.title} />}
       <span className="session-host-name">{group.label}</span>
       {group.local && <span className="session-host-local">(local)</span>}
-      <span className="session-host-count" title={`${count} session${count === 1 ? '' : 's'}`}>{count}</span>
+      <span className="session-host-counts" aria-label={`${read} read, ${unread} unread sessions`}>
+        <span className="session-host-count" title="Read sessions">{read}</span>
+        <span aria-hidden="true">+</span>
+        <span className="session-host-count unread" title="Unread sessions">{unread}</span>
+      </span>
       {menu && createPortal(
         <div
           className="session-context-menu"
