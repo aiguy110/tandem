@@ -50,9 +50,25 @@ describe('prompt acknowledgements', () => {
 
     await vi.advanceTimersByTimeAsync(15_000);
 
-    await expect(pending).resolves.toEqual({ error: 'Prompt confirmation timed out. Check the queue before retrying.' });
+    await expect(pending).resolves.toEqual(expect.objectContaining({ error: 'Prompt confirmation timed out. Check the queue before retrying.' }));
     expect(sendSpy).toHaveBeenCalledOnce();
   });
+  it('reconciles a timed out prompt from replay and preserves a newer draft', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
+    useStore.setState({ drafts: { 'session-1': 'continue' } });
+    const pending = useStore.getState().prompt('session-1', 'continue');
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await pending;
+    expect(useStore.getState().promptTimeouts[result.recoveryId!]).toBe(true);
+    useStore.getState().setDraft('session-1', 'next question');
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 1, event: { kind: 'user_message', text: 'different' } });
+    expect(useStore.getState().promptTimeouts[result.recoveryId!]).toBe(true);
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'user_message', text: 'continue' } });
+    expect(useStore.getState().promptTimeouts[result.recoveryId!]).toBe(false);
+    expect(useStore.getState().drafts['session-1']).toBe('next question');
+  });
+
 });
 
 function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {

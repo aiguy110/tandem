@@ -298,6 +298,7 @@ export interface DraftAttachment {
 export type ModalKind = 'none' | 'spawn' | 'command' | 'resume' | 'automation' | 'fleet' | 'host-metrics' | 'adapters' | 'mcp' | 'appearance' | 'artifacts';
 
 export interface AckResult {
+  recoveryId?: string;
   sessionId?: string;
   error?: string;
   promptId?: string;
@@ -307,6 +308,7 @@ export interface AckResult {
 }
 
 interface StoreState {
+  promptTimeouts: Record<string, boolean>;
   conn: ConnState;
   // Round-trip health of the daemon socket, from periodic pings.
   linkHealth: LinkHealth;
@@ -544,13 +546,20 @@ function failInFlightSpawns(): void {
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
 const RATE_LIMIT_ACK_TIMEOUT_MS = 5_000;
 
-function registerPromptAck(corrId: string, resolve: (result: AckResult) => void, onAccepted: () => void): void {
+const promptAttempts = new Map<string, { sessionId: string; baseline: number; blocks: PromptBlock[]; queueIds: Set<string>; accept: () => void; aside: boolean }>();
+function registerPromptAck(corrId: string, resolve: (result: AckResult) => void, onAccepted: () => void, sessionId: string, input: string | PromptBlock[], aside = false): void {
+  const view = useStore.getState().sessions[sessionId];
+  promptAttempts.set(corrId, { sessionId, baseline: view?.lastSeq ?? 0, blocks: typeof input === 'string' ? [{ type: 'text', text: input }] : input, queueIds: new Set(view?.queuedPrompts.map(p => p.id)), accept: onAccepted, aside });
   const timer = window.setTimeout(() => {
-    if (!pendingAcks.delete(corrId)) return;
-    resolve({ error: 'Prompt confirmation timed out. Check the queue before retrying.' });
+    if (!pendingAcks.has(corrId)) return;
+    useStore.setState(st => ({ promptTimeouts: { ...st.promptTimeouts, [corrId]: true } }));
+    console.warn('Prompt confirmation timed out', { corrId, sessionId });
+    resolve({ error: 'Prompt confirmation timed out. Check the queue before retrying.', recoveryId: corrId });
   }, PROMPT_ACK_TIMEOUT_MS);
   pendingAcks.set(corrId, (result) => {
     window.clearTimeout(timer);
+    promptAttempts.delete(corrId);
+    useStore.setState(st => ({ promptTimeouts: { ...st.promptTimeouts, [corrId]: false } }));
     if (!result.error) onAccepted();
     resolve(result);
   });
@@ -870,7 +879,8 @@ export const useStore = create<StoreState>((set, get, api) => {
           const focusedId = st.focusedId && sessions[st.focusedId] ? st.focusedId : st.focusedSpawnId ? null : order[0] ?? null;
           const pane = focusedId ? st.panesBySession[focusedId] ?? 'chat' : 'chat';
           if (focusedId !== st.focusedId) saveFocusedSession(focusedId);
-          return { sessions, order, focusedId, pane };
+          return {
+    sessions, order, focusedId, pane };
         });
         // The reconnect path already re-subscribes tracked sessions. Summary
         // refreshes only need to subscribe sessions discovered for the first time.
@@ -1525,6 +1535,7 @@ export const useStore = create<StoreState>((set, get, api) => {
   });
 
   return {
+    promptTimeouts: {},
     conn: 'connecting',
     linkHealth: { rttMs: null, stale: false, bufferedBytes: 0 },
     theme: initialTheme(),
@@ -2088,7 +2099,8 @@ export const useStore = create<StoreState>((set, get, api) => {
     prompt: (sessionId, input) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
+        const draft = get().drafts[sessionId];
+        registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, input);
         client.send(typeof input === 'string'
           ? { t: 'prompt', sessionId, text: input, corrId }
           : { t: 'prompt', sessionId, blocks: input, corrId });
@@ -2096,7 +2108,8 @@ export const useStore = create<StoreState>((set, get, api) => {
     steer: (sessionId, input, opts) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
+        const draft = get().drafts[sessionId];
+        registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, input);
         const includeQueue = opts?.includeQueue ? { includeQueue: true } : {};
         client.send(typeof input === 'string'
           ? { t: 'steer', sessionId, text: input, corrId, ...includeQueue }
@@ -2105,7 +2118,8 @@ export const useStore = create<StoreState>((set, get, api) => {
     aside: (sessionId, question) =>
       new Promise<AckResult>((resolve) => {
         const corrId = nextCorr();
-        registerPromptAck(corrId, resolve, () => set((st) => ({ drafts: { ...st.drafts, [sessionId]: '' } })));
+        const draft = get().drafts[sessionId];
+        registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, question, true);
         client.send({ t: 'aside', sessionId, text: question, corrId });
       }),
     removeQueuedPrompt: (sessionId, promptId) =>
@@ -2605,3 +2619,23 @@ export function allSecretRequests(st: StoreState): { sessionId: string; request:
   }
   return out;
 }
+
+// Reconcile after both live updates and reconnect snapshots. Old identical chat
+// messages and pre-existing queue entries cannot confirm a new attempt.
+useStore.subscribe((state) => {
+  for (const [corrId, attempt] of promptAttempts) {
+    const view = state.sessions[attempt.sessionId];
+    if (!view) continue;
+    const same = (blocks: PromptBlock[]) => JSON.stringify(blocks) === JSON.stringify(attempt.blocks);
+    const delivered = view.events.some(({ seq, event }) => seq > attempt.baseline && (
+      attempt.aside
+        ? event.kind === 'aside_started' && same([{ type: 'text', text: event.question }])
+        : event.kind === 'user_message' && same(event.blocks ?? [{ type: 'text', text: event.text ?? '' }])
+    ));
+    const queued = !attempt.aside && view.queuedPrompts.some(p => !attempt.queueIds.has(p.id) && same(p.blocks));
+    if (!delivered && !queued) continue;
+    console.info('Prompt delivery reconciled', { corrId, sessionId: attempt.sessionId, queued });
+    pendingAcks.get(corrId)?.({ sessionId: attempt.sessionId });
+    pendingAcks.delete(corrId);
+  }
+});

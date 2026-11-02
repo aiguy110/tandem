@@ -2305,6 +2305,15 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     });
   };
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [promptRecoveryId, setPromptRecoveryId] = useState<string>();
+  const promptUnconfirmed = useStore(st => promptRecoveryId ? st.promptTimeouts[promptRecoveryId] : undefined);
+  useEffect(() => {
+    if (promptRecoveryId && promptUnconfirmed === false) {
+      setAttachmentError(null);
+      setPromptRecoveryId(undefined);
+    }
+  }, [promptRecoveryId, promptUnconfirmed]);
+
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const { mounted: attachmentMenuMounted, closing: attachmentMenuClosing } = usePresence(attachmentMenuOpen);
   const [dragging, setDragging] = useState(false);
@@ -2587,7 +2596,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       setSending(true);
       try {
         const result = await setRateLimitAutoContinue(sessionId, true, t);
-        if (result.error) setAttachmentError(result.error);
+        if (result.error) { setAttachmentError(result.error); setPromptRecoveryId(result.recoveryId); }
         else {
           setDraft(sessionId, '');
           setAttachmentError(null);
@@ -2608,7 +2617,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       setSending(true);
       try {
         const result = await steer(sessionId, quotes, { includeQueue: true });
-        if (result.error) setAttachmentError(result.error);
+        if (result.error) { setAttachmentError(result.error); setPromptRecoveryId(result.recoveryId); }
         else {
           setAttachmentError(null);
           if (hasAnnotations) void clearAnnotations(sessionId);
@@ -2635,7 +2644,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
       try {
         const btw = t.match(/^\/btw(?:\s+|$)([\s\S]*)$/i);
         const result = !steering && btw ? await aside(sessionId, btw[1].trim()) : await (steering ? steer : prompt)(sessionId, t);
-        if (result.error) setAttachmentError(result.error);
+        if (result.error) { setAttachmentError(result.error); setPromptRecoveryId(result.recoveryId); }
         if (result.disposition === 'queued') {
           setQueuedPosition(result.position ?? 1);
           window.setTimeout(() => setQueuedPosition(null), 2000);
@@ -2672,6 +2681,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     }
     if (result.error) {
       setAttachmentError(result.error);
+      setPromptRecoveryId(result.recoveryId);
       return;
     }
     for (const attachment of attachments) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
@@ -2704,6 +2714,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     const result = queued.id === wakePromptId ? {} : await removeQueuedPrompt(sessionId, queued.id);
     if (result.error) {
       setAttachmentError(result.error);
+      setPromptRecoveryId(result.recoveryId);
       return;
     }
     const draft = queued.blocks
@@ -2960,7 +2971,7 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
                   try {
                     if (scheduledRateLimit.enabled) await setRateLimitAutoContinue(sessionId, false, '');
                     const result = await prompt(sessionId, message);
-                    if (result.error) setAttachmentError(result.error);
+                    if (result.error) { setAttachmentError(result.error); setPromptRecoveryId(result.recoveryId); }
                     else setAttachmentError(null);
                   } catch (error) {
                     setAttachmentError(error instanceof Error ? error.message : 'Could not send prompt.');
