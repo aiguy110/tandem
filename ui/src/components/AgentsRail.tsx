@@ -88,6 +88,14 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
     else next.delete(id);
     return next;
   });
+  // A resumed session reuses its ID. Do not let a completed deletion disable
+  // that new row, even when removal arrives before the close acknowledgement.
+  useEffect(() => {
+    setDeleting((previous) => {
+      const next = new Set([...previous].filter((id) => agents[id]));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [agents]);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [contextMenuDismissal, setContextMenuDismissal] = useState<{ id: string; token: number } | null>(null);
@@ -198,6 +206,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           pendingRemoval.current = null;
           setCloseError(result.error);
         }
+        setRowDeleting(id, false);
         return;
       }
       setRowDeleting(id, false);
@@ -475,7 +484,10 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                     pendingRemoval.current = null;
                     setCloseError(result.error);
                   }
-                  else setConfirmation(null);
+                  else {
+                    setRowDeleting(confirmation.id, false);
+                    setConfirmation(null);
+                  }
                 }}
               >
                 Delete agent

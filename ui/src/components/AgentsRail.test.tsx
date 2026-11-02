@@ -51,6 +51,26 @@ function touchPointer(type: string, pointerId: number, clientX: number, clientY:
 }
 
 describe('SessionsRail close recovery', () => {
+  it('clears deletion state when the same session is resumed', async () => {
+    const agent = session();
+    const closeAgent = vi.fn(async () => {
+      useStore.setState({ sessions: {}, order: [] });
+      return {};
+    });
+    useStore.setState({
+      sessions: { [agent.id]: agent }, order: [agent.id],
+      getClosePreview: vi.fn().mockResolvedValue({ kind: 'worktree' }), closeAgent,
+    });
+    const view = render(<SessionsRail />);
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('.delete-btn')!);
+    await waitFor(() => expect(closeAgent).toHaveBeenCalled());
+    await waitFor(() => expect(view.container.querySelector('.session-row')).toBeNull());
+    act(() => useStore.setState({ sessions: { [agent.id]: { ...agent } }, order: [agent.id] }));
+    expect(view.container.querySelector('.session-row')).toBeTruthy();
+    expect(view.container.querySelector('.session-row.deleting')).toBeNull();
+    expect(screen.queryByText('Deleting…')).toBeNull();
+  });
+
   it('offers a forced retry when a clean preview belongs to an orphaned worktree', async () => {
     const closeAgent = vi.fn()
       .mockResolvedValueOnce({ error: 'orphaned_worktree: repository no longer exists; close with force:true' })
