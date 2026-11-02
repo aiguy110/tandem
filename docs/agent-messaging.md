@@ -139,7 +139,10 @@ reciprocal links.
 - On the recipient, while the asker has an ask open with it, `messages_send` to the asker
   goes as a `reply` to the oldest such ask (needing no link). If the asker no longer
   holds the request (`unknown_request`), it is resent as a plain `send`. With
-  `expectsReply` and no link, it is likewise sent as the reply.
+  `expectsReply` it is likewise sent as the reply. The asker is matched against the
+  obligation itself (`<host>~<agent>` or `@agent:<host>/<agent>` by node ID, display
+  name or session ID), so the reply works even when the asker's host is absent from
+  this host's federation view (one-way federation); it then waits for the asker's pull.
 - Any message from the asked agent (send, ask, reply or decline) closes all the asker's
   open requests to it; any message the asked agent sends to the asker closes all its
   obligations to it. The conversation itself never closes: either side keeps sending.

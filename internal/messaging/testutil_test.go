@@ -118,11 +118,20 @@ type testNet struct {
 	level map[string]federation.Level
 	// noPull lists hosts that predate agent_message_pull.
 	noPull map[string]bool
+	// hidden lists hosts left out of another host's federation view, keyed
+	// "viewer>host" (one-way federation).
+	hidden map[string]bool
 	calls  []string
 }
 
 func newNet() *testNet {
-	return &testNet{hosts: map[string]*testHost{}, offline: map[string]bool{}, level: map[string]federation.Level{}, noPull: map[string]bool{}}
+	return &testNet{hosts: map[string]*testHost{}, offline: map[string]bool{}, level: map[string]federation.Level{}, noPull: map[string]bool{}, hidden: map[string]bool{}}
+}
+
+func (n *testNet) setHidden(viewer, host string) {
+	n.mu.Lock()
+	n.hidden[viewer+">"+host] = true
+	n.mu.Unlock()
 }
 
 func (n *testNet) setNoPull(id string, v bool)    { n.mu.Lock(); n.noPull[id] = v; n.mu.Unlock() }
@@ -161,7 +170,7 @@ func (f *testFed) Hosts() []federation.Host {
 	defer f.net.mu.Unlock()
 	var out []federation.Host
 	for id := range f.net.hosts {
-		if id == f.self {
+		if id == f.self || f.net.hidden[f.self+">"+id] {
 			continue
 		}
 		status := "connected"

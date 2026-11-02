@@ -44,7 +44,13 @@ func (s *Service) Send(ctx context.Context, sessionID, to, body, threadID string
 	}
 	dest, err := s.resolve(ctx, sess, to)
 	if err != nil {
-		return SendResult{}, err
+		// An asker on a host this host has no federation entry for (one-way
+		// federation) is not resolvable, but its open ask is still answerable.
+		ob := s.openObligationNamed(sess.ID, to)
+		if ob == nil {
+			return SendResult{}, err
+		}
+		dest = Address{Host: ob.AskerHost, Agent: ob.AskerAgent, Name: ob.AskerName}
 	}
 	if ob := s.openObligationFrom(sess.ID, dest); ob != nil {
 		res, err := s.answer(ctx, sessionID, ob.RequestID, KindReply, body)
@@ -83,6 +89,14 @@ func (s *Service) SendMessage(ctx context.Context, sessionID, to, body, threadID
 	if !expectsReply {
 		return s.Send(ctx, sessionID, to, body, threadID)
 	}
+	// A message to an agent with an ask open answers it (see Send), even when
+	// its host is not in this host's federation view.
+	if sess, err := s.liveSession(sessionID); err == nil {
+		dest, rerr := s.resolve(ctx, sess, to)
+		if (rerr == nil && s.openObligationFrom(sess.ID, dest) != nil) || (rerr != nil && s.openObligationNamed(sess.ID, to) != nil) {
+			return s.Send(ctx, sessionID, to, body, threadID)
+		}
+	}
 	res, err := s.AskInThread(ctx, sessionID, to, body, threadID, timeoutMinutes)
 	var rej *Rejection
 	if err == nil || !errors.As(err, &rej) || rej.Code != ErrNoLink {
@@ -110,6 +124,39 @@ func (s *Service) openObligationFrom(sessionID string, peer Address) *store.Agen
 	}
 	for _, ob := range obs {
 		if ob.AskerHost == peer.Host && ob.AskerAgent == peer.Agent {
+			return &ob
+		}
+	}
+	return nil
+}
+
+// openObligationNamed returns the oldest open ask whose asker the recipient
+// string to names, matched against the obligation itself rather than the
+// federation view: "<host>~<agent>" or "@agent:<host>/<agent>", where <host>
+// is the asker's node ID or this host's display name for it and <agent> its
+// session ID or name. Nil when none matches.
+func (s *Service) openObligationNamed(sessionID, to string) *store.AgentMsgObligation {
+	hostSel, agentSel, ok := parseRef(to)
+	if !ok {
+		addr, ok := ParseAddress(to)
+		if !ok {
+			return nil
+		}
+		hostSel, agentSel = addr.Host, addr.Agent
+	}
+	if hostSel == "" || agentSel == "" {
+		return nil
+	}
+	obs, err := s.st.OpenAgentMsgObligations(sessionID)
+	if err != nil {
+		slog.Warn("agent obligation lookup failed", "session_id", sessionID, "error", err)
+		return nil
+	}
+	names := s.hostNames()
+	for _, ob := range obs {
+		hostOK := strings.EqualFold(ob.AskerHost, hostSel) || (names[ob.AskerHost] != "" && strings.EqualFold(names[ob.AskerHost], hostSel))
+		agentOK := strings.EqualFold(ob.AskerAgent, agentSel) || (ob.AskerName != "" && strings.EqualFold(ob.AskerName, agentSel))
+		if hostOK && agentOK {
 			return &ob
 		}
 	}

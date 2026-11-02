@@ -636,6 +636,42 @@ func TestCrossHostAskReplyAndSameHostBypassesFederation(t *testing.T) {
 	}
 }
 
+// An asker whose host is missing from the answerer's federation view (one-way
+// federation) can't be resolved by reference, but messages_send to it still
+// answers its open ask, by ID-style address and by the canonical reference.
+func TestAnswerToAskerOnUnlistedHost(t *testing.T) {
+	for _, to := range []string{"hostA~alice", "@agent:hostA/alice"} {
+		t.Run(to, func(t *testing.T) {
+			net := newNet()
+			a := newTestHost(t, "hostA", hostOpts{net: net})
+			b := newTestHost(t, "hostB", hostOpts{net: net, clock: a.clock})
+			_, aliceAd := a.addSession("alice", "alice")
+			_, bobAd := b.addSession("bob", "bob")
+			b.link(a.addr("alice"), "bob")
+			net.setHidden("hostB", "hostA")
+			ctx := context.Background()
+			ask, err := a.svc.Ask(ctx, "alice", "hostB~bob", "question", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "bob to receive", func() bool { return len(bobAd.promptTexts()) == 1 })
+			if _, err := b.svc.resolve(ctx, b.svc.opts.Sessions.Get("bob"), "@agent:hostA/alice"); err == nil {
+				t.Fatal("hostA should not be resolvable from hostB")
+			}
+			res, err := b.svc.SendMessage(ctx, "bob", to, "answer", ask.ThreadID, true, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RequestID != ask.RequestID {
+				t.Fatalf("send did not answer the ask: %+v", res)
+			}
+			// hostB has no route to hostA: the answer waits for hostA's pull.
+			a.svc.pullOutstanding(ctx)
+			eventually(t, "alice to receive the answer", func() bool { return sawText(aliceAd, "answer") })
+		})
+	}
+}
+
 func TestRecipientClosedNotifiesAskerWithRecipientGone(t *testing.T) {
 	net := newNet()
 	a := newTestHost(t, "hostA", hostOpts{net: net})
