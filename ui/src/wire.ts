@@ -640,9 +640,9 @@ export type ClientMsg =
   | { t: 'client_diag'; diag: ClientDiag }
   | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean; browserId?: string; transcriptTail?: number }
   | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
-  | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
-  | { t: 'steer'; sessionId: string; text?: string; blocks?: PromptBlock[]; includeQueue?: boolean; corrId?: string }
-  | { t: 'aside'; sessionId: string; text: string; corrId?: string }
+  | { t: 'prompt'; requestId?: string; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }
+  | { t: 'steer'; requestId?: string; sessionId: string; text?: string; blocks?: PromptBlock[]; includeQueue?: boolean; corrId?: string }
+  | { t: 'aside'; requestId?: string; sessionId: string; text: string; corrId?: string }
   | { t: 'remove_queued_prompt'; sessionId: string; promptId: string; corrId?: string }
   | { t: 'clear_prompt_queue'; sessionId: string; corrId?: string }
   | { t: 'set_rate_limit_auto_continue'; sessionId: string; enabled: boolean; message?: string; corrId?: string }

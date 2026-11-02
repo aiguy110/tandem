@@ -614,7 +614,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		}
 		return updateService.HandleAction(actionCtx, id, action)
 	}
-	handler := wsserver.New(wsserver.Options{Token: token, Registry: agents, Fallback: fallback, Browser: broker, DismissTakeover: func(sessionID, reqID string) error {
+	handler := wsserver.New(wsserver.Options{PromptRequests: db, Token: token, Registry: agents, Fallback: fallback, Browser: broker, DismissTakeover: func(sessionID, reqID string) error {
 		if agents.Get(sessionID) == nil {
 			return errors.New("no such agent")
 		}

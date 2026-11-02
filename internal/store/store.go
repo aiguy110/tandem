@@ -18,6 +18,11 @@ import (
 var agentSuffix = regexp.MustCompile(`-(\d+)$`)
 
 const schema = `
+CREATE TABLE IF NOT EXISTS prompt_requests (
+ sessionId TEXT NOT NULL, requestId TEXT NOT NULL, fingerprint TEXT NOT NULL,
+ result TEXT, PRIMARY KEY(sessionId, requestId)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
         id           TEXT PRIMARY KEY,
         name         TEXT NOT NULL,

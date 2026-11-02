@@ -644,3 +644,15 @@ concrete payoff of the "daemon owns all state" invariant.
   owner=user. **`takeover_request` events ride the `transcript` channel** (like
   `permission_request`) so the attention rail sees them even when no Browser pane is open.
   See [`browser.md`](browser.md).
+
+Prompt delivery recovery: `prompt`, `steer`, and `aside` accept an optional
+`requestId` (a random UUID, at most 128 characters). Reuse that ID and the exact
+same payload for retries; `corrId` still correlates each response. The daemon
+reserves the ID durably before execution and stores the resulting acknowledgement.
+Duplicates return the saved result; different content under the same ID is rejected.
+Receipts survive daemon restarts. An unfinished reservation is reported as uncertain
+and is never executed again automatically. Federation parents reserve IDs too, so
+older children cannot execute a retried request twice after a lost tunnel response.
+The UI retries twice at 15-second intervals while connected and resends outstanding
+requests on reconnect. Pending browser attempts live in memory; reloading retains
+the existing text drafts but does not automatically resend them.

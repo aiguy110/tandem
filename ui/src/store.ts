@@ -546,19 +546,32 @@ function failInFlightSpawns(): void {
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
 const RATE_LIMIT_ACK_TIMEOUT_MS = 5_000;
 
+const promptCommands = new Map<string, ClientMsg>();
+let retryPromptCommand: (command: ClientMsg) => void;
 const promptAttempts = new Map<string, { sessionId: string; baseline: number; blocks: PromptBlock[]; queueIds: Set<string>; accept: () => void; aside: boolean }>();
 function registerPromptAck(corrId: string, resolve: (result: AckResult) => void, onAccepted: () => void, sessionId: string, input: string | PromptBlock[], aside = false): void {
   const view = useStore.getState().sessions[sessionId];
   promptAttempts.set(corrId, { sessionId, baseline: view?.lastSeq ?? 0, blocks: typeof input === 'string' ? [{ type: 'text', text: input }] : input, queueIds: new Set(view?.queuedPrompts.map(p => p.id)), accept: onAccepted, aside });
-  const timer = window.setTimeout(() => {
+  let retries = 0;
+  const check = () => {
     if (!pendingAcks.has(corrId)) return;
+    const command = promptCommands.get(corrId);
+    if (command && useStore.getState().conn === 'connected' && retries < 2) {
+      retries++;
+      console.info('Retrying unconfirmed prompt', { corrId, sessionId, retries });
+      retryPromptCommand(command);
+      timer = window.setTimeout(check, PROMPT_ACK_TIMEOUT_MS);
+      return;
+    }
     useStore.setState(st => ({ promptTimeouts: { ...st.promptTimeouts, [corrId]: true } }));
     console.warn('Prompt confirmation timed out', { corrId, sessionId });
     resolve({ error: 'Prompt confirmation timed out. Check the queue before retrying.', recoveryId: corrId });
-  }, PROMPT_ACK_TIMEOUT_MS);
+  };
+  let timer = window.setTimeout(check, PROMPT_ACK_TIMEOUT_MS);
   pendingAcks.set(corrId, (result) => {
     window.clearTimeout(timer);
     promptAttempts.delete(corrId);
+    promptCommands.delete(corrId);
     useStore.setState(st => ({ promptTimeouts: { ...st.promptTimeouts, [corrId]: false } }));
     if (!result.error) onAccepted();
     resolve(result);
@@ -1477,6 +1490,12 @@ export const useStore = create<StoreState>((set, get, api) => {
   applyServerMsg = apply;
   const spawnCache = loadSpawnCache();
 
+  const sendPromptCommand = (corrId: string, command: ClientMsg) => {
+    const message = { ...command, requestId: crypto.randomUUID() } as ClientMsg;
+    promptCommands.set(corrId, message);
+    client.send(message);
+  };
+  retryPromptCommand = command => { client.send(command); };
   client = new WsClient({
     onMessage: apply,
     onState: (conn) => {
@@ -1507,6 +1526,9 @@ export const useStore = create<StoreState>((set, get, api) => {
       sendClientDiag({ kind: 'slow_command', ...report, rttMs: get().linkHealth.rttMs ?? undefined });
     },
     onOpen: () => {
+      // Repeat with the same durable request ID, including commands whose ack
+      // was lost. The daemon returns the saved receipt without executing again.
+      for (const command of promptCommands.values()) client.send(command);
       // The outbox was just flushed onto this socket.
       for (const corrId of queuedSpawns) inFlightSpawns.add(corrId);
       queuedSpawns.clear();
@@ -2101,7 +2123,7 @@ export const useStore = create<StoreState>((set, get, api) => {
         const corrId = nextCorr();
         const draft = get().drafts[sessionId];
         registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, input);
-        client.send(typeof input === 'string'
+        sendPromptCommand(corrId, typeof input === 'string'
           ? { t: 'prompt', sessionId, text: input, corrId }
           : { t: 'prompt', sessionId, blocks: input, corrId });
       }),
@@ -2111,7 +2133,7 @@ export const useStore = create<StoreState>((set, get, api) => {
         const draft = get().drafts[sessionId];
         registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, input);
         const includeQueue = opts?.includeQueue ? { includeQueue: true } : {};
-        client.send(typeof input === 'string'
+        sendPromptCommand(corrId, typeof input === 'string'
           ? { t: 'steer', sessionId, text: input, corrId, ...includeQueue }
           : { t: 'steer', sessionId, blocks: input, corrId, ...includeQueue });
       }),
@@ -2120,7 +2142,7 @@ export const useStore = create<StoreState>((set, get, api) => {
         const corrId = nextCorr();
         const draft = get().drafts[sessionId];
         registerPromptAck(corrId, resolve, () => set((st) => st.drafts[sessionId] === draft ? ({ drafts: { ...st.drafts, [sessionId]: '' } }) : st), sessionId, question, true);
-        client.send({ t: 'aside', sessionId, text: question, corrId });
+        sendPromptCommand(corrId, { t: 'aside', sessionId, text: question, corrId });
       }),
     removeQueuedPrompt: (sessionId, promptId) =>
       new Promise<AckResult>((resolve) => {

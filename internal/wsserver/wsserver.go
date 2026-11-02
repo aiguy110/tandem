@@ -5,6 +5,7 @@ package wsserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -76,11 +77,12 @@ type Backend interface {
 }
 
 type Options struct {
-	Token      string
-	Registry   Backend
-	Fallback   http.Handler
-	WriteQueue int
-	Browser    *browser.Broker
+	PromptRequests *store.Store
+	Token          string
+	Registry       Backend
+	Fallback       http.Handler
+	WriteQueue     int
+	Browser        *browser.Broker
 	// ResolveBrowserInstance records the human's decision on an agent's
 	// request for an additional browser instance.
 	ResolveBrowserInstance func(ctx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error
@@ -428,6 +430,7 @@ type clientMessage struct {
 	Cols            int                        `json:"cols"`
 	Rows            int                        `json:"rows"`
 	ReqID           string                     `json:"reqId"`
+	RequestID       string                     `json:"requestId,omitempty"`
 	PromptID        string                     `json:"promptId"`
 	// IncludeQueue on steer appends the session's queued prompts.
 	IncludeQueue      bool                      `json:"includeQueue,omitempty"`
@@ -1642,56 +1645,8 @@ func (c *connection) handle(m clientMessage) {
 		}
 		sess.CloseUserShell()
 		c.commandAck(m, sess.ID)
-	case "prompt":
-		sess, ok := c.requireSession(m)
-		if !ok {
-			return
-		}
-		blocks := m.Blocks
-		if blocks == nil {
-			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
-		}
-		receipt, err := sess.EnqueuePrompt(context.Background(), blocks)
-		if err != nil {
-			c.commandError(m, err)
-			return
-		}
-		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
-	case "steer":
-		sess, ok := c.requireSession(m)
-		if !ok {
-			return
-		}
-		blocks := m.Blocks
-		if m.IncludeQueue {
-			// An empty prompt box steers what is waiting in the queue instead.
-			steered, err := sess.SteerWithQueue(context.Background(), blocks)
-			if err != nil {
-				c.commandError(m, err)
-				return
-			}
-			c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "disposition": "steered", "cleared": steered}, m.CorrID))
-			return
-		}
-		if blocks == nil {
-			blocks = []agentadapter.PromptBlock{{Type: "text", Text: m.Text}}
-		}
-		if err := sess.Steer(context.Background(), blocks); err != nil {
-			c.commandError(m, err)
-			return
-		}
-		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "disposition": "steered"}, m.CorrID))
-	case "aside":
-		sess, ok := c.requireSession(m)
-		if !ok {
-			return
-		}
-		receipt, err := sess.EnqueueAside(context.Background(), m.Text)
-		if err != nil {
-			c.commandError(m, err)
-			return
-		}
-		c.send(withCorr(map[string]any{"t": "ack", "sessionId": sess.ID, "promptId": receipt.ID, "disposition": receipt.Disposition, "position": receipt.Position}, m.CorrID))
+	case "prompt", "steer", "aside":
+		c.handlePromptRequest(m)
 	case "remove_queued_prompt":
 		sess, ok := c.requireSession(m)
 		if !ok {
@@ -2320,6 +2275,35 @@ var asyncForwards = map[string]bool{
 }
 
 func (c *connection) forwardFederation(m clientMessage) {
+	// Reserve at the parent as well: older children may ignore requestId.
+	// A lost federation result remains uncertain rather than forwarding twice.
+	requestKey := ""
+	if m.RequestID != "" && (m.T == "prompt" || m.T == "steer" || m.T == "aside") {
+		db := c.server.opts.PromptRequests
+		if db == nil || len(m.RequestID) > 128 {
+			c.commandError(m, errors.New("prompt deduplication unavailable"))
+			return
+		}
+		requestKey = remoteSessionID(m.HostID, m.SessionID)
+		payload, _ := json.Marshal([]any{m.T, m.Text, m.Blocks, m.IncludeQueue})
+		hash := sha256.Sum256(payload)
+		claimed, result, err := db.ClaimPromptRequest(requestKey, m.RequestID, hex.EncodeToString(hash[:]))
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		if !claimed {
+			var reply map[string]any
+			if err := json.Unmarshal([]byte(result), &reply); err != nil {
+				c.commandError(m, err)
+				return
+			}
+			slog.Info("duplicate remote prompt reconciled", "session_id", requestKey, "request_id", m.RequestID)
+			c.send(withCorr(reply, m.CorrID))
+			return
+		}
+	}
+
 	if c.server.opts.Federation == nil {
 		c.commandError(m, errors.New("remote hosts are unavailable"))
 		return
@@ -2468,6 +2452,14 @@ func (c *connection) forwardFederation(m clientMessage) {
 		c.mu.Lock()
 		delete(c.remoteSubs, remoteID)
 		c.mu.Unlock()
+	}
+	if requestKey != "" {
+		encoded, _ := json.Marshal(envelope)
+		if err := c.server.opts.PromptRequests.CompletePromptRequest(requestKey, m.RequestID, string(encoded)); err != nil {
+			slog.Error("remote prompt receipt persistence failed", "session_id", requestKey, "request_id", m.RequestID, "error", err)
+			c.commandError(m, errors.New("remote prompt receipt could not be saved; check the chat and queue before retrying"))
+			return
+		}
 	}
 	c.send(envelope)
 }

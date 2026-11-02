@@ -687,7 +687,7 @@ func setupWSOptions(t *testing.T, queue int, history HistoryLifecycle, tweak fun
 		t.Fatal(err)
 	}
 	b := &testBackend{sessions: map[string]*session.Session{"a": s}}
-	opts := Options{Token: "secret", Registry: b, WriteQueue: queue, History: history, Automation: db}
+	opts := Options{PromptRequests: db, Token: "secret", Registry: b, WriteQueue: queue, History: history, Automation: db}
 	if tweak != nil {
 		tweak(&opts)
 	}
@@ -2056,5 +2056,52 @@ func TestWriteDeadlineScalesWithMessageSize(t *testing.T) {
 	}
 	if got := writeDeadline(4 << 20); got != 37*time.Second {
 		t.Fatalf("4 MiB message deadline = %v", got)
+	}
+}
+
+func TestPromptRequestDeduplicatesAcrossConnections(t *testing.T) {
+	_, b, a, _, url := setupWS(t, 0)
+	a.promptGate = make(chan struct{}, 1)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "prompt", "sessionId": "a", "text": "hello", "requestId": "unique", "corrId": "one"})
+	first := recv(t, c)
+	c.Close()
+	c = dial(t, url)
+	send(t, c, map[string]any{"t": "prompt", "sessionId": "a", "text": "hello", "requestId": "unique", "corrId": "two"})
+	second := recv(t, c)
+	if first["promptId"] == nil || first["promptId"] != second["promptId"] || second["corrId"] != "two" {
+		t.Fatalf("receipts: %v / %v", first, second)
+	}
+	if len(b.sessions["a"].QueuedPrompts()) != 0 {
+		t.Fatal("duplicate was queued")
+	}
+	send(t, c, map[string]any{"t": "prompt", "sessionId": "a", "text": "changed", "requestId": "unique", "corrId": "three"})
+	if reply := recv(t, c); reply["error"] == nil {
+		t.Fatalf("reused ID accepted: %v", reply)
+	}
+}
+
+func TestRemotePromptRequestForwardedOnce(t *testing.T) {
+	fed := &testFederation{}
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(opts *Options) { opts.Federation = fed })
+	c := dial(t, url)
+	for _, corr := range []string{"first", "retry"} {
+		send(t, c, map[string]any{"t": "prompt", "sessionId": "remote", "hostId": "child", "text": "hello", "requestId": "unique-remote", "corrId": corr})
+		if reply := recv(t, c); reply["error"] != nil || reply["corrId"] != corr {
+			t.Fatalf("reply: %v", reply)
+		}
+	}
+	fed.mu.Lock()
+	defer fed.mu.Unlock()
+	prompts := 0
+	for _, payload := range fed.calls {
+		var command map[string]any
+		json.Unmarshal(payload, &command)
+		if command["t"] == "prompt" {
+			prompts++
+		}
+	}
+	if prompts != 1 {
+		t.Fatalf("forwarded prompt %d times", prompts)
 	}
 }

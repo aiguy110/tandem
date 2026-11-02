@@ -53,6 +53,20 @@ describe('prompt acknowledgements', () => {
     await expect(pending).resolves.toEqual(expect.objectContaining({ error: 'Prompt confirmation timed out. Check the queue before retrying.' }));
     expect(sendSpy).toHaveBeenCalledOnce();
   });
+  it('retries with the same request ID and accepts the original receipt', async () => {
+    vi.useFakeTimers();
+    const send = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
+    useStore.setState({ conn: 'connected' });
+    const pending = useStore.getState().prompt('retry-session', 'hello');
+    const original = send.mock.calls[0][0];
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(send.mock.calls[1][0]).toEqual(original);
+    expect(original).toHaveProperty('requestId');
+    __testApplyServerMsg({ t: 'ack', corrId: 'corrId' in original ? original.corrId : undefined, sessionId: 'retry-session' });
+    await expect(pending).resolves.toMatchObject({ sessionId: 'retry-session' });
+    useStore.setState({ conn: 'connecting' });
+  });
+
   it('reconciles a timed out prompt from replay and preserves a newer draft', async () => {
     vi.useFakeTimers();
     vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
