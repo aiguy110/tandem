@@ -25,11 +25,30 @@ The only type today is free-form HTML.
   - html: the complete document as a string. Fine for small one-offs.
 - title: short and specific ("Q3 latency report", not "Report").
 - filename: optional download name; .html is appended when missing.
-- Each call creates a new artifact. To revise, edit and publish again; don't
-  try to update an old one. Identical content yields the same artifactId.
+- Without artifactId, each call creates a new artifact (a new artifactId).
 - Limit: 10 MB of UTF-8 HTML.
 - After publishing, tell the user briefly what it is. Don't paste the HTML into
   your reply; the card already shows it.
+
+## Revisions: finding and updating artifacts
+
+Every artifact keeps a history of revisions. Artifacts on this host are shared
+across sessions, so you can find and revise ones other sessions published.
+
+- artifact_list({query?}) finds artifacts (latest revision of each).
+- artifact_revisions({artifactId}) lists an artifact's history.
+- artifact_read({artifactId, revision?, path?}) fetches a revision's HTML;
+  with path it writes the file into your workspace instead of returning it.
+- To revise: artifact_read({artifactId, path}) → edit the file →
+  artifact_publish({path, artifactId, baseRevision}) where baseRevision is the
+  revision you read. The update is refused if a newer revision appeared in
+  the meantime; read again and reapply your change.
+- When the user asks to change an artifact you (or another session) already
+  published, update it rather than publishing a new one, so its history stays
+  in one place. Title and download name carry over unless you pass new ones.
+- The new revision's card appears in this chat. Cards in other chats keep
+  showing the revision they announced; the gallery shows the latest, and the
+  full-page view has a revision picker.
 
 ## Rendering environment
 

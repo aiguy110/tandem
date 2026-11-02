@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
+import type { ArtifactRevisionInfo } from '../wire';
 import {
   ARTIFACT_PREVIEW_SANDBOX,
   ARTIFACT_SANDBOX,
@@ -8,6 +9,7 @@ import {
   formatBytes,
   knownArtifact,
   openArtifact,
+  showArtifactRevision,
   useArtifactContent,
   type ArtifactContent,
   type ArtifactEvent,
@@ -97,13 +99,15 @@ function PreviewFrame({ title, content, preview, onOpen }: {
 // whole preview opens the artifact page; the preview itself is inert.
 export function ArtifactCard({ sessionId, artifact }: { sessionId: string; artifact: ArtifactEvent }) {
   const preview = useLazyPreview();
-  const content = useArtifactContent(sessionId, artifact.artifactId, preview.visible);
-  const open = () => openArtifact(sessionId, artifact.artifactId);
+  const content = useArtifactContent(sessionId, artifact.artifactId, artifact.revision, preview.visible);
+  const open = () => openArtifact(sessionId, artifact.artifactId, artifact.revision);
+  const updated = (artifact.revisionNumber ?? 1) > 1;
   return (
     <section className="artifact-card" aria-label={`Artifact: ${artifact.title}`}>
       <header className="artifact-card-head">
         <span className="artifact-card-badge">HTML</span>
         <button type="button" className="artifact-card-title" onClick={open} title="Open artifact">{artifact.title}</button>
+        {updated && <span className="artifact-card-rev" title={`Revision ${artifact.revisionNumber} of this artifact`}>rev {artifact.revisionNumber}</span>}
         <span className="artifact-card-meta">{formatBytes(artifact.size)}</span>
         <button
           type="button"
@@ -128,40 +132,64 @@ export function ArtifactTile({ sessionId, artifact, source, onOpen }: {
   onOpen: () => void;
 }) {
   const preview = useLazyPreview();
-  const content = useArtifactContent(sessionId, artifact.artifactId, preview.visible);
+  const content = useArtifactContent(sessionId, artifact.artifactId, artifact.revision, preview.visible);
+  const revisions = artifact.revisionNumber ?? 1;
   return (
     <li className="artifact-tile">
       <PreviewFrame title={artifact.title} content={content} preview={preview} onOpen={onOpen} />
       <div className="artifact-tile-text">
         <button type="button" className="artifact-card-title" onClick={onOpen} tabIndex={-1} title={artifact.title}>{artifact.title}</button>
-        <span className="artifact-tile-meta">{[source, new Date(artifact.createdAt).toLocaleString(), formatBytes(artifact.size)].filter(Boolean).join(' · ')}</span>
+        <span className="artifact-tile-meta">{[source, new Date(artifact.createdAt).toLocaleString(), revisions > 1 ? `${revisions} revisions` : formatBytes(artifact.size)].filter(Boolean).join(' · ')}</span>
       </div>
     </li>
   );
 }
 
-// Full-page artifact view, shown over the app for #/artifact/<session>/<id>.
-// The app stays mounted underneath so Back returns to the chat exactly as it
-// was left.
+// Full-page artifact view, shown over the app for #/artifact/<session>/<id>
+// [/<revision>]. The app stays mounted underneath so Back returns to the chat
+// (or gallery) exactly as it was left. The header's picker switches between
+// the artifact's revisions.
 export function ArtifactPage({ route }: { route: ArtifactRoute }) {
   const events = useStore((s) => s.sessions[route.sessionId]?.events);
   const liveName = useStore((s) => s.sessions[route.sessionId]?.name);
+  const listRevisions = useStore((s) => s.listArtifactRevisions);
   const known = knownArtifact(route.sessionId, route.artifactId);
-  const sessionName = liveName ?? known?.sessionName;
-  const artifact = useMemo(() => {
+  const event = useMemo(() => {
     for (let i = (events?.length ?? 0) - 1; i >= 0; i--) {
       const ev = events![i].event;
-      if (ev.kind === 'artifact' && ev.artifactId === route.artifactId) return ev;
+      if (ev.kind === 'artifact' && ev.artifactId === route.artifactId && (!route.revision || ev.revision === route.revision)) return ev;
     }
     return known?.artifact;
-  }, [events, route.artifactId, known]);
-  const content = useArtifactContent(route.sessionId, route.artifactId);
-  const title = artifact?.title ?? 'Artifact';
-  const filename = artifact?.filename ?? `artifact-${route.artifactId.slice(0, 8)}.html`;
+  }, [events, route.artifactId, route.revision, known]);
+  const [revisions, setRevisions] = useState<ArtifactRevisionInfo[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setRevisions(null);
+    listRevisions(route.sessionId, route.artifactId)
+      .then((list) => { if (live) setRevisions(list); })
+      // No picker for a host too old to keep revisions; the page still works.
+      .catch(() => { if (live) setRevisions([]); });
+    return () => { live = false; };
+  }, [listRevisions, route.sessionId, route.artifactId]);
+
+  // A pre-revision link names no revision: its document is the asset whose
+  // content hash is the artifactId, which is also its first revision.
+  const selected = revisions?.find((rev) => rev.revision === route.revision)
+    ?? (!route.revision ? revisions?.find((rev) => rev.contentSha256 === route.artifactId) : undefined);
+  const content = useArtifactContent(route.sessionId, route.artifactId, route.revision);
+  const title = selected?.title ?? event?.title ?? 'Artifact';
+  const filename = selected?.filename ?? event?.filename ?? `artifact-${route.artifactId.slice(0, 8)}.html`;
+  const size = selected?.size ?? event?.size;
+  const createdAt = selected?.createdAt ?? event?.createdAt;
+  const by = selected ? selected.sessionName : liveName ?? known?.sessionName;
   const backRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     backRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
     const previous = document.title;
     document.title = `${title} · Tandem`;
     return () => { document.title = previous; };
@@ -181,15 +209,31 @@ export function ArtifactPage({ route }: { route: ArtifactRoute }) {
   return (
     <div className="artifact-page" role="dialog" aria-modal="true" aria-label={title}>
       <header className="artifact-page-bar">
-        <button type="button" ref={backRef} className="artifact-page-back" onClick={closeArtifact} title="Back to chat (Esc)">
+        <button type="button" ref={backRef} className="artifact-page-back" onClick={closeArtifact} title="Back (Esc)">
           ← Back
         </button>
         <div className="artifact-page-heading">
           <span className="artifact-page-title">{title}</span>
           <span className="artifact-page-meta">
-            {[sessionName, artifact && formatBytes(artifact.size), artifact && new Date(artifact.createdAt).toLocaleString()].filter(Boolean).join(' · ')}
+            {[by, size !== undefined && formatBytes(size), createdAt !== undefined && new Date(createdAt).toLocaleString()].filter(Boolean).join(' · ')}
           </span>
         </div>
+        {revisions && revisions.length > 0 && (
+          <select
+            className="artifact-page-revision"
+            aria-label="Revision"
+            title="Show another revision"
+            value={selected?.revision ?? ''}
+            onChange={(e) => e.target.value && showArtifactRevision(route, e.target.value)}
+          >
+            {!selected && <option value="">This version</option>}
+            {revisions.map((rev, i) => (
+              <option key={rev.revision} value={rev.revision}>
+                {`rev ${rev.revisionNumber}${i === 0 ? ' (latest)' : ''} · ${new Date(rev.createdAt).toLocaleString()}${rev.sessionName ? ` · ${rev.sessionName}` : ''}`}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           className="artifact-page-download"

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -58,6 +59,9 @@ type Options struct {
 	Voice              voice.Renderer
 	MessageText        func(sessionID string, seq int64) (string, error)
 	RenderMessageAudio func(context.Context, string, int64) (voice.Audio, error)
+	// ArtifactContent returns one artifact revision's document. The session
+	// in the URL only routes the request to the host that owns the artifact.
+	ArtifactContent func(ctx context.Context, sessionID, artifactID, revision string) ([]byte, error)
 }
 
 var ErrMessageNotFound = errors.New("transcript message not found")
@@ -131,6 +135,10 @@ func (h *Handler) serveAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.opts.Assets != nil && parts[3] == "assets" && r.Method == http.MethodGet && len(parts) == 5 {
 		h.download(w, r, sessionID, parts[4])
+		return
+	}
+	if h.opts.ArtifactContent != nil && parts[3] == "artifacts" && r.Method == http.MethodGet && len(parts) == 6 {
+		h.artifactRevision(w, r, sessionID, parts[4], parts[5])
 		return
 	}
 	if parts[3] == "messages" && len(parts) == 6 && parts[5] == "audio" && r.Method == http.MethodPost {
@@ -272,6 +280,26 @@ func uploadName(raw string) string {
 		raw = string(runes[:255])
 	}
 	return raw
+}
+
+// artifactRevision serves GET /api/agents/<session>/artifacts/<id>/<revision>.
+// A revision is immutable, so it caches like an asset, and like a non-image
+// asset it can never run on the daemon's origin.
+func (h *Handler) artifactRevision(w http.ResponseWriter, r *http.Request, sessionID, artifactID, revision string) {
+	data, err := h.opts.ArtifactContent(r.Context(), sessionID, artifactID, revision)
+	if err != nil {
+		slog.Info("artifact revision fetch failed", "session_id", sessionID, "artifact_id", artifactID, "revision", revision, "error", err)
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	w.Header().Set("Content-Disposition", "attachment")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (h *Handler) download(w http.ResponseWriter, r *http.Request, sessionID, assetID string) {

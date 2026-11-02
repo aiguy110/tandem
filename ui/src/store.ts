@@ -41,6 +41,7 @@ import type {
   FederationHost,
   HostMetric,
   GalleryArtifact,
+  ArtifactRevisionInfo,
   Profile,
   RepoInfo,
   ResumableSession,
@@ -403,6 +404,8 @@ interface StoreState {
   fetchHostMetrics: (hostId: string, since?: number, maxPoints?: number) => Promise<HostMetric[]>;
   // One host's published artifacts, newest first (the artifacts gallery).
   listArtifacts: (hostId: string) => Promise<GalleryArtifact[]>;
+  // One artifact's revisions, newest first, from the host owning the session.
+  listArtifactRevisions: (sessionId: string, artifactId: string) => Promise<ArtifactRevisionInfo[]>;
   clearFleetFocusHost: () => void;
   // Open the spawn palette pre-selected to hand off from this agent.
   handOffAgent: (sessionId: string) => void;
@@ -596,6 +599,7 @@ const pendingAgentDistributions = new Map<string, { resolve: (adapters: ManagedA
 const pendingMcpServers = new Map<string, { resolve: (servers: McpServerStatus[]) => void; reject: (error: Error) => void }>();
 const pendingMcpAuth = new Map<string, { resolve: (url: string) => void; reject: (error: Error) => void }>();
 const pendingHostMetrics = new Map<string, { resolve: (metrics: HostMetric[]) => void; reject: (error: Error) => void }>();
+const pendingArtifactRevisions = new Map<string, { resolve: (revisions: ArtifactRevisionInfo[]) => void; reject: (error: Error) => void }>();
 const pendingArtifacts = new Map<string, { resolve: (artifacts: GalleryArtifact[]) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
@@ -922,6 +926,14 @@ export const useStore = create<StoreState>((set, get, api) => {
 		}
 		return;
       }
+      case 'artifact_revisions': {
+        const pending = msg.corrId ? pendingArtifactRevisions.get(msg.corrId) : undefined;
+        if (pending && msg.corrId) {
+          pendingArtifactRevisions.delete(msg.corrId);
+          if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(msg.revisions ?? []);
+        }
+        return;
+      }
       case 'artifacts': {
         const pending = msg.corrId ? pendingArtifacts.get(msg.corrId) : undefined;
         if (pending && msg.corrId) {
@@ -1126,6 +1138,12 @@ export const useStore = create<StoreState>((set, get, api) => {
         if (metricsPending && msg.corrId) {
           pendingHostMetrics.delete(msg.corrId);
           metricsPending.reject(new Error(msg.error ?? 'host metrics unavailable'));
+          return;
+        }
+        const revisionsPending = msg.corrId ? pendingArtifactRevisions.get(msg.corrId) : undefined;
+        if (revisionsPending && msg.corrId) {
+          pendingArtifactRevisions.delete(msg.corrId);
+          revisionsPending.reject(new Error(msg.error ?? 'artifact revisions unavailable'));
           return;
         }
         const artifactsPending = msg.corrId ? pendingArtifacts.get(msg.corrId) : undefined;
@@ -1666,6 +1684,12 @@ export const useStore = create<StoreState>((set, get, api) => {
       client.send(isLocalHost(hostId)
         ? { t: 'list_host_metrics', sinceSeq: since, limit: 20000, maxPoints, corrId }
         : { t: 'list_host_metrics', hostId, sinceSeq: since, limit: 20000, maxPoints, corrId });
+    }),
+    listArtifactRevisions: (sessionId, artifactId) => new Promise((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingArtifactRevisions.set(corrId, { resolve, reject });
+      const { hostId } = sessionRoute({ id: sessionId });
+      client.send(hostId ? { t: 'list_artifact_revisions', artifactId, hostId, corrId } : { t: 'list_artifact_revisions', artifactId, corrId });
     }),
     listArtifacts: (hostId) => new Promise((resolve, reject) => {
       const corrId = nextCorr();

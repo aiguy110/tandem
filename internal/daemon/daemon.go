@@ -432,7 +432,22 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		return fmt.Errorf("configure agent messaging: %w", err)
 	}
 	agents.SetMessaging(messagingService)
-	artifactService := artifacts.New(artifacts.Options{Token: token, Store: assetStore, Sessions: artifactSessions{agents}})
+	artifactRepo, err := artifacts.OpenRepo(filepath.Join(cfg.Home, "artifacts.git"))
+	if err != nil {
+		// Artifacts are optional: the rest of the daemon works without git.
+		slog.Error("artifact revision repository unavailable; artifacts disabled", "error", err)
+		artifactRepo = nil
+	}
+	artifactService := artifacts.New(artifacts.Options{
+		Token: token, Repo: artifactRepo, Sessions: artifactSessions{agents},
+		SessionName: func(id string) string {
+			if sess, lookupErr := db.Session(id); lookupErr == nil && sess != nil {
+				return sess.Name
+			}
+			return ""
+		},
+	})
+	go importLegacyArtifacts(ctx, db, assetStore, artifactService)
 	httpHandler := httpserver.New(httpserver.Options{
 		// A federated agent's images live on the host that owns it; the
 		// federated store fetches them over the tunnel on a local miss.
@@ -444,6 +459,14 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 		},
 		// A federated agent's transcript lives on the host that owns it, so
 		// its clip is rendered there and carried back over the tunnel.
+		// A federated session's artifacts live in its host's repository.
+		ArtifactContent: func(reqCtx context.Context, sessionID, artifactID, revision string) ([]byte, error) {
+			if hostID, _, ok := wsserver.SplitRemoteSessionID(sessionID); ok {
+				return remoteArtifactRevision(reqCtx, federationService, hostID, artifactID, revision)
+			}
+			data, _, err := artifactService.Content(reqCtx, artifactID, revision)
+			return data, err
+		},
 		RenderMessageAudio: func(renderCtx context.Context, sessionID string, seq int64) (voice.Audio, error) {
 			if hostID, localID, ok := wsserver.SplitRemoteSessionID(sessionID); ok {
 				return remoteMessageAudio(renderCtx, federationService, hostID, localID, seq)
@@ -604,7 +627,7 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}, ResolveBrowserInstance: func(resolveCtx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error {
 		_, resolveErr := browserInstances.Resolve(resolveCtx, sessionID, requestID, granted, savedProfileID)
 		return resolveErr
-	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Artifacts: artifactService, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a
@@ -856,8 +879,30 @@ func remoteMessageAudio(ctx context.Context, svc *federation.Service, hostID, se
 	return voice.Audio{Data: data, MIMEType: envelope.MIMEType}, nil
 }
 
-// federatedAssetStore serves local assets directly and routes assets for a
-// namespaced session to the daemon that owns it.
+// importLegacyArtifacts gives artifacts published before revisions existed a
+// history in the revision repository (see artifacts.Service.ImportLegacy).
+func importLegacyArtifacts(ctx context.Context, db *store.Store, assetStore *assets.Store, svc *artifacts.Service) {
+	events, err := db.EventsOfKindAcrossSessions(artifacts.EventKind, 100000)
+	if err != nil {
+		slog.Warn("legacy artifact scan failed", "error", err)
+		return
+	}
+	legacy := make([]artifacts.LegacyEvent, 0)
+	// Oldest first, so an artifact's first publisher owns its revision.
+	for i := len(events) - 1; i >= 0; i-- {
+		if !strings.Contains(events[i].Payload, `"revision"`) {
+			legacy = append(legacy, artifacts.LegacyEvent{SessionID: events[i].SessionID, Payload: []byte(events[i].Payload)})
+		}
+	}
+	if len(legacy) == 0 {
+		return
+	}
+	svc.ImportLegacy(ctx, legacy, func(sessionID, assetID string) ([]byte, error) {
+		stored, err := assetStore.Get(sessionID, assetID)
+		return stored.Data, err
+	})
+}
+
 // artifactSessions appends artifact events to live sessions' transcripts.
 type artifactSessions struct{ agents *registry.Registry }
 
@@ -870,6 +915,8 @@ func (s artifactSessions) AppendEvent(sessionID string, ev eventlog.Event) error
 	return err
 }
 
+// federatedAssetStore serves local assets directly and routes assets for a
+// namespaced session to the daemon that owns it.
 type federatedAssetStore struct {
 	local      *assets.Store
 	federation *federation.Service
@@ -992,6 +1039,41 @@ func (s federatedAssetStore) Get(sessionID, assetID string) (assets.Stored, erro
 	}
 	slog.Debug("remote asset fetched", "host_id", hostID, "session_id", localID, "asset_id", assetID, "bytes", stored.Size)
 	return stored, nil
+}
+
+// remoteArtifactRevision fetches one artifact revision from the host that
+// owns it, base64-encoded over the tunnel like remoteAsset.
+func remoteArtifactRevision(ctx context.Context, svc *federation.Service, hostID, artifactID, revision string) ([]byte, error) {
+	if svc == nil {
+		return nil, errors.New("remote hosts are unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	payload, err := json.Marshal(map[string]any{"t": "get_artifact_revision", "artifactId": artifactID, "revision": revision})
+	if err != nil {
+		return nil, err
+	}
+	response, err := svc.Call(ctx, hostID, payload)
+	if err != nil {
+		slog.Warn("remote artifact revision fetch failed", "host_id", hostID, "artifact_id", artifactID, "revision", revision, "error", err)
+		return nil, err
+	}
+	var envelope struct {
+		Error string `json:"error"`
+		Data  string `json:"data"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return nil, fmt.Errorf("remote host returned invalid artifact response: %w", err)
+	}
+	if envelope.Error != "" {
+		return nil, errors.New(envelope.Error)
+	}
+	data, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil {
+		return nil, fmt.Errorf("remote host returned undecodable artifact: %w", err)
+	}
+	slog.Debug("remote artifact revision fetched", "host_id", hostID, "artifact_id", artifactID, "revision", revision, "bytes", len(data))
+	return data, nil
 }
 
 // remoteAsset fetches one stored image from the host that owns a federated

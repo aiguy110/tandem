@@ -518,6 +518,9 @@ body.dock-resizing .app { transition: none; }
 .artifact-card-title { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .artifact-card-title:hover { text-decoration: underline; }
 .artifact-card-meta { color: var(--text-faint); font-size: var(--fs-xs); }
+.artifact-card-rev { padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.artifact-page-revision { max-width: min(360px, 40vw); padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-3); color: var(--text); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.artifact-page-revision:hover, .artifact-page-revision:focus-visible { border-color: var(--agent); outline: none; }
 .artifact-card-download, .artifact-page-download, .artifact-page-back { padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface-3); color: var(--text); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
 .artifact-card-download:hover:not(:disabled), .artifact-page-download:hover:not(:disabled), .artifact-page-back:hover { border-color: var(--agent); }
 .artifact-card-download:disabled, .artifact-page-download:disabled { opacity: .5; cursor: default; }

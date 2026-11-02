@@ -1087,7 +1087,8 @@ const tandemSessionPreamble = "## Tandem session\n\n" +
 	"`agent-docs/README.md` for concise guidance and links to deeper documentation. The `tandem-messages` MCP " +
 	"lets you message other agents over human-granted links: `messages_directory` discovers them (refer to an " +
 	"agent as `@agent:host/name`, e.g. `@agent:bifrost/api-worker`) and `messages_request_link` asks a human for access. " +
-	"The `tandem-artifacts` MCP publishes rendered HTML artifacts the user can preview, open, and download: " +
+	"The `tandem-artifacts` MCP publishes rendered HTML artifacts the user can preview, open, and download, and " +
+	"revises existing ones (`artifact_list`, `artifact_read`, then `artifact_publish` with `artifactId`): " +
 	"call `artifact_docs` before your first `artifact_publish`."
 
 // firstPrompt prefixes the first real user turn with Tandem-specific guidance,
@@ -1641,50 +1642,6 @@ func hasUserMessage(db *store.Store, sessionID string) (bool, error) {
 		}
 	}
 	return false, nil
-}
-
-// GalleryArtifact is one published artifact (docs/artifacts.md) in the
-// artifacts gallery. Artifact is the transcript event payload as published.
-type GalleryArtifact struct {
-	SessionID   string          `json:"sessionId"`
-	SessionName string          `json:"sessionName"`
-	Artifact    json.RawMessage `json:"artifact"`
-}
-
-const maxGalleryArtifacts = 500
-
-// Artifacts lists the artifacts published by every session on this host,
-// newest first. Republishing identical content in a session shows once.
-func (r *Registry) Artifacts(limit int) ([]GalleryArtifact, error) {
-	if limit <= 0 || limit > maxGalleryArtifacts {
-		limit = maxGalleryArtifacts
-	}
-	// Over-fetch so duplicates do not shrink the page below the limit.
-	events, err := r.store.EventsOfKindAcrossSessions("artifact", limit*2)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]bool, len(events))
-	out := make([]GalleryArtifact, 0, min(limit, len(events)))
-	for _, ev := range events {
-		var head struct {
-			ArtifactID string `json:"artifactId"`
-		}
-		if err := json.Unmarshal([]byte(ev.Payload), &head); err != nil || head.ArtifactID == "" {
-			slog.Warn("skipping malformed artifact event", "session_id", ev.SessionID, "seq", ev.Seq, "error", err)
-			continue
-		}
-		key := ev.SessionID + "\x00" + head.ArtifactID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, GalleryArtifact{SessionID: ev.SessionID, SessionName: ev.SessionName, Artifact: json.RawMessage(ev.Payload)})
-		if len(out) == limit {
-			break
-		}
-	}
-	return out, nil
 }
 
 // ResumeCatalog unions durable Tandem rows, ACP-discovered sessions, and

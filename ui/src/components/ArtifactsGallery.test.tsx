@@ -9,7 +9,7 @@ const initialState = useStore.getState();
 const item = (sessionId: string, title: string, createdAt: number): GalleryArtifact => ({
   sessionId,
   sessionName: `name-${sessionId}`,
-  artifact: { kind: 'artifact', artifactId: `${title}-id`, type: 'html', title, filename: `${title}.html`, mimeType: 'text/html', size: 10, createdAt },
+  artifact: { kind: 'artifact', artifactId: `${title}-id`, revision: `${title}-rev`, revisionNumber: 2, type: 'html', title, filename: `${title}.html`, mimeType: 'text/html', size: 10, createdAt },
 });
 
 beforeEach(() => {
@@ -45,7 +45,7 @@ describe('ArtifactsGallery', () => {
 
     fireEvent.change(screen.getByPlaceholderText(/Filter/), { target: { value: 'remote' } });
     fireEvent.keyDown(screen.getByPlaceholderText(/Filter/), { key: 'Enter' });
-    expect(parseArtifactRoute(window.location.hash)).toEqual({ sessionId: 'fed~box~s9', artifactId: 'Remote plan-id' });
+    expect(parseArtifactRoute(window.location.hash)).toEqual({ sessionId: 'fed~box~s9', artifactId: 'Remote plan-id', revision: 'Remote plan-rev' });
   });
 
   it('shows a failing host without hiding the others', async () => {

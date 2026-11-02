@@ -195,9 +195,11 @@ export type SessionEvent =
   // for the envelope with the same id (e.g. pending -> started).
   | { kind: 'agent_message'; direction: 'in' | 'out'; envelope: AgentEnvelope; status: string; error?: string }
   | { kind: 'agent_message_status'; id: string; status: string; error?: string }
-  // A rendered artifact the agent published (docs/artifacts.md). artifactId is
-  // the session asset holding the document.
-  | { kind: 'artifact'; artifactId: string; type: 'html'; title: string; filename: string; mimeType: string; size: number; sourcePath?: string; createdAt: number }
+  // A rendered artifact revision the agent published (docs/artifacts.md).
+  // revision is the git commit holding exactly this version; events logged
+  // before revisions existed lack it, and their artifactId is the session
+  // asset (content hash) holding the document.
+  | { kind: 'artifact'; artifactId: string; revision?: string; revisionNumber?: number; contentSha256?: string; sessionId?: string; type: 'html'; title: string; filename: string; mimeType: string; size: number; sourcePath?: string; createdAt: number }
   | { kind: 'rate_limit'; id: string; harness: string; resetAt: number; detectedAt: number; enabled: boolean; state: 'pending' | 'sent' | 'failed' | 'superseded'; queuedMessage?: string; error?: string }
   | { kind: 'handoff_received'; sourceSessionId: string; cutoffSeq: number; mode: 'full' | 'brief'; rendererVersion: number; sourceWasActive: boolean; delegations: { completed: number; failed: number; running: number; unresolved: number } };
 
@@ -282,6 +284,21 @@ export interface GalleryArtifact {
   sessionId: string;
   sessionName: string;
   artifact: Extract<SessionEvent, { kind: 'artifact' }>;
+}
+
+// One revision in an artifact's history (list_artifact_revisions), newest
+// first. sessionId is local to the host that owns the artifact.
+export interface ArtifactRevisionInfo {
+  artifactId: string;
+  revision: string;
+  revisionNumber: number;
+  title: string;
+  filename: string;
+  size: number;
+  contentSha256: string;
+  sessionId: string;
+  sessionName?: string;
+  createdAt: number;
 }
 
 export interface HostMetric {
@@ -678,6 +695,7 @@ export type ClientMsg =
   | { t: 'list_host_metrics'; hostId?: string; sinceSeq?: number; limit?: number; maxPoints?: number; corrId?: string }
   | { t: 'list_sessions'; hostId?: string; corrId?: string }
   | { t: 'list_artifacts'; hostId?: string; limit?: number; corrId?: string }
+  | { t: 'list_artifact_revisions'; artifactId: string; hostId?: string; corrId?: string }
   | { t: 'list_automation'; repositoryId?: string; corrId?: string }
   | { t: 'set_automation_enabled'; id: string; enabled: boolean; corrId?: string }
   | { t: 'search_sessions'; query: string; limit?: number; maxHitsPerSession?: number; hostId?: string; corrId?: string }
@@ -745,6 +763,7 @@ export type ServerMsg =
   | { t: 'hosts'; corrId?: string; hosts: FederationHost[] }
   | { t: 'host_metrics'; corrId?: string; hostId?: string; metrics: HostMetric[]; error?: string }
   | { t: 'artifacts'; corrId?: string; hostId?: string; artifacts?: GalleryArtifact[]; error?: string }
+  | { t: 'artifact_revisions'; corrId?: string; hostId?: string; artifactId?: string; revisions?: ArtifactRevisionInfo[]; error?: string }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
   | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
   | { t: 'mcp_servers'; corrId?: string; servers?: McpServerStatus[]; error?: string }

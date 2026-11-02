@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
+	"github.com/aiguy110/tandem/internal/artifacts"
 	"github.com/aiguy110/tandem/internal/assets"
 	"github.com/aiguy110/tandem/internal/browser"
 	"github.com/aiguy110/tandem/internal/eventlog"
@@ -121,6 +122,17 @@ type Options struct {
 	SaveUpload         func(sessionID, name string, data []byte) (string, error)
 	HasUploadDirectory func(sessionID string) (bool, error)
 	PutAsset           func(sessionID string, data []byte, declaredMIME string) (assets.Stored, error)
+	// Artifacts serves the artifacts gallery, revision lists, and (for a
+	// parent reaching a federated host) revision content; nil answers them
+	// with an error.
+	Artifacts Artifacts
+}
+
+// Artifacts is this host's artifact revision store (internal/artifacts).
+type Artifacts interface {
+	Gallery(ctx context.Context, query string, limit int) ([]artifacts.Revision, error)
+	Revisions(ctx context.Context, artifactID string) ([]artifacts.Revision, error)
+	Content(ctx context.Context, artifactID, revision string) ([]byte, artifacts.Revision, error)
 }
 
 // Federation is the parent-side transport used for host-qualified browser
@@ -464,6 +476,8 @@ type clientMessage struct {
 	FederationOrigin string `json:"federationOrigin,omitempty"`
 	All              bool   `json:"all"`
 	AssetID          string `json:"assetId"`
+	ArtifactID       string `json:"artifactId"`
+	Revision         string `json:"revision"`
 	MIMEType         string `json:"mimeType"`
 	Version          string `json:"version"`
 	// Origin is the UI origin an MCP OAuth callback should return to.
@@ -990,6 +1004,62 @@ func (c *connection) renderMessageAudio(m clientMessage) {
 	reply(map[string]any{"mimeType": audio.MIMEType, "data": base64.StdEncoding.EncodeToString(audio.Data)})
 }
 
+// handleArtifacts serves the artifacts gallery (the latest revision of every
+// artifact), one artifact's revisions, and one revision's content. Browsers
+// fetch local content from the HTTP artifact route; get_artifact_revision
+// exists so a parent can fetch a federated host's revision over the tunnel.
+func (c *connection) handleArtifacts(m clientMessage) {
+	reply := func(t string, extra map[string]any) {
+		envelope := map[string]any{"t": t}
+		if m.ArtifactID != "" {
+			envelope["artifactId"] = m.ArtifactID
+		}
+		for k, v := range extra {
+			envelope[k] = v
+		}
+		c.send(withCorr(envelope, m.CorrID))
+	}
+	replyType := map[string]string{"list_artifacts": "artifacts", "list_artifact_revisions": "artifact_revisions", "get_artifact_revision": "artifact_revision"}[m.T]
+	if c.server.opts.Artifacts == nil {
+		reply(replyType, map[string]any{"error": "artifacts are unavailable"})
+		return
+	}
+	ctx := context.Background()
+	log := slog.With("type", m.T, "connection_id", c.id, "artifact_id", m.ArtifactID, "revision", m.Revision)
+	switch m.T {
+	case "list_artifacts":
+		list, err := c.server.opts.Artifacts.Gallery(ctx, m.Query, m.Limit)
+		if err != nil {
+			log.Warn("list artifacts failed", "error", err)
+			reply(replyType, map[string]any{"error": err.Error()})
+			return
+		}
+		items := make([]map[string]any, len(list))
+		for i, rev := range list {
+			rev.Kind = artifacts.EventKind
+			items[i] = map[string]any{"sessionId": rev.SessionID, "sessionName": rev.SessionName, "artifact": rev}
+		}
+		log.Debug("served artifacts gallery", "artifacts", len(items))
+		reply(replyType, map[string]any{"artifacts": items})
+	case "list_artifact_revisions":
+		list, err := c.server.opts.Artifacts.Revisions(ctx, m.ArtifactID)
+		if err != nil {
+			log.Info("list artifact revisions failed", "error", err)
+			reply(replyType, map[string]any{"error": err.Error()})
+			return
+		}
+		reply(replyType, map[string]any{"revisions": list})
+	case "get_artifact_revision":
+		data, rev, err := c.server.opts.Artifacts.Content(ctx, m.ArtifactID, m.Revision)
+		if err != nil {
+			log.Info("artifact revision lookup failed", "error", err)
+			reply(replyType, map[string]any{"error": "artifact revision not found"})
+			return
+		}
+		reply(replyType, map[string]any{"revision": rev.Revision, "mimeType": rev.MIMEType, "data": base64.StdEncoding.EncodeToString(data)})
+	}
+}
+
 // getAsset answers with one stored image inline. Like renderMessageAudio, only
 // a parent reaching a federated agent uses this path.
 func (c *connection) getAsset(m clientMessage) {
@@ -1401,22 +1471,8 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.send(withCorr(map[string]any{"t": "sessions", "catalog": catalog}, m.CorrID))
-	case "list_artifacts":
-		backend, ok := c.server.opts.Registry.(interface {
-			Artifacts(int) ([]registry.GalleryArtifact, error)
-		})
-		if !ok {
-			c.commandError(m, errors.New("artifacts gallery is unsupported"))
-			return
-		}
-		list, err := backend.Artifacts(m.Limit)
-		if err != nil {
-			slog.Warn("list artifacts failed", "connection_id", c.id, "error", err)
-			c.commandError(m, err)
-			return
-		}
-		slog.Debug("served artifacts gallery", "connection_id", c.id, "artifacts", len(list), "limit", m.Limit)
-		c.send(withCorr(map[string]any{"t": "artifacts", "artifacts": list}, m.CorrID))
+	case "list_artifacts", "list_artifact_revisions", "get_artifact_revision":
+		c.handleArtifacts(m)
 	case "search_sessions":
 		if c.server.opts.History != nil {
 			c.server.opts.History.TriggerStale("")
@@ -2247,6 +2303,8 @@ var asyncForwards = map[string]bool{
 	"list_system_notifications": true,
 	"list_host_metrics":         true,
 	"list_artifacts":            true,
+	"list_artifact_revisions":   true,
+	"get_artifact_revision":     true,
 }
 
 func (c *connection) forwardFederation(m clientMessage) {

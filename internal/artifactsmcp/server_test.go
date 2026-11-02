@@ -45,7 +45,7 @@ func TestToolsListAndDocs(t *testing.T) {
 	for _, tool := range replies[1]["result"].(map[string]any)["tools"].([]any) {
 		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != ToolPublish+","+ToolDocs {
+	if strings.Join(names, ",") != strings.Join([]string{ToolPublish, ToolList, ToolRevisions, ToolRead, ToolDocs}, ",") {
 		t.Fatalf("tools=%v", names)
 	}
 	text := replies[2]["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
@@ -111,6 +111,49 @@ func TestPublishArgumentErrors(t *testing.T) {
 	for id := 1.0; id <= 4; id++ {
 		if replies[id]["result"].(map[string]any)["isError"] != true {
 			t.Fatalf("call %v: %v", id, replies[id])
+		}
+	}
+}
+
+func TestReadWritesWorkspaceFileAndUpdatePassesArtifactID(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["op"] = strings.TrimPrefix(r.URL.Path, "/internal/artifacts/")
+		bodies = append(bodies, body)
+		switch body["op"] {
+		case "read":
+			_ = json.NewEncoder(w).Encode(map[string]any{"revision": map[string]any{"revision": "r1"}, "content": "<p>v1</p>"})
+		case "list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": []any{}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"artifactId": body["artifactId"], "revisionNumber": 2})
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	cfg := Config{ControlURL: srv.URL, Token: "tok", SessionID: "s-1", WorkspaceCWD: dir}
+	r1 := runMCP(t, cfg, call(1, ToolRead, map[string]any{"artifactId": "art-1", "path": "work/a.html"}))
+	sc := r1[1]["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if sc["content"] != nil || sc["path"] != filepath.Join(dir, "work/a.html") {
+		t.Fatalf("read=%v", sc)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "work/a.html")); err != nil || string(data) != "<p>v1</p>" {
+		t.Fatalf("file=%q err=%v", data, err)
+	}
+	r2 := runMCP(t, cfg, call(2, ToolPublish, map[string]any{"path": "work/a.html", "artifactId": "art-1", "baseRevision": "r1"}))
+	if r2[2]["result"].(map[string]any)["isError"] == true {
+		t.Fatalf("publish=%v", r2[2])
+	}
+	runMCP(t, cfg, call(3, ToolList, map[string]any{"query": "plan"}))
+	if len(bodies) != 3 || bodies[1]["artifactId"] != "art-1" || bodies[1]["baseRevision"] != "r1" || bodies[1]["content"] != "<p>v1</p>" || bodies[2]["op"] != "list" || bodies[2]["query"] != "plan" || bodies[2]["sessionId"] != "s-1" {
+		t.Fatalf("bodies=%v", bodies)
+	}
+	missing := runMCP(t, cfg, call(4, ToolRead, map[string]any{}), call(5, ToolRevisions, map[string]any{}))
+	for id := 4.0; id <= 5; id++ {
+		if missing[id]["result"].(map[string]any)["isError"] != true {
+			t.Fatalf("call %v: %v", id, missing[id])
 		}
 	}
 }

@@ -80,11 +80,15 @@ most that many evenly strided samples (always including the newest). The
 utilization modal fetches a downsampled 24h history once and then polls only
 for samples newer than the last one it holds.
 
-`list_artifacts` (`hostId?`, `limit?` ≤ 500) answers
-`{t: "artifacts", artifacts: [{sessionId, sessionName, artifact}]}`: the host's
-published `artifact` events across every session, newest first, one per
-(session, artifactId). `sessionId` is local to the answering host; the
-gallery namespaces it (`fed~<host>~<session>`) for a remote host. Structured daemon logs identify connection
+`list_artifacts` (`hostId?`, `query?`, `limit?`) answers
+`{t: "artifacts", artifacts: [{sessionId, sessionName, artifact}]}`: the latest
+revision of every artifact on the host, newest first; `sessionId` is the
+session that published that revision. `list_artifact_revisions`
+(`artifactId`, `hostId?`) answers `{t: "artifact_revisions", artifactId,
+revisions}` newest first. `get_artifact_revision` (`artifactId`, `revision`)
+returns `{data}` base64 and exists for a parent fetching a federated host's
+revision. Session IDs in these replies are local to the answering host; the UI
+namespaces them (`fed~<host>~<session>`) for a remote host. Structured daemon logs identify connection
 IDs, closure causes, queue bytes/messages, slow writes and commands, replay
 volume, dropped intermediate frames, and CDP failures without logging prompts
 or credentials.

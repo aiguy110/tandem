@@ -1,7 +1,8 @@
-// Rendered artifacts (docs/artifacts.md). An agent's artifact_publish stores
-// the document as a session asset and logs an `artifact` transcript event; the
-// transcript previews it and `#/artifact/<sessionId>/<artifactId>` shows it
-// full-page. A hash route (not a path) keeps the relative-base UI bundle
+// Rendered artifacts (docs/artifacts.md). An agent's artifact_publish commits
+// a revision of the artifact and logs an `artifact` transcript event naming
+// that revision; the transcript previews it and
+// `#/artifact/<sessionId>/<artifactId>[/<revision>]` shows it full-page. The
+// session only routes requests to the host that owns the artifact. A hash route (not a path) keeps the relative-base UI bundle
 // loadable when that URL is reloaded, and puts the page on browser history so
 // Back returns to the chat.
 
@@ -14,21 +15,27 @@ export type ArtifactEvent = Extract<WireEvent, { kind: 'artifact' }>;
 export interface ArtifactRoute {
   sessionId: string;
   artifactId: string;
+  // Absent for artifacts logged before revisions existed (and for links to
+  // them), whose document is the session asset named by artifactId.
+  revision?: string;
 }
 
 const ROUTE_PREFIX = '#/artifact/';
 const ROUTE_EVENT = 'tandem:artifact-route';
 
-export function artifactHash(sessionId: string, artifactId: string): string {
-  return `${ROUTE_PREFIX}${encodeURIComponent(sessionId)}/${encodeURIComponent(artifactId)}`;
+export function artifactHash(sessionId: string, artifactId: string, revision?: string): string {
+  const base = `${ROUTE_PREFIX}${encodeURIComponent(sessionId)}/${encodeURIComponent(artifactId)}`;
+  return revision ? `${base}/${encodeURIComponent(revision)}` : base;
 }
 
 export function parseArtifactRoute(hash: string): ArtifactRoute | null {
   if (!hash.startsWith(ROUTE_PREFIX)) return null;
-  const [sid, aid, ...rest] = hash.slice(ROUTE_PREFIX.length).split('/');
-  if (!sid || !aid || rest.length) return null;
+  const [sid, aid, rev, ...rest] = hash.slice(ROUTE_PREFIX.length).split('/');
+  if (!sid || !aid || rev === '' || rest.length) return null;
   try {
-    return { sessionId: decodeURIComponent(sid), artifactId: decodeURIComponent(aid) };
+    const route: ArtifactRoute = { sessionId: decodeURIComponent(sid), artifactId: decodeURIComponent(aid) };
+    if (rev) route.revision = decodeURIComponent(rev);
+    return route;
   } catch {
     return null;
   }
@@ -37,17 +44,26 @@ export function parseArtifactRoute(hash: string): ArtifactRoute | null {
 // Metadata for artifacts opened from the gallery, whose session transcript may
 // not be loaded: the full page falls back to it for the title and filename.
 const known = new Map<string, { artifact: ArtifactEvent; sessionName?: string }>();
+const MAX_KNOWN = 500;
 
 export function rememberArtifact(sessionId: string, artifact: ArtifactEvent, sessionName?: string): void {
   known.set(`${sessionId}\u0000${artifact.artifactId}`, { artifact, sessionName });
+  while (known.size > MAX_KNOWN) known.delete(known.keys().next().value as string);
 }
 
 export function knownArtifact(sessionId: string, artifactId: string): { artifact: ArtifactEvent; sessionName?: string } | undefined {
   return known.get(`${sessionId}\u0000${artifactId}`);
 }
 
-export function openArtifact(sessionId: string, artifactId: string): void {
-  history.pushState({ tandemArtifact: true }, '', artifactHash(sessionId, artifactId));
+export function openArtifact(sessionId: string, artifactId: string, revision?: string): void {
+  history.pushState({ tandemArtifact: true }, '', artifactHash(sessionId, artifactId, revision));
+  window.dispatchEvent(new Event(ROUTE_EVENT));
+}
+
+// Switch the open artifact page to another revision without adding a history
+// entry, so Back still returns to where the page was opened from.
+export function showArtifactRevision(route: ArtifactRoute, revision: string): void {
+  history.replaceState(history.state, '', artifactHash(route.sessionId, route.artifactId, revision));
   window.dispatchEvent(new Event(ROUTE_EVENT));
 }
 
@@ -82,8 +98,11 @@ export function artifactRouteOpen(): boolean {
   return parseArtifactRoute(window.location.hash) !== null;
 }
 
-function artifactUrl(sessionId: string, artifactId: string): string {
-  return `/api/agents/${encodeURIComponent(sessionId)}/assets/${encodeURIComponent(artifactId)}`;
+function artifactUrl(sessionId: string, artifactId: string, revision?: string): string {
+  const session = `/api/agents/${encodeURIComponent(sessionId)}`;
+  return revision
+    ? `${session}/artifacts/${encodeURIComponent(artifactId)}/${encodeURIComponent(revision)}`
+    : `${session}/assets/${encodeURIComponent(artifactId)}`;
 }
 
 // Artifacts are content-addressed and immutable, so a fetched document is
@@ -92,8 +111,8 @@ function artifactUrl(sessionId: string, artifactId: string): string {
 const MAX_CACHED = 24;
 const cache = new Map<string, Promise<string>>();
 
-export function fetchArtifact(sessionId: string, artifactId: string): Promise<string> {
-  const key = `${sessionId}\u0000${artifactId}`;
+export function fetchArtifact(sessionId: string, artifactId: string, revision?: string): Promise<string> {
+  const key = `${sessionId}\u0000${artifactId}\u0000${revision ?? ''}`;
   const hit = cache.get(key);
   if (hit) {
     cache.delete(key);
@@ -101,7 +120,7 @@ export function fetchArtifact(sessionId: string, artifactId: string): Promise<st
     return hit;
   }
   const token = storedToken();
-  const pending = fetch(artifactUrl(sessionId, artifactId), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  const pending = fetch(artifactUrl(sessionId, artifactId, revision), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     .then((response) => {
       if (!response.ok) throw new Error(response.status === 404 ? 'Artifact not found' : `Artifact fetch failed (${response.status})`);
       return response.text();
@@ -114,17 +133,17 @@ export function fetchArtifact(sessionId: string, artifactId: string): Promise<st
 
 export type ArtifactContent = { state: 'loading' } | { state: 'ready'; html: string } | { state: 'error'; message: string };
 
-export function useArtifactContent(sessionId: string | undefined, artifactId: string, enabled = true): ArtifactContent {
+export function useArtifactContent(sessionId: string | undefined, artifactId: string, revision?: string, enabled = true): ArtifactContent {
   const [content, setContent] = useState<ArtifactContent>({ state: 'loading' });
   useEffect(() => {
     if (!sessionId || !enabled) return;
     let live = true;
     setContent({ state: 'loading' });
-    fetchArtifact(sessionId, artifactId)
+    fetchArtifact(sessionId, artifactId, revision)
       .then((html) => { if (live) setContent({ state: 'ready', html }); })
       .catch((error: unknown) => { if (live) setContent({ state: 'error', message: error instanceof Error ? error.message : String(error) }); });
     return () => { live = false; };
-  }, [sessionId, artifactId, enabled]);
+  }, [sessionId, artifactId, revision, enabled]);
   return content;
 }
 

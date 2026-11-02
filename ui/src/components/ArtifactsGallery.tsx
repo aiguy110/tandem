@@ -74,7 +74,7 @@ export function ArtifactsGallery() {
 
   const open = (entry: Entry) => {
     rememberArtifact(entry.sessionId, entry.artifact, entry.sessionName);
-    openArtifact(entry.sessionId, entry.artifact.artifactId);
+    openArtifact(entry.sessionId, entry.artifact.artifactId, entry.artifact.revision);
   };
 
   return <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setModal('none')}>
