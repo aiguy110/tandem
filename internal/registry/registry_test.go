@@ -1059,6 +1059,14 @@ func TestIdleAgentHibernatesAndWakesOnPrompt(t *testing.T) {
 	if _, err = s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "hello"}}); err != nil {
 		t.Fatal(err)
 	}
+	// The turn finishes asynchronously; an agent mid-turn is never reaped.
+	deadline := time.Now().Add(5 * time.Second)
+	for s.ActiveTurn() {
+		if time.Now().After(deadline) {
+			t.Fatal("turn did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	// Recently active agents are left alone.
 	r.reapIdle(context.Background(), time.Hour)
 	if s.Dormant() {

@@ -1584,14 +1584,21 @@ func TestBrowserSubscriptionControlAndInput(t *testing.T) {
 	defer server.Close()
 	c := dial(t, "ws"+strings.TrimPrefix(server.URL, "http"))
 	send(t, c, map[string]any{"t": "subscribe", "agentId": "a", "channels": []string{"browser"}})
-	if got := recv(t, c); got["t"] != "snapshot" {
-		t.Fatalf("snapshot = %#v", got)
+	// The cold browser state is pushed by the broker independently of the
+	// snapshot, so it may arrive on either side of it.
+	subscribed := map[string]map[string]any{}
+	for range 3 {
+		got := recv(t, c)
+		subscribed[got["t"].(string)] = got
 	}
-	if got := recv(t, c); got["t"] != "browser_state" || got["active"] != false || got["controlOwner"] != "agent" {
+	if _, ok := subscribed["snapshot"]; !ok {
+		t.Fatalf("subscribe replies = %#v", subscribed)
+	}
+	if got := subscribed["browser_state"]; got == nil || got["active"] != false || got["controlOwner"] != "agent" {
 		t.Fatalf("cold browser state = %#v", got)
 	}
-	if got := recv(t, c); got["t"] != "ack" {
-		t.Fatalf("subscribe ack = %#v", got)
+	if _, ok := subscribed["ack"]; !ok {
+		t.Fatalf("subscribe replies = %#v", subscribed)
 	}
 	send(t, c, map[string]any{"t": "browser_control", "agentId": "a", "action": "grab", "corrId": "grab"})
 	if got := recv(t, c); got["t"] != "browser_state" || got["controlOwner"] != "user" {
