@@ -389,7 +389,7 @@ it('splits host counts into read and unread sessions, including manual reminders
     hosts: [{ id: 'worker', name: 'Worker', status: 'connected' }],
   });
   render(<SessionsRail />);
-  expect(screen.getByLabelText('1 read, 1 unread sessions')).toBeTruthy();
+  expect(screen.getByLabelText('1 read, 1 unread sessions').textContent).toBe('1+1');
   act(() => useStore.getState().focus(unread.id));
-  expect(screen.getByLabelText('2 read, 0 unread sessions')).toBeTruthy();
+  expect(screen.getByLabelText('2 read, 0 unread sessions').textContent).toBe('2');
 });

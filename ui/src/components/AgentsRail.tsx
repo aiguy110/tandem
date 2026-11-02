@@ -569,8 +569,10 @@ function HostHeader({ group, collapsed, onToggle, onSpawn, onDetails, onMetrics 
       {group.local && <span className="session-host-local">(local)</span>}
       <span className="session-host-counts" aria-label={`${read} read, ${unread} unread sessions`}>
         <span className="session-host-count" title="Read sessions">{read}</span>
-        <span aria-hidden="true">+</span>
-        <span className="session-host-count unread" title="Unread sessions">{unread}</span>
+        {unread > 0 && <>
+          <span aria-hidden="true">+</span>
+          <span className="session-host-count unread" title="Unread sessions">{unread}</span>
+        </>}
       </span>
       {menu && createPortal(
         <div
