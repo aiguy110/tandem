@@ -4,7 +4,7 @@
 // here so actions and the reducer share one socket.
 
 import { create } from 'zustand';
-import { WsClient, resolveToken, type ConnState } from './ws/client';
+import { WsClient, resolveToken, type ConnState, type LinkHealth } from './ws/client';
 import type { AudioPosition } from './audio/engine';
 import { getListeningAgentId, getState as getEngineState, setPlaylist as setEnginePlaylist } from './audio/engine';
 import { ptyHub } from './terminal/ptyHub';
@@ -59,6 +59,7 @@ import type {
   WireEvent,
   WorkspaceDiff,
   WorkspaceEntry,
+  ClientDiag,
 } from './wire';
 
 // The focus/bandwidth rules: browser frames stream only for the focused Browser
@@ -162,6 +163,8 @@ export interface PendingSpawn {
   hostName?: string;
   label: string;
   phase: string;
+  // Wall-clock ms when the spawn was requested, for an elapsed-time readout.
+  startedAt: number;
   error: string | null;
 }
 
@@ -305,6 +308,8 @@ export interface AckResult {
 
 interface StoreState {
   conn: ConnState;
+  // Round-trip health of the daemon socket, from periodic pings.
+  linkHealth: LinkHealth;
   theme: 'dark' | 'light';
   appearance: Appearance;
   sessions: Record<string, SessionView>;
@@ -476,6 +481,8 @@ interface StoreState {
   getClosePreview: (sessionId: string) => Promise<ClosePreview>;
   getDiff: (sessionId: string) => Promise<WorkspaceDiff>;
   closeAgent: (sessionId: string, force?: boolean, deleteWorktree?: boolean, deinitSubmodules?: boolean) => Promise<AckResult>;
+  // Sends a latency observation to the daemon log (rate limited).
+  reportClientDiag: (diag: ClientDiag) => void;
   send: (m: ClientMsg) => void;
   // Agent messaging. Commands are routed to the host that owns the agent (a
   // rail ID is parent-namespaced; the daemon wants the host-local ID plus
@@ -603,6 +610,27 @@ const pendingArtifactRevisions = new Map<string, { resolve: (revisions: Artifact
 const pendingArtifacts = new Map<string, { resolve: (artifacts: GalleryArtifact[]) => void; reject: (error: Error) => void }>();
 
 let client: WsClient;
+
+// Latency reports exist to be read in the daemon log next to its own view of
+// the same moment. Cap them so a persistently bad link cannot turn diagnostics
+// into traffic of its own.
+const DIAG_WINDOW_MS = 5 * 60_000;
+const DIAG_MAX_PER_WINDOW = 30;
+const SLOW_RTT_MS = 2000;
+const SLOW_RTT_REPORT_GAP_MS = 30_000;
+const LONG_TASK_REPORT_MS = 1500;
+let diagSentAt: number[] = [];
+let linkStaleSince = 0;
+let lastSlowRttReportAt = 0;
+
+function sendClientDiag(diag: ClientDiag): void {
+  const now = Date.now();
+  diagSentAt = diagSentAt.filter((at) => now - at < DIAG_WINDOW_MS);
+  if (diagSentAt.length >= DIAG_MAX_PER_WINDOW) return;
+  diagSentAt.push(now);
+  client.send({ t: 'client_diag', diag: { ...diag, visible: document.visibilityState === 'visible' } });
+}
+
 // Guards the one-time window 'hashchange' listener boot() installs (boot may run
 // twice under React StrictMode in dev).
 let hashListenerAttached = false;
@@ -1442,8 +1470,31 @@ export const useStore = create<StoreState>((set, get, api) => {
   client = new WsClient({
     onMessage: apply,
     onState: (conn) => {
-      if (conn !== 'connected') failInFlightSpawns();
+      if (conn !== 'connected') {
+        failInFlightSpawns();
+        linkStaleSince = 0;
+        set({ linkHealth: { rttMs: null, stale: false, bufferedBytes: 0 } });
+      }
       set({ conn });
+    },
+    onHealth: (health) => {
+      const previous = get().linkHealth;
+      if (previous.rttMs === health.rttMs && previous.stale === health.stale && previous.bufferedBytes === health.bufferedBytes) return;
+      set({ linkHealth: health });
+      const now = Date.now();
+      if (health.stale && !previous.stale) {
+        linkStaleSince = now;
+        console.warn('Tandem daemon link stalled: ping unanswered', { bufferedBytes: health.bufferedBytes });
+      } else if (!health.stale && previous.stale) {
+        sendClientDiag({ kind: 'link_recovered', staleMs: now - linkStaleSince, rttMs: health.rttMs ?? undefined, bufferedBytes: health.bufferedBytes });
+      } else if (health.rttMs !== null && health.rttMs >= SLOW_RTT_MS && now - lastSlowRttReportAt >= SLOW_RTT_REPORT_GAP_MS) {
+        lastSlowRttReportAt = now;
+        sendClientDiag({ kind: 'slow_rtt', rttMs: health.rttMs, bufferedBytes: health.bufferedBytes });
+      }
+    },
+    onSlowCommand: (report) => {
+      console.warn('Tandem daemon reply was slow', report);
+      sendClientDiag({ kind: 'slow_command', ...report, rttMs: get().linkHealth.rttMs ?? undefined });
     },
     onOpen: () => {
       // The outbox was just flushed onto this socket.
@@ -1475,6 +1526,7 @@ export const useStore = create<StoreState>((set, get, api) => {
 
   return {
     conn: 'connecting',
+    linkHealth: { rttMs: null, stale: false, bufferedBytes: 0 },
     theme: initialTheme(),
     appearance: loadAppearance(),
     sessions: {},
@@ -1564,6 +1616,18 @@ export const useStore = create<StoreState>((set, get, api) => {
         const wake = () => { if (document.visibilityState === 'visible') client.wake(); };
         document.addEventListener('visibilitychange', wake);
         window.addEventListener('pageshow', wake);
+        // A frozen main thread delays clicks and message handling exactly like
+        // a slow network does; report long tasks so the two can be told apart.
+        if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if (entry.duration >= LONG_TASK_REPORT_MS) {
+                console.warn('Tandem UI main thread blocked', { durationMs: Math.round(entry.duration) });
+                sendClientDiag({ kind: 'long_task', latencyMs: Math.round(entry.duration) });
+              }
+            }
+          }).observe({ entryTypes: ['longtask'] });
+        }
       }
     },
     submitToken: (t) => client.setToken(t.trim()),
@@ -1871,7 +1935,12 @@ export const useStore = create<StoreState>((set, get, api) => {
             hostId: remote ? remote.id : undefined,
             hostName: remote ? remote.name ?? remote.id : undefined,
             label: [spec.agent, where.split('/').filter(Boolean).pop()].filter(Boolean).join(' · '),
-            phase: remote ? `Starting session on ${remote.name ?? remote.id}…` : 'Starting session…',
+            // Until the daemon's first progress report arrives, say what the
+            // client is actually waiting on rather than implying work has begun.
+            phase: get().conn !== 'connected'
+              ? 'Offline — will send once reconnected…'
+              : remote ? `Waiting for ${remote.name ?? remote.id} to start the session…` : 'Waiting for daemon to start the session…',
+            startedAt: Date.now(),
             error: null,
           }],
         }));
@@ -2129,6 +2198,7 @@ export const useStore = create<StoreState>((set, get, api) => {
         pendingAcks.set(corrId, resolve);
         client.send({ t: 'close_agent', sessionId, force, deleteWorktree, deinitSubmodules, corrId });
       }),
+    reportClientDiag: sendClientDiag,
     send: (m) => client.send(m),
     fetchAgentLinks: (sessionId) => {
       const route = routeFor(sessionId);

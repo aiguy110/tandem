@@ -621,8 +621,23 @@ export interface WorkspaceEntry {
   isDir: boolean;
 }
 
+// A latency observation the browser reports so it appears in the daemon log.
+export interface ClientDiag {
+  kind: 'slow_command' | 'slow_rtt' | 'link_recovered' | 'slow_action' | 'long_task';
+  command?: string;
+  corrId?: string;
+  latencyMs?: number;
+  queuedMs?: number;
+  bufferedBytes?: number;
+  rttMs?: number;
+  staleMs?: number;
+  visible?: boolean;
+  detail?: string;
+}
+
 export type ClientMsg =
   | { t: 'ping'; corrId: string }
+  | { t: 'client_diag'; diag: ClientDiag }
   | { t: 'subscribe'; sessionId: string; channels?: Channel[]; sinceSeq?: number; corrId?: string; pagedReplay?: boolean; browserId?: string; transcriptTail?: number }
   | { t: 'unsubscribe'; sessionId: string; channels?: Channel[]; corrId?: string }
   | { t: 'prompt'; sessionId: string; text?: string; blocks?: PromptBlock[]; corrId?: string }

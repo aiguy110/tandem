@@ -30,6 +30,19 @@ queue. This is the browser's wake probe; session listings and Git checks are
 not liveness probes. A replaced browser socket's callbacks cannot mutate the
 replacement connection, and offline pointer/keyboard input is discarded.
 
+`{ "t": "client_diag", "diag": { "kind": "slow_command" | "slow_rtt" | "link_recovered" | "slow_action" | "long_task", ... } }`
+is a fire-and-forget latency report: the browser sends it when a command's first
+reply, a ping round trip, a user action (e.g. session delete), or the main thread
+was slow. The daemon only logs it (`client reported connection diagnostic`) with
+the connection ID, so it can be read beside the daemon's own `websocket slow command`
+line for the same moment; there is no reply. The daemon also logs the remote address,
+forwarded/Tailscale-serve headers, and user agent once per connection
+(`websocket connected`), and logs receipt of spawn, close, close-preview, spawn-options,
+fork, and resume commands (`websocket command received`) with `client_sent_skew_ms`:
+receipt time minus the browser's `clientTs` send stamp. That figure includes any clock
+offset between browser and daemon, so compare it to other commands on the same
+connection rather than reading it as absolute latency.
+
 A subscription may opt into `pagedReplay: true`. Snapshot replies then use
 `snapshot_start`, one or more `snapshot_chunk` envelopes, and `snapshot_end`.
 Each envelope carries `sessionId` and `replayId`; chunks carry a `data` string

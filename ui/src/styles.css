@@ -253,6 +253,8 @@ body.dock-resizing .app { transition: none; }
 .session-row:hover { background: var(--surface-2); }
 .session-row.active { background: var(--agent-soft); box-shadow: inset 2px 0 0 var(--agent); }
 .session-row.dragging { opacity: .45; cursor: grabbing; }
+.session-row.deleting { opacity: .45; pointer-events: none; }
+.session-deleting { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); font-style: italic; }
 .session-row.drop-before { box-shadow: inset 0 3px 0 var(--agent); }
 .session-row.drop-after { box-shadow: inset 0 -3px 0 var(--agent); }
 .session-row.active.drop-before { box-shadow: inset 2px 0 0 var(--agent), inset 0 3px 0 var(--agent); }

@@ -391,6 +391,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := newConnection(h, ws)
+	c.peer = newPeerInfo(r)
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -494,6 +495,11 @@ type clientMessage struct {
 	Results   []messaging.PullAck  `json:"results,omitempty"`
 	Listed    *bool                `json:"listed,omitempty"`
 	Paused    *bool                `json:"paused,omitempty"`
+
+	// ClientTS is the browser's send time (ms since epoch) on corrId-bearing
+	// commands; Diag carries a client_diag report.
+	ClientTS int64       `json:"clientTs,omitempty"`
+	Diag     *clientDiag `json:"diag,omitempty"`
 }
 
 // UnmarshalJSON accepts the previous agentId envelope during the rolling
@@ -554,6 +560,7 @@ type connection struct {
 	remoteSubs              map[string]struct{}
 	audioFocusID            string
 	remoteSubscriptionTails map[string]chan struct{}
+	peer                    peerInfo
 }
 
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
@@ -570,7 +577,7 @@ func newConnection(h *Handler, ws *websocket.Conn) *connection {
 }
 
 func (c *connection) run() {
-	slog.Info("websocket connected", "connection_id", c.id)
+	slog.Info("websocket connected", "connection_id", c.id, "remote_addr", c.peer.remoteAddr, "network", c.peer.network, "forwarded_for", c.peer.forwardedFor, "via_tailscale_serve", c.peer.viaTailscaleServe, "host", c.peer.host, "user_agent", c.peer.userAgent)
 	go c.writeLoop()
 	go c.browserLoop()
 	go c.subscriptionLoop()
@@ -586,6 +593,7 @@ func (c *connection) run() {
 			c.send(map[string]any{"t": "ack", "error": "invalid message"})
 			continue
 		}
+		c.logCommandReceived(m)
 		switch m.T {
 		case "subscribe", "unsubscribe", "browser_view":
 			select {
@@ -1286,6 +1294,10 @@ func (c *connection) handle(m clientMessage) {
 			c.queuedBytes.Add(-int64(len(data)))
 			c.closeWithReason("priority_queue_full", nil)
 		}
+		return
+	}
+	if m.T == "client_diag" {
+		c.logClientDiag(m)
 		return
 	}
 	if m.T == "list_hosts" {

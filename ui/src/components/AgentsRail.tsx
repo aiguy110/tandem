@@ -15,6 +15,9 @@ const SEVERITY_CLASS: Record<NotifSeverity, string> = {
   failure: 'sev-failure',
 };
 
+// A delete slower than this gets its timeline reported to the daemon log.
+const SLOW_DELETE_MS = 3000;
+
 // Left rail — the orchestra. One row per agent in the order arranged by the
 // user. Click = focus; drag = reorder.
 export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: number) => void }) {
@@ -33,6 +36,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const setDraft = useStore((s) => s.setDraft);
   const getClosePreview = useStore((s) => s.getClosePreview);
   const closeAgent = useStore((s) => s.closeAgent);
+  const reportClientDiag = useStore((s) => s.reportClientDiag);
   const renameAgent = useStore((s) => s.renameAgent);
   const handOffAgent = useStore((s) => s.handOffAgent);
   const forkSession = useStore((s) => s.forkSession);
@@ -74,6 +78,16 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
   const [deleteWorktree, setDeleteWorktree] = useState(true);
   const [deinitSubmodules, setDeinitSubmodules] = useState(false);
   const [closeError, setCloseError] = useState('');
+  // Rows whose delete has been requested but not yet confirmed by the daemon.
+  // They are greyed immediately so a slow link doesn't look like a dead button.
+  const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
+  const setRowDeleting = (id: string, on: boolean) => setDeleting((previous) => {
+    if (previous.has(id) === on) return previous;
+    const next = new Set(previous);
+    if (on) next.add(id);
+    else next.delete(id);
+    return next;
+  });
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [contextMenuDismissal, setContextMenuDismissal] = useState<{ id: string; token: number } | null>(null);
@@ -151,14 +165,22 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
 
   const requestDelete = async (id: string) => {
     setCloseError('');
+    setRowDeleting(id, true);
+    const startedAt = performance.now();
     try {
       const preview = await getClosePreview(id);
+      const previewMs = Math.round(performance.now() - startedAt);
       // A shared worktree always warrants the dialog: the user needs to be told
       // the checkout is staying behind, and who is still in it.
       if (!preview.notGitRepo && !preview.uncommitted && !preview.unmerged && !preview.cohabitants?.length) {
         captureRemovalTops(id);
         const result = await closeAgent(id, false, true);
+        const totalMs = Math.round(performance.now() - startedAt);
+        if (totalMs >= SLOW_DELETE_MS) {
+          reportClientDiag({ kind: 'slow_action', command: 'delete_session', latencyMs: totalMs, detail: `preview=${previewMs}ms close=${totalMs - previewMs}ms` });
+        }
         if (result.error?.startsWith('submodules_block_worktree_removal')) {
+          setRowDeleting(id, false);
           setDeleteWorktree(true);
           setDeinitSubmodules(true);
           setConfirmation({ id, preview });
@@ -167,19 +189,23 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           // repository has disappeared. Teardown is the first operation that
           // detects that condition, so recover by offering the same explicit
           // force-confirmation used for other destructive closes.
+          setRowDeleting(id, false);
           setDeleteWorktree(true);
           setDeinitSubmodules(false);
           setConfirmation({ id, preview, forceReason: result.error.replace(/^orphaned_worktree:\s*/, '') });
         } else if (result.error) {
+          setRowDeleting(id, false);
           pendingRemoval.current = null;
           setCloseError(result.error);
         }
         return;
       }
+      setRowDeleting(id, false);
       setDeleteWorktree(preview.kind === 'worktree');
       setDeinitSubmodules((preview.submodules?.length ?? 0) > 0);
       setConfirmation({ id, preview });
     } catch (error) {
+      setRowDeleting(id, false);
       setCloseError((error as Error).message);
     }
   };
@@ -299,6 +325,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                   rowRef={registerRow(id)}
                   agent={agents[id]}
                   active={id === focusedId}
+                  deleting={deleting.has(id)}
                   onClick={() => focus(id)}
                   onMarkUnread={() => markAgentUnread(id)}
                   onRename={(name) => renameAgent(id, name)}
@@ -437,11 +464,14 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                 className="btn danger"
                 onClick={async () => {
                   captureRemovalTops(confirmation.id);
+                  setRowDeleting(confirmation.id, true);
                   const result = await closeAgent(confirmation.id, deleteWorktree, deleteWorktree, deinitSubmodules);
                   if (result.error?.startsWith('submodules_block_worktree_removal')) {
+                    setRowDeleting(confirmation.id, false);
                     setDeinitSubmodules(true);
                     setCloseError('Submodule cleanup is required before this worktree can be removed.');
                   } else if (result.error) {
+                    setRowDeleting(confirmation.id, false);
                     pendingRemoval.current = null;
                     setCloseError(result.error);
                   }
@@ -616,6 +646,7 @@ function Row({
   rowRef,
   agent,
   active,
+  deleting,
   onClick,
   onMarkUnread,
   onRename,
@@ -634,6 +665,7 @@ function Row({
   rowRef: (node: HTMLDivElement | null) => void;
   agent: SessionView;
   active: boolean;
+  deleting: boolean;
   onClick: () => void;
   onMarkUnread: () => void;
   onRename: (name: string) => Promise<{ error?: string }>;
@@ -772,8 +804,8 @@ function Row({
   return (
     <div
       ref={rowRef}
-      className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
-      draggable={!editing}
+      className={`session-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${deleting ? ' deleting' : ''}${dropPosition ? ` drop-${dropPosition}` : ''}`}
+      draggable={!editing && !deleting}
       title={editing ? undefined : 'Drag to reorder session'}
       onClick={() => {
         if (longPressOpened.current) {
@@ -878,6 +910,7 @@ function Row({
         </div>
         {agent.waitingOn?.length > 0 && <WaitingOnLine waiting={agent.waitingOn} />}
         {renameError && <div className="session-rename-error">{renameError}</div>}
+        {deleting && <div className="session-deleting">Deleting…</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
           <span className="ws-text">

@@ -17,6 +17,19 @@ function ThreadAudioIcon({ enabled }: { enabled: boolean }) {
   );
 }
 
+// Ticks once a second so a spawn that is slow to be acknowledged shows how
+// long it has been waiting instead of looking frozen.
+function SpawnElapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.floor((now - since) / 1000);
+  if (seconds < 3) return null;
+  return <div className="loading-sub">Waiting {seconds} s</div>;
+}
+
 export function FocusArea() {
   const focusedId = useStore((s) => s.focusedId);
   const agent = useStore((s) => (s.focusedId ? s.sessions[s.focusedId] : undefined));
@@ -55,6 +68,7 @@ export function FocusArea() {
             <span className="spinner" aria-hidden="true" />
             <div>{pendingSpawn.phase}</div>
             {pendingSpawn.label && <div className="loading-sub">{pendingSpawn.label}</div>}
+            <SpawnElapsed since={pendingSpawn.startedAt} />
             <div className="spawn-error-actions">
               <button className="btn ghost" type="button" title="Stop tracking this spawn; it appears in the rail if it finishes" onClick={() => dismissPendingSpawn(pendingSpawn.corrId)}>Dismiss</button>
             </div>
