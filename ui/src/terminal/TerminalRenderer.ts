@@ -115,8 +115,19 @@ export class Adapter implements TerminalRenderer {
     this.term.onData((data) => {
       // onData combines user input and terminal replies. Only discard cursor
       // reports; ordinary typing and navigation must still work during replay.
-      if (this.replaying && /^\x1b\[\??\d+;\d+(?:;\d+)?R$/.test(data)) return;
-      cb(data);
+      // Ghostty drains its response buffer in one onData event, so a replay
+      // write can produce many concatenated reports. Remove every report,
+      // preserving any unrelated input in the same callback.
+      if (this.disposed) return;
+      if (this.replaying) {
+        let reports = 0;
+        data = data.replace(/\x1b\[\??\d+;\d+(?:;\d+)?R/g, () => {
+          reports++;
+          return '';
+        });
+        if (reports) console.debug('[terminal] suppressed replay cursor reports', { reports });
+      }
+      if (data) cb(data);
     });
   }
   resize(cols: number, rows: number): void {

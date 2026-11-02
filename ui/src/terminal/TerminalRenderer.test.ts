@@ -39,6 +39,22 @@ describe('terminal replay', () => {
     expect(t.input).toHaveBeenLastCalledWith('hello');
   });
 
+  it('suppresses Ghostty batches of cursor replies when switching tabs', () => {
+    const t = setup();
+    t.adapter.write(new TextEncoder().encode('history'), true);
+    // readResponse() combines replies to all queries in a replay write.
+    const replies = '\x1b[55;142R\x1b[6;56R\x1b[55;142R\x1b[14;56R'
+      + '\x1b[55;142R\x1b[53;56R\x1b[55;142R\x1b[53;56R';
+    t.emit(replies);
+    expect(t.input).not.toHaveBeenCalled();
+    t.emit('a' + replies + '\x1b[A');
+    expect(t.input).toHaveBeenLastCalledWith('a\x1b[A');
+    t.complete();
+    t.adapter.write(new TextEncoder().encode('live'));
+    t.emit(replies);
+    expect(t.input).toHaveBeenLastCalledWith(replies);
+  });
+
   it('batches queued replay chunks and does not resume writes after disposal', () => {
     const t = setup();
     t.adapter.write(new Uint8Array([1]), true);
@@ -48,9 +64,8 @@ describe('terminal replay', () => {
     expect(t.term.write.mock.calls[1][0]).toEqual(new Uint8Array([2, 3]));
     t.adapter.write(new Uint8Array([4]));
     t.adapter.dispose();
-    t.emit('typing during replay');
-    t.emit('\x1b[A');
-    expect(t.input.mock.calls).toEqual([['typing during replay'], ['\x1b[A']]);
+    t.emit('late input');
+    expect(t.input).not.toHaveBeenCalled();
     t.complete();
     expect(t.term.write).toHaveBeenCalledTimes(2);
   });
