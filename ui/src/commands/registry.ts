@@ -84,8 +84,8 @@ export function buildCommands(): Command[] {
         });
       },
     },
-    { id: 'palette.open', title: 'Command palette', subtitle: 'All commands, jump-to-session', run: () => s().setModal('command') },
-    { id: 'nav.goToAgent', title: 'Go to session…', subtitle: 'Jump to a session by name', run: () => s().setModal('command') },
+    { id: 'palette.open', title: 'Command palette', subtitle: 'All commands', run: () => s().setModal('command') },
+    { id: 'nav.goToAgent', title: 'Go to session…', subtitle: 'Jump to an active or past session by name', run: () => s().setModal('resume') },
     { id: 'nav.next', title: 'Next session', subtitle: 'Move down the session rail', run: () => s().nav(1) },
     { id: 'nav.prev', title: 'Previous session', subtitle: 'Move up the session rail', run: () => s().nav(-1) },
     paneCmd('chat', 1, 'Chat'),

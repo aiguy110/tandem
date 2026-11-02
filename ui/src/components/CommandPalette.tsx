@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { useStore, rankedOrder } from '../store';
+import { useStore } from '../store';
 import { buildCommands } from '../commands/registry';
 import { loadBindings, prettyBinding } from '../commands/keymap';
 import { fuzzyFilter } from '../fuzzy';
@@ -13,13 +13,12 @@ interface Entry {
   run: () => void;
 }
 
-// Command palette (D10): every command + jump-to-session-by-name, each row showing
-// its keybinding inline so the palette teaches the hotkeys.
+// Command palette (D10): every command, each row showing its keybinding inline so
+// the palette teaches the hotkeys. Jumping to a session lives in the Resume
+// palette, which already lists active sessions; per-session rows here crowded
+// out the commands.
 export function CommandPalette() {
   const setModal = useStore((s) => s.setModal);
-  const focus = useStore((s) => s.focus);
-  const order = useStore(rankedOrder);
-  const agents = useStore((s) => s.sessions);
 
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);
@@ -37,17 +36,8 @@ export function CommandPalette() {
         c.run();
       },
     }));
-    const jumps: Entry[] = order.map((id) => ({
-      key: `jump:${id}`,
-      title: `Go to ${agents[id].name}`,
-      subtitle: `${agents[id].workspace.repo}${agents[id].workspace.branch ? ' · ' + agents[id].workspace.branch : ''} · ${agents[id].status}`,
-      run: () => {
-        setModal('none');
-        focus(id);
-      },
-    }));
-    return [...jumps, ...cmds];
-  }, [order, agents, setModal, focus]);
+    return cmds;
+  }, [setModal]);
 
   const filtered = useMemo(() => fuzzyFilter(query, entries, (e) => e.title + ' ' + (e.subtitle ?? '')), [query, entries]);
   useEffect(() => setSel(0), [query]);
@@ -74,7 +64,7 @@ export function CommandPalette() {
           }
         }}
       >
-        <input className="q" autoFocus placeholder="Run a command or jump to an agent…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input className="q" autoFocus placeholder="Run a command…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="rows">
           {filtered.length === 0 && <div className="empty">No matches.</div>}
           {filtered.map((e, i) => (
