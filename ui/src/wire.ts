@@ -663,8 +663,10 @@ export type ClientMsg =
   | { t: 'spawn_agent'; spec: SpawnSpec; corrId?: string }
   | { t: 'list_system_notifications'; corrId?: string }
   | { t: 'system_notification_action'; notificationId: string; action: string; corrId?: string }
-  | { t: 'list_agent_distributions'; corrId?: string }
-  | { t: 'install_agent_distribution'; agent: string; version: string; corrId?: string }
+  | { t: 'list_agent_distributions'; hostId?: string; corrId?: string }
+  | { t: 'install_agent_distribution'; agent: string; version: string; hostId?: string; corrId?: string }
+  // Agent profile (ID or name; '' clears it) spawned to rebase a tracked ACP fork.
+  | { t: 'set_acp_fork_rebase_profile'; profile: string; hostId?: string; corrId?: string }
   | { t: 'list_mcp_servers'; corrId?: string }
   | { t: 'begin_mcp_auth'; id: string; origin: string; corrId?: string }
   | { t: 'sign_out_mcp_server'; id: string; corrId?: string }
@@ -780,7 +782,7 @@ export type ServerMsg =
   | { t: 'artifacts'; corrId?: string; hostId?: string; artifacts?: GalleryArtifact[]; error?: string }
   | { t: 'artifact_revisions'; corrId?: string; hostId?: string; artifactId?: string; revisions?: ArtifactRevisionInfo[]; error?: string }
   | { t: 'system_notifications'; corrId?: string; notifications: SystemNotification[] }
-  | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; error?: string }
+  | { t: 'agent_distributions'; corrId?: string; adapters?: ManagedAdapter[]; rebaseProfile?: string; error?: string; hostId?: string }
   | { t: 'mcp_servers'; corrId?: string; servers?: McpServerStatus[]; error?: string }
   | { t: 'mcp_auth_url'; corrId?: string; url?: string; error?: string }
   | { t: 'dirs'; corrId?: string; dirs: RepoInfo[]; refreshing?: boolean; hostId?: string }
@@ -814,6 +816,12 @@ export interface McpServerStatus {
   expiresAt?: string;
   refreshable?: boolean;
   configured: boolean;
+}
+
+export interface AgentDistributions {
+  adapters: ManagedAdapter[];
+  /** Agent profile (ID or name) spawned to rebase a tracked fork; absent on older daemons. */
+  rebaseProfile?: string;
 }
 
 export interface ManagedAdapter {

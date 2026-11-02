@@ -625,3 +625,34 @@ func TestResolveTandemRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveACPForkRebaseProfilePreservesOtherSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(ACPForkRebaseProfileEnv, "")
+	initial := "agents: {}\nsettings:\n    bind: 127.0.0.1\n    futureSetting: keep-me\n    acpForkRebaseProfile: old\n"
+	if err := os.WriteFile(ConfigFilePath(home), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveACPForkRebaseProfile(home, " prof-123 "); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentACPForkRebaseProfile(home, ""); got != "prof-123" {
+		t.Fatalf("profile=%q", got)
+	}
+	b, _ := os.ReadFile(ConfigFilePath(home))
+	for _, want := range []string{"futureSetting: keep-me", "bind: 127.0.0.1", "agents: {}"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("lost %q:\n%s", want, b)
+		}
+	}
+	if err := SaveACPForkRebaseProfile(home, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentACPForkRebaseProfile(home, "fallback"); got != "" {
+		t.Fatalf("cleared profile=%q", got)
+	}
+	t.Setenv(ACPForkRebaseProfileEnv, "from-env")
+	if got := CurrentACPForkRebaseProfile(home, ""); got != "from-env" {
+		t.Fatalf("env override=%q", got)
+	}
+}

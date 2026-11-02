@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useStore } from '../store';
-import type { ForkTracking, ManagedAdapter } from '../wire';
+import type { ForkTracking, ManagedAdapter, Profile } from '../wire';
 import { AdapterManagerModal } from './AdapterManagerModal';
 
 afterEach(cleanup);
@@ -38,7 +38,7 @@ function fork(overrides: Partial<ForkTracking> = {}): ForkTracking {
 
 function mount(rows: ManagedAdapter[]) {
   const install = vi.fn(async () => {});
-  useStore.setState({ listAgentDistributions: async () => rows, installAgentDistribution: install });
+  useStore.setState({ listAgentDistributions: async () => ({ adapters: rows }), installAgentDistribution: install, adaptersHostId: null });
   render(<AdapterManagerModal />);
   return install;
 }
@@ -109,7 +109,7 @@ it('never offers a prerelease as "latest"', async () => {
   ]);
   const install = useStore.getState().installAgentDistribution;
   (await screen.findByText('Update to latest')).click();
-  await waitFor(() => expect(install).toHaveBeenCalledWith('codex', '1.12.0'));
+  await waitFor(() => expect(install).toHaveBeenCalledWith('codex', '1.12.0', undefined));
 });
 
 it('installs a version beyond the declared constraint without warning', async () => {
@@ -130,5 +130,35 @@ it('installs a version beyond the declared constraint without warning', async ()
   fireEvent.change(select, { target: { value: '0.79.0' } });
   const install = useStore.getState().installAgentDistribution;
   screen.getByText('Use version').click();
-  await waitFor(() => expect(install).toHaveBeenCalledWith('claude', '0.79.0'));
+  await waitFor(() => expect(install).toHaveBeenCalledWith('claude', '0.79.0', undefined));
+});
+
+function profile(id: string, name: string): Profile {
+  return { id, name, autoNamed: true, agent: 'claude', harness: '', model: '', effort: '', permission: '', snapshotId: '', createdAt: 0, lastUsedAt: 0 };
+}
+
+it('flags a rebase profile that no longer resolves and saves a replacement on the notifying host', async () => {
+  let current = 'Claude · gone';
+  const save = vi.fn(async (next: string) => { current = next; });
+  const listProfiles = vi.fn(async () => ({ profiles: [profile('prof-a', 'Claude · opus'), profile('prof-b', 'Claude · sonnet')], recent: [] }));
+  useStore.setState({
+    listAgentDistributions: async () => ({ adapters: [adapter()], rebaseProfile: current }),
+    installAgentDistribution: vi.fn(async () => {}),
+    setAcpForkRebaseProfile: save,
+    listProfiles,
+    adaptersHostId: 'remote-1',
+  });
+  render(<AdapterManagerModal />);
+  expect(await screen.findByText('configured profile not found')).toBeTruthy();
+  expect(listProfiles).toHaveBeenCalledWith(undefined, 'remote-1');
+  fireEvent.change(screen.getByLabelText('Fork rebase agent profile'), { target: { value: 'prof-a' } });
+  screen.getByText('Save').click();
+  await waitFor(() => expect(save).toHaveBeenCalledWith('prof-a', 'remote-1'));
+  expect(await screen.findByText(/Spawns Claude · opus/)).toBeTruthy();
+});
+
+it('hides the rebase profile picker for a daemon that does not report it', async () => {
+  mount([adapter()]);
+  await screen.findByLabelText('codex version');
+  expect(screen.queryByLabelText('Fork rebase agent profile')).toBeNull();
 });

@@ -36,7 +36,7 @@ import type {
   ClosePreview,
   ClientMsg,
   GitRefInfo,
-  ManagedAdapter,
+  AgentDistributions,
   McpServerStatus,
   FederationHost,
   HostMetric,
@@ -340,6 +340,7 @@ interface StoreState {
   spawnHostId: string | null;
   fleetFocusHostId: string | null;
   hostMetricsHostId: string | null;
+  adaptersHostId: string | null;
   inspectorOpen: boolean;
   dirs: RepoInfo[];
   agentCatalog: AgentCatalog | null;
@@ -410,6 +411,8 @@ interface StoreState {
   openSpawnAtHost: (hostId: string) => void;
   openFleetAtHost: (hostId: string) => void;
   openHostMetrics: (hostId: string) => void;
+  // Opens the ACP adapter manager scoped to a host (omitted/local = this host).
+  openAdapters: (hostId?: string) => void;
   fetchHostMetrics: (hostId: string, since?: number, maxPoints?: number) => Promise<HostMetric[]>;
   // One host's published artifacts, newest first (the artifacts gallery).
   listArtifacts: (hostId: string) => Promise<GalleryArtifact[]>;
@@ -442,8 +445,9 @@ interface StoreState {
   restartShell: (sessionId: string, cols: number, rows: number) => Promise<AckResult>;
   spawn: (spec: SpawnSpec) => Promise<AckResult>;
   actOnSystemNotification: (notificationId: string, action: string) => Promise<AckResult>;
-  listAgentDistributions: () => Promise<ManagedAdapter[]>;
-  installAgentDistribution: (agent: string, version: string) => Promise<void>;
+  listAgentDistributions: (hostId?: string) => Promise<AgentDistributions>;
+  installAgentDistribution: (agent: string, version: string, hostId?: string) => Promise<void>;
+  setAcpForkRebaseProfile: (profile: string, hostId?: string) => Promise<void>;
   listMcpServers: () => Promise<McpServerStatus[]>;
   // Must be called from the click handler: it opens the sign-in tab before
   // the daemon round trip so popup blockers allow it.
@@ -626,7 +630,7 @@ const dirsRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProfiles = new Map<string, { resolve: (r: { profiles: Profile[]; recent: string[] }) => void; reject: (error: Error) => void }>();
 const pendingSessionSearches = new Map<string, { resolve: (results: SessionSearchResult[]) => void; reject: (error: Error) => void }>();
 const pendingAutomation = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
-const pendingAgentDistributions = new Map<string, { resolve: (adapters: ManagedAdapter[]) => void; reject: (error: Error) => void }>();
+const pendingAgentDistributions = new Map<string, { resolve: (result: AgentDistributions) => void; reject: (error: Error) => void }>();
 const pendingMcpServers = new Map<string, { resolve: (servers: McpServerStatus[]) => void; reject: (error: Error) => void }>();
 const pendingMcpAuth = new Map<string, { resolve: (url: string) => void; reject: (error: Error) => void }>();
 const pendingHostMetrics = new Map<string, { resolve: (metrics: HostMetric[]) => void; reject: (error: Error) => void }>();
@@ -1042,7 +1046,7 @@ export const useStore = create<StoreState>((set, get, api) => {
         if (pending && msg.corrId) {
           pendingAgentDistributions.delete(msg.corrId);
           if (msg.error) pending.reject(new Error(msg.error));
-          else pending.resolve(msg.adapters ?? []);
+          else pending.resolve({ adapters: msg.adapters ?? [], rebaseProfile: msg.rebaseProfile });
         }
         return;
       }
@@ -1586,6 +1590,7 @@ export const useStore = create<StoreState>((set, get, api) => {
     spawnHostId: null,
     fleetFocusHostId: null,
     hostMetricsHostId: null,
+    adaptersHostId: null,
     inspectorOpen: false,
     dirs: spawnCache.dirsByHost[LOCAL_HOST_ID] ?? [],
     agentCatalog: null,
@@ -1751,7 +1756,11 @@ export const useStore = create<StoreState>((set, get, api) => {
       if (m === 'fleet') get().refreshHosts();
       if (m === 'resume') get().refreshSessions();
       if (m === 'automation') void get().refreshAutomation().catch(() => undefined);
-      set({ modal: m, spawnHandoffFrom: null, spawnHostId: null, fleetFocusHostId: null });
+      set({ modal: m, spawnHandoffFrom: null, spawnHostId: null, fleetFocusHostId: null, adaptersHostId: null });
+    },
+    openAdapters: (hostId) => {
+      get().refreshHosts();
+      set({ modal: 'adapters', adaptersHostId: isLocalHost(hostId) ? null : hostId! });
     },
     openSpawnAtHost: (hostId) => {
       get().refreshHosts();
@@ -1982,11 +1991,18 @@ export const useStore = create<StoreState>((set, get, api) => {
         });
         client.send({ t: 'system_notification_action', notificationId, action, corrId });
       }),
-    listAgentDistributions: () => new Promise<ManagedAdapter[]>((resolve,reject) => {
-      const corrId=nextCorr(); pendingAgentDistributions.set(corrId,{resolve,reject}); client.send({t:'list_agent_distributions',corrId});
+    listAgentDistributions: (hostId) => new Promise<AgentDistributions>((resolve,reject) => {
+      const corrId=nextCorr(); pendingAgentDistributions.set(corrId,{resolve,reject});
+      client.send(isLocalHost(hostId) ? {t:'list_agent_distributions',corrId} : {t:'list_agent_distributions',hostId,corrId});
     }),
-    installAgentDistribution: (agent,version) => new Promise<void>((resolve,reject) => {
-      const corrId=nextCorr();pendingAcks.set(corrId,(result)=>result.error?reject(new Error(result.error)):resolve());client.send({t:'install_agent_distribution',agent,version,corrId});
+    installAgentDistribution: (agent,version,hostId) => new Promise<void>((resolve,reject) => {
+      const corrId=nextCorr();pendingAcks.set(corrId,(result)=>result.error?reject(new Error(result.error)):resolve());
+      client.send(isLocalHost(hostId) ? {t:'install_agent_distribution',agent,version,corrId} : {t:'install_agent_distribution',agent,version,hostId,corrId});
+    }),
+    setAcpForkRebaseProfile: (profile, hostId) => new Promise<void>((resolve, reject) => {
+      const corrId = nextCorr();
+      pendingAcks.set(corrId, (result) => (result.error ? reject(new Error(result.error)) : resolve()));
+      client.send(isLocalHost(hostId) ? { t: 'set_acp_fork_rebase_profile', profile, corrId } : { t: 'set_acp_fork_rebase_profile', profile, hostId, corrId });
     }),
     listMcpServers: () => new Promise<McpServerStatus[]>((resolve, reject) => {
       const corrId = nextCorr();

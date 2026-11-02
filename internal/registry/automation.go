@@ -67,6 +67,11 @@ func (r *Registry) spawnProfile(ctx context.Context, profileRef, repo, task, bro
 	return agent, nil
 }
 
+// ResolveProfile finds an agent profile by ID or (case-insensitive) name.
+func (r *Registry) ResolveProfile(ref string) (*store.Profile, error) {
+	return r.resolveProfileRef(ref)
+}
+
 func (r *Registry) resolveProfileRef(ref string) (*store.Profile, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {

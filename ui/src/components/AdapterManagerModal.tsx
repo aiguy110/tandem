@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import type { ForkTracking, ManagedAdapter } from '../wire';
+import type { ForkTracking, ManagedAdapter, Profile } from '../wire';
 
 /**
  * A fork-tracked row does not get a version picker. Its running code is a git
@@ -84,34 +84,93 @@ function ForkRow({ row, fork }: { row: ManagedAdapter; fork: ForkTracking }) {
   );
 }
 
+/** The configured value may be a profile ID (what the picker stores) or a name. */
+function matchProfile(profiles: Profile[], ref: string): Profile | undefined {
+  if (!ref) return undefined;
+  return profiles.find((p) => p.id === ref) ?? profiles.find((p) => p.name.toLowerCase() === ref.toLowerCase());
+}
+
+/**
+ * Picks the agent profile Tandem spawns when a tracked fork falls behind
+ * upstream. A profile can stop working on its own (the agent drops a model it
+ * names), which is why a failed rebase notification links here.
+ */
+function RebaseProfileRow({ current, profiles, hostId, onSaved }: { current: string; profiles: Profile[]; hostId?: string; onSaved: () => Promise<void> }) {
+  const save = useStore((s) => s.setAcpForkRebaseProfile);
+  const matched = matchProfile(profiles, current);
+  const [choice, setChoice] = useState(matched?.id ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setChoice(matchProfile(profiles, current)?.id ?? ''); }, [current, profiles]);
+  const sorted = [...profiles].sort((a, b) => a.name.localeCompare(b.name));
+  const apply = async () => {
+    setBusy(true); setError(null);
+    try { await save(choice, hostId); await onSaved(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  return <div className="adapter-row adapter-row-rebase-profile">
+    <div className="adapter-main">
+      <div className="adapter-heading"><span className="primary">Fork rebase agent</span>
+        {current && !matched && <span className="adapter-fork-behind" title={current}>configured profile not found</span>}
+      </div>
+      <div className="adapter-installed">
+        {current
+          ? matched ? `Spawns ${matched.name} when a tracked fork falls behind upstream.` : `“${current}” no longer matches a saved profile; choose another.`
+          : 'No profile chosen: fork rebase notifications are informational only.'}
+      </div>
+      {error && <div className="modal-err">{error}</div>}
+    </div>
+    <div className="adapter-controls">
+      <select aria-label="Fork rebase agent profile" value={choice} disabled={busy} onChange={(e) => setChoice(e.target.value)}>
+        <option value="">None</option>
+        {sorted.map((p) => <option value={p.id} key={p.id}>{p.name}</option>)}
+      </select>
+      <button type="button" disabled={busy || choice === (matched?.id ?? '') && !(current && !matched)} onClick={() => void apply()}>{busy ? 'Saving…' : 'Save'}</button>
+    </div>
+  </div>;
+}
+
 export function AdapterManagerModal() {
   const setModal = useStore((s) => s.setModal);
   const list = useStore((s) => s.listAgentDistributions);
   const install = useStore((s) => s.installAgentDistribution);
+  const listProfiles = useStore((s) => s.listProfiles);
+  const hostId = useStore((s) => s.adaptersHostId) ?? undefined;
+  const hostName = useStore((s) => (hostId ? s.hosts.find((h) => h.id === hostId)?.name ?? hostId : null));
   const [adapters, setAdapters] = useState<ManagedAdapter[]>([]);
+  const [rebaseProfile, setRebaseProfile] = useState<string | undefined>(undefined);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, string>>({});
   const refresh = async () => {
     setLoading(true); setError(null);
-    try { const rows = await list(); setAdapters(rows); setSelected(Object.fromEntries(rows.map((row) => [row.agent, row.currentVersion || row.availableVersions[0] || '']))); }
+    try {
+      const { adapters: rows, rebaseProfile: profile } = await list(hostId);
+      setAdapters(rows); setRebaseProfile(profile);
+      setSelected(Object.fromEntries(rows.map((row) => [row.agent, row.currentVersion || row.availableVersions[0] || ''])));
+      // Only a daemon that reports the setting can change it.
+      if (profile !== undefined) setProfiles((await listProfiles(undefined, hostId)).profiles);
+    }
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setLoading(false); }
   };
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); }, [hostId]);
   const choose = async (agent: string, version: string) => {
     setBusy(agent); setError(null);
-    try { await install(agent, version); await refresh(); }
+    try { await install(agent, version, hostId); await refresh(); }
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(null); }
   };
   const forked = adapters.filter((row) => row.fork).length;
   return <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setModal('none')}>
     <div className="modal adapter-modal" role="dialog" aria-modal="true" aria-labelledby="adapter-title" onKeyDown={(e) => e.key === 'Escape' && setModal('none')}>
-      <div className="automation-header"><div><div className="primary" id="adapter-title">Managed ACP adapters</div><div className="sub">Choose the version used by new sessions. Existing sessions remain pinned.</div></div><button type="button" className="automation-close" onClick={() => setModal('none')} aria-label="Close adapter manager">×</button></div>
+      <div className="automation-header"><div><div className="primary" id="adapter-title">Managed ACP adapters{hostName && <span className="notification-host-badge">{hostName}</span>}</div><div className="sub">Choose the version used by new sessions. Existing sessions remain pinned.</div></div><button type="button" className="automation-close" onClick={() => setModal('none')} aria-label="Close adapter manager">×</button></div>
       <div className="rows adapter-rows">
         {loading && adapters.length === 0 && <div className="empty">Checking adapter versions…</div>}
+        {rebaseProfile !== undefined && <RebaseProfileRow current={rebaseProfile} profiles={profiles} hostId={hostId} onSaved={refresh} />}
         {adapters.map((row) => {
           if (row.fork) return <ForkRow row={row} fork={row.fork} key={row.agent} />;
           // Deliberately not availableVersions[0]: that can be a prerelease.

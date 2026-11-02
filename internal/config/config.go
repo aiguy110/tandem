@@ -423,6 +423,67 @@ func SaveSettings(home string, s Settings) error {
 	return os.Chmod(path, 0o600)
 }
 
+// ACPForkRebaseProfileEnv overrides the persisted acpForkRebaseProfile.
+const ACPForkRebaseProfileEnv = "TANDEM_ACP_FORK_REBASE_PROFILE"
+
+// CurrentACPForkRebaseProfile reads the rebase profile fresh from the
+// environment override or config.yml, so a change made from the UI applies to
+// the next rebase without restarting the daemon. fallback is returned when
+// config.yml cannot be read.
+func CurrentACPForkRebaseProfile(home, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(ACPForkRebaseProfileEnv)); v != "" {
+		return v
+	}
+	s, err := LoadSettings(home)
+	if err != nil {
+		return strings.TrimSpace(fallback)
+	}
+	return strings.TrimSpace(s.ACPForkRebaseProfile)
+}
+
+// SaveACPForkRebaseProfile persists the rebase profile under settings: in
+// config.yml, leaving every other setting as it is. An empty profile clears it.
+// It edits the one key in place so settings this build does not know about
+// survive the write.
+func SaveACPForkRebaseProfile(home, profile string) error {
+	path := ConfigFilePath(home)
+	doc := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if doc == nil {
+			doc = map[string]any{}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	settings, _ := doc["settings"].(map[string]any)
+	if settings == nil {
+		if doc["settings"] != nil {
+			return fmt.Errorf("parse %s: settings must be a mapping", path)
+		}
+		settings = map[string]any{}
+	}
+	if profile = strings.TrimSpace(profile); profile == "" {
+		delete(settings, "acpForkRebaseProfile")
+	} else {
+		settings["acpForkRebaseProfile"] = profile
+	}
+	doc["settings"] = settings
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
 // ProjectMCPConfigPath is the repository-local MCP configuration location.
 func ProjectMCPConfigPath(cwd string) string { return filepath.Join(cwd, ".tandem", ".config.yml") }
 
@@ -661,7 +722,7 @@ func LoadWithOptions(o Options) (Config, error) {
 		ProjectRoots: roots, DirScanDepth: depth,
 		ACP:       ACPConfig{Default: cat.defaultAgent, Agents: acpAgents, Override: override},
 		ResumeCLI: resume, Agents: cat.agents, Harnesses: cat.harnesses, DefaultHarness: cat.defaultHarness,
-		ACPForkRebaseProfile: strings.TrimSpace(value(env, "TANDEM_ACP_FORK_REBASE_PROFILE", settings.ACPForkRebaseProfile)),
+		ACPForkRebaseProfile: strings.TrimSpace(value(env, ACPForkRebaseProfileEnv, settings.ACPForkRebaseProfile)),
 		Browser:              BrowserConfig{Driver: driver, UserDataRoot: filepath.Join(home, "browser-profiles"), SnapshotRoot: filepath.Join(home, "browser-snapshots"), ChromiumExecutable: env["TANDEM_CHROMIUM_EXECUTABLE"], SteelBaseURL: value(env, "STEEL_BASE_URL", settings.SteelBaseURL), SteelAPIKey: value(env, "STEEL_API_KEY", settings.SteelAPIKey), SteelSessionOptions: steelOptions, MCPEnabled: env["TANDEM_BROWSER_MCP"] != "off", JSRuntime: bun.Command, PlaywrightMCPCLI: filepath.Join(o.RuntimeRoot, "node_modules", "@playwright", "mcp", "cli.js")},
 		Bun:                  bun,
 		AgentIdleTimeout:     idleTimeout,

@@ -27,6 +27,8 @@ const SEVERITY_LABEL: Record<NotifSeverity, string> = {
 
 // System notifications raised by the daemon's MCP sign-in service.
 const MCP_AUTH_PREFIX = 'mcp-auth:';
+// Actions the browser handles itself rather than sending to the daemon.
+const OPEN_ADAPTERS_ACTION = 'ui:open-adapters';
 
 // Right rail — the conductor's inbox for completed turns, approvals, and browser
 // requests across every agent. Clicking a completed-turn card marks it read.
@@ -54,6 +56,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const summary = useStore(notificationsSummary);
   const actOnSystemNotification = useStore((s) => s.actOnSystemNotification);
   const authorizeMcpServer = useStore((s) => s.authorizeMcpServer);
+  const openAdapters = useStore((s) => s.openAdapters);
 
   const total = summary.total;
   // The panel badge takes the color of its highest-severity item (red > yellow
@@ -113,6 +116,13 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
                     disabled={pendingSystemAction === `${notification.id}:${action.id}` || remoteMcpAuthorize}
                     title={remoteMcpAuthorize ? `Authorize from ${notification.hostName || notification.hostId}'s own Tandem UI` : undefined}
                     onClick={() => {
+                      if (action.id === OPEN_ADAPTERS_ACTION) {
+                        // Scoped to the host that raised it: that daemon owns
+                        // the profile setting and the fork being rebased.
+                        setSystemActionError(null);
+                        openAdapters(notification.hostId);
+                        return;
+                      }
                       const key = `${notification.id}:${action.id}`;
                       setPendingSystemAction(key);
                       setSystemActionError(null);

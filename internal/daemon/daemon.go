@@ -496,24 +496,29 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	// A fork rebase is offered as an agent spawn rather than performed by the
 	// daemon: deciding between rebasing the fork and retiring it because the
 	// change was upstreamed needs judgement about the upstream diff.
-	var spawnRebase func(context.Context, runtimeinstall.UpdateInfo) (string, error)
-	if profile := cfg.ACPForkRebaseProfile; profile != "" {
-		spawnRebase = func(ctx context.Context, u runtimeinstall.UpdateInfo) (string, error) {
-			if u.Fork == nil {
-				return "", fmt.Errorf("agent %s does not track an ACP fork", u.Agent)
-			}
-			clone, err := runtimeinstall.EnsureForkClone(ctx, cfg, u.Agent, *u.Fork, stdout)
-			if err != nil {
-				return "", err
-			}
-			session, err := agents.SpawnProfile(ctx, profile, clone, agentupdates.RebasePrompt(u, clone, exe))
-			if err != nil {
-				return "", err
-			}
-			return session.ID, nil
+	// The profile is read fresh on each use so choosing one in the ACP manager
+	// takes effect without a daemon restart.
+	rebaseProfile := func() string { return config.CurrentACPForkRebaseProfile(cfg.Home, cfg.ACPForkRebaseProfile) }
+	spawnRebase := func(ctx context.Context, u runtimeinstall.UpdateInfo) (string, error) {
+		if u.Fork == nil {
+			return "", fmt.Errorf("agent %s does not track an ACP fork", u.Agent)
 		}
+		profile := rebaseProfile()
+		if profile == "" {
+			return "", fmt.Errorf("no ACP fork rebase agent profile is configured; choose one in Manage ACP adapters")
+		}
+		clone, err := runtimeinstall.EnsureForkClone(ctx, cfg, u.Agent, *u.Fork, stdout)
+		if err != nil {
+			return "", err
+		}
+		slog.Info("spawning ACP fork rebase agent", "agent", u.Agent, "profile", profile, "clone", clone)
+		session, err := agents.SpawnProfile(ctx, profile, clone, agentupdates.RebasePrompt(u, clone, exe))
+		if err != nil {
+			return "", err
+		}
+		return session.ID, nil
 	}
-	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout, SpawnRebase: spawnRebase,
+	agentUpdateService := agentupdates.NewService(agentupdates.Options{Config: cfg, Center: notificationCenter, Log: stdout, SpawnRebase: spawnRebase, RebaseProfile: rebaseProfile,
 		RebaseStatePath: filepath.Join(cfg.Home, "acp-fork-rebases.json"),
 		SessionOpen: func(id string) bool {
 			rec, err := db.Session(id)
@@ -627,7 +632,30 @@ func ServeWithOptions(ctx context.Context, cfg config.Config, stdout io.Writer, 
 	}, ResolveBrowserInstance: func(resolveCtx context.Context, sessionID, requestID string, granted bool, savedProfileID string) error {
 		_, resolveErr := browserInstances.Resolve(resolveCtx, sessionID, requestID, granted, savedProfileID)
 		return resolveErr
-	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Artifacts: artifactService, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
+	}, History: historyLifecycle, HostMetrics: metricsService, Automation: db, Notifications: notificationCenter, NotificationAction: notificationAction, AgentDistributions: agentUpdateService.Catalog, InstallAgentDistribution: agentUpdateService.InstallVersion,
+		ACPForkRebaseProfile: rebaseProfile,
+		SetACPForkRebaseProfile: func(ref string) (string, error) {
+			ref = strings.TrimSpace(ref)
+			if os.Getenv(config.ACPForkRebaseProfileEnv) != "" {
+				return "", fmt.Errorf("the rebase profile is set by %s; change it there", config.ACPForkRebaseProfileEnv)
+			}
+			stored := ""
+			if ref != "" {
+				profile, err := agents.ResolveProfile(ref)
+				if err != nil {
+					return "", err
+				}
+				// Store the ID: it survives a profile rename, and SpawnProfile
+				// resolves IDs before names.
+				stored = profile.ID
+			}
+			if err := config.SaveACPForkRebaseProfile(cfg.Home, stored); err != nil {
+				return "", err
+			}
+			slog.Info("ACP fork rebase profile changed", "profile", stored)
+			agentUpdateService.RebaseProfileChanged()
+			return stored, nil
+		}, Federation: federationService, Messaging: messagingService, MCPAuth: mcpAuth, AudioReadySeqs: audioCache.readySeqs, AudioReady: audioCache.readyClips, RenderMessageAudio: audioCache.render, Artifacts: artifactService, Asset: assetStore.Get, PutAsset: assetStore.Put, SaveUpload: agents.Save, HasUploadDirectory: agents.HasConfiguredDirectory})
 	wsHandler.Store(handler)
 	defer handler.Close()
 	// Agents restore in the background so the UI is served immediately; a

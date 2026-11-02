@@ -21,6 +21,11 @@ import (
 const Prefix = "agent-update:"
 const CheckInterval = 6 * time.Hour
 
+// OpenAdaptersAction is a notification action the UI handles itself: it opens
+// the ACP adapter manager (for the host that raised the notification) instead
+// of sending the action to the daemon.
+const OpenAdaptersAction = "ui:open-adapters"
+
 type Options struct {
 	Config   config.Config
 	Center   *notifications.Center
@@ -34,6 +39,10 @@ type Options struct {
 	// leaves the fork notification informational: it then names the clone and the
 	// CLI to run instead of offering a one-click spawn.
 	SpawnRebase func(context.Context, runtimeinstall.UpdateInfo) (string, error)
+	// RebaseProfile reports the currently configured rebase profile, read
+	// fresh so a change from the ACP manager applies without a restart. Nil
+	// treats SpawnRebase alone as the signal that a profile is configured.
+	RebaseProfile func() string
 	// Sync adopts a fork tree published on the fork branch, or retires the fork
 	// when the branch says so. Defaults to runtimeinstall.SyncBlessed.
 	Sync func(context.Context, config.Config, string, io.Writer) (runtimeinstall.SyncResult, error)
@@ -63,6 +72,32 @@ type rebaseRecord struct {
 func (s *Service) Catalog(ctx context.Context) ([]runtimeinstall.AdapterStatus, error) {
 	return runtimeinstall.AdapterCatalog(ctx, s.opts.Config)
 }
+func (s *Service) canSpawnRebase() bool {
+	if s.opts.SpawnRebase == nil {
+		return false
+	}
+	return s.opts.RebaseProfile == nil || s.opts.RebaseProfile() != ""
+}
+
+// RebaseProfileChanged re-raises any pending fork rebase offer so its actions
+// reflect the new profile: a failed spawn becomes a fresh offer to retry, and
+// an informational offer gains (or loses) its one-click spawn.
+func (s *Service) RebaseProfileChanged() {
+	s.mu.Lock()
+	var pending []runtimeinstall.UpdateInfo
+	for agent, u := range s.available {
+		if u.Kind != runtimeinstall.UpdateKindRebase || u.Fork == nil || s.dismissed[agent] == u.OfferKey() {
+			continue
+		}
+		pending = append(pending, u)
+	}
+	s.mu.Unlock()
+	for _, u := range pending {
+		s.opts.Center.Upsert(s.rebaseNotification(u))
+		slog.Info("ACP fork rebase offer refreshed after profile change", "agent", u.Agent, "can_spawn", s.canSpawnRebase())
+	}
+}
+
 func (s *Service) InstallVersion(ctx context.Context, agent, version string) error {
 	_, err := s.opts.Install(ctx, s.opts.Config, agent, version, s.opts.Log)
 	if err != nil {
@@ -239,13 +274,14 @@ func (s *Service) rebaseNotification(u runtimeinstall.UpdateInfo) notifications.
 		message += " Fork adds: " + u.Fork.Reason + "."
 	}
 	actions := []notifications.Action{{ID: "dismiss", Label: "Later"}}
-	if s.opts.SpawnRebase != nil {
+	if s.canSpawnRebase() {
 		message += " An agent can check whether the change was upstreamed and either retire the fork or rebase it."
 		actions = append([]notifications.Action{{ID: "rebase", Label: "Spawn rebase agent", Primary: true}}, actions...)
 	} else {
 		// No profile configured, so say what to run by hand rather than offering
 		// a button that cannot work.
-		message += fmt.Sprintf(" Set an ACP fork rebase profile to offer this as a spawn, or rebase by hand in %s.", u.Fork.Clone)
+		message += fmt.Sprintf(" Choose a rebase agent profile in Manage ACP adapters to offer this as a spawn, or rebase by hand in %s.", u.Fork.Clone)
+		actions = append([]notifications.Action{{ID: OpenAdaptersAction, Label: "Choose profile", Primary: true}}, actions...)
 	}
 	return notifications.Notification{ID: Prefix + u.Agent, Severity: "attention",
 		Title: u.Agent + " ACP fork is behind upstream", Message: message, Actions: actions}
@@ -359,14 +395,17 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		if u.Kind != runtimeinstall.UpdateKindRebase || u.Fork == nil {
 			return "", fmt.Errorf("agent %s does not track an ACP fork", agent)
 		}
-		if s.opts.SpawnRebase == nil {
-			return "", fmt.Errorf("no ACP fork rebase agent profile is configured")
+		if !s.canSpawnRebase() {
+			return "", fmt.Errorf("no ACP fork rebase agent profile is configured; choose one in Manage ACP adapters")
 		}
 		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "attention", Title: "Rebasing " + agent + " ACP fork", Message: "Starting an agent to check whether the change was upstreamed…"})
 		sessionID, err := s.opts.SpawnRebase(ctx, u)
 		if err != nil {
 			slog.Error("ACP fork rebase spawn failed", "agent", agent, "error", err)
-			s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "failure", Title: agent + " ACP fork rebase could not start", Message: err.Error(), Actions: []notifications.Action{{ID: "rebase", Label: "Retry", Primary: true}, {ID: "dismiss", Label: "Later"}}})
+			s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "failure", Title: agent + " ACP fork rebase could not start", Message: err.Error(),
+				// The usual cause is a profile that no longer resolves (a model the
+				// agent dropped), so offer the picker next to Retry.
+				Actions: []notifications.Action{{ID: "rebase", Label: "Retry", Primary: true}, {ID: OpenAdaptersAction, Label: "Choose profile"}, {ID: "dismiss", Label: "Later"}}})
 			return "", err
 		}
 		// The agent owns the outcome from here: it re-pins the fork or retires it,

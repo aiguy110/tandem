@@ -96,7 +96,12 @@ type Options struct {
 	NotificationAction       func(context.Context, string, string) (string, error)
 	AgentDistributions       func(context.Context) ([]runtimeinstall.AdapterStatus, error)
 	InstallAgentDistribution func(context.Context, string, string) error
-	Federation               Federation
+	// ACPForkRebaseProfile reports the agent profile spawned to rebase a
+	// tracked ACP fork; SetACPForkRebaseProfile validates and persists a new
+	// one (by ID or name; "" clears it), returning what was stored.
+	ACPForkRebaseProfile    func() string
+	SetACPForkRebaseProfile func(string) (string, error)
+	Federation              Federation
 	// Messaging serves the agent-messaging commands; nil answers them with an
 	// error.
 	Messaging Messaging
@@ -484,6 +489,7 @@ type clientMessage struct {
 	Revision         string `json:"revision"`
 	MIMEType         string `json:"mimeType"`
 	Version          string `json:"version"`
+	Profile          string `json:"profile,omitempty"`
 	// Origin is the UI origin an MCP OAuth callback should return to.
 	Origin string `json:"origin"`
 
@@ -1804,7 +1810,22 @@ func (c *connection) handle(m clientMessage) {
 			c.send(withCorr(map[string]any{"t": "agent_distributions", "error": err.Error()}, m.CorrID))
 			return
 		}
-		c.send(withCorr(map[string]any{"t": "agent_distributions", "adapters": items}, m.CorrID))
+		reply := map[string]any{"t": "agent_distributions", "adapters": items}
+		if c.server.opts.ACPForkRebaseProfile != nil {
+			reply["rebaseProfile"] = c.server.opts.ACPForkRebaseProfile()
+		}
+		c.send(withCorr(reply, m.CorrID))
+	case "set_acp_fork_rebase_profile":
+		if c.server.opts.SetACPForkRebaseProfile == nil {
+			c.commandError(m, errors.New("the ACP fork rebase profile cannot be changed on this host"))
+			return
+		}
+		if _, err := c.server.opts.SetACPForkRebaseProfile(m.Profile); err != nil {
+			slog.Warn("set ACP fork rebase profile failed", "profile", m.Profile, "error", err)
+			c.commandError(m, err)
+			return
+		}
+		c.commandAck(m, "")
 	case "install_agent_distribution":
 		if c.server.opts.InstallAgentDistribution == nil {
 			c.commandError(m, errors.New("managed ACP adapters are unavailable"))

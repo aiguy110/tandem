@@ -168,6 +168,74 @@ func TestForkRebaseWithoutProfileIsInformational(t *testing.T) {
 	}
 }
 
+func hasAction(n notifications.Notification, id string) bool {
+	for _, a := range n.Actions {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// A failed spawn (typically a profile whose model the agent dropped) offers
+// the profile picker, and choosing a profile turns it back into a spawn offer
+// that uses the new profile without a restart.
+func TestForkRebaseFailureOffersProfilePicker(t *testing.T) {
+	center := notifications.New()
+	profile := "Claude · opus[1m]"
+	var used []string
+	s := NewService(Options{Center: center,
+		RebaseProfile: func() string { return profile },
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{rebaseUpdate()}, nil
+		},
+		SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+			used = append(used, profile)
+			if profile == "Claude · opus[1m]" {
+				return "", errors.New(`profile "Claude · opus[1m]" option "opus[1m]" is no longer available`)
+			}
+			return "session-2", nil
+		}})
+	s.poll(context.Background())
+	if _, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase"); err == nil {
+		t.Fatal("expected the spawn to fail")
+	}
+	items := center.List()
+	if len(items) != 1 || !hasAction(items[0], OpenAdaptersAction) || !hasAction(items[0], "rebase") {
+		t.Fatalf("failure should offer Retry and the profile picker: %#v", items)
+	}
+	profile = "Claude · opus"
+	s.RebaseProfileChanged()
+	items = center.List()
+	if len(items) != 1 || items[0].Severity == "failure" || items[0].Actions[0].ID != "rebase" {
+		t.Fatalf("profile change did not refresh the offer: %#v", items)
+	}
+	if sessionID, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase"); err != nil || sessionID != "session-2" {
+		t.Fatalf("sessionID=%q err=%v", sessionID, err)
+	}
+	if len(used) != 2 || used[1] != "Claude · opus" {
+		t.Fatalf("spawns used profiles %q", used)
+	}
+}
+
+func TestForkRebaseWithEmptyProfileOffersPicker(t *testing.T) {
+	center := notifications.New()
+	s := NewService(Options{Center: center,
+		RebaseProfile: func() string { return "" },
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{rebaseUpdate()}, nil
+		},
+		SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+			t.Fatal("spawned with no profile")
+			return "", nil
+		}})
+	s.poll(context.Background())
+	items := center.List()
+	if len(items) != 1 || hasAction(items[0], "rebase") || items[0].Actions[0].ID != OpenAdaptersAction {
+		t.Fatalf("notification=%#v", items)
+	}
+}
+
 func TestRebasePromptLeadsWithUpstreamCheck(t *testing.T) {
 	prompt := RebasePrompt(rebaseUpdate(), "/rt/forks/pi", "/opt/bin/tandem")
 	for _, want := range []string{

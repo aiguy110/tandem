@@ -185,7 +185,9 @@ harnesses: {}
 #   browserDriver: local    # "local" (installed Chrome/Chromium) or "steel"
 #   acpForkRebaseProfile: ""  # agent profile spawned to rebase a tracked ACP
 #                             # fork (see acpForks above); empty leaves the
-#                             # rebase offer informational rather than one-click
+#                             # rebase offer informational rather than one-click.
+#                             # Usually set from Manage ACP adapters, which stores
+#                             # the profile ID; read fresh, no restart needed
 #   steelBaseUrl: http://localhost:3000  # required when browserDriver is "steel"
 #   steelApiKey: ""         # optional; config.yml is written owner-only
 #   bun:                     # JS runtime + package manager for agent bridges and scripts
