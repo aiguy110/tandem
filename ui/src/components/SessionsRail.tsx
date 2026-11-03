@@ -306,7 +306,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
           ))}
         </section>
       )}
-      {order.length === 0 ? (pendingSpawns.length > 0 ? null : (
+      {order.length === 0 && !federationGrouping ? (pendingSpawns.length > 0 ? null : (
         <div className="empty">
           No sessions yet.
           <br />
@@ -659,6 +659,20 @@ function groupedAgentRows(order: string[], agents: Record<string, SessionView>, 
     const group = groups.get(hostId) ?? { hostId, label, local, link: hostLinkStatus(configured?.status, local), ids: [] };
     group.ids.push(id);
     groups.set(hostId, group);
+  }
+  // Keep fleet hosts discoverable even before their first session or after
+  // their last one closes. Unapproved join requests stay in Fleet settings.
+  for (const host of hosts) {
+    if (groups.has(host.id)) continue;
+    const local = !!host.local || host.id === LOCAL_HOST_ID;
+    if (!local && !['connected', 'accepted', 'offline'].includes(host.status ?? '')) continue;
+    groups.set(host.id, {
+      hostId: host.id,
+      label: local ? localHostLabel(host) : host.name || host.id,
+      local,
+      link: hostLinkStatus(host.status, local),
+      ids: [],
+    });
   }
   const local = groups.get(LOCAL_HOST_ID);
   return [...(local ? [local] : []), ...[...groups.values()].filter((group) => group.hostId !== LOCAL_HOST_ID)];

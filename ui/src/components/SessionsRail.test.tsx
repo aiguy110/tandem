@@ -9,7 +9,7 @@ const realActions = { focus: useStore.getState().focus, reorderAgent: useStore.g
 
 afterEach(() => {
   cleanup();
-  useStore.setState({ sessions: {}, order: [], focusedId: null, ...realActions });
+  useStore.setState({ sessions: {}, order: [], hosts: [], focusedId: null, ...realActions });
 });
 
 function session(): SessionView {
@@ -364,6 +364,37 @@ describe('SessionsRail agent messaging', () => {
 
 describe('SessionsRail host headers', () => {
   afterEach(() => localStorage.clear());
+
+  it('keeps empty fleet hosts visible after the last session closes', () => {
+    const remote = session();
+    useStore.setState({
+      sessions: { [remote.id]: remote }, order: [remote.id],
+      hosts: [
+        { id: LOCAL_HOST_ID, hostname: 'bifrost', local: true, status: 'connected' },
+        { id: 'worker', name: 'Worker', status: 'connected' },
+        { id: 'offline', name: 'Offline worker', status: 'offline' },
+        { id: 'accepted', name: 'Accepted worker', status: 'accepted' },
+        { id: 'pending', name: 'Pending worker', status: 'pending' },
+        { id: 'rejected', name: 'Rejected worker', status: 'rejected' },
+      ],
+    });
+    const view = render(<SessionsRail />);
+    const headers = () => [...view.container.querySelectorAll('.session-host-divider')];
+    expect(headers().map((header) => header.querySelector('.session-host-name')?.textContent))
+      .toEqual(['bifrost', 'Worker', 'Offline worker', 'Accepted worker']);
+    expect(headers().map((header) => header.querySelector('.session-host-count')?.textContent))
+      .toEqual(['0', '1', '0', '0']);
+
+    act(() => useStore.setState({ sessions: {}, order: [] }));
+    expect(headers()).toHaveLength(4);
+    expect(headers().map((header) => header.querySelector('.session-host-count')?.textContent))
+      .toEqual(['0', '0', '0', '0']);
+    expect(screen.queryByText('No sessions yet.')).toBeNull();
+    fireEvent.click(headers()[1]);
+    expect(headers()[1].getAttribute('aria-expanded')).toBe('false');
+    fireEvent.contextMenu(headers()[1]);
+    expect(screen.getByRole('menuitem', { name: 'Spawn agent here' })).not.toBeNull();
+  });
 
   it('labels the local host by hostname, counts sessions, and collapses on click', () => {
     const remote = session();
