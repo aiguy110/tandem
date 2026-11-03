@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -550,20 +551,28 @@ func tandemEventText(kind, payload string) (role, text string) {
 }
 
 func (s *Store) backfillTandemHistory() error {
+	started := time.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT a.id, a.name, a.spec, a.cwd, a.externalSessionId, a.status, a.createdAt, a.closedAt,
-e.seq, e.kind, e.payload, e.ts
-FROM sessions a JOIN events e ON e.sessionId = a.id
-WHERE e.kind IN ('user_message', 'message_chunk')
-AND e.seq > COALESCE((
-	SELECT MAX(he.ordinal) FROM history_sessions hs
+	// Runs on every boot, so it must stay cheap on large event logs: compute
+	// each session's indexed high-water mark once, then range-scan the events
+	// primary key past it. CROSS JOIN pins that join order; a correlated
+	// per-event MAX subquery here took ~2 minutes on a 360k-message log.
+	rows, err := tx.Query(`WITH indexed AS (
+	SELECT hs.sessionId, MAX(he.ordinal) AS maxSeq FROM history_sessions hs
 	JOIN history_entries he ON he.historySessionId = hs.id
-	WHERE hs.source = 'tandem' AND hs.sessionId = a.id
-), 0)
+	WHERE hs.source = 'tandem'
+	GROUP BY hs.sessionId
+)
+SELECT a.id, a.name, a.spec, a.cwd, a.externalSessionId, a.status, a.createdAt, a.closedAt,
+e.seq, e.kind, e.payload, e.ts
+FROM sessions a
+LEFT JOIN indexed i ON i.sessionId = a.id
+CROSS JOIN events e ON e.sessionId = a.id AND e.seq > COALESCE(i.maxSeq, 0)
+WHERE e.kind IN ('user_message', 'message_chunk')
 ORDER BY a.id, e.seq`)
 	if err != nil {
 		return err
@@ -590,6 +599,7 @@ ORDER BY a.id, e.seq`)
 		return err
 	}
 	indexedAt := s.now().UnixMilli()
+	slog.Info("tandem history backfill scanned", "pending_events", len(pending), "elapsed_ms", time.Since(started).Milliseconds())
 	for _, item := range pending {
 		if err := indexTandemEvent(tx, item.sess.ID, item.seq, item.kind, item.payload, item.ts, indexedAt); err != nil {
 			return err
