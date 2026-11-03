@@ -932,7 +932,6 @@ function Row({
         </div>
         {agent.waitingOn?.length > 0 && <WaitingOnLine waiting={agent.waitingOn} />}
         {renameError && <div className="session-rename-error">{renameError}</div>}
-        {deleting && <div className="session-deleting">Deleting…</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
           <span className="ws-text">
