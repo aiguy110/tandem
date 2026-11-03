@@ -4,7 +4,7 @@ import { useGlobalKeys } from './useGlobalKeys';
 import { TokenScreen } from './components/TokenScreen';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { ConductorBar } from './components/ConductorBar';
-import { SessionsRail } from './components/AgentsRail';
+import { SessionsRail } from './components/SessionsRail';
 import { ApprovalsRail } from './components/ApprovalsRail';
 import { FocusArea } from './components/FocusArea';
 import { Inspector } from './components/Inspector';

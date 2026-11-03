@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST_ID, useStore } from '../store';
 import type { SessionView } from '../store';
-import { SessionsRail } from './AgentsRail';
+import { SessionsRail } from './SessionsRail';
 
 // Tests that stub store actions must not leak them into the next test.
 const realActions = { focus: useStore.getState().focus, reorderAgent: useStore.getState().reorderAgent };
