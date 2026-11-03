@@ -2380,6 +2380,12 @@ func (c *connection) forwardFederation(m clientMessage) {
 		// download and verify a release, so they get the same budget rather
 		// than reporting a timeout for work the child goes on to finish.
 		callTimeout = 10 * time.Minute
+	case "restart_harness":
+		// A restart onto a changed managed distribution may build a fork from
+		// source and install it before the replacement process starts, which
+		// routinely takes minutes. A short deadline reports failure for a
+		// restart the child goes on to complete.
+		callTimeout = 10 * time.Minute
 	case "subscribe":
 		// The child serves every forwarded subscription on one loopback
 		// socket, one at a time. A resubscribe burst after it restarts queues
