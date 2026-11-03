@@ -1,9 +1,10 @@
 # Deployment
 
 Production runs the native Go daemon under the user unit in `deploy/tandem.service`.
-`start-dev-server.sh` is the unit entrypoint: it builds and stages the React UI, installs
-the Node-based ACP and Playwright adapters, builds `./tandem`, and replaces itself with
-`./tandem`. The resulting process serves the embedded UI; `TANDEM_UI_DIR` remains an
+`start-dev-server.sh` is the unit entrypoint: it runs `scripts/build-daemon.sh` (stage the
+React UI and build `./tandem`, skipped when `tandem.build-stamp` shows the binary already
+matches the source tree), installs the Node-based ACP and Playwright adapters, and replaces
+itself with `./tandem`. The resulting process serves the embedded UI; `TANDEM_UI_DIR` remains an
 optional development override.
 
 Install the unit with `deploy/install.sh`. After changing Tandem, run:
@@ -12,7 +13,8 @@ Install the unit with `deploy/install.sh`. After changing Tandem, run:
 ./redeploy.sh
 ```
 
-The script reloads the unit and asks the authenticated daemon to shut down after active
+The script first builds while the current daemon keeps serving (a failed build aborts
+without touching it), so the restart itself skips the build. It then reloads the unit and asks the authenticated daemon to shut down after active
 turns finish. `Restart=always` then starts the new native build. If the daemon is unavailable
 or too old for deferred shutdown, the script requests an immediate systemd restart. SIGINT,
 SIGTERM, clean deferred exit, bind/port configuration, `TANDEM_HOME`, browser settings, agent

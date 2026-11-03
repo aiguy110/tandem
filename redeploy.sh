@@ -2,11 +2,18 @@
 # Rebuild and restart the running app. Meant to be invoked from inside the
 # app itself (e.g. a terminal pane) after making code changes to it.
 #
-# The actual rebuild (React UI staging, Node-based adapter dependencies, and
-# the native Go binary) happens in start-dev-server.sh, which is the unit's
-# ExecStart. Restarting the systemd unit embeds the fresh UI and runs Go.
+# The UI + Go build runs here first, while the old daemon keeps serving, so a
+# restart only pays for daemon startup. start-dev-server.sh (the unit's
+# ExecStart) sees the fresh build stamp and skips rebuilding. A failed build
+# aborts before the running daemon is touched.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+echo "==> Prebuilding while the current daemon keeps running"
+if ! ./scripts/build-daemon.sh; then
+  echo "==> Build failed; leaving the running daemon untouched." >&2
+  exit 1
+fi
 
 token_path="${TANDEM_HOME:-$HOME/.tandem}/token"
 host="${TANDEM_BIND:-127.0.0.1}"
