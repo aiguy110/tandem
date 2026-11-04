@@ -572,6 +572,11 @@ type connection struct {
 	peer                    peerInfo
 }
 
+// MaxClientMessageBytes caps one browser→daemon frame. Prompts carry pasted
+// text inline (images go over HTTP upload), so this must fit large logs and
+// HAR dumps; the UI refuses anything bigger before sending (ui/src/wire.ts).
+const MaxClientMessageBytes = 32 << 20
+
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &connection{
@@ -590,7 +595,7 @@ func (c *connection) run() {
 	go c.writeLoop()
 	go c.browserLoop()
 	go c.subscriptionLoop()
-	c.ws.SetReadLimit(1 << 20)
+	c.ws.SetReadLimit(MaxClientMessageBytes)
 	for {
 		_, data, err := c.ws.ReadMessage()
 		if err != nil {

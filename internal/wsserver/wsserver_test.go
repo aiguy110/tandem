@@ -1254,6 +1254,17 @@ func TestCoreCommandsAndDisconnectDoesNotDisposeAgent(t *testing.T) {
 	}
 }
 
+// Pasted logs and HAR dumps ride inline in the prompt frame; a frame over the
+// old 1 MiB read limit closed the socket and the UI's reconnect replay looped.
+func TestPromptAcceptsMultiMegabyteText(t *testing.T) {
+	_, _, _, _, url := setupWS(t, 0)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "prompt", "agentId": "a", "text": strings.Repeat("x", 8<<20), "corrId": "big"})
+	if got := recv(t, c); got["corrId"] != "big" || got["error"] != nil {
+		t.Fatalf("ack=%#v", got)
+	}
+}
+
 func TestPromptQueueAcknowledgementSnapshotAndRemoval(t *testing.T) {
 	_, b, a, _, url := setupWS(t, 0)
 	a.promptGate = make(chan struct{}, 1)
