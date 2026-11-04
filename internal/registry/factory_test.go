@@ -8,6 +8,7 @@ import (
 
 	"github.com/aiguy110/tandem/internal/acp"
 	"github.com/aiguy110/tandem/internal/acpadapter"
+	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
 )
 
@@ -57,5 +58,57 @@ func TestWriteMCPServersFileSkipsEmptyList(t *testing.T) {
 	path, err := f.writeMCPServersFile("agent", nil)
 	if err != nil || path != "" {
 		t.Fatalf("writeMCPServersFile(nil) = %q, %v; want no file", path, err)
+	}
+}
+
+func TestSeedCodexModel(t *testing.T) {
+	t.Setenv("CODEX_CONFIG", `{"model":"default","model_provider":"gateway","nested":{"keep":true}}`)
+	for _, tc := range []struct {
+		name, agent, config string
+		env                 map[string]string
+		wantModel           string
+		wantErr             bool
+	}{
+		{"inherited config", "codex", `{"configOptions":{"model":"saved"}}`, map[string]string{}, "saved", false},
+		{"launch override", "codex", `{"configOptions":{"model":"saved"}}`, map[string]string{"CODEX_CONFIG": `{"model":"override","custom":42}`}, "saved", false},
+		{"null config", "codex", `{"configOptions":{"model":"saved"}}`, map[string]string{"CODEX_CONFIG": "null"}, "saved", false},
+		{"invalid config", "codex", `{"configOptions":{"model":"saved"}}`, map[string]string{"CODEX_CONFIG": "invalid"}, "", true},
+		{"other agent", "claude", `{"configOptions":{"model":"saved"}}`, map[string]string{}, "", false},
+		{"no model", "codex", `{"configOptions":{"reasoning_effort":"high"}}`, map[string]string{}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, _ := json.Marshal(tc.env)
+			req := agentadapter.StartRequest{SessionID: "test", ResumeSessionID: "upstream", Spec: agentadapter.Spec{Agent: tc.agent, SessionConfig: json.RawMessage(tc.config)}}
+			err := seedCodexModel(req, tc.env)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v", err)
+			}
+			if tc.wantErr {
+				return
+			}
+			if tc.wantModel == "" {
+				after, _ := json.Marshal(tc.env)
+				if string(before) != string(after) {
+					t.Fatal("unexpected env mutation")
+				}
+				return
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(tc.env["CODEX_CONFIG"]), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["model"] != tc.wantModel {
+				t.Fatalf("model = %v", got["model"])
+			}
+			if tc.name == "inherited config" && (got["model_provider"] != "gateway" || got["nested"] == nil) {
+				t.Fatal("lost inherited config")
+			}
+			if tc.name == "launch override" && got["custom"] != float64(42) {
+				t.Fatal("lost launch config")
+			}
+			if os.Getenv("CODEX_CONFIG") != `{"model":"default","model_provider":"gateway","nested":{"keep":true}}` {
+				t.Fatal("mutated process environment")
+			}
+		})
 	}
 }

@@ -68,6 +68,13 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	} else if entry, ok := runtimeinstall.EntryPoint(req.Spec.Agent, launch.Distribution); !ok || launch.ACP == nil || len(launch.ACP.Args) == 0 || launch.ACP.Args[0] != entry {
 		return nil, fmt.Errorf("managed agent %s has an invalid pinned distribution", req.Spec.Agent)
 	}
+	env := maps.Clone(launch.ACP.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	if err := seedCodexModel(req, env); err != nil {
+		return nil, err
+	}
 	fs, err := workspacefs.Open(req.CWD)
 	if err != nil {
 		return nil, err
@@ -113,10 +120,6 @@ func (f DefaultFactory) Start(ctx context.Context, req agentadapter.StartRequest
 	// same list through an agent-side bridge; see runtime/pi/mcp-bridge.ts.
 	if err := runtimeinstall.StageAgentSupport(f.Config); err != nil {
 		slog.Warn("stage agent support files failed", "session", req.SessionID, "agent", req.Spec.Agent, "err", err)
-	}
-	env := maps.Clone(launch.ACP.Env)
-	if env == nil {
-		env = map[string]string{}
 	}
 	serversFile, err := f.writeMCPServersFile(req.SessionID, mcpServers)
 	if err != nil {
@@ -185,6 +188,44 @@ func removeMCPServersFile(path string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Warn("remove MCP servers file failed", "path", path, "err", err)
 	}
+}
+
+// seedCodexModel supplies the saved model before session/load can emit a
+// mismatch warning. Each adapter owns its bridge process; no global config is
+// changed. Keep applying the full saved session configuration after load too.
+func seedCodexModel(req agentadapter.StartRequest, env map[string]string) error {
+	if req.Spec.Agent != "codex" || len(req.Spec.SessionConfig) == 0 {
+		return nil
+	}
+	var saved persistedSessionConfig
+	if err := json.Unmarshal(req.Spec.SessionConfig, &saved); err != nil {
+		return fmt.Errorf("decode Codex session settings: %w", err)
+	}
+	model, ok := saved.ConfigOptions["model"].(string)
+	if !ok || model == "" {
+		return nil
+	}
+	raw, exists := env["CODEX_CONFIG"]
+	if !exists {
+		raw = os.Getenv("CODEX_CONFIG")
+	}
+	config := map[string]json.RawMessage{}
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &config); err != nil {
+			return fmt.Errorf("decode CODEX_CONFIG for saved model: %w", err)
+		}
+	}
+	if config == nil {
+		config = map[string]json.RawMessage{}
+	}
+	config["model"], _ = json.Marshal(model)
+	merged, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("encode Codex startup settings: %w", err)
+	}
+	env["CODEX_CONFIG"] = string(merged)
+	slog.Info("seeded Codex startup model", "session_id", req.SessionID, "model", model, "resume", req.ResumeSessionID != "")
+	return nil
 }
 
 func envList(m map[string]string) []string {

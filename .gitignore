@@ -10,6 +10,9 @@ out/
 *.tsbuildinfo
 /tandem
 /tandem.self-update
+/tandem.build-stamp
+/tandem.build-lock
+/tandem.build.*
 /release/
 
 # Env / secrets

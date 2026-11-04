@@ -329,7 +329,7 @@ export function SessionsRail({ onResizeStart }: { onResizeStart?: (clientX: numb
                 />
               )}
               {!(federationGrouping && collapsedHosts.has(group.hostId)) && group.ids.map((id) => (
-                <Row
+                <SessionRow
                   key={id}
                   rowRef={registerRow(id)}
                   agent={agents[id]}
@@ -664,7 +664,7 @@ function groupedAgentRows(order: string[], agents: Record<string, SessionView>, 
   return [...(local ? [local] : []), ...[...groups.values()].filter((group) => group.hostId !== LOCAL_HOST_ID)];
 }
 
-function Row({
+function SessionRow({
   rowRef,
   agent,
   active,
@@ -932,7 +932,6 @@ function Row({
         </div>
         {agent.waitingOn?.length > 0 && <WaitingOnLine waiting={agent.waitingOn} />}
         {renameError && <div className="session-rename-error">{renameError}</div>}
-        {deleting && <div className="session-deleting">Deleting…</div>}
         <div className="ws" title={ws.cwd}>
           {ws.gitState && <span className={`git-state ${ws.gitState}`} title={gitStateTitle} />}
           <span className="ws-text">

@@ -109,7 +109,7 @@ src/
     TerminalRenderer.ts   engine-agnostic interface + ghostty/xterm adapters
     ptyHub.ts             non-reactive raw_pty buffer + fan-out (rehydrate on focus)
   components/
-    ConductorBar, AgentsRail, ApprovalsRail, Inspector, FocusArea,
+    ConductorBar, SessionsRail, ApprovalsRail, Inspector, FocusArea,
     ConnectionBanner, TokenScreen, SpawnPalette, CommandPalette, ResumePalette
     panes/ TranscriptPane, TerminalPane, DiffPane, BrowserPane
 ```

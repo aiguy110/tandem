@@ -2389,11 +2389,16 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
     const el = textRef.current;
     if (!el) return;
 
-    el.style.height = 'auto';
-    const maxHeight = Number.parseFloat(getComputedStyle(el).maxHeight);
-    const height = Math.min(el.scrollHeight, maxHeight);
-    el.style.height = `${height}px`;
-    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    // Ignore the button-alignment minimum while measuring. Otherwise 100%
+    // retains the previous row height and a cleared draft cannot shrink.
+    el.style.minHeight = '0';
+    el.style.height = '0';
+    const style = getComputedStyle(el);
+    const maxHeight = Number.parseFloat(style.maxHeight);
+    const contentHeight = el.scrollHeight + Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
+    el.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+    el.style.minHeight = '';
+    el.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
     if (highlightRef.current) {
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
