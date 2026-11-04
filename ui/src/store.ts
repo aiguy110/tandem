@@ -61,6 +61,7 @@ import type {
   WorkspaceEntry,
   ClientDiag,
 } from './wire';
+import { MAX_CLIENT_MESSAGE_BYTES } from './wire';
 
 // The focus/bandwidth rules: browser frames stream only for the focused Browser
 // pane, and raw PTY / worktree-shell scrollback streams only for the focused
@@ -1498,6 +1499,17 @@ export const useStore = create<StoreState>((set, get, api) => {
 
   const sendPromptCommand = (corrId: string, command: ClientMsg) => {
     const message = { ...command, requestId: crypto.randomUUID() } as ClientMsg;
+    // An oversized frame makes the daemon close the socket, and unacked prompts
+    // are resent on every reconnect, so sending it would loop forever.
+    // 1 KiB headroom covers the clientTs the transport adds.
+    const bytes = new TextEncoder().encode(JSON.stringify(message)).length;
+    if (bytes > MAX_CLIENT_MESSAGE_BYTES - 1024) {
+      const ack = pendingAcks.get(corrId);
+      pendingAcks.delete(corrId);
+      console.warn('Prompt too large to send', { corrId, bytes });
+      ack?.({ error: `Prompt is ${(bytes / 2 ** 20).toFixed(1)} MiB; the daemon accepts up to ${MAX_CLIENT_MESSAGE_BYTES / 2 ** 20} MiB per message. Attach it as a file instead.` });
+      return;
+    }
     promptCommands.set(corrId, message);
     client.send(message);
   };

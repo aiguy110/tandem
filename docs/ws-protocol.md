@@ -334,6 +334,11 @@ instead of hard-coding agent names. Launch commands and environment values stay 
 
 All client messages accept an optional `corrId` echoed back on the matching `ack`.
 
+A browser → daemon frame may be at most 32 MiB (`wsserver.MaxClientMessageBytes`,
+mirrored by `MAX_CLIENT_MESSAGE_BYTES` in `ui/src/wire.ts`). The daemon closes the socket
+(1009) on anything larger, and the UI replays unacknowledged prompts on reconnect, so the UI
+fails an oversized `prompt`/`steer`/`aside` locally instead of sending it.
+
 ```ts
 // ---- Browser → Daemon ----
 type ClientMsg =

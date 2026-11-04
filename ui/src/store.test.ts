@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testApplyServerMsg, agentBadge, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
-import type { SessionSummary, Annotation } from './wire';
+import { MAX_CLIENT_MESSAGE_BYTES, type SessionSummary, type Annotation } from './wire';
 import { WsClient } from './ws/client';
 import { buildCommands } from './commands/registry';
 import {
@@ -81,6 +81,15 @@ describe('prompt acknowledgements', () => {
     __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'user_message', text: 'continue' } });
     expect(useStore.getState().promptTimeouts[result.recoveryId!]).toBe(false);
     expect(useStore.getState().drafts['session-1']).toBe('next question');
+  });
+
+  it('refuses a prompt over the daemon frame limit instead of sending it', async () => {
+    const send = vi.spyOn(WsClient.prototype, 'send').mockImplementation(() => true);
+    useStore.setState({ drafts: { 'session-1': 'huge' } });
+    const result = await useStore.getState().prompt('session-1', 'x'.repeat(MAX_CLIENT_MESSAGE_BYTES));
+    expect(result.error).toMatch(/MiB per message/);
+    expect(send).not.toHaveBeenCalled();
+    expect(useStore.getState().drafts['session-1']).toBe('huge');
   });
 
 });

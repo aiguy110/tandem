@@ -117,6 +117,10 @@ export interface AgentWaitingOn {
   deadline: string;
 }
 
+// Mirrors wsserver.MaxClientMessageBytes: the daemon drops the whole socket on
+// a larger frame, so callers must refuse oversized commands before sending.
+export const MAX_CLIENT_MESSAGE_BYTES = 32 << 20;
+
 export type PromptBlock =
   | { type: 'text'; text: string }
   | ({ type: 'image' } & ImageAssetRef)
