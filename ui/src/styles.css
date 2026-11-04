@@ -466,7 +466,10 @@ body.dock-resizing .app { transition: none; }
    items with overflow:hidden (e.g. .card) get min-height:auto resolved to 0
    per spec, so once content overflows the container the flexbox shrink
    algorithm squishes them toward 0 instead of letting the container scroll. */
-.transcript > * { flex-shrink: 0; }
+.transcript > *, .transcript-content > * { flex-shrink: 0; }
+/* Inner wrapper whose size a ResizeObserver watches to keep the tail pinned
+   while rows render, expand, or lay out late (markdown, images, code). */
+.transcript-content { flex: 1 0 auto; display: flex; min-width: 0; flex-direction: column; gap: 10px; }
 .transcript-node { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
 .subagent-group { max-width: 900px; }
 .subagent-icon {

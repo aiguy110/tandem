@@ -720,26 +720,53 @@ export function TranscriptPane() {
 
   // On mount and whenever the focused agent changes, open to the latest message.
   const sessionId = agent?.id;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const lastScrollTop = useRef(0);
   useLayoutEffect(() => {
     stick.current = true;
     scrollToBottom();
+    lastScrollTop.current = scrollRef.current?.scrollTop ?? 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // As new items stream in, keep the tail pinned only while sticking. Smooth
-  // tail-following makes the existing rows slide upward as a new row appears,
-  // rather than jumping after its layout has been added.
-  useEffect(() => {
-    if (stick.current) scrollToBottom(true);
+  // Keep the tail pinned while sticking, driven by the content's actual size
+  // rather than by item changes: replayed history, markdown, code blocks, and
+  // images keep growing after React commits, and a smooth scroll aimed at a
+  // stale scrollHeight would otherwise stop short of the bottom. Large jumps
+  // (history replay, switching agents) snap instantly; small live growth
+  // slides smoothly so existing rows ease upward as a new row arrives.
+  const historyLoaded = agent?.historyLoaded ?? false;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const pin = () => {
+      if (!stick.current) return;
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (gap <= 1) return;
+      scrollToBottom(historyLoaded && gap < el.clientHeight / 2);
+    };
+    pin();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(pin);
+    ro.observe(content);
+    ro.observe(el);
+    return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
+  }, [sessionId, historyLoaded]);
 
+  // Only an upward scroll (user intent) releases the pin. Programmatic smooth
+  // scrolls pass through "not near bottom" positions on their way down, and
+  // content growth momentarily widens the gap; neither should unstick.
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    stick.current = nearBottom;
-    setAtBottom(nearBottom);
+    const top = el.scrollTop;
+    const nearBottom = el.scrollHeight - top - el.clientHeight < 120;
+    if (nearBottom) stick.current = true;
+    else if (top < lastScrollTop.current - 2) stick.current = false;
+    lastScrollTop.current = top;
+    setAtBottom(nearBottom || stick.current);
   };
 
   // Clicking the peer on an agent-message card focuses that agent and scrolls
@@ -943,10 +970,12 @@ export function TranscriptPane() {
             onMouseUp={captureSelection}
             onTouchEnd={() => window.setTimeout(() => captureSelectionRef.current(), 80)}
           >
-            {transcriptItems.length === 0 && (agent.historyLoaded
-              ? <div className="empty">No activity yet. Send a prompt below to start a turn.</div>
-              : <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />Loading conversation…</div>)}
-            {transcriptTree.map(renderTranscriptNode)}
+            <div className="transcript-content" ref={contentRef}>
+              {transcriptItems.length === 0 && (agent.historyLoaded
+                ? <div className="empty">No activity yet. Send a prompt below to start a turn.</div>
+                : <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />Loading conversation…</div>)}
+              {transcriptTree.map(renderTranscriptNode)}
+            </div>
           </div>
           {!atBottom && (
             <button className="scroll-latest" onClick={() => scrollToBottom(true)} title="Scroll to latest">
