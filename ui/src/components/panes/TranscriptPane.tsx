@@ -2233,6 +2233,8 @@ const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'i
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_TURN_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGES = 4;
+// Pastes longer than this are attached as a text file rather than inlined.
+const LARGE_PASTE_CHARS = 2048;
 
 const attachmentUploads = new Map<string, AbortController>();
 const attachmentUploadKey = (sessionId: string, localId: string) => `${sessionId}\0${localId}`;
@@ -2865,6 +2867,15 @@ function PromptBar({ sessionId, working }: { sessionId: string; working: boolean
               if (images.length) {
                 e.preventDefault();
                 addFiles(images);
+                return;
+              }
+              // Long pastes (logs, HAR captures, dumps) become a text file
+              // attachment instead of flooding the prompt and transcript.
+              const pasted = e.clipboardData.getData('text/plain');
+              if (pasted.length > LARGE_PASTE_CHARS) {
+                e.preventDefault();
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                addFiles([new File([pasted], `pasted-${stamp}.txt`, { type: 'text/plain' })]);
               }
             }}
             onChange={(e) => {
