@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/config"
 )
@@ -253,6 +254,90 @@ func TestInstallForkRebuildsWhenRecipeChangesAtSameCommit(t *testing.T) {
 	}
 	if got := readBunLog(t, logPath); strings.Contains(strings.Join(got[len(got)-3:], "\n"), " run ") {
 		t.Fatalf("buildScript none must not run a script, got %q", got)
+	}
+}
+
+func TestForkBuildDoesNotBlockOtherAgents(t *testing.T) {
+	fork := monorepoFork(t)
+	fork.BuildScript = config.ForkBuildNone
+	// Fork records must name an https remote; point one at the local fixture.
+	local := fork.Repo
+	fork.Repo = "https://fork.invalid/oh-my-pi"
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+local+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", fork.Repo)
+	cfg := config.Config{Home: t.TempDir(), RuntimeRoot: t.TempDir()}
+	if _, err := config.SaveACPFork(cfg.Home, "omp", fork); err != nil {
+		t.Fatal(err)
+	}
+	// claude is already provisioned, so resolving it only reads the lockfile.
+	claudeRoot := filepath.Join(cfg.RuntimeRoot, "agents", "claude", "1.0.0")
+	claudeEntry := filepath.Join(claudeRoot, agentPins["claude"].dist)
+	if err := os.MkdirAll(filepath.Dir(claudeEntry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudeEntry, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLock(cfg.RuntimeRoot, Lockfile{Version: 1, Agents: map[string]LockedAgent{
+		"claude": {Package: agentPins["claude"].packageName, Version: "1.0.0", Path: claudeRoot},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// The fork's dependency install blocks until released, standing in for a
+	// clone or build that takes minutes.
+	bun, _ := fakeBun(t)
+	gate := t.TempDir()
+	blocking := filepath.Join(t.TempDir(), "bun")
+	script := "#!/bin/sh\nif [ \"$1\" = install ]; then : > " + gate + "/started; while [ ! -e " + gate + "/release ]; do sleep 0.02; done; fi\nexec " + bun + " \"$@\"\n"
+	if err := os.WriteFile(blocking, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Bun.Command = blocking
+	release := func() { _ = os.WriteFile(filepath.Join(gate, "release"), nil, 0o644) }
+	t.Cleanup(release)
+
+	forkDone := make(chan error, 1)
+	go func() {
+		_, err := EnsureManaged(context.Background(), cfg, "omp", io.Discard)
+		forkDone <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(gate, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fork build never reached its dependency install")
+		}
+	}
+
+	claudeDone := make(chan error, 1)
+	go func() {
+		_, err := EnsureManaged(context.Background(), cfg, "claude", io.Discard)
+		claudeDone <- err
+	}()
+	select {
+	case err := <-claudeDone:
+		if err != nil {
+			t.Fatalf("claude: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("resolving claude waited on omp's fork build")
+	}
+
+	release()
+	if err := <-forkDone; err != nil {
+		t.Fatalf("omp fork: %v", err)
+	}
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Agents["omp"]; got.Fork == nil || got.Fork.Commit != fork.Commit {
+		t.Fatalf("omp lock entry = %+v", got)
+	}
+	if got := l.Agents["claude"]; got.Path != claudeRoot {
+		t.Fatalf("the fork's lockfile write dropped claude's entry: %+v", got)
 	}
 }
 

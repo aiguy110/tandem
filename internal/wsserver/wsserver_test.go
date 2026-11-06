@@ -112,6 +112,8 @@ type testBackend struct {
 	// dirsGate, when set, holds ListDirs until closed; dirsCalls counts scans.
 	dirsGate  chan struct{}
 	dirsCalls atomic.Int32
+	// spawnOptionsGate, when set, holds SpawnOptions until closed.
+	spawnOptionsGate chan struct{}
 }
 
 type stalledBrowserDriver struct {
@@ -413,7 +415,10 @@ func (*testBackend) AgentCatalog() registry.Catalog {
 func (b *testBackend) Spawn(context.Context, agentadapter.Spec) (*session.Session, error) {
 	return b.Get("a"), nil
 }
-func (*testBackend) SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error) {
+func (b *testBackend) SpawnOptions(context.Context, string, string, []string, string) (registry.SpawnOptions, error) {
+	if b.spawnOptionsGate != nil {
+		<-b.spawnOptionsGate
+	}
 	return registry.SpawnOptions{Modes: json.RawMessage(`null`), ConfigOptions: []json.RawMessage{}}, nil
 }
 func (b *testBackend) Close(_ context.Context, id string, _, _, _ bool) (bool, error) {
@@ -1857,6 +1862,26 @@ func TestListDirsScanDoesNotBlockConnection(t *testing.T) {
 	}
 	if n := b.dirsCalls.Load(); n != 1 {
 		t.Fatalf("scans=%d, want 1", n)
+	}
+}
+
+func TestPingAnsweredWhileSpawnOptionsWaits(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	b.spawnOptionsGate = make(chan struct{})
+	c := dial(t, url)
+	// Spawn options may wait minutes for a distribution to be provisioned; the
+	// link probe must still be answered meanwhile.
+	send(t, c, map[string]any{"t": "get_spawn_options", "agent": "claude", "corrId": "opts"})
+	send(t, c, map[string]any{"t": "ping", "corrId": "alive"})
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	var got map[string]any
+	if err := c.ReadJSON(&got); err != nil || got["t"] != "pong" || got["corrId"] != "alive" {
+		close(b.spawnOptionsGate)
+		t.Fatalf("ping blocked behind spawn options: reply=%v err=%v", got, err)
+	}
+	close(b.spawnOptionsGate)
+	if got := recv(t, c); got["t"] != "spawn_options" || got["corrId"] != "opts" {
+		t.Fatalf("spawn options=%#v", got)
 	}
 }
 
