@@ -89,3 +89,42 @@ page (`Page.enable`, screencast, input) timed out at the same time.
   the tab or restart the browser.
 - **Attention rail.** A pending dialog is shown only in the Browser pane, not as an
   attention item.
+
+## Automatic secret redaction in transcripts
+
+**Status: proposed, not started.**
+
+**What.** Find credentials that turn up in agent tool output and redact them before they
+are stored in the event log or shown in the UI. Examples: a `docker inspect` that dumps
+`TS_AUTHKEY=…` and `TANDEM_JOIN_TOKEN=…`, an `env` listing, a `.env` that was `cat`ed, a
+bearer token echoed by `curl -v`. Redact both values that match known shapes (`hskey-auth-…`,
+`ghp_…`, `sk-…`, AWS keys, JWTs, PEM blocks) and values of high-entropy
+`*_TOKEN`/`*_KEY`/`*_SECRET`/`*PASSWORD*` assignments.
+
+**Seen.** 2026-11-10: diagnosing a federated child running in a container, an agent ran
+`docker inspect … {{json .Config.Env}}`. That put the container's Tailscale auth key and
+federation join token into the transcript in plain text.
+
+**Why it is not covered today.** The secret broker ([`secrets.md`](secrets.md)) keeps
+*brokered* secrets out of transcripts, but it only recognizes values a user granted through
+it during the current daemon lifetime. It does nothing for credentials an agent finds on
+its own through ordinary shell tools.
+
+**Limits to state up front.**
+
+- **This would not stop the model from seeing the secret.** ACP agents run their own tools
+  and pass the results to their model before the daemon sees a `tool_call_update`. Daemon
+  redaction protects what is persisted and displayed: SQLite, replay, the UI, federation
+  relays, and exported or imported history. Keeping a secret out of model context needs
+  redaction inside the harness or an MCP-level shell wrapper.
+- **False positives hide useful output.** Hashes, commit SHAs, and checksums look
+  high-entropy. Matching on the variable name *and* the value's shape, plus a per-host
+  allowlist, keeps this manageable.
+
+**Open decisions.**
+
+- Redact at ingest, so the raw value is never written, or at render, so the raw value
+  stays in SQLite behind a reveal action. Ingest is the safer default. Render keeps
+  debugging possible.
+- Whether a detected secret should also raise a notification suggesting rotation.
+- Whether to retroactively scrub existing event logs.
