@@ -110,21 +110,59 @@ federation join token into the transcript in plain text.
 it during the current daemon lifetime. It does nothing for credentials an agent finds on
 its own through ordinary shell tools.
 
+**Decided: redact at ingest.** The raw value is never written to SQLite, so replay,
+federation relays, history export, and backups never carry it. Debugging gives up the
+ability to see the original value; that is the intended trade.
+
 **Limits to state up front.**
 
-- **This would not stop the model from seeing the secret.** ACP agents run their own tools
-  and pass the results to their model before the daemon sees a `tool_call_update`. Daemon
-  redaction protects what is persisted and displayed: SQLite, replay, the UI, federation
-  relays, and exported or imported history. Keeping a secret out of model context needs
-  redaction inside the harness or an MCP-level shell wrapper.
+- **Daemon redaction alone would not stop the model from seeing the secret.** ACP agents
+  run their own tools and pass the results to their model before the daemon sees a
+  `tool_call_update`. Daemon redaction protects what is persisted and displayed: SQLite,
+  replay, the UI, federation relays, and exported or imported history. Keeping a secret
+  out of model context needs redaction inside the harness. See *omp as Tandem's native
+  agent* below, which would get both halves in one change for that harness.
 - **False positives hide useful output.** Hashes, commit SHAs, and checksums look
   high-entropy. Matching on the variable name *and* the value's shape, plus a per-host
   allowlist, keeps this manageable.
 
 **Open decisions.**
 
-- Redact at ingest, so the raw value is never written, or at render, so the raw value
-  stays in SQLite behind a reveal action. Ingest is the safer default. Render keeps
-  debugging possible.
 - Whether a detected secret should also raise a notification suggesting rotation.
 - Whether to retroactively scrub existing event logs.
+
+## omp as Tandem's native agent, with its transcript storage format
+
+**Status: proposed, not started.**
+
+**What.** Ship Oh My Pi (`omp`) as Tandem's default, first-party agent instead of one
+catalog entry among several, and move Tandem's transcript storage toward omp's own
+session format. Then the daemon and the harness would read and write one record of a
+conversation, rather than Tandem keeping a parallel event log that it rebuilds from ACP
+updates. Today that log is why restore loads the session through `session/load` and then
+discards the replay ([`omp-acp-plan.md`](omp-acp-plan.md) §3.3).
+
+**Why it came up.** Secret redaction (above). A redaction step inside omp's tool-result
+path, writing to storage both sides share, would keep a detected secret out of the
+model's context *and* out of Tandem's stored transcript in one implementation. With a
+separate harness and daemon, those are two independent features. This is the only path
+found so far that covers the model-context half for any harness.
+
+**Relationship to existing work.** The ACP integration plan
+([`omp-acp-plan.md`](omp-acp-plan.md)) and the `aiguy110/oh-my-pi` fork already carry
+Tandem-specific omp changes, so the delivery mechanism exists. That plan assumes ACP
+remains the boundary and Tandem keeps its own log. This item is the larger step past it.
+
+**Costs and open questions.**
+
+- Claude, Codex, and other ACP agents still need Tandem's own event log. Either two
+  storage paths coexist, or omp's format becomes the general one and other agents'
+  updates are written into it. Invariant 1 in `CLAUDE.md` (the daemon owns all state)
+  has to survive either way.
+- How much of the storage change can go upstream, versus living permanently on the fork.
+  Upstream rules ([`omp-acp-plan.md`](omp-acp-plan.md), *Upstream contribution rules*)
+  require a Discord discussion before architectural changes.
+- omp's session format, its stability guarantees across releases, and how it handles
+  forks, compaction, and subagents all need to be checked before committing to it. This
+  entry has not verified any of them.
+- Federation, history import, and full-text search all read Tandem's current schema.
