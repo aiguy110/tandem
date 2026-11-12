@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aiguy110/tandem/internal/agentadapter"
 	"github.com/aiguy110/tandem/internal/config"
@@ -73,8 +75,72 @@ func ForkFor(cfg config.Config, agent string) (config.ACPFork, bool, error) {
 	return fork, ok, nil
 }
 
+// forkBuildMu serializes fork builds. A fork tree is cloned, built, and
+// installed in its own per-commit directory rather than the shared
+// node_modules, so building it does not need installMu; holding installMu
+// through a clone that can take many minutes would block every other agent's
+// spawn and the adapter catalog behind it.
+var forkBuildMu sync.Mutex
+
+// forkBuildTimeout bounds one fork's clone, dependency install, build, and
+// pack, so a stalled network fetch fails the sync instead of hanging it.
+const forkBuildTimeout = 30 * time.Minute
+
+// ensureFork provisions the pinned fork tree for a fork-tracked agent and
+// records it in the lockfile. Only the lockfile read and write take installMu.
+func ensureFork(ctx context.Context, cfg config.Config, agent string, fork config.ACPFork, log io.Writer) (*agentadapter.Distribution, error) {
+	p := agentPins[agent]
+	// current returns the locked entry when it already satisfies fork.
+	current := func() (*agentadapter.Distribution, error) {
+		installMu.Lock()
+		defer installMu.Unlock()
+		l, err := ReadLock(cfg.RuntimeRoot)
+		if err != nil {
+			return nil, err
+		}
+		if locked := l.Agents[agent]; forkLockCurrent(locked, fork, p.dist) {
+			return forkDistribution(locked), nil
+		}
+		return nil, nil
+	}
+	// A fork-tracked agent resolves against the pinned commit, so a re-pinned
+	// record (or a stale upstream install left over from before tracking began)
+	// must provision the fork tree rather than reuse what the lockfile names.
+	if d, err := current(); err != nil || d != nil {
+		return d, err
+	}
+	forkBuildMu.Lock()
+	defer forkBuildMu.Unlock()
+	// Another caller may have built this commit while this one waited.
+	if d, err := current(); err != nil || d != nil {
+		return d, err
+	}
+	bun, err := resolveBun(ctx, cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	next, err := installFork(ctx, cfg, bun, agent, fork, log)
+	if err != nil {
+		return nil, err
+	}
+	installMu.Lock()
+	defer installMu.Unlock()
+	// Re-read: other agents' entries may have changed during the build.
+	l, err := ReadLock(cfg.RuntimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	previous := l.Agents[agent]
+	next.PreviousVersion, next.PreviousPath = previous.Version, previous.Path
+	l.Agents[agent] = next
+	if err := writeLock(cfg.RuntimeRoot, l); err != nil {
+		return nil, err
+	}
+	return forkDistribution(next), nil
+}
+
 // installFork provisions a fork-pinned distribution and returns its lock entry.
-// Callers must hold installMu.
+// Callers must hold forkBuildMu.
 func installFork(ctx context.Context, cfg config.Config, bun, agent string, fork config.ACPFork, log io.Writer) (LockedAgent, error) {
 	p := agentPins[agent]
 	version := fork.DistributionVersion()
@@ -162,31 +228,52 @@ func writeForkRecipe(root string, r forkRecipe) error {
 // Dependencies are installed at the clone root so a workspace monorepo's
 // members resolve; the build script and the pack run in fork.PackageDir.
 func buildFork(ctx context.Context, cfg config.Config, bun, root string, fork config.ACPFork, log io.Writer) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, forkBuildTimeout)
+	defer cancel()
 	src := filepath.Join(root, ".fork-src")
 	if err := os.RemoveAll(src); err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(src)
 	pkg := filepath.Join(src, filepath.FromSlash(fork.PackageDir))
+	started := time.Now()
 	slog.Info("building ACP fork", "repo", fork.Repo, "commit", fork.Commit, "dir", src,
-		"package_dir", fork.PackageDir, "build_script", fork.BuildScript)
+		"package_dir", fork.PackageDir, "build_script", fork.BuildScript, "timeout", forkBuildTimeout)
 	fmt.Fprintf(log, "tandem: building ACP fork %s#%s\n", fork.Repo, fork.ShortCommit())
-	if err := runGit(ctx, root, log, "clone", "--quiet", fork.Repo, src); err != nil {
+	step := func(name string, stepStarted time.Time, err error) error {
+		if err != nil {
+			slog.Warn("ACP fork build step failed", "repo", fork.Repo, "commit", fork.Commit, "step", name,
+				"elapsed", time.Since(stepStarted), "total_elapsed", time.Since(started), "error", err)
+			return err
+		}
+		slog.Info("ACP fork build step completed", "repo", fork.Repo, "commit", fork.Commit, "step", name,
+			"elapsed", time.Since(stepStarted), "total_elapsed", time.Since(started))
+		return nil
+	}
+	// Only the pinned commit's files are needed. A blobless clone still has the
+	// full commit graph (so the checkout and any build script that inspects
+	// history work) but fetches file contents for the checked-out tree alone,
+	// rather than every version of every file the fork has ever had.
+	stepStarted := time.Now()
+	if err := step("clone", stepStarted, runGit(ctx, root, log, "clone", "--quiet", "--filter=blob:none", "--no-checkout", fork.Repo, src)); err != nil {
 		return "", err
 	}
-	if err := runGit(ctx, src, log, "checkout", "--quiet", "--detach", fork.Commit); err != nil {
+	stepStarted = time.Now()
+	if err := step("checkout", stepStarted, runGit(ctx, src, log, "checkout", "--quiet", "--detach", fork.Commit)); err != nil {
 		return "", err
 	}
 	run := func(dir string, args ...string) error {
+		stepStarted := time.Now()
 		cmd := exec.CommandContext(ctx, bun, args...)
 		cmd.Dir = dir
 		cmd.Stdout = log
 		cmd.Stderr = log
 		cmd.Env = buildEnv(cfg, bun)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("bun %s: %w", strings.Join(args, " "), err)
+		err := cmd.Run()
+		if err != nil {
+			err = fmt.Errorf("bun %s: %w", strings.Join(args, " "), err)
 		}
-		return nil
+		return step("bun "+strings.Join(args, " "), stepStarted, err)
 	}
 	scripts, err := packageScripts(filepath.Join(pkg, "package.json"))
 	if errors.Is(err, os.ErrNotExist) {

@@ -1287,6 +1287,23 @@ func (c *connection) sendAutomation(repositoryID string, corrID json.RawMessage)
 	c.send(withCorr(map[string]any{"t": "automation", "jobs": jobs, "runs": runs}, corrID))
 }
 
+// spawnOptions answers get_spawn_options. It runs off the read loop, so its
+// duration is logged here rather than by handle's slow-command check.
+func (c *connection) spawnOptions(m clientMessage) {
+	started := time.Now()
+	options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
+	elapsed := time.Since(started)
+	if err != nil {
+		slog.Warn("websocket spawn options failed", "connection_id", c.id, "agent", m.Agent, "harness", m.Harness, "elapsed_ms", elapsed.Milliseconds(), "error", err)
+		c.send(withCorr(map[string]any{"t": "spawn_options", "error": err.Error()}, m.CorrID))
+		return
+	}
+	if elapsed >= 3*time.Second {
+		slog.Warn("websocket slow spawn options", "connection_id", c.id, "agent", m.Agent, "harness", m.Harness, "elapsed_ms", elapsed.Milliseconds())
+	}
+	c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
+}
+
 func (c *connection) handle(m clientMessage) {
 	started := time.Now()
 	defer func() {
@@ -1867,12 +1884,10 @@ func (c *connection) handle(m clientMessage) {
 			c.send(map[string]any{"t": "hosts", "hosts": c.server.federationHosts()})
 		}
 	case "get_spawn_options":
-		options, err := c.server.opts.Registry.SpawnOptions(context.Background(), m.Agent, m.Harness, m.ACPArgs, m.CWD)
-		if err != nil {
-			c.send(withCorr(map[string]any{"t": "spawn_options", "error": err.Error()}, m.CorrID))
-			return
-		}
-		c.send(withCorr(map[string]any{"t": "spawn_options", "options": options}, m.CorrID))
+		// The probe launches an ACP process and may first wait to provision the
+		// agent's distribution. Inline, that wait stops this socket's reader, so
+		// even pings go unanswered and the browser reports the daemon as hung.
+		go c.spawnOptions(m)
 	case "capture_snapshot":
 		snap, err := c.server.opts.Registry.CaptureSnapshot(context.Background(), m.SessionID, browserIDOf(m), m.Name)
 		if err != nil {

@@ -135,39 +135,20 @@ func EnsureManaged(ctx context.Context, cfg config.Config, agent string, log io.
 	if !ok {
 		return nil, nil
 	}
+	fork, forked, err := ForkFor(cfg, agent)
+	if err != nil {
+		return nil, err
+	}
+	if forked {
+		return ensureFork(ctx, cfg, agent, fork, log)
+	}
 	installMu.Lock()
 	defer installMu.Unlock()
 	l, err := ReadLock(cfg.RuntimeRoot)
 	if err != nil {
 		return nil, err
 	}
-	fork, forked, err := ForkFor(cfg, agent)
-	if err != nil {
-		return nil, err
-	}
 	locked, ok := l.Agents[agent]
-	// A fork-tracked agent resolves against the pinned commit, so a re-pinned
-	// record (or a stale upstream install left over from before tracking began)
-	// must provision the fork tree rather than reuse what the lockfile names.
-	if forked && !forkLockCurrent(locked, fork, p.dist) {
-		bun, err := resolveBun(ctx, cfg, log)
-		if err != nil {
-			return nil, err
-		}
-		next, err := installFork(ctx, cfg, bun, agent, fork, log)
-		if err != nil {
-			return nil, err
-		}
-		next.PreviousVersion, next.PreviousPath = locked.Version, locked.Path
-		l.Agents[agent] = next
-		if err := writeLock(cfg.RuntimeRoot, l); err != nil {
-			return nil, err
-		}
-		return forkDistribution(next), nil
-	}
-	if forked {
-		return forkDistribution(locked), nil
-	}
 	if !ok || !distExists(locked.Path, p.dist) {
 		bun, err := resolveBun(ctx, cfg, log)
 		if err != nil {
