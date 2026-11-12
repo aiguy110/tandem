@@ -91,11 +91,12 @@ func (s *Session) Dormant() bool {
 }
 
 // IdleFor reports how long the session has gone without an event or turn.
-// It is zero while a turn is running.
+// It is zero while a turn is running, including one the agent started on its
+// own (reported only through a "working" status, with no prompt in flight).
 func (s *Session) IdleFor() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.active > 0 {
+	if s.active > 0 || s.status == Working {
 		return 0
 	}
 	return time.Since(s.lastActivity)

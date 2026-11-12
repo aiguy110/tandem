@@ -170,11 +170,14 @@ type Adapter struct {
 	replayBarrier chan chan struct{}
 	asideBarrier  chan chan struct{}
 
-	mu             sync.RWMutex
-	caps           Capabilities
-	sessionID      string
-	state          SessionState
-	replaying      bool
+	mu        sync.RWMutex
+	caps      Capabilities
+	sessionID string
+	state     SessionState
+	replaying bool
+	// loading is set for the whole session/load replay, even when the replay
+	// is captured (replaying false), so replayed output never looks live.
+	loading        bool
 	permissions    map[string]pendingPermission
 	liveTools      map[string]struct{}
 	toolFiles      map[string]string
@@ -192,6 +195,8 @@ type Adapter struct {
 	// parentPath is cfg.ParentToolCallIDPath pre-split on "." (nil when unset),
 	// used to pull a normalized parentId out of each update's `_meta`.
 	parentPath []string
+	// auto tracks turns the agent starts on its own (see autonomous.go).
+	auto *autonomousTracker
 }
 
 var permissionCounter atomic.Uint64
@@ -214,7 +219,7 @@ func StartAdapter(ctx context.Context, cfg AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 	serviceCtx, serviceStop := context.WithCancel(childCtx)
-	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), toolTerminals: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop}
+	a := &Adapter{cfg: cfg, ctx: childCtx, cancel: cancel, tr: tr, events: make(chan eventlog.Event, 256), errs: make(chan error, 32), done: make(chan struct{}), permissions: make(map[string]pendingPermission), liveTools: make(map[string]struct{}), toolFiles: make(map[string]string), toolTerminals: make(map[string]string), serviceCtx: serviceCtx, serviceStop: serviceStop, auto: newAutonomousTracker()}
 	if cfg.ParentToolCallIDPath != "" {
 		a.parentPath = strings.Split(cfg.ParentToolCallIDPath, ".")
 	}
@@ -364,6 +369,9 @@ func (a *Adapter) load(ctx context.Context, sessionID string) error {
 	// Re-declare MCP servers on resume. ACP runtimes may recreate their backing
 	// agent process during session/load and cannot reliably recover subprocess
 	// configuration that was supplied only to the original session/new call.
+	a.mu.Lock()
+	a.loading = true
+	a.mu.Unlock()
 	if err := a.tr.Call(ctx, "session/load", map[string]any{"sessionId": sessionID, "cwd": a.cwd(), "mcpServers": a.cfg.MCPServers}, &raw); err != nil {
 		return fmt.Errorf("acp session/load: %w", err)
 	}
@@ -435,7 +443,7 @@ func (a *Adapter) endReplay() {
 	// readLoop has exited (or is exiting); no further notifications will be
 	// processed, so clearing the gate directly is safe.
 	a.mu.Lock()
-	a.replaying = false
+	a.replaying, a.loading = false, false
 	a.mu.Unlock()
 }
 
@@ -547,6 +555,8 @@ func (a *Adapter) promptSession(ctx context.Context, sessionID string, blocks []
 	if err != nil {
 		return "", err
 	}
+	a.autoPromptStarted()
+	defer a.autoPromptEnded()
 	if emitStatus {
 		a.emit(map[string]any{"kind": "status", "status": "working"})
 	}
@@ -729,6 +739,7 @@ func (a *Adapter) Interrupt() error {
 	for _, id := range tools {
 		a.emit(map[string]any{"kind": "tool_call_update", "id": id, "status": "cancelled"})
 	}
+	a.autoInterrupted()
 	if sessionID == "" {
 		return nil
 	}
@@ -767,6 +778,7 @@ func (a *Adapter) Close() error {
 		a.serviceStop()
 		a.mu.Unlock()
 		a.cancel()
+		a.autoClose()
 		// Transport.Close terminates the owned child, so an exit status caused by
 		// that termination is the expected disposal path rather than a close
 		// failure to surface through close_agent.
@@ -820,7 +832,7 @@ func (a *Adapter) readLoop() {
 				}
 			}
 			a.mu.Lock()
-			a.replaying = false
+			a.replaying, a.loading = false, false
 			a.mu.Unlock()
 			close(done)
 		case done := <-a.asideBarrier:
@@ -1196,6 +1208,9 @@ func (a *Adapter) handleUpdate(params json.RawMessage) error {
 		})
 	}
 	parentID := a.parentToolCallID(u["_meta"])
+	if a.observeOutOfTurn(note.SessionID, header.Variant, u, parentID) {
+		defer a.autoEmitEnded()
+	}
 	switch header.Variant {
 	case "agent_message_chunk", "agent_thought_chunk":
 		text, err := textContent(u["content"])
