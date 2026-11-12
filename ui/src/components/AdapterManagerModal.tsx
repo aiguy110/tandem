@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useStore } from '../store';
+import { isLocalHost, useStore } from '../store';
 import type { ForkTracking, ManagedAdapter, Profile } from '../wire';
 
 /**
@@ -10,8 +10,22 @@ import type { ForkTracking, ManagedAdapter, Profile } from '../wire';
  * fork is, whether upstream has moved, and the two ways out: rebase it, or
  * retire it once the change is upstreamed.
  */
-function ForkRow({ row, fork }: { row: ManagedAdapter; fork: ForkTracking }) {
+function ForkRow({ row, fork, canSpawn, hostId }: { row: ManagedAdapter; fork: ForkTracking; canSpawn: boolean; hostId?: string }) {
   const behind = Boolean(fork.latestUpstreamVersion);
+  const act = useStore((s) => s.actOnSystemNotification);
+  const setModal = useStore((s) => s.setModal);
+  const [spawning, setSpawning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The rebase offer is the updater's notification for this agent; acting on it
+  // spawns (or reopens) the rebase agent exactly as the notification button does.
+  const spawnRebase = async () => {
+    setSpawning(true); setError(null);
+    const local = `agent-update:${row.agent}`;
+    const result = await act(!isLocalHost(hostId) ? `fed~${hostId}~${local}` : local, 'rebase');
+    setSpawning(false);
+    if (result.error) setError(result.error);
+    else if (result.sessionId) setModal('none');
+  };
   const prs = fork.upstreamPrs ?? [];
   const commitUrl = `${fork.repo.replace(/\.git$/, '')}/commit/${fork.commit}`;
   const upstreamName = fork.upstreamRepo?.replace(/^https?:\/\/github\.com\//, '');
@@ -74,8 +88,20 @@ function ForkRow({ row, fork }: { row: ManagedAdapter; fork: ForkTracking }) {
             </>
           )}
         </div>
+        {error && <div className="modal-err">{error}</div>}
       </div>
       <div className="adapter-controls adapter-controls-fork">
+        {behind && (
+          <button
+            type="button"
+            className="adapter-latest"
+            disabled={spawning || !canSpawn}
+            title={canSpawn ? 'Start (or open) the agent that rebases or retires this fork' : 'Choose a fork rebase agent profile above first'}
+            onClick={() => void spawnRebase()}
+          >
+            {spawning ? 'Spawning…' : 'Spawn rebase agent'}
+          </button>
+        )}
         <code className="adapter-fork-cmd" title="Run in a terminal, or let a rebase agent do it">
           tandem acp status
         </code>
@@ -172,7 +198,7 @@ export function AdapterManagerModal() {
         {loading && adapters.length === 0 && <div className="empty">Checking adapter versions…</div>}
         {rebaseProfile !== undefined && <RebaseProfileRow current={rebaseProfile} profiles={profiles} hostId={hostId} onSaved={refresh} />}
         {adapters.map((row) => {
-          if (row.fork) return <ForkRow row={row} fork={row.fork} key={row.agent} />;
+          if (row.fork) return <ForkRow row={row} fork={row.fork} canSpawn={rebaseProfile !== ''} hostId={hostId} key={row.agent} />;
           // Deliberately not availableVersions[0]: that can be a prerelease.
           const latest = row.latestVersion ?? '';
           const choice = selected[row.agent] ?? row.currentVersion;

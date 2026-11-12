@@ -395,6 +395,16 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		if u.Kind != runtimeinstall.UpdateKindRebase || u.Fork == nil {
 			return "", fmt.Errorf("agent %s does not track an ACP fork", agent)
 		}
+		// The adapter manager offers this button whether or not a rebase agent
+		// is already working, so a second press opens that agent instead of
+		// starting a duplicate on the same fork.
+		s.mu.Lock()
+		existing, busy := s.rebaseInProgressLocked(u)
+		s.mu.Unlock()
+		if busy {
+			slog.Info("ACP fork rebase requested while an agent is already working", "agent", agent, "session", existing)
+			return existing, nil
+		}
 		if !s.canSpawnRebase() {
 			return "", fmt.Errorf("no ACP fork rebase agent profile is configured; choose one in Manage ACP adapters")
 		}

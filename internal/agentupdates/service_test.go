@@ -113,6 +113,31 @@ func TestForkRebaseOffersSpawnRatherThanInstall(t *testing.T) {
 	}
 }
 
+// The adapter manager's button can be pressed while a rebase agent is already
+// working; that must open the existing agent rather than spawn a second one.
+func TestForkRebaseActionReusesRunningAgent(t *testing.T) {
+	spawns := 0
+	s := NewService(Options{Center: notifications.New(),
+		SessionOpen: func(id string) bool { return id == "session-1" },
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{rebaseUpdate()}, nil
+		},
+		SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+			spawns++
+			return "session-1", nil
+		}})
+	s.poll(context.Background())
+	for i := 0; i < 2; i++ {
+		id, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase")
+		if err != nil || id != "session-1" {
+			t.Fatalf("press %d: id=%q err=%v", i, id, err)
+		}
+	}
+	if spawns != 1 {
+		t.Fatalf("spawned %d rebase agents, want 1", spawns)
+	}
+}
+
 // A daemon restart must not re-offer a rebase an agent is still working on,
 // and closing that agent's session re-offers it.
 func TestForkRebaseInProgressSurvivesRestart(t *testing.T) {
