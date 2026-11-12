@@ -1176,3 +1176,32 @@ func TestMessagingHooksDecorateSummariesWatchAndCloseSessions(t *testing.T) {
 		t.Fatalf("DisposeAll reported closes: %v", hooks2.closed)
 	}
 }
+
+func TestMarkReadPublishesMonotonicMarkerInSummaries(t *testing.T) {
+	r, _, _ := setup(t, &fakeFactory{})
+	s, err := r.Spawn(context.Background(), existing(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readSeq := func() int64 {
+		for _, summary := range r.Summaries(context.Background()) {
+			if summary.ID == s.ID {
+				return summary.ReadSeq
+			}
+		}
+		t.Fatal("session missing from summaries")
+		return 0
+	}
+	if changed, err := r.MarkRead(s.ID, 7); err != nil || !changed {
+		t.Fatalf("MarkRead(7) = %v, %v", changed, err)
+	}
+	if changed, err := r.MarkRead(s.ID, 3); err != nil || changed {
+		t.Fatalf("stale MarkRead(3) = %v, %v", changed, err)
+	}
+	if got := readSeq(); got != 7 {
+		t.Fatalf("readSeq = %d, want 7", got)
+	}
+	if _, err := r.MarkRead("missing", 1); err == nil {
+		t.Fatal("MarkRead accepted an unknown session")
+	}
+}

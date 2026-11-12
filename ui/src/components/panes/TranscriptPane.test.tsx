@@ -23,6 +23,7 @@ function agent(): SessionView {
     name: 'Mobile test',
     workspace: { kind: 'existing', repo: 'repo', repoPath: '/repo', branch: 'main', cwd: '/repo' },
     status: 'idle',
+    readSeq: 0,
     events: [{ seq: 1, event: { kind: 'message_chunk', text: 'Select these words on a phone.' } }],
     lastSeq: 1,
     pendingApprovals: [],

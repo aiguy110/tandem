@@ -201,6 +201,9 @@ export interface SessionView {
   lastSeq: number;
   pendingApprovals: Approval[];
   turnNotifications: TurnNotification[];
+  // Daemon-owned acknowledgement marker (see markSessionRead): completed-turn
+  // notifications at or below it were already seen in some Tandem UI.
+  readSeq: number;
   manuallyUnread?: boolean;
   hasPty: boolean; // any raw_pty seen → the agent CLI view has live content
   // User escape-hatch shell (Terminal tab). shellExited flips true when the
@@ -1452,8 +1455,12 @@ export const useStore = create<StoreState>((set, get, api) => {
           // snapshot replay never resurrects ones the user has already read.
           // The focused thread is already visible, so it does not need a card.
           const severity = turnNotificationSeverity(prevStatus, next.status);
-          if (severity && st.focusedId !== sessionId) {
+          if (severity && st.focusedId !== sessionId && seq > a.readSeq) {
             next.turnNotifications = [{ seq, createdAt: Date.now(), severity }];
+          } else if (severity && st.focusedId === sessionId && userIsLooking()) {
+            // The user watched this turn finish here, so other UIs should not
+            // keep notifying about it.
+            queueMicrotask(() => markSessionRead(sessionId, seq));
           }
           const sessions = { ...st.sessions, [sessionId]: next };
           const order = st.order.includes(sessionId) ? st.order : [sessionId, ...st.order];
@@ -1694,7 +1701,13 @@ export const useStore = create<StoreState>((set, get, api) => {
         if (!agent || agent.turnNotifications.length === 0 && !agent.manuallyUnread) return { focusedId: id, pane };
         return { focusedId: id, pane, sessions: { ...st.sessions, [id]: { ...agent, turnNotifications: [], manuallyUnread: false } } };
       });
-      if (get().sessions[id]) saveFocusedSession(id);
+      const focused = get().sessions[id];
+      if (focused) {
+        saveFocusedSession(id);
+        // Only a finished turn is something other UIs may be notifying about;
+        // the readSeq guard keeps this to one send per turn.
+        if (focused.status !== 'working') markSessionRead(id, focused.lastSeq);
+      }
       syncAudioFocus();
       if (previous && previous !== id && previousHadPty) subscribeAgent(previous);
       if (wantsPty(id)) replayPtyFor(id);
@@ -2501,6 +2514,7 @@ function shell(id: string): SessionView {
     lastSeq: 0,
     pendingApprovals: [],
     turnNotifications: [],
+    readSeq: 0,
     hasPty: false,
     shellExited: false,
     shellExitMessage: null,
@@ -2539,9 +2553,30 @@ function shell(id: string): SessionView {
   };
 }
 
+function userIsLooking(): boolean {
+  return typeof document === 'undefined' || (document.visibilityState === 'visible' && document.hasFocus());
+}
+
+// Publishes "seen through seq" to the daemon, which relays it in agent
+// summaries to every other UI and federation parent. Skips no-op sends.
+function markSessionRead(sessionId: string, seq: number): void {
+  const agent = useStore.getState().sessions[sessionId];
+  if (!agent || seq < 1 || seq <= agent.readSeq) return;
+  useStore.setState((st) => {
+    const a = st.sessions[sessionId];
+    if (!a || seq <= a.readSeq) return st;
+    return { sessions: { ...st.sessions, [sessionId]: { ...a, readSeq: seq, turnNotifications: a.turnNotifications.filter((n) => n.seq > seq) } } };
+  });
+  client.send({ t: 'mark_session_read', sessionId, seq });
+}
+
 function mergeSummary(prev: SessionView | undefined, s: SessionSummary): SessionView {
   const base = prev ?? shell(s.id);
-  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff, waitingOn: s.waitingOn ?? [], openAsks: s.openAsks ?? 0, unlisted: s.unlisted };
+  const readSeq = Math.max(base.readSeq, s.readSeq ?? 0);
+  // A turn acknowledged in another UI (another browser, or a federation
+  // child/parent) is no longer unread here either.
+  const turnNotifications = readSeq > base.readSeq ? base.turnNotifications.filter((n) => n.seq > readSeq) : base.turnNotifications;
+  return { ...base, name: s.name, agent: s.agent, hostId: s.hostId, hostName: s.hostName, profile: s.profile, workspace: s.workspace, status: s.status, controlMode: s.controlMode, adapter: s.adapter, canHandoff: s.canHandoff, waitingOn: s.waitingOn ?? [], openAsks: s.openAsks ?? 0, unlisted: s.unlisted, readSeq, turnNotifications };
 }
 
 // Fold status/permission side effects of an event into the view (mirrors the

@@ -286,6 +286,38 @@ describe('thread audio preference', () => {
     expect(notifications[0]).toMatchObject({ seq: 4, severity: 'failure' });
   });
 
+  it('clears a completed-turn notification acknowledged in another UI', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ focusedId: 'session-2' });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(1);
+
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'session-2' }), summary({ id: 'session-1', readSeq: 2 })] });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(0);
+
+    // A completion relayed after the acknowledgement does not resurface it.
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'working' } });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(0);
+  });
+
+  it('keeps a newer completed turn after an older acknowledgement', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ focusedId: 'session-2' });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 5, event: { kind: 'status', status: 'idle' } });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'session-2' }), summary({ id: 'session-1', readSeq: 3 })] });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(1);
+  });
+
   it('persists the focused agent', () => {
     __testApplyServerMsg({
       t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],

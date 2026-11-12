@@ -65,6 +65,7 @@ type Backend interface {
 	DeleteProfile(string) error
 	ForgetProfile(string, string) error
 	Rename(string, string) error
+	MarkRead(string, int64) (bool, error)
 	Reorder(string, string, bool) error
 	ListAnnotations(string) ([]store.Annotation, error)
 	UpsertAnnotation(store.Annotation) error
@@ -1948,6 +1949,19 @@ func (c *connection) handle(m clientMessage) {
 			return
 		}
 		c.server.broadcastAgents()
+		c.commandAck(m, m.SessionID)
+	case "mark_session_read":
+		changed, err := c.server.opts.Registry.MarkRead(m.SessionID, m.Seq)
+		if err != nil {
+			c.commandError(m, err)
+			return
+		}
+		// The marker rides in agent summaries, which a federation host also
+		// relays to its parent, so acknowledging a turn on any UI clears it on
+		// every other one.
+		if changed {
+			c.server.broadcastAgents()
+		}
 		c.commandAck(m, m.SessionID)
 	case "set_audio_enabled":
 		if err := c.server.opts.Registry.SetAudioEnabled(m.SessionID, m.Enabled); err != nil {
