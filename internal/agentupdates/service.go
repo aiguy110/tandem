@@ -39,6 +39,9 @@ type Options struct {
 	// leaves the fork notification informational: it then names the clone and the
 	// CLI to run instead of offering a one-click spawn.
 	SpawnRebase func(context.Context, runtimeinstall.UpdateInfo) (string, error)
+	// RebaseOffer derives an npm rebase offer for an agent whose pending offer
+	// is something else (a blessed tree). Defaults to runtimeinstall.RebaseOffer.
+	RebaseOffer func(context.Context, config.Config, string) (runtimeinstall.UpdateInfo, bool, error)
 	// RebaseProfile reports the currently configured rebase profile, read
 	// fresh so a change from the ACP manager applies without a restart. Nil
 	// treats SpawnRebase alone as the signal that a profile is configured.
@@ -126,6 +129,9 @@ func NewService(o Options) *Service {
 	}
 	if o.Install == nil {
 		o.Install = runtimeinstall.InstallUpdate
+	}
+	if o.RebaseOffer == nil {
+		o.RebaseOffer = runtimeinstall.RebaseOffer
 	}
 	if o.Rollback == nil {
 		o.Rollback = runtimeinstall.Rollback
@@ -358,6 +364,22 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 	s.mu.Lock()
 	u, ok := s.available[agent]
 	s.mu.Unlock()
+	// The pending offer can be a blessed tree (adopt/retire) that superseded the
+	// npm rebase offer; an explicit rebase request still means "rebase onto the
+	// newest upstream release", so derive that offer on demand.
+	derived := false
+	if action == "rebase" && (!ok || u.Kind != runtimeinstall.UpdateKindRebase) {
+		offer, behind, err := s.opts.RebaseOffer(ctx, s.opts.Config, agent)
+		if err != nil {
+			slog.Error("ACP fork rebase offer lookup failed", "agent", agent, "error", err)
+			return "", err
+		}
+		if !behind {
+			return "", fmt.Errorf("agent %s has no ACP fork behind upstream", agent)
+		}
+		slog.Info("ACP fork rebase requested outside the pending offer", "agent", agent, "pending_kind", u.Kind, "upstream_version", offer.LatestVersion)
+		u, ok, derived = offer, true, true
+	}
 	if !ok && action != "rollback" {
 		// The offer was withdrawn (installed elsewhere, superseded, or the daemon
 		// restarted) while a view still showed it. Drop the leftover entry so
@@ -408,10 +430,17 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		if !s.canSpawnRebase() {
 			return "", fmt.Errorf("no ACP fork rebase agent profile is configured; choose one in Manage ACP adapters")
 		}
-		s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "attention", Title: "Rebasing " + agent + " ACP fork", Message: "Starting an agent to check whether the change was upstreamed…"})
+		// A derived rebase shares its notification ID with the pending blessed
+		// offer, which must stay intact; the caller reports progress and errors.
+		if !derived {
+			s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "attention", Title: "Rebasing " + agent + " ACP fork", Message: "Starting an agent to check whether the change was upstreamed…"})
+		}
 		sessionID, err := s.opts.SpawnRebase(ctx, u)
 		if err != nil {
 			slog.Error("ACP fork rebase spawn failed", "agent", agent, "error", err)
+			if derived {
+				return "", err
+			}
 			s.opts.Center.Upsert(notifications.Notification{ID: id, Severity: "failure", Title: agent + " ACP fork rebase could not start", Message: err.Error(),
 				// The usual cause is a profile that no longer resolves (a model the
 				// agent dropped), so offer the picker next to Retry.
@@ -422,11 +451,15 @@ func (s *Service) HandleAction(ctx context.Context, id, action string) (string, 
 		// and the next poll re-raises the notification if neither happened. Keep
 		// the entry suppressed for this release so it does not nag mid-rebase.
 		s.mu.Lock()
-		s.dismissed[agent] = u.OfferKey()
+		if !derived {
+			s.dismissed[agent] = u.OfferKey()
+		}
 		s.rebases[agent] = rebaseRecord{Offer: u.OfferKey(), Session: sessionID}
 		s.saveRebasesLocked()
 		s.mu.Unlock()
-		s.opts.Center.Remove(id)
+		if !derived {
+			s.opts.Center.Remove(id)
+		}
 		slog.Info("ACP fork rebase agent spawned", "agent", agent, "session", sessionID, "upstream_version", u.LatestVersion)
 		return sessionID, nil
 	case "sync":
