@@ -568,7 +568,13 @@ func (s *Session) steerLocked(ctx context.Context, blocks []agentadapter.PromptB
 	if !ok {
 		return errors.New("this agent does not support steering")
 	}
-	if err := steerer.Steer(ctx, flattenQuoteBlocks(blocks)); err != nil {
+	outbound := flattenQuoteBlocks(blocks)
+	if ev == nil {
+		// Only text the user typed; a relayed agent message carries its own
+		// reply instructions.
+		outbound = s.withAgentMentionNote(outbound)
+	}
+	if err := steerer.Steer(ctx, outbound); err != nil {
 		return err
 	}
 	text := ""
@@ -781,7 +787,11 @@ func (s *Session) executePrompt(ctx context.Context, blocks []agentadapter.Promp
 		s.emit(eventlog.Event{Kind: "user_message", Payload: payload})
 	}
 	slog.Info("agent prompt started", "session_id", s.ID, "adapter_epoch", epoch, "blocks", len(blocks))
-	stopReason, err := adapter.Prompt(ctx, flattenQuoteBlocks(blocks))
+	outbound := flattenQuoteBlocks(blocks)
+	if override == nil {
+		outbound = s.withAgentMentionNote(outbound)
+	}
+	stopReason, err := adapter.Prompt(ctx, outbound)
 	s.mu.RLock()
 	replaced := epoch != s.adapterEpoch
 	s.mu.RUnlock()

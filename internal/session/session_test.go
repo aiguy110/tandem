@@ -665,3 +665,40 @@ func TestSteerWithQueueDrainsUserPromptsIntoCurrentTurn(t *testing.T) {
 		t.Fatalf("steered blocks = %q", got)
 	}
 }
+
+func TestAgentMentionAddsAgentOnlyMessagingNote(t *testing.T) {
+	s, a, _ := testSession(t)
+	run := func(text string) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: text}})
+			done <- err
+		}()
+		deadline := time.Now().Add(time.Second)
+		for !s.ActiveTurn() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		a.gate <- struct{}{}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("ask @agent:bifrost/api-worker when it is done")
+	if len(a.prompts) != 2 || !strings.Contains(a.prompts[1], "tandem-messages") {
+		t.Fatalf("adapter prompts=%+v", a.prompts)
+	}
+	run("no mention here")
+	if len(a.prompts) != 3 {
+		t.Fatalf("plain prompt gained a note: %+v", a.prompts)
+	}
+	history, err := s.Log.FullHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range history {
+		if event.Event.Kind == "user_message" && strings.Contains(string(event.Event.Payload), "tandem-messages") {
+			t.Fatalf("note leaked into the transcript: %s", event.Event.Payload)
+		}
+	}
+}
