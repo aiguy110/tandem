@@ -479,6 +479,37 @@ func checkPublished(ctx context.Context, cfg config.Config) ([]UpdateInfo, error
 	return out, nil
 }
 
+// RebaseOffer returns the npm rebase offer for one fork-tracked agent, when its
+// fork sits behind the newest upstream release. CheckUpdates drops this offer
+// when a blessed tree supersedes it, but the operator can still ask for a
+// rebase agent explicitly from the adapter manager.
+func RebaseOffer(ctx context.Context, cfg config.Config, agent string) (UpdateInfo, bool, error) {
+	p, managed := agentPins[agent]
+	if !managed {
+		return UpdateInfo{}, false, nil
+	}
+	forks, err := config.LoadACPForks(cfg.Home)
+	if err != nil {
+		return UpdateInfo{}, false, err
+	}
+	fork, tracked := forks[agent]
+	if !tracked {
+		return UpdateInfo{}, false, nil
+	}
+	versions, err := publishedVersions(ctx, fork.UpstreamPackage)
+	if err != nil {
+		return UpdateInfo{}, false, fmt.Errorf("check %s upstream release: %w", agent, err)
+	}
+	latest, ok := newestPublished(versions)
+	if !ok || !semverNewer(latest, fork.UpstreamVersion) {
+		return UpdateInfo{}, false, nil
+	}
+	record := fork
+	record.Clone = config.ForkCloneDir(cfg.RuntimeRoot, agent, fork)
+	return UpdateInfo{Agent: agent, Package: fork.UpstreamPackage, Constraint: strings.TrimPrefix(p.spec, p.packageName+"@"),
+		CurrentVersion: fork.UpstreamVersion, LatestVersion: latest, Kind: UpdateKindRebase, Fork: &record}, true, nil
+}
+
 // pickUpdate returns the offer to make for one agent's published version list:
 // the newest release (never a prerelease), if it is newer than current.
 func pickUpdate(agent, pkg, constraint, current string, versions []string) (UpdateInfo, bool) {

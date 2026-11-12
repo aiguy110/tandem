@@ -113,6 +113,64 @@ func TestForkRebaseOffersSpawnRatherThanInstall(t *testing.T) {
 	}
 }
 
+// The adapter manager's button can be pressed while a rebase agent is already
+// working; that must open the existing agent rather than spawn a second one.
+func TestForkRebaseActionReusesRunningAgent(t *testing.T) {
+	spawns := 0
+	s := NewService(Options{Center: notifications.New(),
+		SessionOpen: func(id string) bool { return id == "session-1" },
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{rebaseUpdate()}, nil
+		},
+		SpawnRebase: func(context.Context, runtimeinstall.UpdateInfo) (string, error) {
+			spawns++
+			return "session-1", nil
+		}})
+	s.poll(context.Background())
+	for i := 0; i < 2; i++ {
+		id, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase")
+		if err != nil || id != "session-1" {
+			t.Fatalf("press %d: id=%q err=%v", i, id, err)
+		}
+	}
+	if spawns != 1 {
+		t.Fatalf("spawned %d rebase agents, want 1", spawns)
+	}
+}
+
+// A blessed tree supersedes the npm rebase offer, but an explicit rebase
+// request from the adapter manager must still spawn against the newest release
+// and leave the blessed offer in place.
+func TestForkRebaseActionWhileBlessedOfferPending(t *testing.T) {
+	center := notifications.New()
+	blessed := rebaseUpdate()
+	blessed.Kind, blessed.LatestVersion = runtimeinstall.UpdateKindAdopt, "0.0.33"
+	blessed.Blessed = &runtimeinstall.BlessedFork{Commit: "abc"}
+	var spawned runtimeinstall.UpdateInfo
+	s := NewService(Options{Center: center,
+		Check: func(context.Context, config.Config) ([]runtimeinstall.UpdateInfo, error) {
+			return []runtimeinstall.UpdateInfo{blessed}, nil
+		},
+		RebaseOffer: func(context.Context, config.Config, string) (runtimeinstall.UpdateInfo, bool, error) {
+			return rebaseUpdate(), true, nil
+		},
+		SpawnRebase: func(_ context.Context, u runtimeinstall.UpdateInfo) (string, error) {
+			spawned = u
+			return "session-1", nil
+		}})
+	s.poll(context.Background())
+	id, err := s.HandleAction(context.Background(), "agent-update:pi", "rebase")
+	if err != nil || id != "session-1" {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
+	if spawned.Kind != runtimeinstall.UpdateKindRebase || spawned.LatestVersion != "0.0.34" {
+		t.Fatalf("spawned with %#v", spawned)
+	}
+	if items := center.List(); len(items) != 1 || strings.HasPrefix(items[0].Title, "Rebasing") {
+		t.Fatalf("blessed offer not left intact: %#v", items)
+	}
+}
+
 // A daemon restart must not re-offer a rebase an agent is still working on,
 // and closing that agent's session re-offers it.
 func TestForkRebaseInProgressSurvivesRestart(t *testing.T) {
