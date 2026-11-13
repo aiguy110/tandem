@@ -43,7 +43,11 @@ type testFederation struct {
 	notificationLists map[string]string
 }
 
-func (f *testFederation) Hosts() []federation.Host { return f.hosts }
+func (f *testFederation) Hosts() []federation.Host {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hosts
+}
 func (f *testFederation) Subscribe(fn func(string, json.RawMessage)) func() {
 	f.mu.Lock()
 	f.subscriber = fn
@@ -114,6 +118,8 @@ type testBackend struct {
 	dirsCalls atomic.Int32
 	// spawnOptionsGate, when set, holds SpawnOptions until closed.
 	spawnOptionsGate chan struct{}
+	// closeGate, when set, holds Close until closed.
+	closeGate chan struct{}
 }
 
 type stalledBrowserDriver struct {
@@ -422,6 +428,9 @@ func (b *testBackend) SpawnOptions(context.Context, string, string, []string, st
 	return registry.SpawnOptions{Modes: json.RawMessage(`null`), ConfigOptions: []json.RawMessage{}}, nil
 }
 func (b *testBackend) Close(_ context.Context, id string, _, _, _ bool) (bool, error) {
+	if b.closeGate != nil {
+		<-b.closeGate
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.sessions[id] == nil {
@@ -842,7 +851,9 @@ func TestRemoteSystemNotificationsAreNamespacedAndRouted(t *testing.T) {
 	}
 
 	// A host that drops off takes its notifications with it.
+	fed.mu.Lock()
 	fed.hosts = []federation.Host{{ID: "host-one", Name: "builder", Status: "offline"}}
+	fed.mu.Unlock()
 	subscriber("host-one", json.RawMessage(`{"t":"federation_hosts_changed"}`))
 	for {
 		got := recv(t, c)
@@ -2140,5 +2151,58 @@ func TestRemotePromptRequestForwardedOnce(t *testing.T) {
 	}
 	if prompts != 1 {
 		t.Fatalf("forwarded prompt %d times", prompts)
+	}
+}
+
+// An ordinary command that stalls must not stop the reader: the browser's link
+// probe is still answered, so a slow command never reads as a slow link.
+func TestPingAnsweredWhileQueuedCommandRuns(t *testing.T) {
+	_, b, _, _, url := setupWS(t, 0)
+	b.closeGate = make(chan struct{})
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "close_agent", "sessionId": "a", "corrId": "close"})
+	send(t, c, map[string]any{"t": "ping", "corrId": "alive"})
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	var got map[string]any
+	if err := c.ReadJSON(&got); err != nil || got["t"] != "pong" || got["corrId"] != "alive" {
+		close(b.closeGate)
+		t.Fatalf("ping blocked behind close_agent: reply=%v err=%v", got, err)
+	}
+	c.SetReadDeadline(time.Time{})
+	close(b.closeGate)
+	for {
+		if got := recv(t, c); got["corrId"] == "close" {
+			return
+		}
+	}
+}
+
+// Installing an update can take minutes; later commands on the same
+// connection run meanwhile instead of queueing behind it.
+func TestNotificationActionDoesNotBlockLaterCommands(t *testing.T) {
+	gate := make(chan struct{})
+	_, _, _, _, url := setupWSOptions(t, 0, nil, func(opts *Options) {
+		opts.NotificationAction = func(context.Context, string, string) (string, error) {
+			<-gate
+			return "", nil
+		}
+	})
+	defer close(gate)
+	c := dial(t, url)
+	send(t, c, map[string]any{"t": "system_notification_action", "notificationId": "tandem-update", "action": "install", "corrId": "act"})
+	send(t, c, map[string]any{"t": "ping", "corrId": "alive"})
+	send(t, c, map[string]any{"t": "list_hosts", "corrId": "hosts"})
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	seen := map[string]bool{}
+	for !seen["alive"] || !seen["hosts"] {
+		var got map[string]any
+		if err := c.ReadJSON(&got); err != nil {
+			t.Fatalf("blocked behind notification action: seen=%v err=%v", seen, err)
+		}
+		if id, _ := got["corrId"].(string); id == "act" {
+			t.Fatal("notification action finished before its gate opened")
+		} else {
+			seen[id] = true
+		}
 	}
 }

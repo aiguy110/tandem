@@ -551,6 +551,7 @@ type connection struct {
 	browserQueue            []clientMessage
 	browserReady            chan struct{}
 	subscriptionQueue       chan clientMessage
+	commandQueue            chan clientMessage
 	outDrained              chan struct{}
 	priority                chan []byte
 	replaySequence          atomic.Uint64
@@ -581,7 +582,7 @@ const MaxClientMessageBytes = 32 << 20
 func newConnection(h *Handler, ws *websocket.Conn) *connection {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &connection{
-		ctx: ctx, cancel: cancel, openedAt: time.Now(), browserReady: make(chan struct{}, 1), subscriptionQueue: make(chan clientMessage, 256), outDrained: make(chan struct{}, 1), priority: make(chan []byte, 16),
+		ctx: ctx, cancel: cancel, openedAt: time.Now(), browserReady: make(chan struct{}, 1), subscriptionQueue: make(chan clientMessage, 256), commandQueue: make(chan clientMessage, 256), outDrained: make(chan struct{}, 1), priority: make(chan []byte, 16),
 		server: h, ws: ws, replayReady: make(chan struct{}, 1),
 		out:        make(chan []byte, h.opts.WriteQueue),
 		frameReady: make(chan string, 16), latestFrames: make(map[string][]byte),
@@ -596,6 +597,7 @@ func (c *connection) run() {
 	go c.writeLoop()
 	go c.browserLoop()
 	go c.subscriptionLoop()
+	go c.commandLoop()
 	c.ws.SetReadLimit(MaxClientMessageBytes)
 	for {
 		_, data, err := c.ws.ReadMessage()
@@ -624,11 +626,49 @@ func (c *connection) run() {
 			// Not queued behind input: while a dialog is open, every queued
 			// click or key waits out its CDP timeout first.
 			go c.handle(m)
-		default:
+		case "ping", "client_diag":
+			// Answered by the reader itself so the link probe measures the link,
+			// not whatever command happens to be running on this connection.
 			c.handle(m)
+		case "system_notification_action", "restart_harness", "get_close_preview", "get_diff":
+			// Each may take seconds to minutes (download a release, relaunch a
+			// harness, walk a worktree) and nothing later on this connection
+			// depends on its completion, so it must not hold up the command queue.
+			go c.handle(m)
+		default:
+			c.enqueueCommand(m)
 		}
 	}
 	c.close()
+}
+
+// enqueueCommand hands m to commandLoop. The reader never runs ordinary
+// commands itself: one slow command there stops every later frame, pings
+// included, and the browser then reports a slow or dead link.
+func (c *connection) enqueueCommand(m clientMessage) {
+	select {
+	case c.commandQueue <- m:
+	case <-c.done:
+	default:
+		slog.Warn("websocket command queue full", "connection_id", c.id, "type", m.T, "session_id", m.SessionID, "queued", len(c.commandQueue))
+		c.commandError(m, errors.New("command queue full; wait for pending commands to finish"))
+	}
+}
+
+// commandLoop runs this connection's ordinary commands one at a time, in the
+// order they were received.
+func (c *connection) commandLoop() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case m := <-c.commandQueue:
+			if c.ctx.Err() != nil {
+				return
+			}
+			c.handle(m)
+		}
+	}
 }
 
 func (c *connection) subscriptionLoop() {

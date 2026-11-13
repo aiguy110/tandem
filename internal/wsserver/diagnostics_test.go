@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func TestPeerNetworkClassification(t *testing.T) {
 }
 
 func TestClientDiagIsLoggedAndConnectionSurvives(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
@@ -67,8 +68,26 @@ func TestClientDiagIsLoggedAndConnectionSurvives(t *testing.T) {
 	}
 }
 
+// syncBuffer is a log sink safe to read while connection goroutines write.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestKeyCommandReceiptIsLogged(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
