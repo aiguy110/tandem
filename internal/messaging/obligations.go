@@ -25,7 +25,9 @@ func (s *Service) Watch(sess *session.Session) {
 		}
 		prev.unsub()
 	}
-	unsub := sess.OnTurnEnd(func(end session.TurnEnd) { s.onTurnEnd(sess, end) })
+	unsubTurn := sess.OnTurnEnd(func(end session.TurnEnd) { s.onTurnEnd(sess, end) })
+	unsubMention := sess.OnAgentMention(func(refs []string) { s.linkMentioned(sess, refs) })
+	unsub := func() { unsubTurn(); unsubMention() }
 	s.watched[sess.ID] = watchedSession{sess: sess, unsub: unsub}
 }
 

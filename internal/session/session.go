@@ -44,6 +44,7 @@ type Session struct {
 	listeners        map[uint64]func(eventlog.LoggedEvent)
 	nextListener     uint64
 	turnEndListeners map[uint64]func(TurnEnd)
+	mentionListeners map[uint64]func([]string)
 	active           int
 	controlMode      string
 	adapterEpoch     uint64

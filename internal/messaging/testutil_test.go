@@ -205,6 +205,8 @@ func (f *testFed) Call(ctx context.Context, hostID string, payload json.RawMessa
 		Query    string            `json:"query"`
 		IDs      []string          `json:"ids"`
 		Results  []PullAck         `json:"results"`
+		Session  string            `json:"sessionId"`
+		Link     *LinkInput        `json:"link"`
 		Extra    map[string]string `json:"-"`
 	}
 	if err := json.Unmarshal(payload, &cmd); err != nil {
@@ -234,6 +236,17 @@ func (f *testFed) Call(ctx context.Context, hostID string, payload json.RawMessa
 			reply["error"], reply["message"] = res.Error, res.Message
 		}
 		return json.Marshal(reply)
+	case "list_agent_links":
+		view, err := target.svc.Links(cmd.Session)
+		if err != nil {
+			return json.Marshal(map[string]any{"t": "ack", "error": err.Error()})
+		}
+		return json.Marshal(map[string]any{"t": "agent_links", "sessionId": view.SessionID, "links": view.Links})
+	case "set_agent_link":
+		if err := target.svc.SetLink(cmd.Session, *cmd.Link); err != nil {
+			return json.Marshal(map[string]any{"t": "ack", "error": err.Error()})
+		}
+		return json.Marshal(map[string]any{"t": "ack", "sessionId": cmd.Session})
 	case "agent_directory":
 		return json.Marshal(map[string]any{"t": "agent_directory", "entries": target.svc.LocalDirectory(cmd.Req, cmd.Query)})
 	case "agent_message_pull", "agent_message_pull_ack":

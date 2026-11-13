@@ -81,13 +81,21 @@ host (the host that executes a command enforces its own policy):
 | `budgetPerHour` | 60 | accepted messages per rolling hour over this link |
 | `maxHops` | 200 | reject a message whose `hop` exceeds this (a runaway-loop guard; approval links still at the old default of 20 are raised at startup) |
 | `paused` | false | reject everything over this link |
-| `source` | — | `user` (UI), `approval` (agent request approved) or `reciprocal` (see below) |
+| `source` | — | `user` (UI), `approval` (agent request approved), `reciprocal` or `mention` (see below) |
 
 **Reciprocal links.** When the requester's host accepts `link_approved` for a pending
 request of its own agent, it creates the reverse link (peer → its agent, `source:
 reciprocal`, default settings) unless one already exists, so the approved agent can
 message back freely. Each direction is edited, paused or removed independently in the
 Inspector.
+
+**Mention links.** When the user types an `@agent:<host>/<agent>` reference in a prompt
+to an agent, the mention is the approval: the prompted agent's host links the two agents
+in both directions (default settings, existing links left untouched). The reverse link
+is created locally (`source: mention`). For an agent on another host, the link to it is
+set there through federation (`list_agent_links`, then `set_agent_link`, which needs
+`operate` access); without that access the host falls back to an ordinary link request,
+approved by the human on the other host. Relayed agent messages never create links.
 
 Replies and declines need no link when the asker's host holds an open outbound request
 with that `requestId` addressed to the replying agent. A reply to a request that has

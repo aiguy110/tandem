@@ -702,3 +702,30 @@ func TestAgentMentionAddsAgentOnlyMessagingNote(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentMentionRefs(t *testing.T) {
+	got := AgentMentionRefs("ask @agent:bifrost/api-worker. Then @agent:local-id/sess_1, and @agent:BIFROST/api-worker again; @agent:x/")
+	want := []string{"@agent:bifrost/api-worker", "@agent:local-id/sess_1"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("refs = %q", got)
+	}
+}
+
+func TestAgentMentionNotifiesListeners(t *testing.T) {
+	s, a, _ := testSession(t)
+	got := make(chan []string, 1)
+	unsub := s.OnAgentMention(func(refs []string) { got <- refs })
+	defer unsub()
+	a.gate <- struct{}{}
+	if _, err := s.Prompt(context.Background(), []agentadapter.PromptBlock{{Type: "text", Text: "ping @agent:h/bob"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case refs := <-got:
+		if len(refs) != 1 || refs[0] != "@agent:h/bob" {
+			t.Fatalf("refs = %q", refs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no mention notification")
+	}
+}
