@@ -1214,6 +1214,34 @@ describe('TranscriptPane annotations', () => {
     );
   });
 
+  it('offers the comment action on a finished message while the next turn is working', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+    const working = agent();
+    working.status = 'working';
+    working.events = [
+      ...working.events,
+      { seq: 2, event: { kind: 'tool_call', id: 'read-1', title: 'Read auth.go', status: 'running' } },
+    ];
+    useStore.setState({
+      ...initialState,
+      sessions: { 'session-1': working }, order: ['session-1'], focusedId: 'session-1', annotations: { 'session-1': [] },
+    }, true);
+    const view = render(<TranscriptPane />);
+    const text = view.container.querySelector('.ev.msg p')?.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 6);
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({ top: 100, left: 20, width: 140, height: 20, right: 160, bottom: 120, x: 20, y: 100, toJSON: () => ({}) }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+
+    await waitFor(() => view.getByRole('button', { name: /comment/i }));
+  });
+
   it('keeps a native selection anchored when a row already has a highlighted annotation', async () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
     useStore.setState({
