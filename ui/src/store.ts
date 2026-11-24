@@ -91,6 +91,17 @@ export interface BrowserInstanceState {
   takeoverHeld: boolean;
   // JavaScript dialogs currently blocking pages of this browser.
   dialogs: BrowserDialog[];
+  // An agent browser tool call is stalled because the user holds control.
+  agentWaiting?: boolean;
+  // The user chose to keep control despite agentWaiting; cleared once the
+  // agent stops waiting so the next blocked call notifies again.
+  waitDismissed?: boolean;
+}
+
+// True when the agent is blocked on this browser and the user has not chosen
+// to keep holding control.
+export function agentBlockedOn(state: BrowserInstanceState | undefined): boolean {
+  return !!state?.agentWaiting && !state.waitDismissed && state.owner === 'user';
 }
 export const DEFAULT_BROWSER_ID = 'default';
 const DEFAULT_BROWSER_INSTANCES: BrowserInstance[] = [{ id: DEFAULT_BROWSER_ID, name: 'Default' }];
@@ -147,7 +158,8 @@ function turnNotificationSeverity(prev: SessionStatus, next: SessionStatus): Not
 export function agentBadge(agent: SessionView): { count: number; severity: NotifSeverity | null } {
   const severities = agent.turnNotifications.map((n) => n.severity);
   if (agent.manuallyUnread && severities.length === 0) severities.push('success');
-  const attention = agent.pendingApprovals.length + agent.takeovers.length + (agent.secretRequests?.length ?? 0) + (agent.browserInstanceRequests?.length ?? 0);
+  const blockedBrowsers = Object.values(agent.browserStates ?? {}).filter(agentBlockedOn).length;
+  const attention = agent.pendingApprovals.length + agent.takeovers.length + blockedBrowsers + (agent.secretRequests?.length ?? 0) + (agent.browserInstanceRequests?.length ?? 0);
   for (let i = 0; i < attention; i++) severities.push('attention');
   return { count: severities.length, severity: maxSeverity(severities) };
 }
@@ -520,6 +532,12 @@ interface StoreState {
   // Acknowledge an agent's request when the user already owns this browser.
   // The request remains live in the daemon until the user returns control.
   acknowledgeTakeover: (sessionId: string, browserId: string) => void;
+  // Hands a browser the user holds back to the agent (any instance, not only
+  // the viewed one).
+  releaseBrowser: (sessionId: string, browserId: string) => void;
+  // Keeps holding a browser an agent is blocked on, silencing its notice
+  // until the agent's wait ends.
+  keepBrowserControl: (sessionId: string, browserId: string) => void;
   // Browser instances. Commands above act on the session's viewed instance.
   setBrowserView: (sessionId: string, browserId: string) => void;
   closeBrowserInstance: (sessionId: string, browserId: string) => Promise<AckResult>;
@@ -1178,7 +1196,9 @@ export const useStore = create<StoreState>((set, get, api) => {
           const takeoverGrab = userJustGrabbed && waiting.length > 0;
           const takeovers = takeoverGrab ? a.takeovers.filter((t) => !waiting.includes(t)) : a.takeovers;
           const takeoverHeld = msg.controlOwner === 'user' && ((previous?.takeoverHeld ?? false) || takeoverGrab);
-          const browserStates = { ...a.browserStates, [browserId]: { active: msg.active, owner: msg.controlOwner, takeoverHeld, dialogs: msg.dialogs ?? [] } };
+          const agentWaiting = msg.controlOwner === 'user' && !!msg.agentWaiting;
+          const waitDismissed = agentWaiting && !!previous?.agentWaiting && !!previous?.waitDismissed;
+          const browserStates = { ...a.browserStates, [browserId]: { active: msg.active, owner: msg.controlOwner, takeoverHeld, dialogs: msg.dialogs ?? [], agentWaiting, waitDismissed } };
           return {
             sessions: {
               ...st.sessions,
@@ -2379,6 +2399,17 @@ export const useStore = create<StoreState>((set, get, api) => {
       if (!a || !a.browserActive) return;
       client.send({ t: 'browser_control', sessionId, browserId: a.browserViewId, action: a.browserOwner === 'user' ? 'release' : 'grab' });
     },
+    releaseBrowser: (sessionId, browserId) => {
+      if (get().sessions[sessionId]?.browserStates[browserId]?.owner !== 'user') return;
+      client.send({ t: 'browser_control', sessionId, browserId, action: 'release' });
+    },
+    keepBrowserControl: (sessionId, browserId) => set((st) => {
+      const agent = st.sessions[sessionId];
+      const browser = agent?.browserStates[browserId];
+      if (!agent || !browser?.agentWaiting) return st;
+      const browserStates = { ...agent.browserStates, [browserId]: { ...browser, waitDismissed: true } };
+      return { sessions: { ...st.sessions, [sessionId]: { ...agent, browserStates } } };
+    }),
     acknowledgeTakeover: (sessionId, browserId) => set((st) => {
       const agent = st.sessions[sessionId];
       const browser = agent?.browserStates[browserId];
@@ -2684,6 +2715,17 @@ export function allTakeovers(st: StoreState): { sessionId: string; takeover: Tak
   for (const id of rankSessions(st.sessions, st.order)) {
     const a = st.sessions[id];
     for (const t of a.takeovers) out.push({ sessionId: id, takeover: t });
+  }
+  return out;
+}
+// Browsers where an agent tool call is blocked on the user's control, for the
+// attention rail.
+export function allBlockedBrowsers(st: StoreState): { sessionId: string; browserId: string }[] {
+  const out: { sessionId: string; browserId: string }[] = [];
+  for (const id of rankSessions(st.sessions, st.order)) {
+    for (const [browserId, state] of Object.entries(st.sessions[id].browserStates)) {
+      if (agentBlockedOn(state)) out.push({ sessionId: id, browserId });
+    }
   }
   return out;
 }

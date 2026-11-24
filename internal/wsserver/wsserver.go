@@ -3258,7 +3258,7 @@ func (c *connection) subscribe(m clientMessage) {
 			if dialogs == nil {
 				dialogs = []browser.PendingDialog{}
 			}
-			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "browserId": browserID, "active": state.Active, "controlOwner": state.ControlOwner, "dialogs": dialogs})
+			c.send(map[string]any{"t": "browser_state", "sessionId": sess.ID, "browserId": browserID, "active": state.Active, "controlOwner": state.ControlOwner, "dialogs": dialogs, "agentWaiting": state.AgentWaiting})
 		})
 		sub.mu.Lock()
 		active := sub.active.Load()

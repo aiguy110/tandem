@@ -68,7 +68,16 @@ type agentBrowser struct {
 	nextListener      uint64
 	stateListeners    map[uint64]*browserStateListener
 	frameListeners    map[uint64]func(ScreencastFrame)
+	// waitingUntil is when the latest report of an agent tool call blocked
+	// behind the human's control lapses (see NoteAgentWaiting).
+	waitingUntil time.Time
+	waitingTimer *time.Timer
 }
+
+// agentWaitingTTL is how long one report of a blocked agent tool call stays
+// visible. tandem mcp-browser re-reports every DialogPollInterval while the
+// call is alive, so the flag clears shortly after the call ends or gives up.
+const agentWaitingTTL = 3 * time.Second
 
 // browserStateListener serializes the initial state snapshot with later state
 // changes. Without this, a release racing subscription setup could deliver the
@@ -84,12 +93,16 @@ type BrowserState struct {
 	ControlOwner ControlOwner `json:"controlOwner"`
 	// Dialogs are JavaScript dialogs currently blocking pages of the browser.
 	Dialogs []PendingDialog `json:"dialogs,omitempty"`
+	// AgentWaiting reports that an agent browser tool call is stalled because
+	// the human holds control — the inverse of a takeover request.
+	AgentWaiting bool `json:"agentWaiting,omitempty"`
 }
 
 // stateLocked snapshots a's state. a.mu must be held; the dialog watcher's
 // lock nests inside it and never the other way round.
 func (a *agentBrowser) stateLocked() BrowserState {
 	state := BrowserState{Active: a.provisioned, ControlOwner: a.owner}
+	state.AgentWaiting = a.owner == ControlUser && time.Now().Before(a.waitingUntil)
 	if a.dialogs != nil {
 		if dialogs := a.dialogs.Dialogs(); len(dialogs) > 0 {
 			state.Dialogs = dialogs
@@ -336,6 +349,56 @@ func (b *Broker) Owner(id string) ControlOwner {
 	defer a.mu.Unlock()
 	return a.owner
 }
+
+// NoteAgentWaiting records that an agent tool call on browser id is running
+// while the human holds control, so its CDP traffic is being held. Reports
+// made while the agent owns the browser are ignored. The flag lapses
+// agentWaitingTTL after the last report, or at release.
+func (b *Broker) NoteAgentWaiting(id string) {
+	b.mu.Lock()
+	a := b.agents[id]
+	b.mu.Unlock()
+	if a == nil {
+		return
+	}
+	now := time.Now()
+	a.mu.Lock()
+	if a.owner != ControlUser {
+		a.mu.Unlock()
+		return
+	}
+	started := !now.Before(a.waitingUntil)
+	a.waitingUntil = now.Add(agentWaitingTTL)
+	if a.waitingTimer == nil {
+		a.waitingTimer = time.AfterFunc(agentWaitingTTL, func() { b.expireAgentWaiting(id, a) })
+	}
+	a.mu.Unlock()
+	if started {
+		slog.Info("agent browser tool call blocked by user control", "session_id", id)
+		b.emitState(id)
+	}
+}
+
+func (b *Broker) expireAgentWaiting(id string, a *agentBrowser) {
+	a.mu.Lock()
+	if remaining := time.Until(a.waitingUntil); remaining > 0 && a.owner == ControlUser {
+		a.waitingTimer.Reset(remaining)
+		a.mu.Unlock()
+		return
+	}
+	visible := a.owner == ControlUser && !a.waitingUntil.IsZero()
+	a.waitingTimer = nil
+	a.waitingUntil = time.Time{}
+	a.mu.Unlock()
+	b.mu.Lock()
+	current := b.agents[id] == a
+	b.mu.Unlock()
+	if visible && current {
+		slog.Info("agent browser tool call no longer waiting on user control", "session_id", id)
+		b.emitState(id)
+	}
+}
+
 func (b *Broker) ActiveConnections(id string) int {
 	a := b.record(id)
 	a.mu.Lock()
@@ -809,6 +872,7 @@ func (b *Broker) ReleaseContext(ctx context.Context, id string) error {
 		}
 		if len(batches) == 0 {
 			a.owner = ControlAgent
+			a.waitingUntil = time.Time{}
 			a.mu.Unlock()
 			break
 		}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __testApplyServerMsg, agentBadge, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
+import { __testApplyServerMsg, agentBadge, allBlockedBrowsers, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
 import { MAX_CLIENT_MESSAGE_BYTES, type SessionSummary, type Annotation } from './wire';
 import { WsClient } from './ws/client';
 import { buildCommands } from './commands/registry';
@@ -197,6 +197,28 @@ describe('thread audio preference', () => {
 
     expect(useStore.getState().sessions['session-1'].audioOnTurnEnd).toBe(false);
     expect(useStore.getState().sessions['session-2'].audioOnTurnEnd).toBe(false);
+  });
+
+  it('surfaces an agent blocked on user browser control until released or kept', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([{ sessionId: 'session-1', browserId: 'default' }]);
+    expect(agentBadge(useStore.getState().sessions['session-1']).severity).toBe('attention');
+
+    useStore.getState().keepBrowserControl('session-1', 'default');
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
+    // Still waiting: stays silenced.
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
+    // The wait ends, then a new blocked call notifies again.
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user' });
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toHaveLength(1);
+
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'agent' });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
   });
 
   it('tracks browser instances, per-instance state and pending instance requests', () => {

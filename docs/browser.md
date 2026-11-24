@@ -87,6 +87,12 @@ Folds into the same attention/approvals rail as permissions. Two directions:
   the attention item and banner, and highlights the browser action as **Return control**.
   When the user completes the step and returns control, the agent's blocked tool call **resolves with
   the result** and it continues.
+- **Agent blocked by a user grab (the inverse):** while the user holds a browser, any
+  agent browser tool call in flight polls the daemon with `waiting=1`; the broker then
+  reports `agentWaiting` in `browser_state` (lapsing ~3s after polls stop, cleared on
+  release). The UI shows an attention card and Browser-pane banner *"web-1 is waiting —
+  you're holding control. [Release control] [Keep control]"* and highlights the Browser
+  tab. *Keep control* silences it until the agent's current wait ends.
 
 ## Lifecycle
 

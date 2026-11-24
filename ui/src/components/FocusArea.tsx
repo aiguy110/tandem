@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useStore, PANES } from '../store';
+import { useStore, PANES, agentBlockedOn } from '../store';
 import type { PaneId } from '../store';
 import { ChatPane } from './panes/ChatPane';
 import { ShellPane } from './panes/ShellPane';
@@ -168,7 +168,7 @@ export function FocusArea() {
             return (
               <button
                 key={p}
-                className={`tab${pane === p ? ' active' : ''}${disabled ? ' disabled' : ''}${p === 'browser' && agent.takeovers.length ? ' attn' : ''}`}
+                className={`tab${pane === p ? ' active' : ''}${disabled ? ' disabled' : ''}${p === 'browser' && (agent.takeovers.length || Object.values(agent.browserStates).some(agentBlockedOn)) ? ' attn' : ''}`}
                 onClick={() => setPane(p)}
                 title={disabled ? 'No browser yet — spins up on first agent browser use' : undefined}
               >

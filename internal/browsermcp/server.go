@@ -445,7 +445,7 @@ func (c *callClock) tick() <-chan time.Time { return c.ticker.C }
 
 func (c *callClock) advance(ctx context.Context) (browser.DialogStatus, error) {
 	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	status, err := c.s.dialogStatus(statusCtx, c.browserID)
+	status, err := c.s.dialogStatusWaiting(statusCtx, c.browserID, true)
 	cancel()
 	now := time.Now()
 	if err != nil || status.ControlOwner != browser.ControlUser {
@@ -471,8 +471,18 @@ func (s *server) resetChild(browserID string, slot *childSlot) {
 }
 
 func (s *server) dialogStatus(ctx context.Context, browserID string) (browser.DialogStatus, error) {
+	return s.dialogStatusWaiting(ctx, browserID, false)
+}
+
+// dialogStatusWaiting fetches a browser's status; waiting tells the daemon a
+// tool call is in flight, so it can tell the human holding control that the
+// agent is blocked on them.
+func (s *server) dialogStatusWaiting(ctx context.Context, browserID string, waiting bool) (browser.DialogStatus, error) {
 	var status browser.DialogStatus
 	query := "?sessionId=" + url.QueryEscape(s.cfg.SessionID) + "&browserId=" + url.QueryEscape(browserID)
+	if waiting {
+		query += "&waiting=1"
+	}
 	err := s.control(ctx, http.MethodGet, browser.DialogsPath+query, nil, &status)
 	return status, err
 }

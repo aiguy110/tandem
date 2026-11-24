@@ -805,7 +805,7 @@ export type ServerMsg =
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user'; dialogs?: BrowserDialog[] }
+  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user'; dialogs?: BrowserDialog[]; agentWaiting?: boolean }
   // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
   | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
   | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };
