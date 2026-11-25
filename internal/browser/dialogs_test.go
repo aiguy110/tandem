@@ -201,7 +201,9 @@ func TestBrokerTracksAndAnswersDialogs(t *testing.T) {
 	fake.event("Page.javascriptDialogClosed", "w-page-1-2", map[string]any{"result": true})
 	waitFor(t, "dialog closed", func() bool { return len(broker.Dialogs("s")) == 0 })
 	fake.event("Page.javascriptDialogOpening", "w-page-1-2", map[string]any{"type": "beforeunload", "message": "", "url": "https://example.test/form"})
-	waitFor(t, "dialog on the new session", func() bool { return len(lastState().Dialogs) == 1 })
+	// Wait on the broker itself: lastState may still hold the closed dialog's
+	// state, since state callbacks arrive asynchronously.
+	waitFor(t, "dialog on the new session", func() bool { return len(broker.Dialogs("s")) == 1 })
 
 	body, _ := json.Marshal(map[string]any{"sessionId": "s", "targetId": "page-1", "accept": true})
 	request = httptest.NewRequest(http.MethodPost, DialogsPath+"/handle", bytes.NewReader(body))
