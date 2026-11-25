@@ -17,7 +17,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	tandem "github.com/aiguy110/tandem"
@@ -54,7 +53,7 @@ var playwrightPin = pin{spec: "@playwright/mcp@^0.0.78", dist: filepath.Join("no
 
 // installMu serializes all installs into the shared RuntimeRoot node_modules;
 // concurrent installs into the same node_modules can corrupt it.
-var installMu sync.Mutex
+var installMu installLock
 
 const lockFileName = "agents.lock.json"
 

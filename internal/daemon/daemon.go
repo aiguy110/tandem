@@ -68,6 +68,7 @@ func RunWithOptions(stdout io.Writer, opts RunOptions) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	dumpGoroutinesOnSignal(ctx, cfg.Home)
 	if _, statErr := os.Stat(config.ConfigFilePath(cfg.Home)); os.IsNotExist(statErr) {
 		fmt.Fprintf(stdout, "tandem: no configuration found at %s; using defaults. Run 'tandem setup' in a terminal to configure Tandem.\n", config.ConfigFilePath(cfg.Home))
 	}
