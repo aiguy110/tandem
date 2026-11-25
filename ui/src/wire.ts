@@ -381,6 +381,8 @@ export interface SessionSummary {
   openAsks?: number;
   // Hidden from other agents' directories (and from @agent: completion).
   unlisted?: boolean;
+  // Highest transcript seq a user has acknowledged in any Tandem UI.
+  readSeq?: number;
 }
 
 // A resumable coding-agent session for the Resume picker — either a session
@@ -683,6 +685,8 @@ export type ClientMsg =
   | { t: 'rename_profile'; id: string; name: string; project?: string; corrId?: string }
   | { t: 'forget_profile'; id: string; project: string; hostId?: string; corrId?: string }
   | { t: 'rename_agent'; sessionId: string; name: string; corrId?: string }
+  // Acknowledges completed turns through seq on every UI (and federation parent).
+  | { t: 'mark_session_read'; sessionId: string; seq: number; corrId?: string }
   // Sets this daemon's display name for a host; "" restores the reported name.
   | { t: 'rename_host'; hostId: string; name: string; corrId?: string }
   | { t: 'reorder_session'; sessionId: string; targetSessionId: string; after: boolean; corrId?: string }
@@ -801,7 +805,7 @@ export type ServerMsg =
   | { t: 'automation'; corrId?: string; jobs?: AutomationJob[]; runs?: AutomationRun[]; error?: string }
   | { t: 'session_search'; corrId?: string; query?: string; results?: SessionSearchResult[]; error?: string }
   | { t: 'browser_frame'; sessionId: string; browserId?: string; dataB64: string; meta: { deviceWidth: number; deviceHeight: number; offsetTop: number; timestamp?: number } }
-  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user'; dialogs?: BrowserDialog[] }
+  | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; controlOwner: 'agent' | 'user'; dialogs?: BrowserDialog[]; agentWaiting?: boolean }
   // A relayed reply carries the parent-namespaced sessionId and the leaf hostId.
   | { t: 'agent_links'; corrId?: string; sessionId: string; hostId?: string; links: AgentLink[]; listed: boolean; card?: string }
   | { t: 'messaging_state'; corrId?: string; hostId?: string; paused: boolean };

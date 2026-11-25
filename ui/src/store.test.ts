@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __testApplyServerMsg, agentBadge, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
+import { __testApplyServerMsg, agentBadge, allBlockedBrowsers, allTurnNotifications, LOCAL_HOST_ID, notificationsSummary, useStore } from './store';
 import { MAX_CLIENT_MESSAGE_BYTES, type SessionSummary, type Annotation } from './wire';
 import { WsClient } from './ws/client';
 import { buildCommands } from './commands/registry';
@@ -199,6 +199,28 @@ describe('thread audio preference', () => {
     expect(useStore.getState().sessions['session-2'].audioOnTurnEnd).toBe(false);
   });
 
+  it('surfaces an agent blocked on user browser control until released or kept', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 0, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([{ sessionId: 'session-1', browserId: 'default' }]);
+    expect(agentBadge(useStore.getState().sessions['session-1']).severity).toBe('attention');
+
+    useStore.getState().keepBrowserControl('session-1', 'default');
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
+    // Still waiting: stays silenced.
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
+    // The wait ends, then a new blocked call notifies again.
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user' });
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'user', agentWaiting: true });
+    expect(allBlockedBrowsers(useStore.getState())).toHaveLength(1);
+
+    __testApplyServerMsg({ t: 'browser_state', sessionId: 'session-1', active: true, controlOwner: 'agent' });
+    expect(allBlockedBrowsers(useStore.getState())).toEqual([]);
+  });
+
   it('tracks browser instances, per-instance state and pending instance requests', () => {
     __testApplyServerMsg({
       t: 'snapshot', sessionId: 'session-1', seq: 2, status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
@@ -284,6 +306,38 @@ describe('thread audio preference', () => {
     const notifications = useStore.getState().sessions['session-1'].turnNotifications;
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toMatchObject({ seq: 4, severity: 'failure' });
+  });
+
+  it('clears a completed-turn notification acknowledged in another UI', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ focusedId: 'session-2' });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'idle' } });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(1);
+
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'session-2' }), summary({ id: 'session-1', readSeq: 2 })] });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(0);
+
+    // A completion relayed after the acknowledgement does not resurface it.
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 2, event: { kind: 'status', status: 'working' } });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(0);
+  });
+
+  it('keeps a newer completed turn after an older acknowledgement', () => {
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-2', seq: 0, transcript: [], status: 'idle', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    __testApplyServerMsg({
+      t: 'snapshot', sessionId: 'session-1', seq: 1, transcript: [], status: 'working', controlMode: 'transcript', pendingApprovals: [], queuedPrompts: [],
+    });
+    useStore.setState({ focusedId: 'session-2' });
+    __testApplyServerMsg({ t: 'event', sessionId: 'session-1', seq: 5, event: { kind: 'status', status: 'idle' } });
+    __testApplyServerMsg({ t: 'agents', sessions: [summary({ id: 'session-2' }), summary({ id: 'session-1', readSeq: 3 })] });
+    expect(useStore.getState().sessions['session-1'].turnNotifications).toHaveLength(1);
   });
 
   it('persists the focused agent', () => {

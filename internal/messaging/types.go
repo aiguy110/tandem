@@ -70,6 +70,9 @@ const (
 	// SourceReciprocal: created on the requester's host when its own link
 	// request was approved, so the conversation runs both ways.
 	SourceReciprocal = "reciprocal"
+	// SourceMention: created when the user @-mentioned one agent in a prompt to
+	// another; the user's mention is the approval, in both directions.
+	SourceMention = "mention"
 )
 
 // Delivery result statuses and error codes. A Result carries either one of

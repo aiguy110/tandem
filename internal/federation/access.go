@@ -207,6 +207,7 @@ var commandLevels = map[string]Level{
 	"capture_snapshot":          LevelOperate,
 	"reorder_session":           LevelOperate,
 	"rename_agent":              LevelOperate,
+	"mark_session_read":         LevelView,
 	"set_audio_enabled":         LevelOperate,
 	"set_audio_focus":           LevelOperate,
 	"set_audio_position":        LevelOperate,

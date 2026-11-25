@@ -294,7 +294,8 @@ export function SpawnPalette() {
     refreshHostDirs(hostId);
     refreshAgentCatalog(hostId);
     refreshProfiles(hostId);
-    setQuery('');
+    // The typed filter is host-independent: keep it so the same repo can be
+    // found on the newly selected host.
     setSel(null);
     setAdvanced(false);
     setChosenDir(null);

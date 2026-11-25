@@ -95,6 +95,7 @@ type Registry struct {
 	known     map[string]bool
 	counter   int
 	handoffs  map[string]*sync.Mutex
+	read      readMarkers
 	// ranks is the daemon-owned sessions-rail order of live sessions (lower
 	// first). Every browser, and every federation parent viewing this host,
 	// renders Summaries in this order.
@@ -177,6 +178,10 @@ type Summary struct {
 	// directory (set_agent_listed), so UIs offer only listed agents as
 	// message targets.
 	Unlisted bool `json:"unlisted,omitempty"`
+	// ReadSeq is the highest transcript seq a user has acknowledged in any
+	// Tandem UI (mark_session_read); browsers clear completed-turn
+	// notifications at or below it.
+	ReadSeq int64 `json:"readSeq,omitempty"`
 }
 
 // MessagingHooks is what the registry needs from agent messaging
@@ -587,7 +592,7 @@ func (r *Registry) summary(ctx context.Context, id, name string, spec agentadapt
 	if agent == "" {
 		agent = r.config.ACP.Default
 	}
-	summary := Summary{ID: id, Name: name, Agent: agent, Status: status, PendingApprovals: pendingApprovals, ControlMode: controlMode, Adapter: spec.Adapter, CanHandoff: canHandoff(spec)}
+	summary := Summary{ID: id, Name: name, Agent: agent, Status: status, PendingApprovals: pendingApprovals, ControlMode: controlMode, Adapter: spec.Adapter, CanHandoff: canHandoff(spec), ReadSeq: r.read.get(id)}
 	if m := r.messagingHooks(); m != nil {
 		summary.WaitingOn, summary.OpenAsks = m.SummaryState(id)
 		summary.Unlisted = m.Unlisted(id)
@@ -2533,6 +2538,7 @@ func (r *Registry) Close(ctx context.Context, id string, force, deleteWorktree, 
 	}
 	r.mu.Lock()
 	delete(r.sessions, id)
+	r.read.forget(id)
 	delete(r.cwds, id)
 	delete(r.ranks, id)
 	r.mu.Unlock()

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useStore, allApprovals, allBrowserInstanceRequests, allSecretRequests, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
+import { useStore, allApprovals, allBlockedBrowsers, allBrowserInstanceRequests, allSecretRequests, allTakeovers, allTurnNotifications, notificationsSummary } from '../store';
 import type { BrowserInstanceRequest, NotifSeverity } from '../store';
 import type { BrowserSnapshot } from '../wire';
 import type { SecretRequest } from '../store';
@@ -38,6 +38,9 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
   const [secretEntry, setSecretEntry] = useState<{ sessionId: string; request: SecretRequest } | null>(null);
   const items = useStore(allApprovals);
   const takeovers = useStore(allTakeovers);
+  const blockedBrowsers = useStore(allBlockedBrowsers);
+  const releaseBrowser = useStore((s) => s.releaseBrowser);
+  const keepBrowserControl = useStore((s) => s.keepBrowserControl);
   const secretRequests = useStore(allSecretRequests);
   const browserRequests = useStore(allBrowserInstanceRequests);
   const notifications = useStore(allTurnNotifications);
@@ -202,6 +205,43 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
           </div>
         </div>
       ))}
+      {blockedBrowsers.map(({ sessionId, browserId }) => (
+        <div
+          key={`${sessionId}:blocked:${browserId}`}
+          className="appr takeover"
+          onClick={() => {
+            focus(sessionId);
+            setPane('browser');
+            setBrowserView(sessionId, browserId);
+          }}
+        >
+          <div className="who">
+            <span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · browser{browserId !== 'default' ? ` · ${agents[sessionId]?.browserInstances.find((i) => i.id === browserId)?.name ?? browserId}` : ''}
+          </div>
+          <div className="what">is waiting — you're holding control of the browser</div>
+          <div className="acts">
+            <button
+              className="btn-approve"
+              onClick={(e) => {
+                e.stopPropagation();
+                releaseBrowser(sessionId, browserId);
+              }}
+            >
+              Release control
+            </button>
+            <button
+              className="btn-deny"
+              title="Keep holding the browser; the agent stays blocked until you release it"
+              onClick={(e) => {
+                e.stopPropagation();
+                keepBrowserControl(sessionId, browserId);
+              }}
+            >
+              Keep control
+            </button>
+          </div>
+        </div>
+      ))}
       {secretRequests.map(({ sessionId, request }) => (
         <div key={request.requestId} className="appr secret-request" onClick={() => setSecretEntry({ sessionId, request })}>
           <div className="who"><span className="dot blocked" /> {agents[sessionId]?.name ?? sessionId} · secret</div>
@@ -213,7 +253,7 @@ export function ApprovalsRail({ onResizeStart }: { onResizeStart?: (clientX: num
       {browserRequests.map(({ sessionId, request }) => (
         <BrowserRequestCard key={request.requestId} sessionId={sessionId} request={request} agentName={agents[sessionId]?.name ?? sessionId} />
       ))}
-      {items.length === 0 && takeovers.length === 0 && secretRequests.length === 0 && browserRequests.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
+      {items.length === 0 && takeovers.length === 0 && blockedBrowsers.length === 0 && secretRequests.length === 0 && browserRequests.length === 0 && notifications.length === 0 && systemNotifications.length === 0 ? (
         <div className="empty">No notifications. Completed session turns and requests for attention appear here.</div>
       ) : (
         items.map(({ sessionId, approval }) => {

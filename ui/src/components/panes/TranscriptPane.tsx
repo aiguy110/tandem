@@ -615,12 +615,17 @@ export function TranscriptPane() {
   const taskList = items.find((item): item is Extract<Item, { kind: 'plan' }> => item.kind === 'plan');
   const transcriptItems = useMemo(() => items.filter((item) => item.kind !== 'plan'), [items]);
   const transcriptTree = useMemo(() => groupTranscriptItems(transcriptItems), [transcriptItems]);
-  // The actively-streaming last message row never offers annotation — its text
-  // is still growing underneath any selection the user made.
   const lastMessageItem = useMemo(
     () => [...transcriptItems].reverse().find((it): it is Extract<Item, { kind: 'message' }> => it.kind === 'message'),
     [transcriptItems],
   );
+  // The actively-streaming message row never offers annotation — its text is
+  // still growing underneath any selection the user made. Only the transcript's
+  // final row can be streaming: once a turn moves on to a tool call, thought, or
+  // the next user prompt, the latest message is complete and commentable.
+  const streamingMessageKey = agent?.status === 'working' && transcriptItems[transcriptItems.length - 1]?.kind === 'message'
+    ? transcriptItems[transcriptItems.length - 1].key
+    : null;
   // Rows animate in only when they arrive while the transcript is already on
   // screen; the first render for an agent (initial load, replay, or switching
   // agents) seeds the set silently so history does not stampede in.
@@ -860,7 +865,9 @@ export function TranscriptPane() {
       clearPendingSelection();
       return;
     }
-    const rowEl = closestRow(sel.anchorNode);
+    // A drag that starts in row padding or between rows anchors outside any
+    // row; fall back to the other end of the selection.
+    const rowEl = closestRow(sel.anchorNode) ?? closestRow(sel.focusNode);
     if (!rowEl || !rowEl.dataset.seq || !scrollRef.current?.contains(rowEl)) {
       clearPendingSelection();
       return;
@@ -868,7 +875,7 @@ export function TranscriptPane() {
     const seq = Number(rowEl.dataset.seq);
     const role = rowEl.dataset.role ?? 'assistant';
     // Never offer annotation on the row still streaming in.
-    if (agent?.status === 'working' && lastMessageItem && rowEl.dataset.key === lastMessageItem.key) {
+    if (streamingMessageKey && rowEl.dataset.key === streamingMessageKey) {
       clearPendingSelection();
       return;
     }

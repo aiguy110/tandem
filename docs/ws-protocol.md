@@ -455,7 +455,8 @@ type ServerMsg =
   | { t: 'browser_state'; sessionId: string; browserId?: string; active: boolean; // lifecycle + wheel, per instance
       controlOwner: 'agent'|'user';
       dialogs: { targetId: string; type: 'alert'|'confirm'|'prompt'|'beforeunload'; message: string; // open JavaScript dialogs
-        defaultPrompt?: string; url?: string; openedAt: number }[] }
+        defaultPrompt?: string; url?: string; openedAt: number }[];
+      agentWaiting?: boolean }                                        // an agent tool call is blocked on the user's control
   | { t: 'message_audio'; sessionId: string; seq: number;                 // reply to render_message_audio
       mimeType?: string; data?: string; error?: string }                // data: base64 clip bytes
   | { t: 'asset'; sessionId: string; assetId: string;                   // reply to get_asset

@@ -497,6 +497,11 @@ func (d *DialogControl) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		// mcp-browser sets waiting=1 while one of its tool calls is in
+		// flight; under user control that call is blocked on the human.
+		if r.URL.Query().Get("waiting") == "1" {
+			d.opts.Broker.NoteAgentWaiting(key)
+		}
 		takeoverJSON(w, http.StatusOK, DialogStatus{ControlOwner: d.opts.Broker.Owner(key), Dialogs: d.opts.Broker.Dialogs(key)})
 	case r.URL.Path == DialogsPath+"/handle" && r.Method == http.MethodPost:
 		var body struct {

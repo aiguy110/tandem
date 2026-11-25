@@ -10,7 +10,7 @@
 // unmounting opts back out and the screencast stops.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { DEFAULT_BROWSER_ID, useStore, type BrowserInstanceState, type Takeover } from '../../store';
+import { DEFAULT_BROWSER_ID, agentBlockedOn, useStore, type BrowserInstanceState, type Takeover } from '../../store';
 import { browserHub, type Frame } from '../../terminal/browserHub';
 import type { BrowserDialog, BrowserInputWire, BrowserInstance, BrowserPages } from '../../wire';
 
@@ -94,11 +94,15 @@ export function BrowserPane() {
   const viewId = useStore((s) => s.sessions[sessionId]?.browserViewId ?? DEFAULT_BROWSER_ID);
   const setBrowserView = useStore((s) => s.setBrowserView);
   const dismissTakeover = useStore((s) => s.dismissTakeover);
+  const releaseBrowser = useStore((s) => s.releaseBrowser);
+  const keepBrowserControl = useStore((s) => s.keepBrowserControl);
   const closeBrowserInstance = useStore((s) => s.closeBrowserInstance);
   const takeovers = allTakeovers.filter((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === viewId);
   const otherTakeover = allTakeovers.find((t) => (t.browserId ?? DEFAULT_BROWSER_ID) !== viewId);
   const viewed = instances.find((instance) => instance.id === viewId);
   const dialogs = browserStates[viewId]?.dialogs ?? NO_DIALOGS;
+  const agentBlocked = agentBlockedOn(browserStates[viewId]);
+  const otherBlockedBrowser = instances.find((instance) => instance.id !== viewId && agentBlockedOn(browserStates[instance.id]));
   const otherDialogBrowser = instances.find((instance) => instance.id !== viewId && (browserStates[instance.id]?.dialogs?.length ?? 0) > 0);
   const setBrowserSub = useStore((s) => s.setBrowserSub);
   const toggleWheel = useStore((s) => s.toggleWheel);
@@ -603,7 +607,7 @@ export function BrowserPane() {
         <div className="browser-instances" role="tablist" aria-label="Browser instances">
           {instances.map((instance) => {
             const state = browserStates[instance.id];
-            const waiting = allTakeovers.some((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === instance.id);
+            const waiting = allTakeovers.some((t) => (t.browserId ?? DEFAULT_BROWSER_ID) === instance.id) || agentBlockedOn(state);
             return (
               <span key={instance.id} className={`browser-instance${instance.id === viewId ? ' selected' : ''}`}>
                 <button role="tab" aria-selected={instance.id === viewId} onClick={() => setBrowserView(sessionId, instance.id)}
@@ -720,6 +724,27 @@ export function BrowserPane() {
         <div className="takeover-banner">
           <span>A page dialog is waiting in browser <b>{otherDialogBrowser.name}</b>.</span>
           <button className="wheel-btn hot" onClick={() => setBrowserView(sessionId, otherDialogBrowser.id)}>Show it</button>
+        </div>
+      )}
+
+      {agentBlocked && (
+        <div className="takeover-banner" role="alert">
+          <span>
+            <b>{sessionId}</b> is waiting{instances.length > 1 ? ` on ${viewed?.name ?? viewId}` : ''} — you're holding control of the browser, so its browser tools are blocked.
+          </span>
+          <button className="wheel-btn hot" onClick={() => releaseBrowser(sessionId, viewId)}>
+            Release control
+          </button>
+          <button className="wheel-btn" title="Keep holding the browser; the agent stays blocked until you release it" onClick={() => keepBrowserControl(sessionId, viewId)}>
+            Keep control
+          </button>
+        </div>
+      )}
+      {!agentBlocked && otherBlockedBrowser && (
+        <div className="takeover-banner">
+          <span>The agent is waiting on browser <b>{otherBlockedBrowser.name}</b> — you're holding control of it.</span>
+          <button className="wheel-btn hot" onClick={() => releaseBrowser(sessionId, otherBlockedBrowser.id)}>Release control</button>
+          <button className="wheel-btn" onClick={() => setBrowserView(sessionId, otherBlockedBrowser.id)}>Show it</button>
         </div>
       )}
 
