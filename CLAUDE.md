@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./redeploy.sh                  # requests a deferred rebuild/restart of tandem.service
 ```
 
-The backend is exclusively the native Go daemon (`cmd/tandem` + `internal/`). The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh`; a restart builds the React UI, installs external agent runtime dependencies, embeds the UI in the Go binary, and starts that binary. Logs: `journalctl --user -u tandem -f`.
+The backend is exclusively the native Go daemon (`cmd/tandem` + `internal/`). The app runs under a `systemd --user` unit (`deploy/tandem.service`, installed via `deploy/install.sh`) whose `ExecStart` is `start-dev-server.sh`; a restart builds the React UI, installs external agent runtime dependencies, embeds the UI in the Go binary, and starts that binary. Logs: `journalctl --user -u tandem -f`. A wedged daemon: `kill -USR1 $(systemctl --user show -p MainPID --value tandem)` writes all goroutine stacks to `$TANDEM_HOME/diagnostics/goroutines-*.txt` without stopping it (prefer this to SIGQUIT, whose dump journald truncates and which kills the daemon).
 
 Manual equivalent:
 
